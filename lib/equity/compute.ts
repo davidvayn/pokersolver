@@ -102,9 +102,9 @@ export function computeEquity(
     }
   }
 
+  // Exact path: for one fixed set of holdings, enumerate every runout.
   function accumulate(holdings: [Card, Card][], weight: number) {
     if (weight <= 0) return;
-    // Cards removed from the deck for the runout.
     const dead = new Uint8Array(52);
     for (const c of board) dead[c] = 1;
     for (const [a, b] of holdings) {
@@ -114,29 +114,70 @@ export function computeEquity(
     const deck: Card[] = [];
     for (const c of FULL_DECK) if (!dead[c]) deck.push(c);
 
-    if (enumerate) {
-      let runouts = 0;
-      enumerateRunouts(deck, board, need, (fullBoard) => {
-        settle(holdings, fullBoard, weight);
-        samples++;
-        runouts++;
-      });
-      // Each runout contributed `weight` to wins/ties, so the denominator must
-      // account for every one of them.
-      totalWeight += weight * runouts;
-    } else {
-      // Monte Carlo: sample a fixed number of runouts for this holding.
-      const perHolding = Math.max(
-        1,
-        Math.floor(maxSamples / estimateHoldings(combos))
-      );
-      for (let s = 0; s < perHolding; s++) {
-        if (opts.shouldStop?.()) break;
-        const fullBoard = board.concat(sampleN(deck, need));
-        settle(holdings, fullBoard, weight);
-        samples++;
+    let runouts = 0;
+    enumerateRunouts(deck, board, need, (fullBoard) => {
+      settle(holdings, fullBoard, weight);
+      samples++;
+      runouts++;
+    });
+    // Each runout contributed `weight`, so the denominator must count them all.
+    totalWeight += weight * runouts;
+  }
+
+  // Monte Carlo path: sample one holding per player (weighted, with rejection
+  // on card collisions) plus a runout, per iteration. This avoids enumerating
+  // the full cartesian product of holdings, which explodes for wide/multi-way
+  // ranges.
+  function monteCarlo() {
+    const cum = combos.map((list) => {
+      const c: number[] = [];
+      let acc = 0;
+      for (const { weight } of list) {
+        acc += Math.max(0, weight);
+        c.push(acc);
       }
-      totalWeight += weight * perHolding;
+      return c;
+    });
+    const totals = cum.map((c) => c[c.length - 1] || 0);
+    if (totals.some((t) => t <= 0)) return;
+
+    let attempts = 0;
+    const maxAttempts = maxSamples * 20 + 1000;
+    while (samples < maxSamples && attempts < maxAttempts) {
+      if (opts.shouldStop?.()) break;
+      attempts++;
+
+      const dead = new Uint8Array(52);
+      for (const c of board) dead[c] = 1;
+      const holdings: [Card, Card][] = [];
+      let ok = true;
+      for (let p = 0; p < n; p++) {
+        const list = combos[p];
+        const target = rand() * totals[p];
+        let lo = 0;
+        let hi = list.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (cum[p][mid] < target) lo = mid + 1;
+          else hi = mid;
+        }
+        const [a, b] = list[lo].combo;
+        if (dead[a] || dead[b]) {
+          ok = false;
+          break;
+        }
+        dead[a] = 1;
+        dead[b] = 1;
+        holdings.push([a, b]);
+      }
+      if (!ok) continue;
+
+      const deck: Card[] = [];
+      for (const c of FULL_DECK) if (!dead[c]) deck.push(c);
+      const fullBoard = need > 0 ? board.concat(sampleN(deck, need)) : board;
+      settle(holdings, fullBoard, 1);
+      samples++;
+      totalWeight += 1;
     }
   }
 
@@ -160,7 +201,8 @@ export function computeEquity(
     }
   }
 
-  forEachHolding(0, [], 1);
+  if (enumerate) forEachHolding(0, [], 1);
+  else monteCarlo();
 
   const equities = new Array(n).fill(0);
   const denom = totalWeight || 1;
@@ -175,12 +217,6 @@ export function computeEquity(
     samples,
     exact: enumerate,
   };
-}
-
-function estimateHoldings(
-  combos: { combo: [Card, Card]; weight: number }[][]
-): number {
-  return combos.reduce((a, c) => a * Math.max(1, c.length), 1);
 }
 
 /** Enumerate every unordered combination of `need` cards from `deck`. */
@@ -217,7 +253,9 @@ function rand(): number {
   rngState ^= rngState >>> 17;
   rngState ^= rngState << 5;
   rngState >>>= 0;
-  return rngState / 0xffffffff;
+  // Divide by 2^32 so the result is in [0, 1) and can never hit exactly 1.0
+  // (which would cause out-of-bounds sampling downstream).
+  return rngState / 0x100000000;
 }
 
 export function seedRng(seed: number) {

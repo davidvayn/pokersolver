@@ -153,20 +153,32 @@ impl Tree {
             if s.raises < MAX_RAISES && my_remaining > to_call + 1e-9 {
                 let pot_after_call = cur_pot + to_call;
                 let sizes = self.raise_sizes.clone();
+                let mut added: Vec<f64> = Vec::new();
                 for r in sizes {
                     let raise_extra = r * pot_after_call;
                     let total = (to_call + raise_extra).min(my_remaining);
                     if total <= to_call + 1e-9 {
                         continue;
                     }
+                    // Skip sizes that collapse to the same amount (e.g. multiple
+                    // sizes that all cap to the same all-in).
+                    if added.iter().any(|&a| (a - total).abs() < 1e-6) {
+                        continue;
+                    }
+                    added.push(total);
                     let mut rs = s.clone();
                     add_paid(&mut rs, s.to_act, total);
                     rs.to_act = 1 - s.to_act;
                     rs.facing = true;
                     rs.raises = s.raises + 1;
                     rs.prev_check = false;
+                    let all_in = total >= my_remaining - 1e-9;
                     let pct = (r * 100.0).round() as i64;
-                    labels.push(format!("Raise {}%", pct));
+                    labels.push(if all_in {
+                        "Raise all-in".into()
+                    } else {
+                        format!("Raise {}%", pct)
+                    });
                     children.push(self.build(rs));
                 }
             }
@@ -194,18 +206,30 @@ impl Tree {
             // Bets
             if my_remaining > 1e-9 {
                 let sizes = self.bet_sizes.clone();
+                let mut added: Vec<f64> = Vec::new();
                 for b in sizes {
                     let amt = (b * cur_pot).min(my_remaining);
                     if amt < 1e-9 {
                         continue;
                     }
+                    // Skip sizes that collapse to the same amount (e.g. multiple
+                    // sizes that all cap to the same all-in).
+                    if added.iter().any(|&a| (a - amt).abs() < 1e-6) {
+                        continue;
+                    }
+                    added.push(amt);
                     let mut bs = s.clone();
                     add_paid(&mut bs, s.to_act, amt);
                     bs.to_act = 1 - s.to_act;
                     bs.facing = true;
                     bs.prev_check = false;
+                    let all_in = amt >= my_remaining - 1e-9;
                     let pct = (b * 100.0).round() as i64;
-                    labels.push(format!("Bet {}%", pct));
+                    labels.push(if all_in {
+                        "Bet all-in".into()
+                    } else {
+                        format!("Bet {}%", pct)
+                    });
                     children.push(self.build(bs));
                 }
             }
@@ -668,11 +692,28 @@ fn run(input: Input) -> Result<Output, String> {
     if input.board.len() < 3 {
         return Err("board must have at least 3 cards".into());
     }
+    if input.pot <= 0.0 {
+        return Err("pot must be greater than zero".into());
+    }
 
-    let (oop_h, trunc_o) = take_top(input.oop, input.max_combos);
-    let (ip_h, trunc_i) = take_top(input.ip, input.max_combos);
+    // Remove any hand whose hole cards collide with a board card — such combos
+    // are impossible and would otherwise be scored with a duplicated card.
+    let mut on_board = [false; 52];
+    for &c in &input.board {
+        if (c as usize) < 52 {
+            on_board[c as usize] = true;
+        }
+    }
+    let board_free = |h: &(u8, u8, f64)| {
+        !on_board[h.0 as usize] && !on_board[h.1 as usize] && h.0 != h.1
+    };
+    let oop_in: Vec<_> = input.oop.into_iter().filter(|h| board_free(h)).collect();
+    let ip_in: Vec<_> = input.ip.into_iter().filter(|h| board_free(h)).collect();
+
+    let (oop_h, trunc_o) = take_top(oop_in, input.max_combos);
+    let (ip_h, trunc_i) = take_top(ip_in, input.max_combos);
     if oop_h.is_empty() || ip_h.is_empty() {
-        return Err("both ranges must be non-empty".into());
+        return Err("both ranges need combos that don't collide with the board".into());
     }
 
     let oop_cards: Vec<(u8, u8)> = oop_h.iter().map(|h| (h.0, h.1)).collect();

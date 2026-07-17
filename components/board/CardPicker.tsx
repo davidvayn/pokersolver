@@ -131,9 +131,14 @@ export function CardSlots({
     onChange(next);
   }
 
+  // Exclude cards already placed in this component's OTHER slots (the parent
+  // strips this side's own hand from `used`), while keeping the card currently
+  // being edited selectable.
   const usedExceptEditing = new Set(used);
   cards.forEach((c, i) => {
+    if (c === undefined) return;
     if (i === slot) usedExceptEditing.delete(c);
+    else usedExceptEditing.add(c);
   });
 
   return (
@@ -165,15 +170,23 @@ export function CardSlots({
         })}
       </div>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 rounded-lg border border-border bg-surface p-3 shadow-card">
-          <div className="mb-2 flex items-center justify-between text-xs text-muted">
-            <span>Pick a card</span>
-            <button onClick={() => setOpen(false)} className="hover:text-fg">
-              Close
-            </button>
+        <>
+          {/* Click-outside backdrop closes the picker */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <div className="absolute left-0 top-full z-50 mt-2 rounded-lg border-2 border-accent bg-surface p-3 shadow-card ring-1 ring-black/20">
+            <div className="mb-2 flex items-center justify-between text-xs text-muted">
+              <span>Pick a card</span>
+              <button onClick={() => setOpen(false)} className="hover:text-fg">
+                Close
+              </button>
+            </div>
+            <CardGrid used={usedExceptEditing} onPick={pick} />
           </div>
-          <CardGrid used={usedExceptEditing} onPick={pick} />
-        </div>
+        </>
       )}
     </div>
   );

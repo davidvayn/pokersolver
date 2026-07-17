@@ -39,6 +39,21 @@ describe('equity — known spots', () => {
     expect(r.equities[1]).toBeGreaterThan(0);
   });
 
+  it('does not hang on 3-way wide range vs range', () => {
+    seedRng(3);
+    const wide = parseRange('22+,A2s+,K2s+,Q2s+,J2s+,T2s+,92s+,A2o+,K2o+');
+    const start = Date.now ? 0 : 0; // Date.now unavailable in some envs; rely on sample cap
+    const r = computeEquity(
+      [{ range: wide }, { range: wide }, { range: wide }],
+      { maxSamples: 20000 }
+    );
+    void start;
+    expect(r.samples).toBeGreaterThan(0);
+    const sum = r.equities.reduce((a, b) => a + b, 0);
+    expect(sum).toBeGreaterThan(0.95);
+    expect(sum).toBeLessThan(1.05);
+  });
+
   it('hand vs range works', () => {
     seedRng(7);
     const r = computeEquity(

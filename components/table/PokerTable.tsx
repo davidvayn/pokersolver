@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Position, TableFormat, POSITION_LABELS } from '@/lib/positions';
 
 interface PokerTableProps {
@@ -24,31 +24,33 @@ export function PokerTable({
   const [assigning, setAssigning] = useState<'hero' | 'villain'>('hero');
   const positions = format.positions;
 
-  // Keyboard: 1..9 select a seat for the active role.
+  const assign = useCallback(
+    (p: Position) => {
+      if (assigning === 'villain' && withVillain) {
+        if (p === hero) return; // can't be both
+        onVillain?.(p);
+      } else {
+        if (withVillain && p === villain) onVillain?.(hero); // swap
+        onHero(p);
+      }
+    },
+    [assigning, withVillain, hero, villain, onHero, onVillain]
+  );
+
+  // Keyboard: 1..9 select a seat for the active role — routed through assign()
+  // so the same hero/villain conflict guard and swap logic apply as on click.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
         return;
       const n = parseInt(e.key, 10);
       if (!isNaN(n) && n >= 1 && n <= positions.length) {
-        const p = positions[n - 1];
-        if (assigning === 'villain' && withVillain) onVillain?.(p);
-        else onHero(p);
+        assign(positions[n - 1]);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [assigning, positions, onHero, onVillain, withVillain]);
-
-  function assign(p: Position) {
-    if (assigning === 'villain' && withVillain) {
-      if (p === hero) return; // can't be both
-      onVillain?.(p);
-    } else {
-      if (withVillain && p === villain) onVillain?.(hero); // swap
-      onHero(p);
-    }
-  }
+  }, [assign, positions]);
 
   return (
     <div className="flex flex-col gap-3">

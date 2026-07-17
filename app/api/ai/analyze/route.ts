@@ -68,7 +68,7 @@ function callAnthropic(apiKey: string, model: string, prompt: string) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: SYSTEM_PROMPT,
       stream: true,
       messages: [{ role: 'user', content: prompt }],
@@ -104,36 +104,59 @@ function normalizeStream(
   const encoder = new TextEncoder();
   let buffer = '';
 
+  const processEvents = (
+    block: string,
+    controller: ReadableStreamDefaultController<Uint8Array>
+  ): boolean => {
+    for (const evt of block.split('\n\n')) {
+      for (const line of evt.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        try {
+          const obj = JSON.parse(data);
+          // Surface provider-side errors instead of silently dropping them.
+          const errMsg =
+            obj?.type === 'error'
+              ? obj.error?.message || 'provider stream error'
+              : obj?.error
+                ? obj.error.message || String(obj.error)
+                : null;
+          if (errMsg) {
+            controller.enqueue(encoder.encode(`\n\n⚠️ AI provider error: ${errMsg}`));
+            controller.close();
+            reader.cancel();
+            return true; // stop
+          }
+          const text =
+            provider === 'anthropic'
+              ? obj.type === 'content_block_delta'
+                ? obj.delta?.text ?? ''
+                : ''
+              : obj.choices?.[0]?.delta?.content ?? '';
+          if (text) controller.enqueue(encoder.encode(text));
+        } catch {
+          /* skip non-JSON keepalive lines */
+        }
+      }
+    }
+    return false;
+  };
+
   return new ReadableStream({
     async pull(controller) {
       const { done, value } = await reader.read();
       if (done) {
+        // Flush any residual buffered event before closing.
+        buffer += decoder.decode();
+        if (buffer.trim()) processEvents(buffer, controller);
         controller.close();
         return;
       }
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split('\n\n');
       buffer = events.pop() ?? '';
-
-      for (const evt of events) {
-        for (const line of evt.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === '[DONE]') continue;
-          try {
-            const obj = JSON.parse(data);
-            const text =
-              provider === 'anthropic'
-                ? obj.type === 'content_block_delta'
-                  ? obj.delta?.text ?? ''
-                  : ''
-                : obj.choices?.[0]?.delta?.content ?? '';
-            if (text) controller.enqueue(encoder.encode(text));
-          } catch {
-            /* skip non-JSON keepalive lines */
-          }
-        }
-      }
+      processEvents(events.join('\n\n'), controller);
     },
     cancel() {
       reader.cancel();

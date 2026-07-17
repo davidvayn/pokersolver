@@ -64,10 +64,12 @@ export function EquityPanel({ result, labels, colors, running }: EquityPanelProp
   );
 }
 
-/** Shows the pot odds / required call % implied by hero equity. */
+/** Shows the pot odds / required price implied by hero equity. */
 function PotOdds({ heroEquity }: { heroEquity: number }) {
-  // If hero has E equity, they can profitably call getting worse than E:(1-E).
-  const breakEvenPct = (1 - heroEquity) * 100; // max % of final pot to call
+  // With equity E, hero breaks even calling an amount up to E of the FINAL pot
+  // (call C into final pot P where E = C/P). Equivalently the pot must lay at
+  // least (1-E):E odds.
+  const breakEvenPct = heroEquity * 100; // max call as % of final pot
   const ratio = heroEquity > 0 ? (1 - heroEquity) / heroEquity : Infinity;
   return (
     <div className="rounded-md border border-border bg-surface-2 p-3 text-xs">
@@ -75,11 +77,11 @@ function PotOdds({ heroEquity }: { heroEquity: number }) {
       <div className="flex justify-between text-muted">
         <span>Break-even call</span>
         <span className="font-mono text-fg">
-          {breakEvenPct.toFixed(1)}% of pot
+          {breakEvenPct.toFixed(1)}% of final pot
         </span>
       </div>
       <div className="flex justify-between text-muted">
-        <span>Required odds</span>
+        <span>Min. pot odds</span>
         <span className="font-mono text-fg">
           {isFinite(ratio) ? `${ratio.toFixed(2)} : 1` : '—'}
         </span>
