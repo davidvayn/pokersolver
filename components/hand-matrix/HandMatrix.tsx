@@ -63,6 +63,17 @@ export function HandMatrix({
     if (mode === 'select' && painting !== null) applyPaint(label, painting);
   };
 
+  const handleKeyDown = (label: string, e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    if (mode === 'select') {
+      const current = weights[label] ?? 0;
+      onWeightsChange?.({ ...weights, [label]: current > 0 ? 0 : 1 });
+    } else {
+      onCellClick?.(label);
+    }
+  };
+
   const endPaint = () => {
     if (painting !== null) {
       draftRef.current = {};
@@ -89,10 +100,20 @@ export function HandMatrix({
             return (
               <button
                 key={label}
+                type="button"
                 onMouseDown={(e) => handleDown(label, e)}
                 onMouseEnter={() => handleEnter(label)}
+                onKeyDown={(e) => handleKeyDown(label, e)}
+                {...(mode === 'select'
+                  ? { 'aria-pressed': w > 0 }
+                  : {})}
+                aria-label={
+                  mode === 'select'
+                    ? `${label}${w > 0 ? ', selected' : ''}`
+                    : `${label}${annotation?.(label) ? `, ${annotation(label)}` : ''}`
+                }
                 className={
-                  'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-colors ' +
+                  'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                   (isPair
                     ? 'border-border/80 '
                     : 'border-border/40 ') +

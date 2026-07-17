@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import { Card, cardToStr, weightsToRange, serializeRange } from '@/lib/cards';
 import { CardSlots } from '@/components/board/CardPicker';
 import { RangeEditor } from '@/components/range/RangeEditor';
@@ -115,10 +115,14 @@ export default function SolverPage() {
               <TextField label="Raise sizes (% pot)" value={raiseSizes} onChange={setRaiseSizes} />
             </div>
             <div className="mt-3">
-              <label className="mb-1 block text-xs text-muted">
+              <label
+                htmlFor="solver-iterations"
+                className="mb-1 block text-xs text-muted"
+              >
                 Iterations: {iterations}
               </label>
               <input
+                id="solver-iterations"
                 type="range"
                 min={50}
                 max={1000}
@@ -173,14 +177,19 @@ function NumberField({
   value: number;
   onChange: (n: number) => void;
 }) {
+  const id = useId();
   return (
     <div>
-      <label className="mb-1 block text-xs text-muted">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-xs text-muted">
+        {label}
+      </label>
       <input
+        id={id}
         type="number"
+        inputMode="decimal"
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="w-full rounded-md border border-border bg-surface-2 p-2 text-sm outline-none focus:border-accent"
+        className="w-full rounded-md border border-border bg-surface-2 p-2 text-sm outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
       />
     </div>
   );
@@ -195,13 +204,18 @@ function TextField({
   value: string;
   onChange: (s: string) => void;
 }) {
+  const id = useId();
   return (
     <div>
-      <label className="mb-1 block text-xs text-muted">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-xs text-muted">
+        {label}
+      </label>
       <input
+        id={id}
+        inputMode="decimal"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-border bg-surface-2 p-2 font-mono text-xs outline-none focus:border-accent"
+        className="w-full rounded-md border border-border bg-surface-2 p-2 font-mono text-xs outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
       />
     </div>
   );

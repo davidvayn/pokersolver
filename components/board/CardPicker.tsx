@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, RANKS, SUITS, makeCard, cardToStr, cardRank, cardSuit } from '@/lib/cards';
 
 const SUIT_SYMBOL = ['♣', '♦', '♥', '♠'];
@@ -19,7 +19,7 @@ export function PlayingCard({
 }: {
   card: Card;
   size?: 'sm' | 'md' | 'lg';
-  onClick?: () => void;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   dimmed?: boolean;
 }) {
   const r = cardRank(card);
@@ -37,7 +37,9 @@ export function PlayingCard({
       className={
         `flex flex-col items-center justify-center rounded-md border border-border bg-white font-bold shadow-sm ${dims} ` +
         (dimmed ? 'opacity-30 ' : '') +
-        (onClick ? 'hover:ring-2 hover:ring-accent ' : '')
+        (onClick
+          ? 'hover:ring-2 hover:ring-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent '
+          : '')
       }
     >
       <span className={SUIT_COLOR[s] === 'text-fg' ? 'text-gray-900' : SUIT_COLOR[s]}>
@@ -71,8 +73,9 @@ export function CardGrid({
                 key={card}
                 disabled={isUsed}
                 onClick={() => onPick(card)}
+                aria-label={cardToStr(card)}
                 className={
-                  'flex h-8 w-7 items-center justify-center rounded border text-xs font-semibold transition-colors ' +
+                  'flex h-8 w-7 items-center justify-center rounded border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                   (isUsed
                     ? 'cursor-not-allowed border-border bg-surface-2 text-muted opacity-40'
                     : 'border-border bg-white text-gray-900 hover:ring-2 hover:ring-accent')
@@ -117,12 +120,39 @@ export function CardSlots({
 }) {
   const [open, setOpen] = useState(false);
   const [slot, setSlot] = useState(0);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+
+  function openPicker(i: number, el: HTMLButtonElement) {
+    setSlot(i);
+    openerRef.current = el;
+    setOpen(true);
+  }
+
+  function closePicker() {
+    setOpen(false);
+    openerRef.current?.focus();
+  }
+
+  // While open: Escape closes and focus moves into the picker.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closePicker();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    popoverRef.current?.focus();
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
 
   function pick(c: Card) {
     const next = cards.slice();
     next[slot] = c;
     onChange(next.filter((x) => x !== undefined));
-    setOpen(false);
+    closePicker();
   }
 
   function removeAt(i: number) {
@@ -149,11 +179,14 @@ export function CardSlots({
           const c = cards[i];
           return c !== undefined ? (
             <div key={i} className="group relative">
-              <PlayingCard card={c} onClick={() => { setSlot(i); setOpen(true); }} />
+              <PlayingCard
+                card={c}
+                onClick={(e) => openPicker(i, e.currentTarget)}
+              />
               <button
                 onClick={() => removeAt(i)}
-                className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-raise text-[10px] text-white group-hover:flex"
-                aria-label="remove"
+                className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-raise text-[10px] text-white opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
+                aria-label={`Remove ${cardToStr(c)}`}
               >
                 ×
               </button>
@@ -161,8 +194,9 @@ export function CardSlots({
           ) : (
             <button
               key={i}
-              onClick={() => { setSlot(i); setOpen(true); }}
-              className="flex h-10 w-7 items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-accent hover:text-accent"
+              onClick={(e) => openPicker(i, e.currentTarget)}
+              aria-label="Add card"
+              className="flex h-10 w-7 items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               +
             </button>
@@ -171,16 +205,25 @@ export function CardSlots({
       </div>
       {open && (
         <>
-          {/* Click-outside backdrop closes the picker */}
+          {/* Click-outside backdrop closes the picker (Escape also closes) */}
           <div
             className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
+            onClick={closePicker}
             aria-hidden
           />
-          <div className="absolute left-0 top-full z-50 mt-2 rounded-lg border-2 border-accent bg-surface p-3 shadow-card ring-1 ring-black/20">
+          <div
+            ref={popoverRef}
+            role="dialog"
+            aria-label="Pick a card"
+            tabIndex={-1}
+            className="absolute left-0 top-full z-50 mt-2 rounded-lg border-2 border-accent bg-surface p-3 shadow-card outline-none ring-1 ring-black/20"
+          >
             <div className="mb-2 flex items-center justify-between text-xs text-muted">
               <span>Pick a card</span>
-              <button onClick={() => setOpen(false)} className="hover:text-fg">
+              <button
+                onClick={closePicker}
+                className="rounded hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
                 Close
               </button>
             </div>

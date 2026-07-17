@@ -111,8 +111,9 @@ export function RangeEditor({ weights, onChange, title, accent }: RangeEditorPro
         }}
         rows={2}
         spellCheck={false}
-        placeholder="e.g. 22+, AJs+, KQo, A5s-A2s"
-        className="w-full resize-none rounded-md border border-border bg-surface-2 p-2 font-mono text-xs text-fg outline-none focus:border-accent"
+        aria-label="Range in text notation"
+        placeholder="e.g. 22+, AJs+, KQo, A5s-A2s…"
+        className="w-full resize-none rounded-md border border-border bg-surface-2 p-2 font-mono text-xs text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
       />
     </div>
   );

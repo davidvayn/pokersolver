@@ -68,19 +68,25 @@ export function AiPanel({ getSpot }: AiPanelProps) {
     <div className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <span className="text-accent">✦</span> AI Analysis
+          <span className="text-accent" aria-hidden="true">
+            ✦
+          </span>{' '}
+          AI Analysis
         </h3>
         <button
           onClick={analyze}
           disabled={status === 'streaming'}
-          className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-fg hover:opacity-90 disabled:opacity-50"
+          className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-fg hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
         >
           {status === 'streaming' ? 'Analyzing…' : 'Analyze this spot'}
         </button>
       </div>
 
       {status === 'error' && (
-        <div className="rounded-md border border-raise/40 bg-raise/10 p-3 text-xs text-raise">
+        <div
+          role="alert"
+          className="rounded-md border border-raise/40 bg-raise/10 p-3 text-xs text-raise"
+        >
           {error}{' '}
           {error.includes('Settings') && (
             <Link href="/settings" className="underline">
@@ -91,7 +97,10 @@ export function AiPanel({ getSpot }: AiPanelProps) {
       )}
 
       {text ? (
-        <div className="prose-poker whitespace-pre-wrap text-sm leading-relaxed text-fg/90">
+        <div
+          aria-live="polite"
+          className="prose-poker whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
+        >
           {text}
         </div>
       ) : status !== 'error' ? (

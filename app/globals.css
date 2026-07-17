@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
   --bg: 247 248 250;
   --surface: 255 255 255;
   --surface-2: 241 243 246;
@@ -21,6 +22,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --bg: 12 15 20;
   --surface: 22 27 34;
   --surface-2: 30 37 46;
@@ -50,8 +52,31 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Snappier taps on touch devices */
+button,
+a,
+[role='button'],
+input,
+select,
+textarea {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Thin, unobtrusive scrollbars */
 * {
   scrollbar-width: thin;
   scrollbar-color: rgb(var(--border)) transparent;
+}
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

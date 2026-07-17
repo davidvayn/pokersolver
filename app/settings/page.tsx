@@ -43,14 +43,24 @@ export default function SettingsPage() {
       </div>
 
       <div className="rounded-lg border border-border bg-surface p-5">
-        <label className="mb-2 block text-sm font-medium">AI Provider</label>
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div
+          id="provider-label"
+          className="mb-2 block text-sm font-medium"
+        >
+          AI Provider
+        </div>
+        <div
+          role="group"
+          aria-labelledby="provider-label"
+          className="mb-4 flex flex-wrap gap-2"
+        >
           {PROVIDER_LIST.map((p) => (
             <button
               key={p.id}
               onClick={() => setProvider(p.id)}
+              aria-pressed={settings.provider === p.id}
               className={
-                'rounded-md border px-3 py-1.5 text-sm transition-colors ' +
+                'rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                 (settings.provider === p.id
                   ? 'border-accent text-fg'
                   : 'border-border text-muted hover:text-fg')
@@ -61,11 +71,14 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        <label className="mb-2 block text-sm font-medium">Model</label>
+        <label htmlFor="ai-model" className="mb-2 block text-sm font-medium">
+          Model
+        </label>
         <select
+          id="ai-model"
           value={settings.model}
           onChange={(e) => update({ model: e.target.value })}
-          className="mb-4 w-full rounded-md border border-border bg-surface-2 p-2 text-sm outline-none focus:border-accent"
+          className="mb-4 w-full rounded-md border border-border bg-surface-2 p-2 text-sm text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
         >
           {provider.models.map((m) => (
             <option key={m} value={m}>
@@ -74,16 +87,19 @@ export default function SettingsPage() {
           ))}
         </select>
 
-        <label className="mb-2 block text-sm font-medium">
+        <label htmlFor="ai-key" className="mb-2 block text-sm font-medium">
           {provider.label} API Key
         </label>
         <input
+          id="ai-key"
+          name="ai-api-key"
           type="password"
+          autoComplete="off"
           value={settings.apiKeys[settings.provider] ?? ''}
           onChange={(e) => setKey(e.target.value)}
           placeholder={provider.keyPlaceholder}
           spellCheck={false}
-          className="w-full rounded-md border border-border bg-surface-2 p-2 font-mono text-sm outline-none focus:border-accent"
+          className="w-full rounded-md border border-border bg-surface-2 p-2 font-mono text-sm outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
         />
         <div className="mt-2 flex items-center justify-between text-xs">
           <a
@@ -94,8 +110,8 @@ export default function SettingsPage() {
           >
             Get a key ↗
           </a>
-          <span className={saved ? 'text-accent' : 'text-transparent'}>
-            Saved
+          <span role="status" aria-live="polite" className="text-accent">
+            {saved ? 'Saved' : ''}
           </span>
         </div>
       </div>

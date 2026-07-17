@@ -44,7 +44,7 @@ export function EquityPanel({ result, labels, colors, running }: EquityPanelProp
               </div>
               <div className="h-3 overflow-hidden rounded-full bg-surface-2">
                 <div
-                  className="h-full rounded-full transition-all"
+                  className="h-full rounded-full transition-[width] duration-300"
                   style={{ width: `${eq * 100}%`, background: colors[i] }}
                 />
               </div>
