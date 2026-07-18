@@ -1,11 +1,26 @@
 'use client';
 
-import { useCallback, useId, useMemo, useState } from 'react';
-import { Card, cardToStr, weightsToRange, serializeRange } from '@/lib/cards';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  Card,
+  cardToStr,
+  weightsToRange,
+  serializeRange,
+  parseRange,
+  parseBoard,
+  rangeToWeights,
+} from '@/lib/cards';
 import { CardSlots } from '@/components/board/CardPicker';
 import { RangeEditor } from '@/components/range/RangeEditor';
 import { AiPanel } from '@/components/ai/AiPanel';
-import { SolverResults } from '@/components/solver/SolverResults';
+import { StrategyView } from '@/components/solver/SolverResults';
 import {
   useSolver,
   rangeToTriples,
@@ -17,19 +32,80 @@ import type { SpotContext } from '@/lib/ai/prompt';
 const OOP_COLOR = 'rgb(var(--check))';
 const IP_COLOR = 'rgb(var(--allin))';
 
+// A ready-to-solve single-raised-pot example (BTN opens, BB calls) so the page
+// works the moment it loads and there's always a known-good spot to fall back
+// to. IP = Button opening range, OOP = Big Blind defending range.
+const EXAMPLE = {
+  oop: '99-22,AJs-A8s,KTs+,QTs+,JTs,T9s,98s,87s,76s,AQo,AJo,KQo',
+  ip: 'TT-22,ATs+,A5s,KTs+,QTs+,J9s+,T9s,98s,AQo+,KQo',
+  board: 'Qh7s2c',
+};
+const exampleWeights = (s: string) => rangeToWeights(parseRange(s));
+
+// Premade pot/stack/bet/raise configurations, plus a fully custom option.
+interface Sizing {
+  label: string;
+  pot?: number;
+  stack?: number;
+  bet?: string;
+  raise?: string;
+}
+const SIZING_PRESETS: Record<string, Sizing> = {
+  srp: { label: 'Single-raised pot · 33/75', pot: 6, stack: 100, bet: '33, 75', raise: '100' },
+  threebet: { label: '3-bet pot · 33/66', pot: 18, stack: 100, bet: '33, 66', raise: '100' },
+  small: { label: 'Small bets · 25/50', pot: 6, stack: 100, bet: '25, 50', raise: '100' },
+  big: { label: 'Big bets · 75/125', pot: 6, stack: 100, bet: '75, 125', raise: '75' },
+  custom: { label: 'Custom…' },
+};
+
+const SOLVE_ITERATIONS = 1000;
+
 export default function SolverPage() {
-  const [board, setBoard] = useState<Card[]>([]);
-  const [oop, setOop] = useState<Record<string, number>>({});
-  const [ip, setIp] = useState<Record<string, number>>({});
+  const [board, setBoard] = useState<Card[]>(() => parseBoard(EXAMPLE.board));
+  const [oop, setOop] = useState<Record<string, number>>(() =>
+    exampleWeights(EXAMPLE.oop)
+  );
+  const [ip, setIp] = useState<Record<string, number>>(() =>
+    exampleWeights(EXAMPLE.ip)
+  );
   const [pot, setPot] = useState(6);
   const [stack, setStack] = useState(100);
   const [betSizes, setBetSizes] = useState('33, 75');
   const [raiseSizes, setRaiseSizes] = useState('100');
-  const [iterations, setIterations] = useState(300);
+  const [sizing, setSizing] = useState('srp');
   const [result, setResult] = useState<SolverResult | null>(null);
+  const [rangeTab, setRangeTab] = useState<'oop' | 'ip'>('oop');
+  const [stratTab, setStratTab] = useState<'oop' | 'ip'>('oop');
   const { solve, running, available } = useSolver();
 
+  function applySizing(key: string) {
+    setSizing(key);
+    const p = SIZING_PRESETS[key];
+    if (key !== 'custom' && p.pot !== undefined) {
+      setPot(p.pot);
+      setStack(p.stack!);
+      setBetSizes(p.bet!);
+      setRaiseSizes(p.raise!);
+    }
+  }
+
   const used = useMemo(() => new Set<Card>(board), [board]);
+
+  // What (if anything) is stopping a solve, for clear inline feedback.
+  const missing = useMemo(() => {
+    if (Object.values(oop).every((w) => !w)) return 'Add an OOP range';
+    if (Object.values(ip).every((w) => !w)) return 'Add an IP range';
+    if (board.length < 3) return 'Set at least a flop (3 cards)';
+    return null;
+  }, [oop, ip, board]);
+  const ready = missing === null;
+
+  function clearAll() {
+    setOop({});
+    setIp({});
+    setBoard([]);
+    setResult(null);
+  }
 
   const parseSizes = (s: string) =>
     s
@@ -51,12 +127,21 @@ export default function SolverPage() {
       stack,
       bet_sizes: parseSizes(betSizes),
       raise_sizes: parseSizes(raiseSizes),
-      iterations,
+      iterations: SOLVE_ITERATIONS,
       max_combos: 200,
     };
     const r = await solve(input);
     setResult(r);
-  }, [oop, ip, board, pot, stack, betSizes, raiseSizes, iterations, solve]);
+  }, [oop, ip, board, pot, stack, betSizes, raiseSizes, solve]);
+
+  // Auto-solve (debounced) whenever the spot is valid and inputs change — so
+  // the page shows a result on load and updates as you edit, no hunting for a
+  // button.
+  useEffect(() => {
+    if (!ready || !available) return;
+    const t = setTimeout(runSolve, 500);
+    return () => clearTimeout(t);
+  }, [ready, available, runSolve]);
 
   const buildSpot = useCallback((): SpotContext | null => {
     if (board.length < 3) return null;
@@ -83,88 +168,187 @@ export default function SolverPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold">Postflop Solver</h1>
-        <p className="max-w-3xl text-sm text-muted">
-          Real Discounted-CFR (CFR+) solving, compiled from Rust to WebAssembly
-          and run entirely in your browser. Single-street, all-in-equity model —
-          produces GTO bet/check/call/fold frequencies and EVs with observable
-          exploitability convergence.
-        </p>
+      {/* Compact title + inline solution stats */}
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-semibold">Postflop Solver</h1>
+          {running && (
+            <span role="status" className="text-xs text-muted">
+              Solving…
+            </span>
+          )}
+        </div>
+        {result && !result.error && (
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+            <InlineStat label="Exploitability" value={`${result.exploitability_pct}%`} />
+            <InlineStat label="OOP EV" value={`${result.oop_ev} bb`} />
+            <InlineStat label="IP EV" value={`${result.ip_ev} bb`} />
+            <InlineStat label="Iterations" value={`${result.iterations}`} />
+            {result.truncated && (
+              <span className="text-xs text-muted">ranges capped</span>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px_1fr]">
-        <div className="rounded-lg border border-border bg-surface p-4">
-          <div className="mb-3 font-semibold" style={{ color: OOP_COLOR }}>
-            OOP range
-          </div>
-          <RangeEditor weights={oop} onChange={setOop} accent={OOP_COLOR} />
-        </div>
-
-        <div className="flex flex-col gap-4">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+        {/* Setup (left) — range editor */}
+        <div className="flex flex-col gap-6">
           <div className="rounded-lg border border-border bg-surface p-4">
-            <div className="mb-2 text-sm font-semibold">Board</div>
-            <CardSlots count={5} cards={board} used={used} onChange={setBoard} />
-
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <NumberField label="Pot (bb)" value={pot} onChange={setPot} />
-              <NumberField label="Eff. stack (bb)" value={stack} onChange={setStack} />
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              <TextField label="Bet sizes (% pot)" value={betSizes} onChange={setBetSizes} />
-              <TextField label="Raise sizes (% pot)" value={raiseSizes} onChange={setRaiseSizes} />
-            </div>
-            <div className="mt-3">
-              <label
-                htmlFor="solver-iterations"
-                className="mb-1 block text-xs text-muted"
+            <div className="mb-3 flex items-center gap-1 rounded-md bg-surface-2 p-1">
+              <TabButton
+                active={rangeTab === 'oop'}
+                color={OOP_COLOR}
+                onClick={() => setRangeTab('oop')}
               >
-                Iterations: {iterations}
-              </label>
-              <input
-                id="solver-iterations"
-                type="range"
-                min={50}
-                max={1000}
-                step={50}
-                value={iterations}
-                onChange={(e) => setIterations(parseInt(e.target.value))}
-                className="w-full accent-[color:rgb(var(--accent))]"
-              />
+                OOP range
+              </TabButton>
+              <TabButton
+                active={rangeTab === 'ip'}
+                color={IP_COLOR}
+                onClick={() => setRangeTab('ip')}
+              >
+                IP range
+              </TabButton>
             </div>
-
-            <button
-              onClick={runSolve}
-              disabled={board.length < 3 || running || !available}
-              className="mt-4 w-full rounded-md bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:opacity-90 disabled:opacity-40"
-            >
-              {running ? 'Solving…' : 'Solve'}
-            </button>
-            {board.length < 3 && (
-              <p className="mt-2 text-center text-xs text-muted">
-                Set at least a flop (3 cards).
-              </p>
-            )}
-            {!available && (
-              <p className="mt-2 text-center text-xs text-muted">
-                Loading solver engine…
-              </p>
+            <p className="mb-3 text-xs text-muted">
+              {rangeTab === 'oop'
+                ? 'Out of position — acts first. Drag the grid or use a preset.'
+                : 'In position — acts last. Drag the grid or use a preset.'}
+            </p>
+            {rangeTab === 'oop' ? (
+              <RangeEditor weights={oop} onChange={setOop} accent={OOP_COLOR} />
+            ) : (
+              <RangeEditor weights={ip} onChange={setIp} accent={IP_COLOR} />
             )}
           </div>
 
-          <AiPanel getSpot={buildSpot} />
+          {/* Board + bet sizing, under the ranges */}
+          <div className="rounded-lg border border-border bg-surface p-4">
+            <div className="mb-1.5 text-xs text-muted">Board</div>
+            <CardSlots
+              count={5}
+              cards={board}
+              used={used}
+              onChange={setBoard}
+              size="lg"
+            />
+
+            <label htmlFor="sizing" className="mb-1.5 mt-4 block text-xs text-muted">
+              Bet sizing
+            </label>
+            <select
+              id="sizing"
+              value={sizing}
+              onChange={(e) => applySizing(e.target.value)}
+              className="w-full rounded-md border border-border bg-surface-2 p-2 text-sm text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {Object.entries(SIZING_PRESETS).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+
+            {sizing === 'custom' && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <NumberField label="Pot (bb)" value={pot} onChange={setPot} />
+                <NumberField label="Stack (bb)" value={stack} onChange={setStack} />
+                <TextField label="Bet %" value={betSizes} onChange={setBetSizes} />
+                <TextField label="Raise %" value={raiseSizes} onChange={setRaiseSizes} />
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="rounded-lg border border-border bg-surface p-4">
-          <div className="mb-3 font-semibold" style={{ color: IP_COLOR }}>
-            IP range
-          </div>
-          <RangeEditor weights={ip} onChange={setIp} accent={IP_COLOR} />
+        {/* Solution (right) — the enlarged strategy chart */}
+        <div>
+          {result && !result.error ? (
+            <div className="rounded-lg border border-border bg-surface p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <div className="flex flex-1 gap-1 rounded-md bg-surface-2 p-1">
+                <TabButton
+                  active={stratTab === 'oop'}
+                  color={OOP_COLOR}
+                  onClick={() => setStratTab('oop')}
+                >
+                  OOP · first to act
+                </TabButton>
+                <TabButton
+                  active={stratTab === 'ip'}
+                  color={IP_COLOR}
+                  onClick={() => setStratTab('ip')}
+                >
+                  IP · vs check
+                </TabButton>
+                </div>
+                <button
+                  onClick={clearAll}
+                  className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  Clear
+                </button>
+              </div>
+              <StrategyView node={stratTab === 'oop' ? result.oop : result.ip} />
+            </div>
+          ) : result?.error ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-raise/40 bg-raise/10 p-4 text-sm text-raise"
+            >
+              Solver error: {result.error}
+            </div>
+          ) : (
+            <div className="grid h-64 place-items-center rounded-lg border border-dashed border-border bg-surface p-8 text-center text-sm text-muted">
+              {running
+                ? 'Solving…'
+                : missing
+                  ? `${missing} to see the solution`
+                  : 'Set up a spot to see the solution'}
+            </div>
+          )}
         </div>
       </div>
 
-      {result && <SolverResults result={result} />}
+      <AiPanel getSpot={buildSpot} />
     </div>
+  );
+}
+
+function InlineStat({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-muted">{label}</span>
+      <span className="font-semibold tabular-nums">{value}</span>
+    </span>
+  );
+}
+
+function TabButton({
+  active,
+  color,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  color: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={
+        'flex-1 rounded px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+        (active ? 'bg-surface text-fg shadow-sm' : 'text-muted hover:text-fg')
+      }
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+        {children}
+      </span>
+    </button>
   );
 }
 

@@ -41,7 +41,7 @@ function toStrategy(
   return out;
 }
 
-function StrategyBlock({ node }: { node: NodeStrategy }) {
+export function StrategyView({ node }: { node: NodeStrategy }) {
   const colors = useMemo(() => colorForActions(node.actions), [node.actions]);
   const strategy = useMemo(() => toStrategy(node, colors), [node, colors]);
   const annotation = useMemo(() => {
@@ -69,7 +69,9 @@ function StrategyBlock({ node }: { node: NodeStrategy }) {
           ))}
         </div>
       </div>
-      <HandMatrix mode="display" strategy={strategy} annotation={annotation} />
+      <div className="w-full">
+        <HandMatrix mode="display" strategy={strategy} annotation={annotation} />
+      </div>
       <p className="mt-2 text-[11px] text-muted">
         Cells show mixed frequencies; small number is the hand class EV (bb).
       </p>
@@ -77,34 +79,54 @@ function StrategyBlock({ node }: { node: NodeStrategy }) {
   );
 }
 
-export function SolverResults({ result }: { result: SolverResult }) {
+/** The compact summary bar (exploitability + EVs). Shown at the top so a
+ * result is always immediately visible, and surfaces solver errors. */
+export function SolverStats({ result }: { result: SolverResult }) {
   if (result.error) {
     return (
-      <div className="rounded-lg border border-raise/40 bg-raise/10 p-4 text-sm text-raise">
+      <div
+        role="alert"
+        className="rounded-lg border border-raise/40 bg-raise/10 p-4 text-sm text-raise"
+      >
         Solver error: {result.error}
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Exploitability" value={`${result.exploitability_pct}%`} hint="of pot" />
         <Stat label="OOP EV" value={`${result.oop_ev} bb`} />
         <Stat label="IP EV" value={`${result.ip_ev} bb`} />
         <Stat label="Iterations" value={`${result.iterations}`} />
       </div>
-
       {result.truncated && (
         <div className="rounded-md border border-border bg-surface-2 p-2 text-xs text-muted">
           Ranges were capped to keep the solve fast — results use the
           highest-weight combos.
         </div>
       )}
+    </div>
+  );
+}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <StrategyBlock node={result.oop} />
-        <StrategyBlock node={result.ip} />
-      </div>
+/** The strategy grids for both players. */
+export function SolverStrategies({ result }: { result: SolverResult }) {
+  if (result.error) return null;
+  return (
+    <div className="flex flex-col gap-4">
+      <StrategyView node={result.oop} />
+      <StrategyView node={result.ip} />
+    </div>
+  );
+}
+
+/** Combined view (stats + strategies), kept for convenience. */
+export function SolverResults({ result }: { result: SolverResult }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <SolverStats result={result} />
+      <SolverStrategies result={result} />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { SiteHeader } from '@/components/SiteHeader';
+import { SettingsModal } from '@/components/settings/SettingsModal';
 
 export const metadata: Metadata = {
   title: 'Poker Solver — Texas Hold\'em',
@@ -42,6 +43,7 @@ export default function RootLayout({
         >
           {children}
         </main>
+        <SettingsModal />
       </body>
     </html>
   );

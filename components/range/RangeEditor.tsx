@@ -1,10 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { HandMatrix } from '@/components/hand-matrix/HandMatrix';
 import {
   parseRange,
-  serializeRange,
   rangeToWeights,
   weightsToRange,
   rangeComboCount,
@@ -26,25 +25,11 @@ const PRESETS: { label: string; range: string }[] = [
 ];
 
 export function RangeEditor({ weights, onChange, title, accent }: RangeEditorProps) {
-  const [text, setText] = useState('');
-  const [editingText, setEditingText] = useState(false);
-
   const comboCount = useMemo(
     () => rangeComboCount(weightsToRange(weights)),
     [weights]
   );
   const pct = ((comboCount / 1326) * 100).toFixed(1);
-
-  const displayText = editingText ? text : serializeRange(weightsToRange(weights));
-
-  function applyText(value: string) {
-    try {
-      const w = rangeToWeights(parseRange(value));
-      onChange(w);
-    } catch {
-      /* ignore parse errors while typing */
-    }
-  }
 
   function selectAll() {
     const all: Record<string, number> = {};
@@ -79,42 +64,24 @@ export function RangeEditor({ weights, onChange, title, accent }: RangeEditorPro
           <button
             key={p.label}
             onClick={() => onChange(rangeToWeights(parseRange(p.range)))}
-            className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg"
+            className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             {p.label}
           </button>
         ))}
         <button
           onClick={selectAll}
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg"
+          className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           All
         </button>
         <button
           onClick={() => onChange({})}
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg"
+          className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Clear
         </button>
       </div>
-
-      <textarea
-        value={displayText}
-        onFocus={() => {
-          setEditingText(true);
-          setText(serializeRange(weightsToRange(weights)));
-        }}
-        onBlur={() => setEditingText(false)}
-        onChange={(e) => {
-          setText(e.target.value);
-          applyText(e.target.value);
-        }}
-        rows={2}
-        spellCheck={false}
-        aria-label="Range in text notation"
-        placeholder="e.g. 22+, AJs+, KQo, A5s-A2s…"
-        className="w-full resize-none rounded-md border border-border bg-surface-2 p-2 font-mono text-xs text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
-      />
     </div>
   );
 }

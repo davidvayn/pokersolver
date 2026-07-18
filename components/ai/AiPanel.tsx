@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import { loadSettings, currentKey } from '@/lib/ai/settings';
+import { useUi } from '@/lib/ui-store';
 import type { SpotContext } from '@/lib/ai/prompt';
 
 interface AiPanelProps {
@@ -14,6 +14,7 @@ export function AiPanel({ getSpot }: AiPanelProps) {
   const [text, setText] = useState('');
   const [status, setStatus] = useState<'idle' | 'streaming' | 'error'>('idle');
   const [error, setError] = useState('');
+  const openSettings = useUi((s) => s.openSettings);
 
   async function analyze() {
     const settings = loadSettings();
@@ -89,9 +90,9 @@ export function AiPanel({ getSpot }: AiPanelProps) {
         >
           {error}{' '}
           {error.includes('Settings') && (
-            <Link href="/settings" className="underline">
+            <button onClick={openSettings} className="underline">
               Open Settings
-            </Link>
+            </button>
           )}
         </div>
       )}
@@ -99,14 +100,18 @@ export function AiPanel({ getSpot }: AiPanelProps) {
       {text ? (
         <div
           aria-live="polite"
-          className="prose-poker whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
+          className="prose-poker max-w-3xl whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
         >
           {text}
         </div>
       ) : status !== 'error' ? (
         <p className="text-xs text-muted">
           Get a natural-language read on the current spot. Uses your own API key
-          (set in <Link href="/settings" className="underline">Settings</Link>).
+          (set in{' '}
+          <button onClick={openSettings} className="underline">
+            Settings
+          </button>
+          ).
         </p>
       ) : null}
     </div>

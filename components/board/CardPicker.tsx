@@ -26,7 +26,7 @@ export function PlayingCard({
   const s = cardSuit(card);
   const dims =
     size === 'lg'
-      ? 'h-14 w-10 text-lg'
+      ? 'h-16 w-12 text-xl'
       : size === 'sm'
         ? 'h-7 w-5 text-[11px]'
         : 'h-10 w-7 text-sm';
@@ -111,13 +111,17 @@ export function CardSlots({
   used,
   onChange,
   label,
+  size = 'md',
 }: {
   count: number;
   cards: Card[];
   used: Set<Card>;
   onChange: (cards: Card[]) => void;
   label?: string;
+  size?: 'sm' | 'md' | 'lg';
 }) {
+  const addDims =
+    size === 'lg' ? 'h-16 w-12 text-lg' : size === 'sm' ? 'h-7 w-5' : 'h-10 w-7';
   const [open, setOpen] = useState(false);
   const [slot, setSlot] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -181,6 +185,7 @@ export function CardSlots({
             <div key={i} className="group relative">
               <PlayingCard
                 card={c}
+                size={size}
                 onClick={(e) => openPicker(i, e.currentTarget)}
               />
               <button
@@ -196,7 +201,10 @@ export function CardSlots({
               key={i}
               onClick={(e) => openPicker(i, e.currentTarget)}
               aria-label="Add card"
-              className="flex h-10 w-7 items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className={
+                'flex items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+                addDims
+              }
             >
               +
             </button>
