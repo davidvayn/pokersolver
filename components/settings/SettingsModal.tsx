@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { X } from 'lucide-react';
 import { useUi } from '@/lib/ui-store';
 import { SettingsForm } from './SettingsForm';
 
@@ -12,8 +13,35 @@ export function SettingsModal() {
 
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key === 'Escape') {
+        close();
+        return;
+      }
+      if (e.key !== 'Tab' || !panelRef.current) return;
+      const focusable = [
+        ...panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        ),
+      ].filter((element) => !element.hasAttribute('disabled'));
+      if (focusable.length === 0) {
+        e.preventDefault();
+        panelRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     panelRef.current?.focus();
@@ -23,6 +51,7 @@ export function SettingsModal() {
     return () => {
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
+      previouslyFocused?.focus();
     };
   }, [open, close]);
 
@@ -46,16 +75,17 @@ export function SettingsModal() {
         aria-modal="true"
         aria-label="Settings"
         tabIndex={-1}
-        className="relative z-10 w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-card outline-none"
+        className="relative z-10 w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-card outline-none"
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Settings</h2>
           <button
+            type="button"
             onClick={close}
             aria-label="Close settings"
-            className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="grid h-10 w-10 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            ✕
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
         <SettingsForm />

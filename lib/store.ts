@@ -1,7 +1,12 @@
 'use client';
 
 import { create } from 'zustand';
-import { Position, SIX_MAX, FULL_RING, TableFormat } from './positions';
+import {
+  Position,
+  SIX_MAX,
+  TABLE_FORMATS,
+  TableFormat,
+} from './positions';
 
 interface SpotState {
   format: TableFormat;
@@ -17,13 +22,24 @@ export const useSpot = create<SpotState>((set, get) => ({
   format: SIX_MAX,
   hero: 'BTN',
   villain: 'BB',
-  setFormat: (format) => set({ format }),
+  setFormat: (format) => {
+    const current = get();
+    const hero = format.positions.includes(current.hero)
+      ? current.hero
+      : format.positions[0];
+    const villain =
+      format.positions.includes(current.villain) && current.villain !== hero
+        ? current.villain
+        : format.positions.find((position) => position !== hero) ?? hero;
+    set({ format, hero, villain });
+  },
   setHero: (hero) => set({ hero }),
   setVillain: (villain) => set({ villain }),
   toggleFormat: () => {
-    const next = get().format.seats === 6 ? FULL_RING : SIX_MAX;
-    const hero = next.positions.includes(get().hero) ? get().hero : 'BTN';
-    const villain = next.positions.includes(get().villain) ? get().villain : 'BB';
-    set({ format: next, hero, villain });
+    const currentIndex = TABLE_FORMATS.findIndex(
+      (format) => format.seats === get().format.seats
+    );
+    const next = TABLE_FORMATS[(currentIndex + 1) % TABLE_FORMATS.length];
+    get().setFormat(next);
   },
 }));

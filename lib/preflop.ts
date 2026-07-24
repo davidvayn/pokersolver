@@ -64,7 +64,7 @@ export function chartSummary(
     range: parseRange(a.range),
   }));
   let acted = 0;
-  const rows = parsed.map((action) => {
+  const rows: { name: string; color: string; pct: number }[] = parsed.map((action) => {
     let combos = 0;
     for (const w of action.range.values()) combos += Math.min(1, w);
     acted += combos;

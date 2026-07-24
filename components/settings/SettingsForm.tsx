@@ -1,8 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { PROVIDER_LIST, PROVIDERS, ProviderId } from '@/lib/ai/providers';
-import { AiSettings, loadSettings, saveSettings } from '@/lib/ai/settings';
+import { ExternalLink } from 'lucide-react';
+import {
+  PROVIDER_LIST,
+  PROVIDERS,
+  type ProviderId,
+} from '@/lib/ai/providers';
+import {
+  type AiSettings,
+  loadSettings,
+  saveSettings,
+} from '@/lib/ai/settings';
 
 export function SettingsForm() {
   const [settings, setSettings] = useState<AiSettings | null>(null);
@@ -48,10 +57,11 @@ export function SettingsForm() {
         {PROVIDER_LIST.map((p) => (
           <button
             key={p.id}
+            type="button"
             onClick={() => setProvider(p.id)}
             aria-pressed={settings.provider === p.id}
             className={
-              'rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+              'min-h-11 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
               (settings.provider === p.id
                 ? 'border-accent text-fg'
                 : 'border-border text-muted hover:text-fg')
@@ -69,7 +79,7 @@ export function SettingsForm() {
         id="ai-model"
         value={settings.model}
         onChange={(e) => update({ model: e.target.value })}
-        className="mb-4 w-full rounded-md border border-border bg-surface-2 p-2 text-sm text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+        className="mb-4 min-h-11 w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
       >
         {provider.models.map((m) => (
           <option key={m} value={m}>
@@ -90,16 +100,17 @@ export function SettingsForm() {
         onChange={(e) => setKey(e.target.value)}
         placeholder={provider.keyPlaceholder}
         spellCheck={false}
-        className="w-full rounded-md border border-border bg-surface-2 p-2 font-mono text-sm outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+        className="min-h-11 w-full rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-base outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
       />
       <div className="mt-2 flex items-center justify-between text-xs">
         <a
           href={provider.keyUrl}
           target="_blank"
           rel="noreferrer"
-          className="text-muted underline hover:text-fg"
+          className="inline-flex min-h-11 items-center gap-1 text-muted underline hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          Get a key ↗
+          Get a key
+          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
         </a>
         <span role="status" aria-live="polite" className="text-accent">
           {saved ? 'Saved' : ''}
@@ -108,7 +119,7 @@ export function SettingsForm() {
 
       <p className="mt-4 text-xs text-muted">
         Your key is stored only in this browser and forwarded through a
-        serverless proxy to the provider — never persisted on the server.
+        serverless proxy to the provider. It is never persisted on the server.
       </p>
     </div>
   );

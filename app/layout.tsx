@@ -4,9 +4,9 @@ import { SiteHeader } from '@/components/SiteHeader';
 import { SettingsModal } from '@/components/settings/SettingsModal';
 
 export const metadata: Metadata = {
-  title: 'Poker Solver — Texas Hold\'em',
+  title: 'Poker Lab - Texas Hold\'em Training',
   description:
-    'Local Texas Hold\'em solver: equity calculator, GTO preflop charts, postflop solver, and AI spot analysis.',
+    'Private preflop practice, performance analysis, range charts, and local postflop solving.',
 };
 
 export const viewport = {
@@ -39,7 +39,7 @@ export default function RootLayout({
         <SiteHeader />
         <main
           id="main"
-          className="mx-auto w-full max-w-[1400px] px-4 py-6"
+          className="mx-auto w-full max-w-[1400px] px-4 py-6 pb-[calc(6rem+env(safe-area-inset-bottom))] md:pb-6"
         >
           {children}
         </main>

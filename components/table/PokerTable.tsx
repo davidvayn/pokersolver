@@ -1,7 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Position, TableFormat, POSITION_LABELS } from '@/lib/positions';
+import {
+  Position,
+  TableFormat,
+  positionLabelForSeats,
+} from '@/lib/positions';
 
 interface PokerTableProps {
   format: TableFormat;
@@ -23,6 +27,8 @@ export function PokerTable({
 }: PokerTableProps) {
   const [assigning, setAssigning] = useState<'hero' | 'villain'>('hero');
   const positions = format.positions;
+  const positionLabel = (position: Position) =>
+    positionLabelForSeats(position, format.seats);
 
   const assign = useCallback(
     (p: Position) => {
@@ -93,13 +99,16 @@ export function PokerTable({
           return (
             <button
               key={p}
+              type="button"
               onClick={() => assign(p)}
+              aria-pressed={isHero || isVillain}
+              aria-label={`${positionLabel(p)}${isHero ? ', hero' : isVillain ? ', villain' : ''}`}
               className={
-                'absolute -translate-x-1/2 -translate-y-1/2 rounded-full border px-2 py-1 text-[11px] font-semibold shadow-card transition-transform hover:scale-105 ' +
+                'absolute min-h-11 min-w-11 -translate-x-1/2 -translate-y-1/2 rounded-full border px-2 py-1 text-[11px] font-semibold shadow-card transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                 (isHero
-                  ? 'text-white'
+                  ? 'text-call-fg'
                   : isVillain
-                    ? 'text-white'
+                    ? 'text-raise-fg'
                     : 'bg-surface text-fg')
               }
               style={{
@@ -112,10 +121,10 @@ export function PokerTable({
                     : undefined,
                 borderColor: isHero || isVillain ? 'transparent' : 'rgb(var(--border))',
               }}
-              title={POSITION_LABELS[p]}
+              title={positionLabel(p)}
             >
               <span className="mr-1 text-[8px] opacity-60">{i + 1}</span>
-              {POSITION_LABELS[p]}
+              {positionLabel(p)}
             </button>
           );
         })}
@@ -129,13 +138,16 @@ export function PokerTable({
           return (
             <button
               key={p}
+              type="button"
               onClick={() => assign(p)}
+              aria-pressed={isHero || isVillain}
+              aria-label={`${positionLabel(p)}${isHero ? ', hero' : isVillain ? ', villain' : ''}`}
               className={
-                'rounded-md border px-2 py-1 text-xs transition-colors ' +
+                'min-h-11 rounded-md border px-3 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                 (isHero
-                  ? 'border-transparent text-white'
+                  ? 'border-transparent text-call-fg'
                   : isVillain
-                    ? 'border-transparent text-white'
+                    ? 'border-transparent text-raise-fg'
                     : 'border-border text-muted hover:text-fg')
               }
               style={{
@@ -146,7 +158,7 @@ export function PokerTable({
                     : undefined,
               }}
             >
-              {POSITION_LABELS[p]}
+              {positionLabel(p)}
             </button>
           );
         })}
@@ -169,12 +181,22 @@ function Segmented({
       {options.map((o) => (
         <button
           key={o.key}
+          type="button"
           onClick={() => onChange(o.key)}
+          aria-pressed={value === o.key}
           className={
-            'rounded px-2 py-0.5 text-xs font-medium transition-colors ' +
-            (value === o.key ? 'text-white' : 'text-muted hover:text-fg')
+            'min-h-11 rounded px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+            (value === o.key ? '' : 'text-muted hover:text-fg')
           }
-          style={{ background: value === o.key ? o.color : undefined }}
+          style={{
+            background: value === o.key ? o.color : undefined,
+            color:
+              value === o.key
+                ? o.key === 'hero'
+                  ? 'rgb(var(--call-fg))'
+                  : 'rgb(var(--raise-fg))'
+                : undefined,
+          }}
         >
           {o.label}
         </button>

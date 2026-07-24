@@ -5,6 +5,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -76,7 +77,8 @@ export default function SolverPage() {
   const [result, setResult] = useState<SolverResult | null>(null);
   const [rangeTab, setRangeTab] = useState<'oop' | 'ip'>('oop');
   const [stratTab, setStratTab] = useState<'oop' | 'ip'>('oop');
-  const { solve, running, available } = useSolver();
+  const solveVersion = useRef(0);
+  const { solve, running, available, error: solverError } = useSolver();
 
   function applySizing(key: string) {
     setSizing(key);
@@ -101,6 +103,7 @@ export default function SolverPage() {
   const ready = missing === null;
 
   function clearAll() {
+    solveVersion.current++;
     setOop({});
     setIp({});
     setBoard([]);
@@ -114,7 +117,7 @@ export default function SolverPage() {
       .filter((x) => isFinite(x) && x > 0)
       .map((x) => x / 100);
 
-  const runSolve = useCallback(async () => {
+  const runSolve = useCallback(async (version: number) => {
     const oopRange = weightsToRange(oop);
     const ipRange = weightsToRange(ip);
     if (oopRange.size === 0 || ipRange.size === 0 || board.length < 3) return;
@@ -131,7 +134,7 @@ export default function SolverPage() {
       max_combos: 200,
     };
     const r = await solve(input);
-    setResult(r);
+    if (version === solveVersion.current) setResult(r);
   }, [oop, ip, board, pot, stack, betSizes, raiseSizes, solve]);
 
   // Auto-solve (debounced) whenever the spot is valid and inputs change — so
@@ -139,7 +142,8 @@ export default function SolverPage() {
   // button.
   useEffect(() => {
     if (!ready || !available) return;
-    const t = setTimeout(runSolve, 500);
+    const version = ++solveVersion.current;
+    const t = setTimeout(() => runSolve(version), 500);
     return () => clearTimeout(t);
   }, [ready, available, runSolve]);
 
@@ -291,17 +295,28 @@ export default function SolverPage() {
               </div>
               <StrategyView node={stratTab === 'oop' ? result.oop : result.ip} />
             </div>
-          ) : result?.error ? (
+          ) : result?.error || solverError ? (
             <div
               role="alert"
               className="rounded-lg border border-raise/40 bg-raise/10 p-4 text-sm text-raise"
             >
-              Solver error: {result.error}
+              <p>Solver error: {result?.error ?? solverError}</p>
+              {solverError && (
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="mt-3 min-h-11 rounded-md border border-raise/40 px-3 py-2 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-raise"
+                >
+                  Reload solver
+                </button>
+              )}
             </div>
           ) : (
             <div className="grid h-64 place-items-center rounded-lg border border-dashed border-border bg-surface p-8 text-center text-sm text-muted">
               {running
                 ? 'Solving…'
+                : !available
+                  ? 'Initializing solver…'
                 : missing
                   ? `${missing} to see the solution`
                   : 'Set up a spot to see the solution'}

@@ -15,10 +15,14 @@
   --felt: 21 128 96;
 
   --raise: 220 38 38;
+  --raise-fg: 255 255 255;
   --call: 34 160 96;
+  --call-fg: 0 0 0;
   --fold: 148 163 184;
+  --fold-fg: 0 0 0;
   --check: 96 165 250;
   --allin: 147 51 234;
+  --allin-fg: 255 255 255;
 }
 
 .dark {
@@ -34,15 +38,20 @@
   --felt: 15 92 68;
 
   --raise: 239 68 68;
+  --raise-fg: 0 0 0;
   --call: 52 199 120;
-  --fold: 100 116 139;
+  --call-fg: 0 0 0;
+  --fold: 148 163 184;
+  --fold-fg: 0 0 0;
   --check: 96 165 250;
   --allin: 168 85 247;
+  --allin-fg: 0 0 0;
 }
 
 html,
 body {
   height: 100%;
+  overflow-x: clip;
 }
 
 body {
@@ -79,4 +88,34 @@ textarea {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+@keyframes home-deal-left {
+  0% {
+    opacity: 0;
+    transform: translate(36px, 16px) rotate(0deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(-9deg);
+  }
+}
+
+@keyframes home-deal-right {
+  0% {
+    opacity: 0;
+    transform: translate(-36px, 16px) rotate(0deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(9deg);
+  }
+}
+
+.home-deal-left {
+  animation: home-deal-left 700ms 120ms ease-out both;
+}
+
+.home-deal-right {
+  animation: home-deal-right 700ms 240ms ease-out both;
 }

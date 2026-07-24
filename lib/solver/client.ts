@@ -57,48 +57,104 @@ export function rangeToTriples(range: Range): [number, number, number][] {
 }
 
 let jobCounter = 1;
+const SOLVE_TIMEOUT_MS = 45_000;
+
+interface PendingSolve {
+  resolve: (result: SolverResult) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+function errorResult(message: string): SolverResult {
+  return { error: message } as SolverResult;
+}
 
 export function useSolver() {
   const workerRef = useRef<Worker | null>(null);
-  const pending = useRef(new Map<number, (r: SolverResult) => void>());
+  const pending = useRef(new Map<number, PendingSolve>());
   const [running, setRunning] = useState(false);
   const [available, setAvailable] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    const failPending = (message: string) => {
+      setAvailable(false);
+      setError(message);
+      for (const request of pending.current.values()) {
+        clearTimeout(request.timeout);
+        request.resolve(errorResult(message));
+      }
+      pending.current.clear();
+      setRunning(false);
+    };
+
     try {
       const w = new Worker(new URL('./worker.ts', import.meta.url), {
         type: 'module',
       });
       w.onmessage = (e: MessageEvent<{ id: number; result: SolverResult }>) => {
-        const resolve = pending.current.get(e.data.id);
-        if (resolve) {
-          resolve(e.data.result);
+        const request = pending.current.get(e.data.id);
+        if (request) {
+          clearTimeout(request.timeout);
           pending.current.delete(e.data.id);
+          request.resolve(e.data.result);
+          setRunning(pending.current.size > 0);
         }
       };
+      w.onerror = (event) => {
+        event.preventDefault();
+        failPending(event.message || 'Solver worker failed to load');
+      };
+      w.onmessageerror = () => {
+        failPending('Solver worker returned an unreadable response');
+      };
       workerRef.current = w;
+      setError(null);
       setAvailable(true);
-      return () => w.terminate();
-    } catch {
-      setAvailable(false);
+      return () => {
+        w.terminate();
+        for (const request of pending.current.values()) {
+          clearTimeout(request.timeout);
+          request.resolve(errorResult('Solver worker stopped'));
+        }
+        pending.current.clear();
+      };
+    } catch (reason) {
+      failPending(
+        reason instanceof Error ? reason.message : 'Solver worker unavailable'
+      );
     }
   }, []);
 
   const solve = useCallback((input: SolverInput): Promise<SolverResult> => {
     if (!workerRef.current) {
-      return Promise.resolve({ error: 'Solver worker unavailable' } as SolverResult);
+      return Promise.resolve(errorResult(error ?? 'Solver worker unavailable'));
     }
     setRunning(true);
     const id = jobCounter++;
     return new Promise<SolverResult>((resolve) => {
-      pending.current.set(id, resolve);
-      workerRef.current!.postMessage({ id, input });
-    }).then((r) => {
-      setRunning(false);
-      return r;
+      const timeout = setTimeout(() => {
+        pending.current.delete(id);
+        setRunning(pending.current.size > 0);
+        resolve(errorResult('Solver timed out. Try smaller ranges or reload.'));
+      }, SOLVE_TIMEOUT_MS);
+      pending.current.set(id, { resolve, timeout });
+      try {
+        workerRef.current!.postMessage({ id, input });
+      } catch (reason) {
+        clearTimeout(timeout);
+        pending.current.delete(id);
+        setRunning(pending.current.size > 0);
+        resolve(
+          errorResult(
+            reason instanceof Error
+              ? reason.message
+              : 'Could not send the spot to the solver'
+          )
+        );
+      }
     });
-  }, []);
+  }, [error]);
 
-  return { solve, running, available };
+  return { solve, running, available, error };
 }

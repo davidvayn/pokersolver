@@ -21,10 +21,14 @@ const config: Config = {
         felt: 'rgb(var(--felt) / <alpha-value>)',
         // Poker action colors (used by the hand matrix mixed-strategy bars)
         raise: 'rgb(var(--raise) / <alpha-value>)',
+        'raise-fg': 'rgb(var(--raise-fg) / <alpha-value>)',
         call: 'rgb(var(--call) / <alpha-value>)',
+        'call-fg': 'rgb(var(--call-fg) / <alpha-value>)',
         fold: 'rgb(var(--fold) / <alpha-value>)',
+        'fold-fg': 'rgb(var(--fold-fg) / <alpha-value>)',
         check: 'rgb(var(--check) / <alpha-value>)',
         allin: 'rgb(var(--allin) / <alpha-value>)',
+        'allin-fg': 'rgb(var(--allin-fg) / <alpha-value>)',
       },
       fontFamily: {
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],

@@ -97,31 +97,14 @@ export function HandMatrix({
             const isPair = row === col;
             const w = weights[label] ?? 0;
             const segs = strategy[label];
-            return (
-              <button
-                key={label}
-                type="button"
-                onMouseDown={(e) => handleDown(label, e)}
-                onMouseEnter={() => handleEnter(label)}
-                onKeyDown={(e) => handleKeyDown(label, e)}
-                {...(mode === 'select'
-                  ? { 'aria-pressed': w > 0 }
-                  : {})}
-                aria-label={
-                  mode === 'select'
-                    ? `${label}${w > 0 ? ', selected' : ''}`
-                    : `${label}${annotation?.(label) ? `, ${annotation(label)}` : ''}`
-                }
-                className={
-                  'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
-                  (isPair
-                    ? 'border-border/80 '
-                    : 'border-border/40 ') +
-                  'bg-surface-2'
-                }
-                title={label + (annotation?.(label) ? ` · ${annotation(label)}` : '')}
-                style={{ minWidth: 0 }}
-              >
+            const cellClass =
+              'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+              (isPair ? 'border-border/80 ' : 'border-border/40 ') +
+              'bg-surface-2';
+            const title =
+              label + (annotation?.(label) ? ` - ${annotation(label)}` : '');
+            const content = (
+              <>
                 {/* Fill layer */}
                 {mode === 'select' ? (
                   <span
@@ -149,7 +132,7 @@ export function HandMatrix({
                   className={
                     'pointer-events-none relative z-10 ' +
                     (mode === 'display' && segs?.length
-                      ? 'text-white/95 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]'
+                      ? 'bg-black/70 px-0.5 py-px text-white'
                       : w > 0.4
                         ? 'text-white/95'
                         : 'text-fg/80')
@@ -162,6 +145,39 @@ export function HandMatrix({
                     {annotation(label)}
                   </span>
                 )}
+              </>
+            );
+            if (mode === 'display' && !onCellClick) {
+              return (
+                <div
+                  key={label}
+                  aria-label={title}
+                  className={cellClass}
+                  title={title}
+                  style={{ minWidth: 0 }}
+                >
+                  {content}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={label}
+                type="button"
+                onMouseDown={(event) => handleDown(label, event)}
+                onMouseEnter={() => handleEnter(label)}
+                onKeyDown={(event) => handleKeyDown(label, event)}
+                {...(mode === 'select' ? { 'aria-pressed': w > 0 } : {})}
+                aria-label={
+                  mode === 'select'
+                    ? `${label}${w > 0 ? ', selected' : ''}`
+                    : title
+                }
+                className={cellClass}
+                title={title}
+                style={{ minWidth: 0 }}
+              >
+                {content}
               </button>
             );
           })

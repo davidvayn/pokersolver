@@ -1,85 +1,75 @@
-# Poker Solver — Texas Hold'em
+# Poker Lab
 
-A local Texas Hold'em study tool: an accurate **equity calculator**, **preflop GTO charts**,
-a **postflop solver** workspace, and optional **AI spot analysis** with your own API key.
-Runs locally with `npm run dev` and deploys to Vercel unchanged.
+A private Texas Hold'em study workspace for learning preflop ranges, drilling
+decisions, tracking weaknesses, and running local postflop solves.
 
-## Features
+## Product areas
 
-- **Equity Calculator** — hand vs hand, hand vs range, range vs range. Exact enumeration
-  when the runout is small, Monte Carlo otherwise, computed off the main thread in a Web
-  Worker. Shows equity, win/tie split, and pot odds.
-- **Preflop GTO Charts** — position-aware opening (RFI) and response ranges on a 13×13
-  matrix with mixed-strategy frequency bars. Click a seat or press `1`–`9` to switch
-  positions instantly; toggle 6-max / 9-max.
-- **Postflop Solver** — real **Discounted CFR (CFR+)** solving, compiled from Rust to
-  **WebAssembly** and run entirely in your browser (in a Web Worker). Configure OOP/IP
-  ranges, board, pot, stacks, and bet/raise sizes; get GTO bet/check/call/fold
-  frequencies and EVs per hand, with exploitability that visibly converges toward zero.
-  Uses a single-street all-in-equity model (see below).
-- **AI Analysis** — bring your own key (Anthropic Claude or OpenAI). Your key is stored
-  only in `localStorage` and forwarded through a serverless route to the provider; it is
-  never persisted server-side. Streams a natural-language read of the current spot.
+- **Preflop**: heads-up, 6-max, and 9-max opening and response charts on a
+  13x13 hand matrix.
+- **Practice**: configurable random preflop spots generated from the bundled
+  chart library.
+- **Stats**: locally stored accuracy, trend, position, spot-type, and action
+  analysis.
+- **Postflop solver**: a browser-worker Discounted CFR implementation compiled
+  from Rust to WebAssembly.
+- **AI analysis**: optional provider-backed spot analysis using a key that stays
+  in browser storage and is forwarded only for the current request.
 
-## Getting started
+The old equity-calculator route is intentionally removed. The underlying
+evaluator and equity engine remain covered because solver and poker-domain
+accuracy still depend on them.
+
+## Run locally
 
 ```bash
 npm install
-npm run dev      # http://localhost:3000
-npm test         # engine unit tests (cards, evaluator, equity)
-npm run build    # production build (what Vercel runs)
+npm run dev
+npm test
+npm run build
 ```
 
-## Deploying to Vercel
+The development server normally runs at `http://localhost:3000`.
 
-Import the repo into Vercel — no configuration needed. The AI route runs as an edge
-function; all equity/solver compute happens client-side in the visitor's browser.
+`npm run lint` is not suitable for unattended validation yet because the
+repository does not have a committed ESLint configuration and `next lint`
+opens an interactive setup flow.
+
+## Landing page
+
+The home route uses the selected Deck direction: a tactile playing-card scene
+with direct links to Practice and the preflop range library.
 
 ## Architecture
 
 | Area | Path |
 | --- | --- |
-| Card model + range notation | `lib/cards.ts` |
-| Hand evaluator (5–7 cards) | `lib/evaluator.ts` |
-| Equity engine (enum + Monte Carlo) | `lib/equity/` |
-| Position state | `lib/positions.ts`, `lib/store.ts` |
-| Preflop chart data + rendering | `data/preflop/`, `lib/preflop.ts` |
-| Solver interface (swappable) | `lib/solver/engine.ts` |
-| AI provider adapters + prompt | `lib/ai/`, `app/api/ai/analyze/route.ts` |
-| Core UI (matrix, table, cards, ranges) | `components/` |
+| Card and range model | `lib/cards.ts` |
+| Hand evaluator | `lib/evaluator.ts` |
+| Equity engine | `lib/equity/` |
+| Preflop chart data | `data/preflop/` |
+| Practice and stats model | `lib/practice.ts` |
+| Practice persistence | `lib/practice-history.ts` |
+| Table formats and current spot | `lib/positions.ts`, `lib/store.ts` |
+| Solver worker boundary | `lib/solver/` |
+| Rust solver source | `wasm/src/` |
+| AI integrations | `lib/ai/`, `app/api/ai/analyze/route.ts` |
 
-The accuracy-critical code (`lib/cards.ts`, `lib/evaluator.ts`, `lib/equity/compute.ts`)
-is covered by unit tests validating known spots (e.g. AA vs KK ≈ 82/18, exact river
-enumeration, hand-vs-range).
+The current solver is a single-street all-in-equity model. It supports a
+configurable bet/raise tree and produces converged strategy frequencies, but it
+does not model separate decisions across multiple postflop streets.
 
-## The WASM CFR solver
+## Rebuild WebAssembly
 
-The solver is a self-contained **vectorized CFR+** implementation in `wasm/src/` (no
-third-party solver dependency, so no AGPL obligations):
-
-- `wasm/src/eval.rs` — Rust port of the hand evaluator.
-- `wasm/src/lib.rs` — the solver: builds a discretized single-street bet/raise tree,
-  precomputes a strategy-independent all-in-equity matrix over the runout, and runs CFR+
-  to convergence. Exposes `solve(json)` via `wasm-bindgen`.
-
-**Model.** It solves one street (flop or turn) with a configurable bet/raise tree. Any
-line ending in a call or check-check is valued by the two hands' equity over the
-remaining runout (the "all-in equity" simplification). This yields real GTO frequencies
-and EVs and converges fast; it does not model separate per-street betting like a
-full multi-street solver.
-
-**Rebuilding the wasm** (only needed if you change the Rust):
+Run from `wasm/`:
 
 ```bash
-cd wasm
 wasm-pack build --release --target web --out-dir pkg
 cp pkg/poker_solver_wasm.js pkg/*.d.ts ../lib/solver/pkg/
-cp pkg/poker_solver_wasm_bg.wasm ../lib/solver/pkg/     # bundled by webpack
-cp pkg/poker_solver_wasm_bg.wasm ../public/wasm/         # optional runtime copy
-cargo test --release                                     # native correctness test
+cp pkg/poker_solver_wasm_bg.wasm ../lib/solver/pkg/
+cp pkg/poker_solver_wasm_bg.wasm ../public/wasm/
+cargo test --release
 ```
 
-The compiled artifacts under `lib/solver/pkg/` are committed, so `npm run build` works
-without the Rust toolchain. The solve runs client-side (in a Web Worker), so it works
-both locally and on Vercel. `next.config.js` sets the `COOP`/`COEP` headers, leaving room
-to add multithreading (`wasm-bindgen-rayon` + `SharedArrayBuffer`) later.
+Generated artifacts under `lib/solver/pkg/` are committed so JavaScript builds
+do not require the Rust toolchain.
