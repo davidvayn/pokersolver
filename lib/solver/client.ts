@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Range } from '../cards';
 
+export type SolverAlgorithm = 'cfr_plus' | 'fictitious_play';
+
 export interface SolverInput {
   board: number[];
   oop: [number, number, number][]; // [card0, card1, weight]
@@ -12,6 +14,7 @@ export interface SolverInput {
   bet_sizes: number[];
   raise_sizes: number[];
   iterations: number;
+  algorithm: SolverAlgorithm;
   max_combos: number;
 }
 
@@ -31,6 +34,7 @@ export interface NodeStrategy {
   rows: ClassRow[];
 }
 export interface SolverResult {
+  algorithm: SolverAlgorithm;
   iterations: number;
   exploitability_pct: number;
   oop_ev: number;
@@ -42,6 +46,11 @@ export interface SolverResult {
   oop: NodeStrategy;
   ip: NodeStrategy;
   exploitability_history: number[];
+  cfr_comparison?: {
+    cfr_iterations: number;
+    fp_oop_vs_cfr_ip_ev: number;
+    fp_ip_vs_cfr_oop_ev: number;
+  };
   error?: string;
 }
 

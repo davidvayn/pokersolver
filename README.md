@@ -11,8 +11,8 @@ decisions, tracking weaknesses, and running local postflop solves.
   chart library.
 - **Stats**: locally stored accuracy, trend, position, spot-type, and action
   analysis.
-- **Postflop solver**: a browser-worker Discounted CFR implementation compiled
-  from Rust to WebAssembly.
+- **Postflop solver**: browser-worker CFR+ and full-width extensive-form
+  fictitious play (XFP) implementations compiled from Rust to WebAssembly.
 - **AI analysis**: optional provider-backed spot analysis using a key that stays
   in browser storage and is forwarded only for the current request.
 
@@ -56,8 +56,12 @@ with direct links to Practice and the preflop range library.
 | AI integrations | `lib/ai/`, `app/api/ai/analyze/route.ts` |
 
 The current solver is a single-street all-in-equity model. It supports a
-configurable bet/raise tree and produces converged strategy frequencies, but it
-does not model separate decisions across multiple postflop streets.
+configurable bet/raise tree and produces converged strategy frequencies with
+either CFR+ or XFP, but it does not model separate decisions across multiple
+postflop streets. XFP is initialized with the same-iteration CFR+ strategy,
+then trains by exact best-response self-play using realization-reach-corrected
+behavioral averaging; its result includes cross-play EVs against that CFR+
+baseline.
 
 ## Rebuild WebAssembly
 

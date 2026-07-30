@@ -1,5 +1,5 @@
-//! Single-street postflop solver using vectorized CFR+ with an all-in-equity
-//! terminal model.
+//! Single-street postflop solver using vectorized CFR+ or full-width
+//! extensive-form fictitious play (XFP) with an all-in-equity terminal model.
 //!
 //! Model: OOP and IP act on the current street (flop or turn) with a
 //! discretized bet/raise tree. Any line ending in a call or check-check goes to
@@ -17,6 +17,17 @@ use wasm_bindgen::prelude::*;
 const RANKS: &[u8; 13] = b"23456789TJQKA";
 const MAX_RAISES: u32 = 3;
 
+#[derive(Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum Algorithm {
+    CfrPlus,
+    FictitiousPlay,
+}
+
+fn default_algorithm() -> Algorithm {
+    Algorithm::CfrPlus
+}
+
 #[derive(Deserialize)]
 struct Input {
     board: Vec<u8>,
@@ -27,6 +38,8 @@ struct Input {
     bet_sizes: Vec<f64>,
     raise_sizes: Vec<f64>,
     iterations: u32,
+    #[serde(default = "default_algorithm")]
+    algorithm: Algorithm,
     #[serde(default = "default_max_combos")]
     max_combos: usize,
 }
@@ -53,7 +66,14 @@ struct NodeStrategy {
     rows: Vec<ClassRow>,
 }
 #[derive(Serialize)]
+struct CfrComparison {
+    cfr_iterations: u32,
+    fp_oop_vs_cfr_ip_ev: f64,
+    fp_ip_vs_cfr_oop_ev: f64,
+}
+#[derive(Serialize)]
 struct Output {
+    algorithm: String,
     iterations: u32,
     exploitability_pct: f64,
     oop_ev: f64,
@@ -65,6 +85,8 @@ struct Output {
     oop: NodeStrategy,
     ip: NodeStrategy,
     exploitability_history: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cfr_comparison: Option<CfrComparison>,
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +297,8 @@ struct Solver {
     eq: Vec<f32>,
     // compat[i*n_ip + j] = hands share no card
     compat: Vec<bool>,
+    // Probability mass of compatible private-hand pairs before normalization.
+    joint_mass: f64,
     // per decision node: regret and strategy sums, indexed by [hand*na + a]
     regret: Vec<Vec<f64>>,
     strat_sum: Vec<Vec<f64>>,
@@ -326,6 +350,29 @@ impl Solver {
             }
         }
         strat
+    }
+
+    fn average_profile(&self) -> Vec<Vec<f64>> {
+        self.tree
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(node, value)| match value {
+                Node::Decision {
+                    player, children, ..
+                } => {
+                    let n = if *player == 0 { self.n_oop } else { self.n_ip };
+                    self.average_strategy(node, n, children.len())
+                }
+                Node::Terminal(_) => Vec::new(),
+            })
+            .collect()
+    }
+
+    fn profile_strategy(profile: &[Vec<f64>], node: usize, n: usize, na: usize) -> &[f64] {
+        let strategy = &profile[node];
+        debug_assert_eq!(strategy.len(), n * na);
+        strategy
     }
 
     /// Terminal value vector for `player`, weighted by opponent reach.
@@ -403,6 +450,199 @@ impl Solver {
                 };
             }
             v
+        }
+    }
+
+    /// Compute an exact deterministic best response at every information set
+    /// for `player` against `profile`.
+    fn best_response_profile(
+        &self,
+        root: usize,
+        player: usize,
+        profile: &[Vec<f64>],
+    ) -> Vec<Vec<f64>> {
+        let mut response: Vec<Vec<f64>> = self
+            .strat_sum
+            .iter()
+            .map(|row| vec![0.0; row.len()])
+            .collect();
+        let opponent_reach = if player == 0 {
+            &self.ip_prob
+        } else {
+            &self.oop_prob
+        };
+        self.best_response_value(root, player, opponent_reach, profile, &mut response);
+        response
+    }
+
+    fn best_response_value(
+        &self,
+        node: usize,
+        player: usize,
+        opp_reach: &[f64],
+        profile: &[Vec<f64>],
+        response: &mut [Vec<f64>],
+    ) -> Vec<f64> {
+        match &self.tree.nodes[node] {
+            Node::Terminal(t) => self.terminal_value(t, player, opp_reach),
+            Node::Decision {
+                player: decision_player,
+                children,
+                ..
+            } => {
+                let decision_player = *decision_player;
+                let children = children.clone();
+                let na = children.len();
+                if decision_player == player {
+                    let n = if player == 0 { self.n_oop } else { self.n_ip };
+                    let action_values: Vec<Vec<f64>> = children
+                        .iter()
+                        .map(|child| {
+                            self.best_response_value(*child, player, opp_reach, profile, response)
+                        })
+                        .collect();
+                    let mut value = vec![0.0; n];
+                    for hand in 0..n {
+                        let mut best_action = 0;
+                        let mut best_value = f64::NEG_INFINITY;
+                        for action in 0..na {
+                            if action_values[action][hand] > best_value {
+                                best_action = action;
+                                best_value = action_values[action][hand];
+                            }
+                        }
+                        response[node][hand * na + best_action] = 1.0;
+                        value[hand] = best_value;
+                    }
+                    value
+                } else {
+                    let n_opp = opp_reach.len();
+                    let strategy = Self::profile_strategy(profile, node, n_opp, na);
+                    let n_player = if player == 0 { self.n_oop } else { self.n_ip };
+                    let mut value = vec![0.0; n_player];
+                    for action in 0..na {
+                        let child_opp_reach: Vec<f64> = (0..n_opp)
+                            .map(|hand| opp_reach[hand] * strategy[hand * na + action])
+                            .collect();
+                        let child_value = self.best_response_value(
+                            children[action],
+                            player,
+                            &child_opp_reach,
+                            profile,
+                            response,
+                        );
+                        for hand in 0..n_player {
+                            value[hand] += child_value[hand];
+                        }
+                    }
+                    value
+                }
+            }
+        }
+    }
+
+    /// Apply one XFP average-policy update for one player. The reach-corrected
+    /// mixture is Theorem 7 of Heinrich, Lanctot & Silver (2015):
+    /// it averages realization plans, not behavior probabilities directly.
+    fn xfp_update_player(
+        &self,
+        root: usize,
+        player: usize,
+        old_profile: &[Vec<f64>],
+        best_response: &[Vec<f64>],
+        old_count: f64,
+        next_profile: &mut [Vec<f64>],
+    ) {
+        let n = if player == 0 { self.n_oop } else { self.n_ip };
+        let reach = vec![1.0; n];
+        self.xfp_update_node(
+            root,
+            player,
+            old_profile,
+            best_response,
+            old_count,
+            &reach,
+            &reach,
+            next_profile,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn xfp_update_node(
+        &self,
+        node: usize,
+        player: usize,
+        old_profile: &[Vec<f64>],
+        best_response: &[Vec<f64>],
+        old_count: f64,
+        old_reach: &[f64],
+        response_reach: &[f64],
+        next_profile: &mut [Vec<f64>],
+    ) {
+        let Node::Decision {
+            player: decision_player,
+            children,
+            ..
+        } = &self.tree.nodes[node]
+        else {
+            return;
+        };
+        let decision_player = *decision_player;
+        let children = children.clone();
+
+        if decision_player == player {
+            let na = children.len();
+            let old_strategy = &old_profile[node];
+            let response_strategy = &best_response[node];
+            for hand in 0..old_reach.len() {
+                let denominator = old_count * old_reach[hand] + response_reach[hand];
+                if denominator <= 1e-15 {
+                    continue;
+                }
+                let base = hand * na;
+                for action in 0..na {
+                    next_profile[node][base + action] = xfp_probability(
+                        old_strategy[base + action],
+                        response_strategy[base + action],
+                        old_reach[hand],
+                        response_reach[hand],
+                        old_count,
+                    );
+                }
+            }
+
+            for action in 0..na {
+                let child_old_reach: Vec<f64> = (0..old_reach.len())
+                    .map(|hand| old_reach[hand] * old_strategy[hand * na + action])
+                    .collect();
+                let child_response_reach: Vec<f64> = (0..response_reach.len())
+                    .map(|hand| response_reach[hand] * response_strategy[hand * na + action])
+                    .collect();
+                self.xfp_update_node(
+                    children[action],
+                    player,
+                    old_profile,
+                    best_response,
+                    old_count,
+                    &child_old_reach,
+                    &child_response_reach,
+                    next_profile,
+                );
+            }
+        } else {
+            // Opponent actions do not change this player's realization reach.
+            for child in children {
+                self.xfp_update_node(
+                    child,
+                    player,
+                    old_profile,
+                    best_response,
+                    old_count,
+                    old_reach,
+                    response_reach,
+                    next_profile,
+                );
+            }
         }
     }
 
@@ -487,14 +727,16 @@ impl Solver {
         }
     }
 
-    /// Evaluate value for `player` under average strategies (no updates).
-    /// If `best_response` is set for `player`'s nodes, take the max action.
-    fn evaluate_val(
+    /// Evaluate value for `player` under a fixed strategy profile. If
+    /// `best_response` is set, maximize independently at each of the player's
+    /// private-hand information sets.
+    fn evaluate_profile_value(
         &self,
         node: usize,
         player: usize,
         opp_reach: &[f64],
         n_p: usize,
+        profile: &[Vec<f64>],
         best_response: bool,
     ) -> Vec<f64> {
         match &self.tree.nodes[node] {
@@ -507,14 +749,15 @@ impl Solver {
                 let dp = *dp;
                 let na = children.len();
                 if dp == player {
-                    let strat = self.average_strategy(node, n_p, na);
+                    let strategy = Self::profile_strategy(profile, node, n_p, na);
                     let mut action_vals: Vec<Vec<f64>> = Vec::with_capacity(na);
                     for a in 0..na {
-                        action_vals.push(self.evaluate_val(
+                        action_vals.push(self.evaluate_profile_value(
                             children[a],
                             player,
                             opp_reach,
                             n_p,
+                            profile,
                             best_response,
                         ));
                     }
@@ -532,22 +775,28 @@ impl Solver {
                     } else {
                         for i in 0..n_p {
                             for a in 0..na {
-                                val[i] += strat[i * na + a] * action_vals[a][i];
+                                val[i] += strategy[i * na + a] * action_vals[a][i];
                             }
                         }
                     }
                     val
                 } else {
                     let n_opp = opp_reach.len();
-                    let strat = self.average_strategy(node, n_opp, na);
+                    let strategy = Self::profile_strategy(profile, node, n_opp, na);
                     let mut val = vec![0.0f64; n_p];
                     for a in 0..na {
                         let mut child_opp = vec![0.0f64; n_opp];
                         for j in 0..n_opp {
-                            child_opp[j] = opp_reach[j] * strat[j * na + a];
+                            child_opp[j] = opp_reach[j] * strategy[j * na + a];
                         }
-                        let cv =
-                            self.evaluate_val(children[a], player, &child_opp, n_p, best_response);
+                        let cv = self.evaluate_profile_value(
+                            children[a],
+                            player,
+                            &child_opp,
+                            n_p,
+                            profile,
+                            best_response,
+                        );
                         for i in 0..n_p {
                             val[i] += cv[i];
                         }
@@ -559,18 +808,36 @@ impl Solver {
     }
 
     fn scalar(&self, vals: &[f64], own_prob: &[f64]) -> f64 {
-        vals.iter().zip(own_prob).map(|(v, p)| v * p).sum()
+        vals.iter().zip(own_prob).map(|(v, p)| v * p).sum::<f64>() / self.joint_mass
     }
 
-    fn exploitability(&self, root: usize) -> f64 {
-        // Best response value for each player vs opponent's average strategy.
-        let br_oop = self.evaluate_val(root, 0, &self.ip_prob, self.n_oop, true);
-        let br_ip = self.evaluate_val(root, 1, &self.oop_prob, self.n_ip, true);
-        let ev_oop = self.evaluate_val(root, 0, &self.ip_prob, self.n_oop, false);
-        let ev_ip = self.evaluate_val(root, 1, &self.oop_prob, self.n_ip, false);
+    fn opponent_compatible_mass(&self, player: usize, hand: usize) -> f64 {
+        if player == 0 {
+            (0..self.n_ip)
+                .filter(|opponent| self.compat[hand * self.n_ip + opponent])
+                .map(|opponent| self.ip_prob[opponent])
+                .sum()
+        } else {
+            (0..self.n_oop)
+                .filter(|opponent| self.compat[opponent * self.n_ip + hand])
+                .map(|opponent| self.oop_prob[opponent])
+                .sum()
+        }
+    }
+
+    fn exploitability_for_profile(&self, root: usize, profile: &[Vec<f64>]) -> f64 {
+        let br_oop = self.evaluate_profile_value(root, 0, &self.ip_prob, self.n_oop, profile, true);
+        let br_ip = self.evaluate_profile_value(root, 1, &self.oop_prob, self.n_ip, profile, true);
+        let ev_oop =
+            self.evaluate_profile_value(root, 0, &self.ip_prob, self.n_oop, profile, false);
+        let ev_ip = self.evaluate_profile_value(root, 1, &self.oop_prob, self.n_ip, profile, false);
         let nc = (self.scalar(&br_oop, &self.oop_prob) - self.scalar(&ev_oop, &self.oop_prob))
             + (self.scalar(&br_ip, &self.ip_prob) - self.scalar(&ev_ip, &self.ip_prob));
         nc.max(0.0)
+    }
+
+    fn exploitability(&self, root: usize) -> f64 {
+        self.exploitability_for_profile(root, &self.average_profile())
     }
 }
 
@@ -671,6 +938,26 @@ fn take_top(mut hands: Vec<(u8, u8, f64)>, max: usize) -> (Vec<(u8, u8, f64)>, b
     (hands, true)
 }
 
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn xfp_probability(
+    old_probability: f64,
+    response_probability: f64,
+    old_reach: f64,
+    response_reach: f64,
+    old_count: f64,
+) -> f64 {
+    let denominator = old_count * old_reach + response_reach;
+    if denominator <= 1e-15 {
+        old_probability
+    } else {
+        (old_count * old_reach * old_probability + response_reach * response_probability)
+            / denominator
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -682,7 +969,9 @@ pub fn solve(input_json: &str) -> String {
         Err(e) => return format!("{{\"error\":\"parse: {}\"}}", e),
     };
     match run(input) {
-        Ok(out) => serde_json::to_string(&out).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e)),
+        Ok(out) => {
+            serde_json::to_string(&out).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+        }
         Err(e) => format!("{{\"error\":\"{}\"}}", e),
     }
 }
@@ -704,9 +993,8 @@ fn run(input: Input) -> Result<Output, String> {
             on_board[c as usize] = true;
         }
     }
-    let board_free = |h: &(u8, u8, f64)| {
-        !on_board[h.0 as usize] && !on_board[h.1 as usize] && h.0 != h.1
-    };
+    let board_free =
+        |h: &(u8, u8, f64)| !on_board[h.0 as usize] && !on_board[h.1 as usize] && h.0 != h.1;
     let oop_in: Vec<_> = input.oop.into_iter().filter(|h| board_free(h)).collect();
     let ip_in: Vec<_> = input.ip.into_iter().filter(|h| board_free(h)).collect();
 
@@ -743,6 +1031,23 @@ fn run(input: Input) -> Result<Output, String> {
             eq[i * n_ip + j] = pair_equity(a, b, &input.board, need);
         }
     }
+    let joint_mass: f64 = (0..n_oop)
+        .flat_map(|i| {
+            let oop_weight = oop_prob[i];
+            let ip_prob_ref = &ip_prob;
+            let compat_ref = &compat;
+            (0..n_ip).map(move |j| {
+                if compat_ref[i * n_ip + j] {
+                    oop_weight * ip_prob_ref[j]
+                } else {
+                    0.0
+                }
+            })
+        })
+        .sum();
+    if joint_mass <= 1e-15 {
+        return Err("the two ranges contain no compatible private-hand pairs".into());
+    }
 
     // Build tree.
     let mut tree = Tree {
@@ -766,7 +1071,9 @@ fn run(input: Input) -> Result<Output, String> {
     let mut strat_sum: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
     for node in 0..num_nodes {
         let (p, na) = match &tree.nodes[node] {
-            Node::Decision { player, children, .. } => (*player, children.len()),
+            Node::Decision {
+                player, children, ..
+            } => (*player, children.len()),
             _ => (0, 0),
         };
         let n = if na == 0 {
@@ -790,13 +1097,16 @@ fn run(input: Input) -> Result<Output, String> {
         ip_prob: ip_prob.clone(),
         eq,
         compat,
+        joint_mass,
         regret,
         strat_sum,
     };
 
-    // CFR+ iterations (both players each iteration).
+    // Always produce the existing CFR+ model. For XFP it becomes the first
+    // member of the empirical opponent population (a mathematically valid
+    // arbitrary initialization) and the fixed cross-play baseline.
     let iters = input.iterations.max(1);
-    let mut history = Vec::new();
+    let mut cfr_history = Vec::new();
     for t in 1..=iters {
         let oop_reach = oop_prob.clone();
         let ip_reach = ip_prob.clone();
@@ -805,23 +1115,91 @@ fn run(input: Input) -> Result<Output, String> {
         if t % (iters / 10).max(1) == 0 || t == iters {
             let e = solver.exploitability(root);
             let pct = e / input.pot * 100.0;
-            history.push((pct * 100.0).round() / 100.0);
+            cfr_history.push((pct * 100.0).round() / 100.0);
         }
     }
+    let cfr_profile = solver.average_profile();
 
-    let final_expl = solver.exploitability(root) / input.pot * 100.0;
+    let (algorithm, history, cfr_comparison) = if input.algorithm == Algorithm::CfrPlus {
+        ("cfr_plus".to_string(), cfr_history, None)
+    } else {
+        // Give the CFR+ initialization one unit of prior weight per CFR
+        // training iteration. This is a generalized weakened-FP stepsize
+        // schedule: α still tends to zero and its infinite sum diverges, so it
+        // preserves convergence while avoiding a destructive first pure-BR
+        // swing away from an already strong CFR profile.
+        solver.strat_sum = cfr_profile.clone();
+        let mut xfp_history = Vec::new();
+        for step in 1..=iters {
+            let old_profile = solver.average_profile();
+            let oop_response = solver.best_response_profile(root, 0, &old_profile);
+            let ip_response = solver.best_response_profile(root, 1, &old_profile);
+            let mut next_profile = old_profile.clone();
+            solver.xfp_update_player(
+                root,
+                0,
+                &old_profile,
+                &oop_response,
+                iters as f64 + step as f64 - 1.0,
+                &mut next_profile,
+            );
+            solver.xfp_update_player(
+                root,
+                1,
+                &old_profile,
+                &ip_response,
+                iters as f64 + step as f64 - 1.0,
+                &mut next_profile,
+            );
+            solver.strat_sum = next_profile;
+
+            if step % (iters / 10).max(1) == 0 || step == iters {
+                let pct = solver.exploitability(root) / input.pot * 100.0;
+                xfp_history.push((pct * 100.0).round() / 100.0);
+            }
+        }
+
+        let xfp_profile = solver.average_profile();
+        let mut fp_oop_vs_cfr_ip = cfr_profile.clone();
+        let mut cfr_oop_vs_fp_ip = cfr_profile.clone();
+        for (node, tree_node) in solver.tree.nodes.iter().enumerate() {
+            match tree_node {
+                Node::Decision { player: 0, .. } => {
+                    fp_oop_vs_cfr_ip[node] = xfp_profile[node].clone();
+                }
+                Node::Decision { player: 1, .. } => {
+                    cfr_oop_vs_fp_ip[node] = xfp_profile[node].clone();
+                }
+                _ => {}
+            }
+        }
+        let fp_oop_values =
+            solver.evaluate_profile_value(root, 0, &ip_prob, n_oop, &fp_oop_vs_cfr_ip, false);
+        let fp_ip_values =
+            solver.evaluate_profile_value(root, 1, &oop_prob, n_ip, &cfr_oop_vs_fp_ip, false);
+        let comparison = CfrComparison {
+            cfr_iterations: iters,
+            fp_oop_vs_cfr_ip_ev: round2(solver.scalar(&fp_oop_values, &oop_prob)),
+            fp_ip_vs_cfr_oop_ev: round2(solver.scalar(&fp_ip_values, &ip_prob)),
+        };
+        ("fictitious_play".to_string(), xfp_history, Some(comparison))
+    };
+
+    let final_profile = solver.average_profile();
+    let final_expl = solver.exploitability_for_profile(root, &final_profile) / input.pot * 100.0;
 
     // Overall EVs (chips) under average strategy.
-    let ev_oop_vec = solver.evaluate_val(root, 0, &ip_prob, n_oop, false);
-    let ev_ip_vec = solver.evaluate_val(root, 1, &oop_prob, n_ip, false);
+    let ev_oop_vec = solver.evaluate_profile_value(root, 0, &ip_prob, n_oop, &final_profile, false);
+    let ev_ip_vec = solver.evaluate_profile_value(root, 1, &oop_prob, n_ip, &final_profile, false);
     let oop_ev = solver.scalar(&ev_oop_vec, &oop_prob);
     let ip_ev = solver.scalar(&ev_ip_vec, &ip_prob);
 
     // Strategy outputs: OOP root, and IP node after OOP checks.
     let ip_vs_check = ip_node_after_oop_check(&solver, root);
-    let oop_strat = node_strategy_root(&solver, root, root, 0, "OOP — first to act");
+    let oop_strat =
+        node_strategy_root(&solver, &final_profile, root, root, 0, "OOP — first to act");
     let ip_strat = match ip_vs_check {
-        Some(n) => node_strategy_root(&solver, n, root, 1, "IP — vs check"),
+        Some(n) => node_strategy_root(&solver, &final_profile, n, root, 1, "IP — vs check"),
         None => NodeStrategy {
             title: "IP".into(),
             actions: vec![],
@@ -830,23 +1208,28 @@ fn run(input: Input) -> Result<Output, String> {
     };
 
     Ok(Output {
+        algorithm,
         iterations: iters,
-        exploitability_pct: (final_expl * 100.0).round() / 100.0,
-        oop_ev: (oop_ev * 100.0).round() / 100.0,
-        ip_ev: (ip_ev * 100.0).round() / 100.0,
+        exploitability_pct: round2(final_expl),
+        oop_ev: round2(oop_ev),
+        ip_ev: round2(ip_ev),
         pot: input.pot,
         oop_combos,
         ip_combos,
         truncated: trunc_o || trunc_i,
         oop: oop_strat,
         ip: ip_strat,
-        exploitability_history: history.into_iter().map(|x| x).collect(),
+        exploitability_history: history,
+        cfr_comparison,
     })
 }
 
 /// The IP decision node reached when OOP's first action is "Check".
 fn ip_node_after_oop_check(solver: &Solver, root: usize) -> Option<usize> {
-    if let Node::Decision { labels, children, .. } = &solver.tree.nodes[root] {
+    if let Node::Decision {
+        labels, children, ..
+    } = &solver.tree.nodes[root]
+    {
         for (i, l) in labels.iter().enumerate() {
             if l == "Check" {
                 if let Node::Decision { .. } = &solver.tree.nodes[children[i]] {
@@ -862,6 +1245,7 @@ fn ip_node_after_oop_check(solver: &Solver, root: usize) -> Option<usize> {
 /// game `root` for the per-hand EV computation.
 fn node_strategy_root(
     solver: &Solver,
+    profile: &[Vec<f64>],
     node: usize,
     root: usize,
     player: usize,
@@ -873,27 +1257,43 @@ fn node_strategy_root(
         (&solver.ip_cards, &solver.ip_prob, solver.n_ip)
     };
     let (labels, na) = match &solver.tree.nodes[node] {
-        Node::Decision { labels, children, .. } => (labels.clone(), children.len()),
+        Node::Decision {
+            labels, children, ..
+        } => (labels.clone(), children.len()),
         _ => (vec![], 0),
     };
     if na == 0 {
-        return NodeStrategy { title: title.into(), actions: vec![], rows: vec![] };
+        return NodeStrategy {
+            title: title.into(),
+            actions: vec![],
+            rows: vec![],
+        };
     }
-    let avg = solver.average_strategy(node, n, na);
-    let opp = if player == 0 { &solver.ip_prob } else { &solver.oop_prob };
-    let ev_vec = solver.evaluate_val(root, player, opp, n, false);
+    let avg = Solver::profile_strategy(profile, node, n, na);
+    let opp = if player == 0 {
+        &solver.ip_prob
+    } else {
+        &solver.oop_prob
+    };
+    let ev_vec = solver.evaluate_profile_value(root, player, opp, n, profile, false);
 
     use std::collections::BTreeMap;
     let mut classes: BTreeMap<String, (f64, Vec<f64>, f64)> = BTreeMap::new();
     for i in 0..n {
         let cls = hand_class(cards[i].0, cards[i].1);
         let entry = classes.entry(cls).or_insert((0.0, vec![0.0; na], 0.0));
-        let w = probs[i];
+        let opponent_mass = solver.opponent_compatible_mass(player, i);
+        if opponent_mass <= 1e-15 {
+            continue;
+        }
+        // Weight private hands by their true marginal probability after card
+        // removal, rather than by the independent input range alone.
+        let w = probs[i] * opponent_mass / solver.joint_mass;
         entry.0 += w;
         for a in 0..na {
             entry.1[a] += w * avg[i * na + a];
         }
-        entry.2 += w * ev_vec[i];
+        entry.2 += w * (ev_vec[i] / opponent_mass);
     }
     let mut rows = Vec::new();
     for (cls, (mass, acts, evsum)) in classes {
@@ -902,52 +1302,126 @@ fn node_strategy_root(
         }
         let ev = evsum / mass;
         let actions = (0..na)
-            .map(|a| ActionStrategy { action: labels[a].clone(), freq: acts[a] / mass, ev })
+            .map(|a| ActionStrategy {
+                action: labels[a].clone(),
+                freq: acts[a] / mass,
+                ev,
+            })
             .collect();
-        rows.push(ClassRow { class: cls, combos: mass, actions });
+        rows.push(ClassRow {
+            class: cls,
+            combos: mass,
+            actions,
+        });
     }
-    NodeStrategy { title: title.into(), actions: labels, rows }
+    NodeStrategy {
+        title: title.into(),
+        actions: labels,
+        rows,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn card(r: u8, s: u8) -> u8 { r * 4 + s }
+    fn card(r: u8, s: u8) -> u8 {
+        r * 4 + s
+    }
 
     #[test]
-    fn converges_and_sane() {
+    fn xfp_averages_realization_reach_not_behavior_directly() {
+        assert!((xfp_probability(0.25, 1.0, 1.0, 1.0, 1.0) - 0.625).abs() < 1e-12);
+        // At a downstream information set the old strategy reaches the state
+        // half as often as the pure best response, so its local update receives
+        // half the weight that a naive 50/50 behavior average would assign.
+        let downstream = xfp_probability(0.8, 1.0, 0.5, 1.0, 1.0);
+        assert!((downstream - (1.4 / 1.5)).abs() < 1e-12);
+        assert_eq!(xfp_probability(0.3, 1.0, 0.0, 0.0, 4.0), 0.3);
+    }
+
+    fn test_input(algorithm: Algorithm) -> Input {
         // Board Kh 7d 2c (dry). OOP has nut overpair + air; IP top pair + air.
-        let board = vec![card(11,2), card(5,1), card(0,0)];
-        let input = Input {
+        let board = vec![card(11, 2), card(5, 1), card(0, 0)];
+        Input {
             board,
             oop: vec![
-                (card(12,3), card(12,2), 1.0), // AsAh overpair (nuts here)
-                (card(3,3),  card(2,3),  1.0), // 5s4s air
+                (card(12, 3), card(12, 2), 1.0), // AsAh overpair (nuts here)
+                (card(3, 3), card(2, 3), 1.0),   // 5s4s air
             ],
             ip: vec![
-                (card(11,3), card(10,3), 1.0), // KsQs top pair
-                (card(7,2),  card(6,2),  1.0), // 9h8h air
+                (card(11, 3), card(10, 3), 1.0), // KsQs top pair
+                (card(7, 2), card(6, 2), 1.0),   // 9h8h air
             ],
             pot: 6.0,
             stack: 100.0,
             bet_sizes: vec![0.75],
             raise_sizes: vec![1.0],
             iterations: 400,
+            algorithm,
             max_combos: 200,
-        };
-        let out = run(input).expect("solve");
-        eprintln!("exploitability%={} oop_ev={} ip_ev={}", out.exploitability_pct, out.oop_ev, out.ip_ev);
+        }
+    }
+
+    #[test]
+    fn cfr_plus_converges_and_is_constant_sum() {
+        let out = run(test_input(Algorithm::CfrPlus)).expect("solve");
+        eprintln!(
+            "exploitability%={} oop_ev={} ip_ev={}",
+            out.exploitability_pct, out.oop_ev, out.ip_ev
+        );
         eprintln!("history={:?}", out.exploitability_history);
         for r in &out.oop.rows {
-            let fr: Vec<String> = r.actions.iter().map(|a| format!("{}={:.2}", a.action, a.freq)).collect();
-            eprintln!("OOP {} [{}] ev={:.2}", r.class, fr.join(","), r.actions[0].ev);
+            let fr: Vec<String> = r
+                .actions
+                .iter()
+                .map(|a| format!("{}={:.2}", a.action, a.freq))
+                .collect();
+            eprintln!(
+                "OOP {} [{}] ev={:.2}",
+                r.class,
+                fr.join(","),
+                r.actions[0].ev
+            );
         }
         for r in &out.ip.rows {
-            let fr: Vec<String> = r.actions.iter().map(|a| format!("{}={:.2}", a.action, a.freq)).collect();
+            let fr: Vec<String> = r
+                .actions
+                .iter()
+                .map(|a| format!("{}={:.2}", a.action, a.freq))
+                .collect();
             eprintln!("IP(vs check) {} [{}]", r.class, fr.join(","));
         }
         // Exploitability should be driven low.
-        assert!(out.exploitability_pct < 5.0, "expl too high: {}", out.exploitability_pct);
+        assert!(
+            out.exploitability_pct < 5.0,
+            "expl too high: {}",
+            out.exploitability_pct
+        );
+        assert!((out.oop_ev + out.ip_ev - out.pot).abs() < 0.02);
+        assert!(out.cfr_comparison.is_none());
+    }
+
+    #[test]
+    fn fictitious_play_converges_from_cfr_population_and_cross_plays_it() {
+        let out = run(test_input(Algorithm::FictitiousPlay)).expect("solve");
+        eprintln!(
+            "xfp exploitability%={} oop_ev={} ip_ev={} history={:?}",
+            out.exploitability_pct, out.oop_ev, out.ip_ev, out.exploitability_history
+        );
+        assert!(
+            out.exploitability_pct < 5.0,
+            "expl too high: {}",
+            out.exploitability_pct
+        );
+        assert!((out.oop_ev + out.ip_ev - out.pot).abs() < 0.02);
+        let comparison = out.cfr_comparison.expect("CFR cross-play report");
+        assert_eq!(comparison.cfr_iterations, 400);
+        assert!(comparison.fp_oop_vs_cfr_ip_ev.is_finite());
+        assert!(comparison.fp_ip_vs_cfr_oop_ev.is_finite());
+        for row in out.oop.rows.iter().chain(out.ip.rows.iter()) {
+            let probability: f64 = row.actions.iter().map(|action| action.freq).sum();
+            assert!((probability - 1.0).abs() < 1e-9);
+        }
     }
 }

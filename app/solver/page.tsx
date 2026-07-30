@@ -25,6 +25,9 @@ import { StrategyView } from '@/components/solver/SolverResults';
 import {
   useSolver,
   rangeToTriples,
+} from '@/lib/solver/client';
+import type {
+  SolverAlgorithm,
   SolverResult,
   SolverInput,
 } from '@/lib/solver/client';
@@ -60,6 +63,10 @@ const SIZING_PRESETS: Record<string, Sizing> = {
 };
 
 const SOLVE_ITERATIONS = 1000;
+const ALGORITHM_LABELS: Record<SolverAlgorithm, string> = {
+  cfr_plus: 'CFR+',
+  fictitious_play: 'Fictitious Play (XFP)',
+};
 
 export default function SolverPage() {
   const [board, setBoard] = useState<Card[]>(() => parseBoard(EXAMPLE.board));
@@ -74,6 +81,7 @@ export default function SolverPage() {
   const [betSizes, setBetSizes] = useState('33, 75');
   const [raiseSizes, setRaiseSizes] = useState('100');
   const [sizing, setSizing] = useState('srp');
+  const [algorithm, setAlgorithm] = useState<SolverAlgorithm>('cfr_plus');
   const [result, setResult] = useState<SolverResult | null>(null);
   const [rangeTab, setRangeTab] = useState<'oop' | 'ip'>('oop');
   const [stratTab, setStratTab] = useState<'oop' | 'ip'>('oop');
@@ -131,11 +139,12 @@ export default function SolverPage() {
       bet_sizes: parseSizes(betSizes),
       raise_sizes: parseSizes(raiseSizes),
       iterations: SOLVE_ITERATIONS,
+      algorithm,
       max_combos: 200,
     };
     const r = await solve(input);
     if (version === solveVersion.current) setResult(r);
-  }, [oop, ip, board, pot, stack, betSizes, raiseSizes, solve]);
+  }, [oop, ip, board, pot, stack, betSizes, raiseSizes, algorithm, solve]);
 
   // Auto-solve (debounced) whenever the spot is valid and inputs change — so
   // the page shows a result on load and updates as you edit, no hunting for a
@@ -151,7 +160,7 @@ export default function SolverPage() {
     if (board.length < 3) return null;
     return {
       kind: 'postflop',
-      description: 'Postflop spot solved with in-browser CFR (all-in-equity model).',
+      description: `Postflop spot solved with in-browser ${ALGORITHM_LABELS[algorithm]} (all-in-equity model).`,
       board: board.map(cardToStr).join(''),
       heroRange: serializeRange(weightsToRange(oop)) || '(empty)',
       villainRange: serializeRange(weightsToRange(ip)) || '(empty)',
@@ -159,6 +168,7 @@ export default function SolverPage() {
       stackBB: stack,
       extra: {
         'Bet sizes (% pot)': betSizes,
+        'Solver model': ALGORITHM_LABELS[algorithm],
         ...(result
           ? {
               Exploitability: `${result.exploitability_pct}% of pot`,
@@ -168,7 +178,7 @@ export default function SolverPage() {
           : {}),
       },
     };
-  }, [board, oop, ip, pot, stack, betSizes, result]);
+  }, [board, oop, ip, pot, stack, betSizes, algorithm, result]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -187,6 +197,7 @@ export default function SolverPage() {
             <InlineStat label="Exploitability" value={`${result.exploitability_pct}%`} />
             <InlineStat label="OOP EV" value={`${result.oop_ev} bb`} />
             <InlineStat label="IP EV" value={`${result.ip_ev} bb`} />
+            <InlineStat label="Model" value={ALGORITHM_LABELS[result.algorithm]} />
             <InlineStat label="Iterations" value={`${result.iterations}`} />
             {result.truncated && (
               <span className="text-xs text-muted">ranges capped</span>
@@ -238,6 +249,24 @@ export default function SolverPage() {
               size="lg"
             />
 
+            <label htmlFor="algorithm" className="mb-1.5 mt-4 block text-xs text-muted">
+              Solver model
+            </label>
+            <select
+              id="algorithm"
+              value={algorithm}
+              onChange={(e) => setAlgorithm(e.target.value as SolverAlgorithm)}
+              className="w-full rounded-md border border-border bg-surface-2 p-2 text-sm text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <option value="cfr_plus">CFR+</option>
+              <option value="fictitious_play">Fictitious Play (XFP)</option>
+            </select>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+              {algorithm === 'cfr_plus'
+                ? 'Counterfactual regret minimization with linear averaging.'
+                : 'Exact best-response self-play, initialized against the CFR+ strategy and averaged by realization reach.'}
+            </p>
+
             <label htmlFor="sizing" className="mb-1.5 mt-4 block text-xs text-muted">
               Bet sizing
             </label>
@@ -269,6 +298,21 @@ export default function SolverPage() {
         <div>
           {result && !result.error ? (
             <div className="rounded-lg border border-border bg-surface p-4">
+              {result.cfr_comparison && (
+                <div className="mb-4 rounded-md border border-border bg-surface-2 p-3">
+                  <div className="text-xs font-semibold">
+                    Trained against {result.cfr_comparison.cfr_iterations.toLocaleString()}-iteration CFR+
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
+                    <span>
+                      XFP as OOP: {result.cfr_comparison.fp_oop_vs_cfr_ip_ev.toFixed(2)} bb
+                    </span>
+                    <span>
+                      XFP as IP: {result.cfr_comparison.fp_ip_vs_cfr_oop_ev.toFixed(2)} bb
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="mb-3 flex items-center gap-2">
                 <div className="flex flex-1 gap-1 rounded-md bg-surface-2 p-1">
                 <TabButton
