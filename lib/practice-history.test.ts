@@ -51,6 +51,21 @@ describe('practice history', () => {
     expect(loadPracticeHistory()).toEqual([valid]);
   });
 
+  it('loads wrapped v1 records that predate scenario snapshots', () => {
+    const chart = CHARTS.find((candidate) => candidate.id === 'rfi-BTN')!;
+    const current = recordPracticeAnswer(
+      createPracticeQuestion(chart, 'AA', 6, 'legacy'),
+      'Raise',
+      100,
+      Date.UTC(2026, 6, 23)
+    );
+    const legacy = { ...current };
+    delete legacy.scenario;
+    installStorage({ version: 1, records: [legacy] });
+
+    expect(loadPracticeHistory()).toEqual([legacy]);
+  });
+
   it('keeps the session usable when storage writes fail', () => {
     installStorage([], true);
     const chart = CHARTS.find((candidate) => candidate.id === 'rfi-BTN')!;

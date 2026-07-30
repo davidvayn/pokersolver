@@ -32,6 +32,11 @@ import {
 } from '@/lib/practice';
 import { appendPracticeRecords } from '@/lib/practice-history';
 import {
+  defaultScenarioForSeats,
+  openingSizeLabel,
+  scenariosForSeats,
+} from '@/data/preflop/catalog';
+import {
   formatForSeats,
   positionFullForSeats,
   positionLabelForSeats,
@@ -66,6 +71,7 @@ const ACTION_STYLES: Record<PracticeAction, string> = {
   Call: 'border-call/50 hover:border-call hover:bg-call/10',
   Raise: 'border-raise/50 hover:border-raise hover:bg-raise/10',
   '3-bet': 'border-allin/50 hover:border-allin hover:bg-allin/10',
+  'All-in': 'border-allin/50 hover:border-allin hover:bg-allin/10',
 };
 
 const ACTION_FILLED_STYLES: Record<PracticeAction, string> = {
@@ -73,6 +79,7 @@ const ACTION_FILLED_STYLES: Record<PracticeAction, string> = {
   Call: 'border-call bg-call text-call-fg',
   Raise: 'border-raise bg-raise text-raise-fg',
   '3-bet': 'border-allin bg-allin text-allin-fg',
+  'All-in': 'border-allin bg-allin text-allin-fg',
 };
 
 function toggleValue<T>(values: T[], value: T): T[] {
@@ -93,6 +100,23 @@ function percentage(value: number): string {
     : `${percent.toFixed(1)}%`;
 }
 
+function categoryCopy(category: PracticeCategory, allIn: boolean) {
+  if (category === 'RFI') {
+    return allIn
+      ? {
+          label: 'Push or fold',
+          description: 'Choose whether to move all-in when first to act.',
+        }
+      : CATEGORY_OPTIONS[0];
+  }
+  return allIn
+    ? {
+        label: 'Facing a shove',
+        description: 'Choose whether to call an all-in.',
+      }
+    : CATEGORY_OPTIONS[1];
+}
+
 function actionColor(action: PracticeAction): string {
   switch (action) {
     case 'Fold':
@@ -102,6 +126,7 @@ function actionColor(action: PracticeAction): string {
     case 'Raise':
       return 'bg-raise';
     case '3-bet':
+    case 'All-in':
       return 'bg-allin';
   }
 }
@@ -119,6 +144,13 @@ export default function PracticePage() {
   const questionStartedAt = useRef(0);
 
   const availableCharts = useMemo(() => chartsForPractice(rules), [rules]);
+  const scenarios = useMemo(
+    () => scenariosForSeats(rules.seats),
+    [rules.seats]
+  );
+  const activeScenario =
+    scenarios.find((scenario) => scenario.id === rules.scenarioId) ??
+    scenarios[0];
   const currentQuestion = questions[questionIndex];
   const answeredCount = records.length;
   const correctCount = records.filter((record) => record.correct).length;
@@ -127,11 +159,18 @@ export default function PracticePage() {
     : 0;
 
   function setSeats(seats: TableSeats) {
+    const scenario = defaultScenarioForSeats(seats);
     setRules((current) => ({
       ...current,
       seats,
+      scenarioId: scenario.id,
       positions: [...formatForSeats(seats).positions],
     }));
+    setSetupError('');
+  }
+
+  function setScenario(scenarioId: string) {
+    setRules((current) => ({ ...current, scenarioId }));
     setSetupError('');
   }
 
@@ -286,11 +325,50 @@ export default function PracticePage() {
                 <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-2 font-mono text-xs text-muted">
                   2
                 </span>
+                Range source and stack
+              </legend>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {scenarios.map((scenario) => {
+                  const selected = scenario.id === activeScenario?.id;
+                  return (
+                    <button
+                      key={scenario.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setScenario(scenario.id)}
+                      className={
+                        'min-h-16 rounded-md border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+                        (selected
+                          ? 'border-accent bg-accent/10'
+                          : 'border-border hover:border-accent/60 hover:bg-surface-2')
+                      }
+                    >
+                      <span className="block text-sm font-semibold text-fg">
+                        {scenario.effectiveStackBb}bb · {scenario.label}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted">
+                        {openingSizeLabel(scenario.openingSize)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            <fieldset className="border-b border-border p-5 sm:p-6">
+              <legend className="flex items-center gap-2 text-sm font-semibold">
+                <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-2 font-mono text-xs text-muted">
+                  3
+                </span>
                 Spot types
               </legend>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 {CATEGORY_OPTIONS.map((category) => {
                   const selected = rules.categories.includes(category.value);
+                  const copy = categoryCopy(
+                    category.value,
+                    activeScenario?.openingSize.kind === 'all-in'
+                  );
                   return (
                     <button
                       key={category.value}
@@ -317,10 +395,10 @@ export default function PracticePage() {
                       </span>
                       <span>
                         <span className="block text-sm font-semibold">
-                          {category.label}
+                          {copy.label}
                         </span>
                         <span className="mt-1 block text-xs leading-5 text-muted">
-                          {category.description}
+                          {copy.description}
                         </span>
                       </span>
                     </button>
@@ -332,7 +410,7 @@ export default function PracticePage() {
             <fieldset className="border-b border-border p-5 sm:p-6">
               <legend className="flex items-center gap-2 text-sm font-semibold">
                 <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-2 font-mono text-xs text-muted">
-                  3
+                  4
                 </span>
                 Eligible positions
               </legend>
@@ -363,7 +441,7 @@ export default function PracticePage() {
             <fieldset className="p-5 sm:p-6">
               <legend className="flex items-center gap-2 text-sm font-semibold">
                 <span className="grid h-7 w-7 place-items-center rounded-md bg-surface-2 font-mono text-xs text-muted">
-                  4
+                  5
                 </span>
                 Session length
               </legend>
@@ -435,13 +513,20 @@ export default function PracticePage() {
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-4 py-4">
+                <dt className="text-sm text-muted">Ranges</dt>
+                <dd className="text-right text-sm font-semibold">
+                  {activeScenario?.effectiveStackBb}bb · {activeScenario?.label}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-4 py-4">
                 <dt className="text-sm text-muted">Spot types</dt>
                 <dd className="text-right text-sm font-semibold">
                   {rules.categories.length === 2
                     ? 'Both'
-                    : rules.categories[0] === 'RFI'
-                      ? 'Raise first in'
-                      : 'Facing a raise'}
+                    : categoryCopy(
+                        rules.categories[0],
+                        activeScenario?.openingSize.kind === 'all-in'
+                      ).label}
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-4 py-4">
@@ -567,12 +652,19 @@ export default function PracticePage() {
     : null;
   const progress = ((questionIndex + (selectedAction ? 1 : 0)) / questions.length) *
     100;
+  const openingSize = currentQuestion.scenario.openingSize;
   const prompt =
     currentQuestion.category === 'RFI'
-      ? currentQuestion.seats === 2
-        ? 'You are first to act before the flop.'
-        : 'The action folds to you.'
-      : `${currentQuestion.villain ?? 'Villain'} opens to 2.5bb.`;
+      ? openingSize.kind === 'all-in'
+        ? 'The action is on you. Choose between folding and moving all-in.'
+        : currentQuestion.seats === 2
+          ? 'You are first to act before the flop.'
+          : 'The action folds to you.'
+      : openingSize.kind === 'all-in'
+        ? `${currentQuestion.villain ?? 'Villain'} moves all-in for ${currentQuestion.scenario.effectiveStackBb}bb.`
+        : openingSize.kind === 'raise-to'
+          ? `${currentQuestion.villain ?? 'Villain'} opens to ${openingSize.bb}bb.`
+          : `${currentQuestion.villain ?? 'Villain'} makes the reference opening action.`;
   const heroLabel =
     currentQuestion.seats === 2 && currentQuestion.hero === 'BTN'
       ? 'Button / small blind'
@@ -624,11 +716,17 @@ export default function PracticePage() {
               <span className="font-semibold">
                 {formatForSeats(currentQuestion.seats).label}
               </span>
-              <span className="text-muted">100bb cash</span>
+              <span className="text-muted">
+                {currentQuestion.scenario.effectiveStackBb}bb effective
+              </span>
               <span className="text-muted">
                 {currentQuestion.category === 'RFI'
-                  ? 'Raise first in'
-                  : 'Facing a raise'}
+                  ? openingSize.kind === 'all-in'
+                    ? 'Push or fold'
+                    : 'Raise first in'
+                  : openingSize.kind === 'all-in'
+                    ? 'Facing a shove'
+                    : 'Facing an open'}
               </span>
             </div>
           </div>

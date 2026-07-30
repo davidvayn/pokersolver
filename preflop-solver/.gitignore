@@ -1,0 +1,6 @@
+/target/
+/push-fold-artifact.json
+/artifacts/hu-blueprint-*.json
+!/artifacts/hu-blueprint-*-stability.json
+!/artifacts/hu-blueprint-*-vs-*.json
+/artifacts/*.checkpoint.json

@@ -1,18 +1,18 @@
 'use client';
 
-import type { PracticeRecord } from '@/lib/practice';
+import type { PracticeRecord } from '@/lib/practice-types';
 import { POSITION_LABELS } from '@/lib/positions';
 
 const STORAGE_KEY = 'poker-lab-practice-history-v1';
 const HISTORY_EVENT = 'poker-lab-practice-history';
 const MAX_RECORDS = 5000;
-const STORAGE_VERSION = 1;
-const ACTIONS = new Set(['Fold', 'Call', 'Raise', '3-bet']);
+const STORAGE_VERSION = 2;
+const ACTIONS = new Set(['Fold', 'Call', 'Raise', '3-bet', 'All-in']);
 const CATEGORIES = new Set(['RFI', 'vs-RFI']);
 const POSITIONS = new Set(Object.keys(POSITION_LABELS));
 
 interface StoredHistory {
-  version: typeof STORAGE_VERSION;
+  version: 1 | typeof STORAGE_VERSION;
   records: PracticeRecord[];
 }
 
@@ -98,12 +98,51 @@ function isPracticeRecord(value: unknown): value is PracticeRecord {
     typeof record.responseMs === 'number' &&
     Number.isFinite(record.responseMs) &&
     record.responseMs >= 0 &&
-    record.responseMs <= 86_400_000
+    record.responseMs <= 86_400_000 &&
+    (record.scenario === undefined || isScenarioSnapshot(record.scenario))
   );
 }
 
 function isStoredHistory(value: unknown): value is StoredHistory {
   if (!value || typeof value !== 'object') return false;
   const stored = value as Partial<StoredHistory>;
-  return stored.version === STORAGE_VERSION && Array.isArray(stored.records);
+  return (
+    (stored.version === 1 || stored.version === STORAGE_VERSION) &&
+    Array.isArray(stored.records)
+  );
+}
+
+function isScenarioSnapshot(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const scenario = value as NonNullable<PracticeRecord['scenario']>;
+  if (
+    typeof scenario.scenarioId !== 'string' ||
+    scenario.scenarioId.length === 0 ||
+    typeof scenario.label !== 'string' ||
+    !Number.isFinite(scenario.effectiveStackBb) ||
+    scenario.effectiveStackBb <= 0 ||
+    !scenario.openingSize ||
+    typeof scenario.openingSize !== 'object' ||
+    !scenario.provenance ||
+    typeof scenario.provenance !== 'object'
+  ) {
+    return false;
+  }
+  const opening = scenario.openingSize;
+  const validOpening =
+    opening.kind === 'all-in' ||
+    opening.kind === 'unspecified' ||
+    (opening.kind === 'raise-to' &&
+      Number.isFinite(opening.bb) &&
+      opening.bb > 0);
+  const provenance = scenario.provenance;
+  return (
+    validOpening &&
+    (provenance.source === 'curated' ||
+      provenance.source === 'offline-solver') &&
+    (provenance.status === 'reference' ||
+      provenance.status === 'validated' ||
+      provenance.status === 'approximate') &&
+    typeof provenance.model === 'string'
+  );
 }

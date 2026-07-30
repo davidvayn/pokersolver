@@ -1,89 +1,40 @@
+import type { PreflopChart } from '@/data/preflop/ranges';
 import {
-  CHARTS,
-  type ChartActionName,
-  type PreflopChart,
-} from '@/data/preflop/ranges';
+  defaultScenarioForSeats,
+  PREFLOP_SCENARIOS,
+  scenarioSnapshot,
+  type PreflopScenario,
+} from '@/data/preflop/catalog';
 import {
   comboKey,
   comboLabelToCombos,
   handClassLabel,
   parseRange,
 } from '@/lib/cards';
-import {
-  formatForSeats,
-  positionLabelForSeats,
-} from '@/lib/positions';
 import type { Position, TableSeats } from '@/lib/positions';
+import type {
+  PracticeAction,
+  PracticeCategory,
+  PracticeQuestion,
+  PracticeRecord,
+  PracticeRules,
+} from '@/lib/practice-types';
 
-export type PracticeAction = 'Fold' | ChartActionName;
-export type PracticeCategory = PreflopChart['category'];
-
-export interface PracticeRules {
-  seats: TableSeats;
-  categories: PracticeCategory[];
-  positions: Position[];
-  questionCount: number;
-}
-
-export interface ActionFrequency {
-  action: PracticeAction;
-  frequency: number;
-}
-
-export interface PracticeQuestion {
-  id: string;
-  chartId: string;
-  category: PracticeCategory;
-  seats: TableSeats;
-  hero: Position;
-  villain?: Position;
-  handClass: string;
-  options: PracticeAction[];
-  strategy: ActionFrequency[];
-  correctActions: PracticeAction[];
-  recommendedAction: PracticeAction;
-}
-
-export interface PracticeRecord {
-  id: string;
-  answeredAt: number;
-  chartId: string;
-  category: PracticeCategory;
-  seats: TableSeats;
-  hero: Position;
-  villain?: Position;
-  handClass: string;
-  chosenAction: PracticeAction;
-  recommendedAction: PracticeAction;
-  correct: boolean;
-  responseMs: number;
-}
-
-export interface StatBreakdown {
-  key: string;
-  label: string;
-  attempts: number;
-  correct: number;
-  accuracy: number;
-}
-
-export interface PracticeStats {
-  total: number;
-  correct: number;
-  accuracy: number;
-  averageResponseMs: number;
-  streakDays: number;
-  trend: number;
-  byFormat: StatBreakdown[];
-  byPosition: StatBreakdown[];
-  byCategory: StatBreakdown[];
-  byAction: StatBreakdown[];
-  weaknesses: StatBreakdown[];
-  recent: PracticeRecord[];
-}
+export { analyzePractice } from '@/lib/practice-stats';
+export type {
+  ActionFrequency,
+  PracticeAction,
+  PracticeCategory,
+  PracticeQuestion,
+  PracticeRecord,
+  PracticeRules,
+  PracticeStats,
+  StatBreakdown,
+} from '@/lib/practice-types';
 
 export const DEFAULT_PRACTICE_RULES: PracticeRules = {
   seats: 6,
+  scenarioId: 'curated-6-max-100bb',
   categories: ['RFI', 'vs-RFI'],
   positions: ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'],
   questionCount: 10,
@@ -100,7 +51,12 @@ export function handClasses(): string[] {
 }
 
 export function chartsForPractice(rules: PracticeRules): PreflopChart[] {
-  return CHARTS.filter(
+  const scenario = PREFLOP_SCENARIOS.find(
+    (candidate) =>
+      candidate.id === rules.scenarioId && candidate.seats === rules.seats
+  );
+  if (!scenario) return [];
+  return scenario.charts.filter(
     (chart) =>
       chart.formats.includes(rules.seats) &&
       rules.categories.includes(chart.category) &&
@@ -112,7 +68,8 @@ export function createPracticeQuestion(
   chart: PreflopChart,
   handClass: string,
   seats: TableSeats,
-  id: string
+  id: string,
+  scenario: PreflopScenario = defaultScenarioForSeats(seats)
 ): PracticeQuestion {
   const combos = comboLabelToCombos(handClass);
   const frequencies = new Map<PracticeAction, number>();
@@ -133,13 +90,10 @@ export function createPracticeQuestion(
 
   frequencies.set('Fold', Math.max(0, 1 - acted));
 
-  const preferredOrder: PracticeAction[] =
-    chart.category === 'RFI'
-      ? ['Fold', 'Raise']
-      : ['Fold', 'Call', '3-bet'];
-  const options = preferredOrder.filter(
-    (action) => action === 'Fold' || frequencies.has(action)
-  );
+  const options = [
+    'Fold' as const,
+    ...chart.actions.map((action) => action.name),
+  ].filter((action, index, values) => values.indexOf(action) === index);
   const strategy = options.map((action) => ({
     action,
     frequency: frequencies.get(action) ?? 0,
@@ -147,9 +101,7 @@ export function createPracticeQuestion(
   const recommendedAction = strategy.reduce((best, current) =>
     current.frequency > best.frequency ? current : best
   ).action;
-  const correctActions = strategy
-    .filter((item) => item.frequency > 0.01)
-    .map((item) => item.action);
+  const correctActions = [recommendedAction];
 
   return {
     id,
@@ -158,6 +110,7 @@ export function createPracticeQuestion(
     seats,
     hero: chart.hero,
     villain: chart.vs,
+    scenario: scenarioSnapshot(scenario),
     handClass,
     options,
     strategy,
@@ -180,6 +133,11 @@ export function generatePracticeQuestions(
 ): PracticeQuestion[] {
   const charts = chartsForPractice(rules);
   if (charts.length === 0) return [];
+  const scenario = PREFLOP_SCENARIOS.find(
+    (candidate) =>
+      candidate.id === rules.scenarioId && candidate.seats === rules.seats
+  );
+  if (!scenario) return [];
 
   const seed = Date.now().toString(36);
   const makeChartBucket = (chart: PreflopChart) => {
@@ -189,7 +147,8 @@ export function generatePracticeQuestions(
           chart,
           handClass,
           rules.seats,
-          `${seed}-${chart.id}-${handClass}`
+          `${seed}-${chart.id}-${handClass}`,
+          scenario
         );
         const bucket = byAction.get(question.recommendedAction) ?? [];
         bucket.push(question);
@@ -277,147 +236,11 @@ export function recordPracticeAnswer(
     seats: question.seats,
     hero: question.hero,
     villain: question.villain,
+    scenario: question.scenario,
     handClass: question.handClass,
     chosenAction,
     recommendedAction: question.recommendedAction,
     correct: question.correctActions.includes(chosenAction),
     responseMs: Math.max(0, Math.round(responseMs)),
-  };
-}
-
-function breakdown(
-  records: PracticeRecord[],
-  keyFor: (record: PracticeRecord) => string,
-  labelFor: (record: PracticeRecord) => string
-): StatBreakdown[] {
-  const groups = new Map<
-    string,
-    { label: string; attempts: number; correct: number }
-  >();
-
-  for (const record of records) {
-    const key = keyFor(record);
-    const current = groups.get(key) ?? {
-      label: labelFor(record),
-      attempts: 0,
-      correct: 0,
-    };
-    current.attempts++;
-    if (record.correct) current.correct++;
-    groups.set(key, current);
-  }
-
-  return [...groups.entries()]
-    .map(([key, value]) => ({
-      key,
-      ...value,
-      accuracy: value.attempts ? value.correct / value.attempts : 0,
-    }))
-    .sort((first, second) => second.attempts - first.attempts);
-}
-
-function localDay(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate()
-  ).getTime();
-}
-
-function calculateStreak(records: PracticeRecord[], now: number): number {
-  const days = [...new Set(records.map((record) => localDay(record.answeredAt)))].sort(
-    (first, second) => second - first
-  );
-  if (days.length === 0) return 0;
-
-  const today = localDay(now);
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (days[0] !== today && days[0] !== yesterday.getTime()) return 0;
-
-  let streak = 1;
-  let cursor = new Date(days[0]);
-  for (let index = 1; index < days.length; index++) {
-    cursor.setDate(cursor.getDate() - 1);
-    if (days[index] !== cursor.getTime()) break;
-    streak++;
-  }
-  return streak;
-}
-
-function accuracy(records: PracticeRecord[]): number {
-  if (records.length === 0) return 0;
-  return records.filter((record) => record.correct).length / records.length;
-}
-
-export function analyzePractice(
-  records: PracticeRecord[],
-  now = Date.now()
-): PracticeStats {
-  const ordered = [...records].sort(
-    (first, second) => second.answeredAt - first.answeredAt
-  );
-  const correct = records.filter((record) => record.correct).length;
-  const recentWindow = ordered.slice(0, 20);
-  const previousWindow = ordered.slice(20, 40);
-  const byFormat = breakdown(
-    records,
-    (record) => String(record.seats),
-    (record) => formatForSeats(record.seats).label
-  );
-  const byPosition = breakdown(
-    records,
-    (record) => `${record.seats}:${record.hero}`,
-    (record) =>
-      `${formatForSeats(record.seats).label} · ${positionLabelForSeats(
-        record.hero,
-        record.seats
-      )}`
-  );
-  const byCategory = breakdown(
-    records,
-    (record) => record.category,
-    (record) => (record.category === 'RFI' ? 'Raise first in' : 'Facing a raise')
-  );
-  const byAction = breakdown(
-    records,
-    (record) => record.recommendedAction,
-    (record) => record.recommendedAction
-  );
-  const eligibleWeaknesses = [
-    ...byFormat,
-    ...byPosition,
-    ...byCategory,
-    ...byAction,
-  ].filter((item) => item.attempts >= 3);
-
-  return {
-    total: records.length,
-    correct,
-    accuracy: accuracy(records),
-    averageResponseMs: records.length
-      ? Math.round(
-          records.reduce((sum, record) => sum + record.responseMs, 0) /
-            records.length
-        )
-      : 0,
-    streakDays: calculateStreak(records, now),
-    trend:
-      recentWindow.length === 20 && previousWindow.length === 20
-        ? accuracy(recentWindow) - accuracy(previousWindow)
-        : 0,
-    byFormat,
-    byPosition,
-    byCategory,
-    byAction,
-    weaknesses: eligibleWeaknesses
-      .sort(
-        (first, second) =>
-          first.accuracy - second.accuracy ||
-          second.attempts - first.attempts
-      )
-      .slice(0, 3),
-    recent: ordered.slice(0, 8),
   };
 }

@@ -1,0 +1,688 @@
+{
+  "schema_version": 1,
+  "analyzer": "hu-blueprint-root-stability-v1",
+  "interpretation": [
+    "Passing certifies cross-seed root-strategy stability under these gates, not Nash equilibrium or exploitability.",
+    "Frequencies and action MAE are weighted by the 1,326 physical starting-hand combinations; hand total variation treats each of the 169 classes equally.",
+    "Held-out button EV consistency uses the absolute difference divided by the combined standard error.",
+    "The one-step root local-deviation audit tests profitable unilateral root-action changes against fixed continuation policies; it is a necessary local check, not full-game exploitability.",
+    "Poker-domain gates catch coarse 100bb heads-up root pathologies; they are necessary sanity checks, not evidence of GTO play.",
+    "The monotonicity check correlates a tie-aware Chen-style structural score with one minus fold frequency because legitimate strong-hand limps make raise frequency an unsuitable strength target."
+  ],
+  "compatibility": {
+    "schema_version": 1,
+    "model": "hu-abstracted-external-sampling-rm-plus-linear-average-v2",
+    "approximate": true,
+    "normalized_config_sha256": "3f82b796d57d3961d4c64c13c88aa30c450255845558708f2afad3b30caba3cd",
+    "ignored_config_paths": [
+      "config.evaluation",
+      "config.evaluation_controls",
+      "config.evaluation_deals",
+      "config.evaluation_iterations",
+      "config.evaluation_seed",
+      "config.held_out_deals",
+      "config.iterations",
+      "config.max_information_sets",
+      "config.seed"
+    ]
+  },
+  "thresholds": {
+    "minimum_root_average_visits": 100,
+    "minimum_held_out_deals": 10000,
+    "maximum_held_out_unknown_information_set_fraction": 0.05,
+    "maximum_held_out_untrained_information_set_fraction": 0.025,
+    "maximum_aggregate_action_frequency_delta": 0.03,
+    "maximum_per_action_mae": 0.08,
+    "maximum_hand_total_variation_median": 0.2,
+    "maximum_hand_total_variation_p95": 0.35,
+    "maximum_hand_total_variation_max": 0.65,
+    "minimum_primary_action_agreement": 0.7,
+    "maximum_held_out_button_ev_z_score": 2.576,
+    "maximum_aggregate_open_shove_frequency": 0.01,
+    "maximum_premium_hand_fold_frequency": 0.02,
+    "maximum_trash_hand_open_shove_frequency": 0.02,
+    "minimum_hand_strength_continue_spearman": 0.65,
+    "minimum_strength_quartile_continue_gap": 0.3,
+    "minimum_root_local_deviation_samples_per_class": 256,
+    "maximum_root_local_deviation_unknown_information_set_fraction": 0.05,
+    "maximum_root_local_deviation_untrained_information_set_fraction": 0.025,
+    "maximum_aggregate_root_local_deviation_gain_bb": 0.1,
+    "maximum_aggregate_root_local_deviation_99pct_lower_bound_bb": 0.05
+  },
+  "threshold_rationale": {
+    "maximum_aggregate_open_shove_frequency": "At 100bb an unopened all-in should be exceptional; one percent still allows residual sampling noise and isolated mixes while rejecting a material shove range.",
+    "maximum_premium_hand_fold_frequency": "AA, KK, QQ, and AKs should almost never fold unopened; two percent allows sampling noise while catching strategically inverted roots.",
+    "maximum_trash_hand_open_shove_frequency": "72o and 32o may mix small opens or limps, but a 100bb shove above two percent is treated as pathological.",
+    "minimum_hand_strength_continue_spearman": "A 0.65 rank correlation requires a clear strength signal without demanding strict hand-by-hand monotonicity from a mixed strategy.",
+    "minimum_strength_quartile_continue_gap": "The strongest structural quartile must continue at least 30 percentage points more often than the weakest quartile.",
+    "minimum_root_local_deviation_samples_per_class": "Every root action in every hand class must have at least 256 samples; the gate uses the minimum actual action count as well as the configured count.",
+    "maximum_root_local_deviation_unknown_information_set_fraction": "At most five percent of continuation decisions may use an unknown information set so the local response is mostly evaluated against learned continuation play.",
+    "maximum_root_local_deviation_untrained_information_set_fraction": "At most 2.5 percent of continuation decisions may use an untrained information set.",
+    "maximum_aggregate_root_local_deviation_gain_bb": "A weighted one-step root action change may improve no more than 0.10bb on average.",
+    "maximum_aggregate_root_local_deviation_99pct_lower_bound_bb": "The one-sided 99 percent lower confidence bound may exceed zero slightly for sampling noise, but not 0.05bb."
+  },
+  "artifacts": [
+    {
+      "file": "preflop-solver/artifacts/hu-blueprint-100bb-v2-seed41-100k.json",
+      "artifact_id": "hu-blueprint-100bb-i100000-s41-5e803926872a5089",
+      "seed": 41,
+      "iterations": 100000,
+      "coverage_and_held_out_metrics": {
+        "root": {
+          "hand_classes": 169,
+          "weighted_combos": 1326,
+          "trained_average_hand_classes": 169,
+          "maximum_probability_sum_error": 4.440892098500626e-16,
+          "average_visits": {
+            "min": 188,
+            "median": 354,
+            "p95": 754.8,
+            "max": 829,
+            "mean": 473.37278106508876
+          },
+          "regret_updates": {
+            "min": 267,
+            "median": 450,
+            "p95": 945,
+            "max": 982,
+            "mean": 591.7159763313609
+          },
+          "combo_weighted_aggregate_frequencies": {
+            "fold": 0.39879663092219403,
+            "limp": 0.2145813277278365,
+            "raise_all_in_to_100.000bb": 0.01798127325966471,
+            "raise_to_2.000bb": 0.07563418087023079,
+            "raise_to_2.500bb": 0.07808155008608686,
+            "raise_to_3.000bb": 0.07177150822188165,
+            "raise_to_4.000bb": 0.07201283588916459,
+            "raise_to_5.000bb": 0.0711406930229408
+          }
+        },
+        "training": {
+          "requested_iterations": 100000,
+          "training_iterations": 100000,
+          "stopped_early": false,
+          "stop_reason": null,
+          "sampled_deals": 200000,
+          "terminal_evaluations": 14795024
+        },
+        "information_sets": {
+          "total": 9443200,
+          "preflop": 63143,
+          "postflop": 9380057,
+          "trained": 5293125,
+          "trained_fraction": 0.5605223864791596,
+          "exported": 53727,
+          "exported_fraction": 0.005689490850559133
+        },
+        "held_out": {
+          "deals": 30000,
+          "button_mean_net_bb": 0.6395051609848489,
+          "button_net_standard_error_bb": 0.1562622663403617,
+          "fold_terminal_fraction": 0.8396666666666667,
+          "showdown_terminal_fraction": 0.16033333333333333,
+          "unknown_information_set_fraction": 0.04780254877116558,
+          "untrained_information_set_fraction": 0.021466642931191555
+        }
+      },
+      "root_local_deviation_audit": {
+        "available": false,
+        "kind": null,
+        "configured_samples_per_class": null,
+        "minimum_action_samples_per_class": null,
+        "hand_classes": null,
+        "canonical_hand_class_coverage": false,
+        "trained_root_hand_classes": null,
+        "trained_root_combo_fraction": null,
+        "fully_trained_root": false,
+        "continuation_coverage": {
+          "decisions": null,
+          "unknown_information_set_fraction": null,
+          "untrained_information_set_fraction": null
+        },
+        "aggregate_chosen_average_ev_bb": null,
+        "aggregate_best_action_ev_bb": null,
+        "aggregate_local_deviation_gain_bb": null,
+        "aggregate_local_deviation_gain_standard_error_bb": null,
+        "aggregate_local_deviation_gain_99pct_lower_bound_bb": null
+      },
+      "poker_domain_sanity": {
+        "applicable_to": "unopened heads-up button/small-blind at 100bb",
+        "action_detection": {
+          "fold_action_present": true,
+          "open_shove_actions": [
+            "raise_all_in_to_100.000bb"
+          ]
+        },
+        "aggregate_open_shove_frequency": 0.017981273259664705,
+        "premium_hand_fold_frequencies": {
+          "AA": 0.0006194093302978105,
+          "AKs": 0.007887513644171307,
+          "KK": 0.0016353620658668075,
+          "QQ": 0.0015603233191353004
+        },
+        "maximum_premium_hand_fold_frequency": 0.007887513644171307,
+        "trash_hand_open_shove_frequencies": {
+          "32o": 0.004894191964113108,
+          "72o": 0.00477035434821921
+        },
+        "maximum_trash_hand_open_shove_frequency": 0.004894191964113108,
+        "hand_strength_continue_rank_order": {
+          "score": "chen_style_structural_score_v1",
+          "response": "one_minus_fold_frequency",
+          "hand_classes": 169,
+          "spearman_correlation": 0.8074086946023713,
+          "quartile_hand_classes": 43,
+          "top_quartile_mean_continue_frequency": 0.9358349948096023,
+          "bottom_quartile_mean_continue_frequency": 0.30711113354866165,
+          "top_minus_bottom_continue_frequency": 0.6287238612609407
+        }
+      }
+    },
+    {
+      "file": "preflop-solver/artifacts/hu-blueprint-100bb-v2-seed42-100k.json",
+      "artifact_id": "hu-blueprint-100bb-i100000-s42-26d314be698af204",
+      "seed": 42,
+      "iterations": 100000,
+      "coverage_and_held_out_metrics": {
+        "root": {
+          "hand_classes": 169,
+          "weighted_combos": 1326,
+          "trained_average_hand_classes": 169,
+          "maximum_probability_sum_error": 4.440892098500626e-16,
+          "average_visits": {
+            "min": 211,
+            "median": 367,
+            "p95": 756,
+            "max": 820,
+            "mean": 473.37278106508876
+          },
+          "regret_updates": {
+            "min": 263,
+            "median": 446,
+            "p95": 940.6,
+            "max": 964,
+            "mean": 591.7159763313609
+          },
+          "combo_weighted_aggregate_frequencies": {
+            "fold": 0.39546657417716247,
+            "limp": 0.21610926264124578,
+            "raise_all_in_to_100.000bb": 0.017922634860558086,
+            "raise_to_2.000bb": 0.07950617799503089,
+            "raise_to_2.500bb": 0.07652051782669478,
+            "raise_to_3.000bb": 0.07965308092390573,
+            "raise_to_4.000bb": 0.06203416516129644,
+            "raise_to_5.000bb": 0.07278758641410604
+          }
+        },
+        "training": {
+          "requested_iterations": 100000,
+          "training_iterations": 100000,
+          "stopped_early": false,
+          "stop_reason": null,
+          "sampled_deals": 200000,
+          "terminal_evaluations": 14888197
+        },
+        "information_sets": {
+          "total": 9511688,
+          "preflop": 63133,
+          "postflop": 9448555,
+          "trained": 5347242,
+          "trained_fraction": 0.5621759250303416,
+          "exported": 53759,
+          "exported_fraction": 0.00565188849760421
+        },
+        "held_out": {
+          "deals": 30000,
+          "button_mean_net_bb": 0.5146380050505062,
+          "button_net_standard_error_bb": 0.1554508774575949,
+          "fold_terminal_fraction": 0.8380666666666666,
+          "showdown_terminal_fraction": 0.16193333333333335,
+          "unknown_information_set_fraction": 0.04698056443301652,
+          "untrained_information_set_fraction": 0.02258981272316549
+        }
+      },
+      "root_local_deviation_audit": {
+        "available": false,
+        "kind": null,
+        "configured_samples_per_class": null,
+        "minimum_action_samples_per_class": null,
+        "hand_classes": null,
+        "canonical_hand_class_coverage": false,
+        "trained_root_hand_classes": null,
+        "trained_root_combo_fraction": null,
+        "fully_trained_root": false,
+        "continuation_coverage": {
+          "decisions": null,
+          "unknown_information_set_fraction": null,
+          "untrained_information_set_fraction": null
+        },
+        "aggregate_chosen_average_ev_bb": null,
+        "aggregate_best_action_ev_bb": null,
+        "aggregate_local_deviation_gain_bb": null,
+        "aggregate_local_deviation_gain_standard_error_bb": null,
+        "aggregate_local_deviation_gain_99pct_lower_bound_bb": null
+      },
+      "poker_domain_sanity": {
+        "applicable_to": "unopened heads-up button/small-blind at 100bb",
+        "action_detection": {
+          "fold_action_present": true,
+          "open_shove_actions": [
+            "raise_all_in_to_100.000bb"
+          ]
+        },
+        "aggregate_open_shove_frequency": 0.017922634860558073,
+        "premium_hand_fold_frequencies": {
+          "AA": 0.00025226461115836327,
+          "AKs": 0.0059745342460448365,
+          "KK": 0.000902840494011331,
+          "QQ": 0.0014452267650776813
+        },
+        "maximum_premium_hand_fold_frequency": 0.0059745342460448365,
+        "trash_hand_open_shove_frequencies": {
+          "32o": 0.005664645250883938,
+          "72o": 0.005267374318292435
+        },
+        "maximum_trash_hand_open_shove_frequency": 0.005664645250883938,
+        "hand_strength_continue_rank_order": {
+          "score": "chen_style_structural_score_v1",
+          "response": "one_minus_fold_frequency",
+          "hand_classes": 169,
+          "spearman_correlation": 0.7888851903950992,
+          "quartile_hand_classes": 43,
+          "top_quartile_mean_continue_frequency": 0.9253361163918863,
+          "bottom_quartile_mean_continue_frequency": 0.3248238508751684,
+          "top_minus_bottom_continue_frequency": 0.6005122655167179
+        }
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "left_artifact_id": "hu-blueprint-100bb-i100000-s41-5e803926872a5089",
+      "right_artifact_id": "hu-blueprint-100bb-i100000-s42-26d314be698af204",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.39879663092219403,
+          "right": 0.39546657417716247,
+          "right_minus_left": -0.003330056745031562,
+          "absolute_delta": 0.003330056745031562
+        },
+        "limp": {
+          "left": 0.2145813277278365,
+          "right": 0.21610926264124578,
+          "right_minus_left": 0.0015279349134092735,
+          "absolute_delta": 0.0015279349134092735
+        },
+        "raise_all_in_to_100.000bb": {
+          "left": 0.01798127325966471,
+          "right": 0.017922634860558086,
+          "right_minus_left": -0.000058638399106622496,
+          "absolute_delta": 0.000058638399106622496
+        },
+        "raise_to_2.000bb": {
+          "left": 0.07563418087023079,
+          "right": 0.07950617799503089,
+          "right_minus_left": 0.003871997124800103,
+          "absolute_delta": 0.003871997124800103
+        },
+        "raise_to_2.500bb": {
+          "left": 0.07808155008608686,
+          "right": 0.07652051782669478,
+          "right_minus_left": -0.0015610322593920811,
+          "absolute_delta": 0.0015610322593920811
+        },
+        "raise_to_3.000bb": {
+          "left": 0.07177150822188165,
+          "right": 0.07965308092390573,
+          "right_minus_left": 0.007881572702024081,
+          "absolute_delta": 0.007881572702024081
+        },
+        "raise_to_4.000bb": {
+          "left": 0.07201283588916459,
+          "right": 0.06203416516129644,
+          "right_minus_left": -0.00997867072786815,
+          "absolute_delta": 0.00997867072786815
+        },
+        "raise_to_5.000bb": {
+          "left": 0.0711406930229408,
+          "right": 0.07278758641410604,
+          "right_minus_left": 0.0016468933911652356,
+          "absolute_delta": 0.0016468933911652356
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.06809509069140862,
+        "limp": 0.10279993449492433,
+        "raise_all_in_to_100.000bb": 0.008318095637799125,
+        "raise_to_2.000bb": 0.051145969975977264,
+        "raise_to_2.500bb": 0.04634800716631833,
+        "raise_to_3.000bb": 0.05392825635588495,
+        "raise_to_4.000bb": 0.04060338435359826,
+        "raise_to_5.000bb": 0.04826894196635024
+      },
+      "per_hand_total_variation": {
+        "median": 0.2239906294442875,
+        "p95": 0.42702543664137493,
+        "max": 0.5583431351506639,
+        "mean": 0.22259048618810473,
+        "worst_hands": [
+          {
+            "hand": "Q5o",
+            "combo_weight": 12,
+            "total_variation": 0.5583431351506639,
+            "left_primary_action": "fold",
+            "right_primary_action": "raise_to_2.000bb"
+          },
+          {
+            "hand": "KJo",
+            "combo_weight": 12,
+            "total_variation": 0.5364804244059803,
+            "left_primary_action": "raise_to_2.500bb",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "AQs",
+            "combo_weight": 4,
+            "total_variation": 0.5089616767533718,
+            "left_primary_action": "raise_to_2.000bb",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "96s",
+            "combo_weight": 4,
+            "total_variation": 0.5038887697015021,
+            "left_primary_action": "fold",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "T6s",
+            "combo_weight": 4,
+            "total_variation": 0.45733663550173287,
+            "left_primary_action": "fold",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "J9s",
+            "combo_weight": 4,
+            "total_variation": 0.4506891057298726,
+            "left_primary_action": "raise_to_4.000bb",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "88",
+            "combo_weight": 6,
+            "total_variation": 0.4358140909597198,
+            "left_primary_action": "raise_to_2.500bb",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "K8s",
+            "combo_weight": 4,
+            "total_variation": 0.4294890496843084,
+            "left_primary_action": "raise_to_2.000bb",
+            "right_primary_action": "limp"
+          },
+          {
+            "hand": "AKo",
+            "combo_weight": 12,
+            "total_variation": 0.4279461274874765,
+            "left_primary_action": "limp",
+            "right_primary_action": "raise_to_2.000bb"
+          },
+          {
+            "hand": "K4o",
+            "combo_weight": 12,
+            "total_variation": 0.4256444003722225,
+            "left_primary_action": "raise_to_4.000bb",
+            "right_primary_action": "limp"
+          }
+        ]
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.6863905325443787,
+        "combo_weighted_fraction": 0.726998491704374
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": -0.12486715593434272,
+        "combined_standard_error_bb": 0.22041522448361484,
+        "absolute_z_score": 0.566508761937291
+      }
+    }
+  ],
+  "acceptance_gates": [
+    {
+      "name": "distinct_training_seeds",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": 2,
+      "observed": 2,
+      "passed": true
+    },
+    {
+      "name": "completed_requested_training",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": true,
+      "passed": true
+    },
+    {
+      "name": "complete_root_coverage",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": true,
+      "passed": true
+    },
+    {
+      "name": "all_root_hand_classes_have_trained_averages",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": true,
+      "passed": true
+    },
+    {
+      "name": "minimum_root_average_visits",
+      "scope": "all_artifacts",
+      "operator": ">=",
+      "threshold": 100,
+      "observed": 188,
+      "passed": true
+    },
+    {
+      "name": "minimum_held_out_deals",
+      "scope": "all_artifacts",
+      "operator": ">=",
+      "threshold": 10000,
+      "observed": 30000,
+      "passed": true
+    },
+    {
+      "name": "maximum_held_out_unknown_information_set_fraction",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.05,
+      "observed": 0.04780254877116558,
+      "passed": true
+    },
+    {
+      "name": "maximum_held_out_untrained_information_set_fraction",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.025,
+      "observed": 0.02258981272316549,
+      "passed": true
+    },
+    {
+      "name": "root_local_deviation_audit_available",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": false,
+      "passed": false
+    },
+    {
+      "name": "minimum_root_local_deviation_samples_per_class",
+      "scope": "all_artifacts",
+      "operator": ">=",
+      "threshold": 256,
+      "observed": null,
+      "passed": false
+    },
+    {
+      "name": "full_trained_root_in_local_deviation_audit",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": false,
+      "passed": false
+    },
+    {
+      "name": "maximum_root_local_deviation_unknown_information_set_fraction",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.05,
+      "observed": null,
+      "passed": false
+    },
+    {
+      "name": "maximum_root_local_deviation_untrained_information_set_fraction",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.025,
+      "observed": null,
+      "passed": false
+    },
+    {
+      "name": "maximum_aggregate_root_local_deviation_gain_bb",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.1,
+      "observed": null,
+      "passed": false
+    },
+    {
+      "name": "maximum_aggregate_root_local_deviation_99pct_lower_bound_bb",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.05,
+      "observed": null,
+      "passed": false
+    },
+    {
+      "name": "maximum_aggregate_action_frequency_delta",
+      "scope": "all_pairs",
+      "operator": "<=",
+      "threshold": 0.03,
+      "observed": 0.00997867072786815,
+      "passed": true
+    },
+    {
+      "name": "maximum_combo_weighted_per_action_mae",
+      "scope": "all_pairs",
+      "operator": "<=",
+      "threshold": 0.08,
+      "observed": 0.10279993449492433,
+      "passed": false
+    },
+    {
+      "name": "maximum_hand_total_variation_median",
+      "scope": "all_pairs",
+      "operator": "<=",
+      "threshold": 0.2,
+      "observed": 0.2239906294442875,
+      "passed": false
+    },
+    {
+      "name": "maximum_hand_total_variation_p95",
+      "scope": "all_pairs",
+      "operator": "<=",
+      "threshold": 0.35,
+      "observed": 0.42702543664137493,
+      "passed": false
+    },
+    {
+      "name": "maximum_hand_total_variation_max",
+      "scope": "all_pairs",
+      "operator": "<=",
+      "threshold": 0.65,
+      "observed": 0.5583431351506639,
+      "passed": true
+    },
+    {
+      "name": "minimum_primary_action_agreement",
+      "scope": "all_pairs",
+      "operator": ">=",
+      "threshold": 0.7,
+      "observed": 0.6863905325443787,
+      "passed": false
+    },
+    {
+      "name": "maximum_held_out_button_ev_z_score",
+      "scope": "all_pairs",
+      "operator": "<=",
+      "threshold": 2.576,
+      "observed": 0.566508761937291,
+      "passed": true
+    },
+    {
+      "name": "poker_domain_sanity_is_100bb",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": true,
+      "passed": true
+    },
+    {
+      "name": "poker_domain_sanity_actions_present",
+      "scope": "all_artifacts",
+      "operator": "==",
+      "threshold": true,
+      "observed": true,
+      "passed": true
+    },
+    {
+      "name": "maximum_aggregate_open_shove_frequency",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.01,
+      "observed": 0.017981273259664705,
+      "passed": false
+    },
+    {
+      "name": "maximum_premium_hand_fold_frequency",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.02,
+      "observed": 0.007887513644171307,
+      "passed": true
+    },
+    {
+      "name": "maximum_trash_hand_open_shove_frequency",
+      "scope": "all_artifacts",
+      "operator": "<=",
+      "threshold": 0.02,
+      "observed": 0.005664645250883938,
+      "passed": true
+    },
+    {
+      "name": "minimum_hand_strength_continue_spearman",
+      "scope": "all_artifacts",
+      "operator": ">=",
+      "threshold": 0.65,
+      "observed": 0.7888851903950992,
+      "passed": true
+    },
+    {
+      "name": "minimum_strength_quartile_continue_gap",
+      "scope": "all_artifacts",
+      "operator": ">=",
+      "threshold": 0.3,
+      "observed": 0.6005122655167179,
+      "passed": true
+    }
+  ],
+  "passed": false
+}

@@ -20,7 +20,11 @@ export interface HandMatrixProps {
   strategy?: Record<string, StrategySegment[]>;
   /** optional per-cell numeric annotation shown small (e.g. EV or frequency) */
   annotation?: (label: string) => string | undefined;
+  /** optional accessible/hover detail that is not rendered inside the cell */
+  cellDescription?: (label: string) => string | undefined;
   onCellClick?: (label: string) => void;
+  /** display mode: currently inspected hand class */
+  selectedLabel?: string;
   className?: string;
 }
 
@@ -32,7 +36,9 @@ export function HandMatrix({
   onWeightsChange,
   strategy = {},
   annotation,
+  cellDescription,
   onCellClick,
+  selectedLabel,
   className,
 }: HandMatrixProps) {
   const [painting, setPainting] = useState<null | number>(null); // target weight while dragging
@@ -47,10 +53,7 @@ export function HandMatrix({
   );
 
   const handleDown = (label: string, e: React.MouseEvent) => {
-    if (mode !== 'select') {
-      onCellClick?.(label);
-      return;
-    }
+    if (mode !== 'select') return;
     e.preventDefault();
     const current = weights[label] ?? 0;
     const target = current > 0 ? 0 : 1; // toggle
@@ -64,14 +67,11 @@ export function HandMatrix({
   };
 
   const handleKeyDown = (label: string, e: React.KeyboardEvent) => {
+    if (mode !== 'select') return;
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
-    if (mode === 'select') {
-      const current = weights[label] ?? 0;
-      onWeightsChange?.({ ...weights, [label]: current > 0 ? 0 : 1 });
-    } else {
-      onCellClick?.(label);
-    }
+    const current = weights[label] ?? 0;
+    onWeightsChange?.({ ...weights, [label]: current > 0 ? 0 : 1 });
   };
 
   const endPaint = () => {
@@ -97,12 +97,19 @@ export function HandMatrix({
             const isPair = row === col;
             const w = weights[label] ?? 0;
             const segs = strategy[label];
+            const isSelected = mode === 'display' && selectedLabel === label;
             const cellClass =
-              'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+              'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-[border-color,box-shadow,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
               (isPair ? 'border-border/80 ' : 'border-border/40 ') +
+              (isSelected
+                ? 'z-10 ring-2 ring-accent ring-offset-1 ring-offset-surface '
+                : '') +
               'bg-surface-2';
-            const title =
-              label + (annotation?.(label) ? ` - ${annotation(label)}` : '');
+            const annotationText = annotation?.(label);
+            const descriptionText = cellDescription?.(label);
+            const title = [label, annotationText, descriptionText]
+              .filter(Boolean)
+              .join(' - ');
             const content = (
               <>
                 {/* Fill layer */}
@@ -140,9 +147,9 @@ export function HandMatrix({
                 >
                   {label}
                 </span>
-                {annotation?.(label) && (
+                {annotationText && (
                   <span className="pointer-events-none absolute bottom-[1px] right-[2px] z-10 text-[7px] text-white/80 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">
-                    {annotation(label)}
+                    {annotationText}
                   </span>
                 )}
               </>
@@ -167,7 +174,12 @@ export function HandMatrix({
                 onMouseDown={(event) => handleDown(label, event)}
                 onMouseEnter={() => handleEnter(label)}
                 onKeyDown={(event) => handleKeyDown(label, event)}
-                {...(mode === 'select' ? { 'aria-pressed': w > 0 } : {})}
+                onClick={
+                  mode === 'display' ? () => onCellClick?.(label) : undefined
+                }
+                {...(mode === 'select'
+                  ? { 'aria-pressed': w > 0 }
+                  : { 'aria-pressed': isSelected })}
                 aria-label={
                   mode === 'select'
                     ? `${label}${w > 0 ? ', selected' : ''}`

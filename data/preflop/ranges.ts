@@ -10,7 +10,7 @@
 import { POSITION_LABELS } from '@/lib/positions';
 import type { Position, TableSeats } from '@/lib/positions';
 
-export type ChartActionName = 'Raise' | 'Call' | '3-bet';
+export type ChartActionName = 'Raise' | 'Call' | '3-bet' | 'All-in';
 
 export interface ChartAction {
   name: ChartActionName;

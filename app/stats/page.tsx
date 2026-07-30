@@ -32,7 +32,7 @@ import {
   analyzePractice,
   type PracticeRecord,
   type StatBreakdown,
-} from '@/lib/practice';
+} from '@/lib/practice-stats';
 import { positionLabelForSeats } from '@/lib/positions';
 
 function formatPercent(value: number): string {
@@ -396,7 +396,8 @@ export default function StatsPage() {
                     Recent performance
                   </h2>
                   <p className="mt-0.5 text-xs leading-5 text-muted">
-                    Your latest 20 decisions compared with the 20 before them.
+                    All range sets: your latest 20 decisions compared with the
+                    20 before them.
                   </p>
                 </div>
               </div>
@@ -479,7 +480,7 @@ export default function StatsPage() {
                 {formatPercent(stats.accuracy)} accuracy.
               </p>
             </div>
-            <div className="grid items-start gap-4 lg:grid-cols-2 xl:grid-cols-4">
+            <div className="grid items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
               <BreakdownPanel
                 title="By table"
                 description="Heads-up, 6-max, and full-ring results."
@@ -496,7 +497,7 @@ export default function StatsPage() {
               />
               <BreakdownPanel
                 title="By spot type"
-                description="Opening versus facing a raise."
+                description="First-in decisions and responses."
                 icon={Layers3}
                 items={stats.byCategory}
                 overallAccuracy={stats.accuracy}
@@ -506,6 +507,13 @@ export default function StatsPage() {
                 description="The chart's recommended response."
                 icon={Check}
                 items={stats.byAction}
+                overallAccuracy={stats.accuracy}
+              />
+              <BreakdownPanel
+                title="By range set"
+                description="Stack depth and source used for each decision."
+                icon={Gauge}
+                items={stats.byScenario}
                 overallAccuracy={stats.accuracy}
               />
             </div>
@@ -547,8 +555,14 @@ export default function StatsPage() {
                     </p>
                     <p className="mt-0.5 text-xs text-muted">
                       {record.category === 'RFI'
-                        ? 'Raise first in'
-                        : 'Facing a raise'}
+                        ? record.scenario?.openingSize.kind === 'all-in'
+                          ? 'Push or fold'
+                          : 'Raise first in'
+                        : record.scenario?.openingSize.kind === 'all-in'
+                          ? 'Facing a shove'
+                          : 'Facing an open'}
+                      {' · '}
+                      {record.scenario?.label ?? 'Legacy curated baseline'}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:block">

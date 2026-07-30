@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "preflop:catalog": "node scripts/generate-preflop-catalog.mjs",
+    "preflop:compare-blueprints": "node scripts/compare-blueprint-artifacts.mjs",
+    "test:blueprint-compare": "node --test scripts/compare-blueprint-artifacts.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.26.0",

@@ -15,6 +15,7 @@ describe('practice questions', () => {
     const questions = generatePracticeQuestions(
       {
         seats: 2,
+        scenarioId: 'curated-2-max-100bb',
         categories: ['RFI'],
         positions: ['BTN'],
         questionCount: 12,
@@ -41,6 +42,7 @@ describe('practice questions', () => {
     const questions = generatePracticeQuestions(
       {
         seats: 9,
+        scenarioId: 'curated-9-max-100bb',
         categories: ['RFI', 'vs-RFI'],
         positions: [
           'UTG',
@@ -73,6 +75,7 @@ describe('practice questions', () => {
     const questions = generatePracticeQuestions(
       {
         seats: 6,
+        scenarioId: 'curated-6-max-100bb',
         categories: ['RFI', 'vs-RFI'],
         positions: ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'],
         questionCount: 30,
@@ -105,22 +108,24 @@ describe('practice questions', () => {
     expect(weak.recommendedAction).toBe('Fold');
   });
 
-  it('accepts any non-zero action when a hidden combo mix exists', () => {
+  it('grades the primary action instead of rewarding a minor mix', () => {
     const mixedChart: PreflopChart = {
       id: 'mixed',
       title: 'Mixed',
       hero: 'BTN',
       category: 'RFI',
       formats: [6],
-      actions: [{ name: 'Raise', color: 'red', range: 'AsKs' }],
+      actions: [{ name: 'Raise', color: 'red', range: 'AKs:0.02' }],
     };
     const question = createPracticeQuestion(mixedChart, 'AKs', 6, 'mixed');
 
     expect(question.recommendedAction).toBe('Fold');
-    expect(question.correctActions).toEqual(
-      expect.arrayContaining(['Fold', 'Raise'])
-    );
-    expect(recordPracticeAnswer(question, 'Raise', 100).correct).toBe(true);
+    expect(question.strategy).toContainEqual({
+      action: 'Raise',
+      frequency: 0.02,
+    });
+    expect(question.correctActions).toEqual(['Fold']);
+    expect(recordPracticeAnswer(question, 'Raise', 100).correct).toBe(false);
   });
 
   it('records answers and computes useful breakdowns', () => {

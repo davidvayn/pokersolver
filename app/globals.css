@@ -119,3 +119,22 @@ textarea {
 .home-deal-right {
   animation: home-deal-right 700ms 240ms ease-out both;
 }
+
+@keyframes preflop-range-enter {
+  0% {
+    opacity: 0.35;
+    transform: translateY(8px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.preflop-range-enter {
+  animation: preflop-range-enter 220ms ease-out both;
+}
+
+.preflop-workspace button:not(:disabled) {
+  cursor: pointer;
+}
