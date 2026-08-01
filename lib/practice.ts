@@ -1,246 +1,191 @@
-import type { PreflopChart } from '@/data/preflop/ranges';
-import {
-  defaultScenarioForSeats,
-  PREFLOP_SCENARIOS,
-  scenarioSnapshot,
-  type PreflopScenario,
-} from '@/data/preflop/catalog';
-import {
-  comboKey,
-  comboLabelToCombos,
-  handClassLabel,
-  parseRange,
-} from '@/lib/cards';
-import type { Position, TableSeats } from '@/lib/positions';
 import type {
-  PracticeAction,
-  PracticeCategory,
-  PracticeQuestion,
-  PracticeRecord,
-  PracticeRules,
+  PracticeDecisionRecord,
+  PracticeSettings,
+  PracticeStreet,
+  Seat,
+} from '@/lib/practice-types';
+import {
+  DEFAULT_PRACTICE_SETTINGS,
+  STREET_ORDER,
 } from '@/lib/practice-types';
 
-export { analyzePractice } from '@/lib/practice-stats';
-export type {
-  ActionFrequency,
-  PracticeAction,
-  PracticeCategory,
-  PracticeQuestion,
-  PracticeRecord,
-  PracticeRules,
-  PracticeStats,
-  StatBreakdown,
-} from '@/lib/practice-types';
+export * from '@/lib/practice-engine';
+export * from '@/lib/practice-grading';
+export type * from '@/lib/practice-types';
 
-export const DEFAULT_PRACTICE_RULES: PracticeRules = {
-  seats: 6,
-  scenarioId: 'curated-6-max-100bb',
-  categories: ['RFI', 'vs-RFI'],
-  positions: ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'],
-  questionCount: 10,
-};
+export const PRACTICE_SETTINGS_KEY = 'poker-lab-practice-settings-v3';
 
-export function handClasses(): string[] {
-  const labels: string[] = [];
-  for (let row = 0; row < 13; row++) {
-    for (let column = 0; column < 13; column++) {
-      labels.push(handClassLabel(row, column));
-    }
-  }
-  return labels;
-}
+const MODES = new Set(['full-hand', 'preflop', 'postflop', 'push-fold']);
+const FULL_DEPTHS = new Set([20, 50, 100]);
+const PUSH_FOLD_DEPTHS = new Set([2, 3, 5, 8, 10, 12, 15, 20]);
+const HERO_SEATS = new Set([
+  'alternate',
+  'button-small-blind',
+  'big-blind',
+]);
+const DEAL_MODES = new Set(['authentic', 'adaptive']);
+const GOALS = new Set(['continuous', 25, 50, 100]);
+const POSTFLOP_STREETS = new Set(['flop', 'turn', 'river']);
 
-export function chartsForPractice(rules: PracticeRules): PreflopChart[] {
-  const scenario = PREFLOP_SCENARIOS.find(
-    (candidate) =>
-      candidate.id === rules.scenarioId && candidate.seats === rules.seats
-  );
-  if (!scenario) return [];
-  return scenario.charts.filter(
-    (chart) =>
-      chart.formats.includes(rules.seats) &&
-      rules.categories.includes(chart.category) &&
-      rules.positions.includes(chart.hero)
-  );
-}
-
-export function createPracticeQuestion(
-  chart: PreflopChart,
-  handClass: string,
-  seats: TableSeats,
-  id: string,
-  scenario: PreflopScenario = defaultScenarioForSeats(seats)
-): PracticeQuestion {
-  const combos = comboLabelToCombos(handClass);
-  const frequencies = new Map<PracticeAction, number>();
-  let acted = 0;
-
-  for (const action of chart.actions) {
-    const range = parseRange(action.range);
-    const frequency =
-      combos.reduce(
-        (sum, [first, second]) =>
-          sum + (range.get(comboKey(first, second)) ?? 0),
-        0
-      ) / combos.length;
-    const normalizedAction: PracticeAction = action.name;
-    frequencies.set(normalizedAction, frequency);
-    acted += frequency;
-  }
-
-  frequencies.set('Fold', Math.max(0, 1 - acted));
-
-  const options = [
-    'Fold' as const,
-    ...chart.actions.map((action) => action.name),
-  ].filter((action, index, values) => values.indexOf(action) === index);
-  const strategy = options.map((action) => ({
-    action,
-    frequency: frequencies.get(action) ?? 0,
-  }));
-  const recommendedAction = strategy.reduce((best, current) =>
-    current.frequency > best.frequency ? current : best
-  ).action;
-  const correctActions = [recommendedAction];
-
+export function sanitizePracticeSettings(value: unknown): PracticeSettings {
+  if (!value || typeof value !== 'object') return DEFAULT_PRACTICE_SETTINGS;
+  const candidate = value as Partial<PracticeSettings>;
+  const postflopStreets = Array.isArray(candidate.postflopStreets)
+    ? candidate.postflopStreets.filter(
+        (street): street is Exclude<PracticeStreet, 'preflop'> =>
+          POSTFLOP_STREETS.has(street)
+      )
+    : DEFAULT_PRACTICE_SETTINGS.postflopStreets;
   return {
-    id,
-    chartId: chart.id,
-    category: chart.category,
-    seats,
-    hero: chart.hero,
-    villain: chart.vs,
-    scenario: scenarioSnapshot(scenario),
-    handClass,
-    options,
-    strategy,
-    correctActions,
-    recommendedAction,
+    mode: MODES.has(candidate.mode ?? '')
+      ? (candidate.mode as PracticeSettings['mode'])
+      : DEFAULT_PRACTICE_SETTINGS.mode,
+    depthBb: FULL_DEPTHS.has(candidate.depthBb ?? -1)
+      ? (candidate.depthBb as PracticeSettings['depthBb'])
+      : DEFAULT_PRACTICE_SETTINGS.depthBb,
+    pushFoldDepthBb: PUSH_FOLD_DEPTHS.has(candidate.pushFoldDepthBb ?? -1)
+      ? (candidate.pushFoldDepthBb as PracticeSettings['pushFoldDepthBb'])
+      : DEFAULT_PRACTICE_SETTINGS.pushFoldDepthBb,
+    postflopStreets:
+      postflopStreets.length > 0
+        ? postflopStreets
+        : DEFAULT_PRACTICE_SETTINGS.postflopStreets,
+    heroSeat: HERO_SEATS.has(candidate.heroSeat ?? '')
+      ? (candidate.heroSeat as PracticeSettings['heroSeat'])
+      : DEFAULT_PRACTICE_SETTINGS.heroSeat,
+    dealMode: DEAL_MODES.has(candidate.dealMode ?? '')
+      ? (candidate.dealMode as PracticeSettings['dealMode'])
+      : DEFAULT_PRACTICE_SETTINGS.dealMode,
+    decisionGoal: GOALS.has(candidate.decisionGoal ?? '')
+      ? (candidate.decisionGoal as PracticeSettings['decisionGoal'])
+      : DEFAULT_PRACTICE_SETTINGS.decisionGoal,
   };
 }
 
-function shuffle<T>(values: T[], random: () => number): T[] {
-  for (let index = values.length - 1; index > 0; index--) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
+export function loadPracticeSettings(): PracticeSettings {
+  if (typeof window === 'undefined') return DEFAULT_PRACTICE_SETTINGS;
+  try {
+    return sanitizePracticeSettings(
+      JSON.parse(localStorage.getItem(PRACTICE_SETTINGS_KEY) ?? 'null')
+    );
+  } catch {
+    return DEFAULT_PRACTICE_SETTINGS;
   }
-  return values;
 }
 
-export function generatePracticeQuestions(
-  rules: PracticeRules,
-  random: () => number = Math.random
-): PracticeQuestion[] {
-  const charts = chartsForPractice(rules);
-  if (charts.length === 0) return [];
-  const scenario = PREFLOP_SCENARIOS.find(
-    (candidate) =>
-      candidate.id === rules.scenarioId && candidate.seats === rules.seats
-  );
-  if (!scenario) return [];
+export function savePracticeSettings(settings: PracticeSettings): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(PRACTICE_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Settings persistence is helpful but must never block practice.
+  }
+}
 
-  const seed = Date.now().toString(36);
-  const makeChartBucket = (chart: PreflopChart) => {
-      const byAction = new Map<PracticeAction, PracticeQuestion[]>();
-      for (const handClass of handClasses()) {
-        const question = createPracticeQuestion(
-          chart,
-          handClass,
-          rules.seats,
-          `${seed}-${chart.id}-${handClass}`,
-          scenario
-        );
-        const bucket = byAction.get(question.recommendedAction) ?? [];
-        bucket.push(question);
-        byAction.set(question.recommendedAction, bucket);
-      }
-      for (const bucket of byAction.values()) shuffle(bucket, random);
-      return {
-        byAction,
-        actionOrder: shuffle([...byAction.keys()], random),
-        actionIndex: 0,
-      };
+export function structuralSettingsChanged(
+  current: PracticeSettings,
+  next: PracticeSettings
+): boolean {
+  return (
+    current.mode !== next.mode ||
+    current.depthBb !== next.depthBb ||
+    current.pushFoldDepthBb !== next.pushFoldDepthBb ||
+    current.heroSeat !== next.heroSeat ||
+    current.dealMode !== next.dealMode ||
+    current.postflopStreets.join(',') !== next.postflopStreets.join(',')
+  );
+}
+
+export function nextHeroSeat(
+  setting: PracticeSettings['heroSeat'],
+  completedHands: number
+): Seat {
+  if (setting === 'button-small-blind' || setting === 'big-blind') return setting;
+  return completedHands % 2 === 0
+    ? 'button-small-blind'
+    : 'big-blind';
+}
+
+export interface AdaptiveGroup {
+  key: string;
+  street: PracticeStreet;
+  position: Seat;
+  depthBb: number;
+  handBucket: string;
+  facingAction: string;
+  attempts: number;
+  averageEvLossBb: number;
+}
+
+export function adaptiveGroups(
+  records: PracticeDecisionRecord[]
+): AdaptiveGroup[] {
+  const latest = [...records]
+    .sort((first, second) => second.answeredAt - first.answeredAt)
+    .slice(0, 200);
+  const groups = new Map<
+    string,
+    Omit<AdaptiveGroup, 'averageEvLossBb'> & { totalLoss: number; graded: number }
+  >();
+  for (const record of latest) {
+    const key = [
+      record.street,
+      record.position,
+      record.depthBb,
+      record.handBucket,
+      record.facingAction,
+    ].join('|');
+    const current = groups.get(key) ?? {
+      key,
+      street: record.street,
+      position: record.position,
+      depthBb: record.depthBb,
+      handBucket: record.handBucket,
+      facingAction: record.facingAction,
+      attempts: 0,
+      totalLoss: 0,
+      graded: 0,
     };
-  const chartsByPosition = new Map<Position, PreflopChart[]>();
-  for (const chart of charts) {
-    const positionCharts = chartsByPosition.get(chart.hero) ?? [];
-    positionCharts.push(chart);
-    chartsByPosition.set(chart.hero, positionCharts);
-  }
-  const positionBuckets = shuffle(
-    [...chartsByPosition.values()].map((positionCharts) => ({
-      chartBuckets: shuffle(positionCharts.map(makeChartBucket), random),
-      chartIndex: 0,
-    })),
-    random
-  );
-
-  const questions: PracticeQuestion[] = [];
-  while (questions.length < rules.questionCount) {
-    let added = false;
-    for (const positionBucket of positionBuckets) {
-      let positionAdded = false;
-      for (
-        let chartOffset = 0;
-        chartOffset < positionBucket.chartBuckets.length;
-        chartOffset++
-      ) {
-        const chartIndex =
-          (positionBucket.chartIndex + chartOffset) %
-          positionBucket.chartBuckets.length;
-        const chartBucket = positionBucket.chartBuckets[chartIndex];
-
-        for (
-          let actionOffset = 0;
-          actionOffset < chartBucket.actionOrder.length;
-          actionOffset++
-        ) {
-          const actionIndex =
-            (chartBucket.actionIndex + actionOffset) %
-            chartBucket.actionOrder.length;
-          const action = chartBucket.actionOrder[actionIndex];
-          const bucket = chartBucket.byAction.get(action);
-          const question = bucket?.pop();
-          if (!question) continue;
-
-          questions.push(question);
-          chartBucket.actionIndex =
-            (actionIndex + 1) % chartBucket.actionOrder.length;
-          positionBucket.chartIndex =
-            (chartIndex + 1) % positionBucket.chartBuckets.length;
-          added = true;
-          positionAdded = true;
-          break;
-        }
-        if (positionAdded) break;
-      }
-      if (questions.length >= rules.questionCount) break;
+    current.attempts += 1;
+    if (record.evLossBb !== null) {
+      current.totalLoss += record.evLossBb;
+      current.graded += 1;
     }
-    if (!added) break;
+    groups.set(key, current);
   }
-
-  return questions;
+  return [...groups.values()]
+    .map(({ totalLoss, graded, ...group }) => ({
+      ...group,
+      averageEvLossBb: graded ? totalLoss / graded : 0,
+    }))
+    .sort(
+      (first, second) =>
+        second.averageEvLossBb - first.averageEvLossBb ||
+        first.attempts - second.attempts
+    );
 }
 
-export function recordPracticeAnswer(
-  question: PracticeQuestion,
-  chosenAction: PracticeAction,
-  responseMs: number,
-  answeredAt = Date.now()
-): PracticeRecord {
-  return {
-    id: `${question.id}-${answeredAt}`,
-    answeredAt,
-    chartId: question.chartId,
-    category: question.category,
-    seats: question.seats,
-    hero: question.hero,
-    villain: question.villain,
-    scenario: question.scenario,
-    handClass: question.handClass,
-    chosenAction,
-    recommendedAction: question.recommendedAction,
-    correct: question.correctActions.includes(chosenAction),
-    responseMs: Math.max(0, Math.round(responseMs)),
-  };
+export function chooseAdaptiveGroup(
+  groups: AdaptiveGroup[],
+  random: () => number = Math.random
+): AdaptiveGroup | null {
+  if (groups.length === 0 || random() >= 0.7) return null;
+  const maxAttempts = Math.max(...groups.map((group) => group.attempts), 1);
+  const weights = groups.map(
+    (group) =>
+      0.01 +
+      group.averageEvLossBb +
+      (maxAttempts - group.attempts) / maxAttempts
+  );
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = random() * total;
+  for (let index = 0; index < groups.length; index++) {
+    roll -= weights[index];
+    if (roll <= 0) return groups[index];
+  }
+  return groups[groups.length - 1];
+}
+
+export function streetIndex(street: PracticeStreet): number {
+  return STREET_ORDER.indexOf(street);
 }

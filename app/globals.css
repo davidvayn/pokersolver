@@ -138,3 +138,315 @@ textarea {
 .preflop-workspace button:not(:disabled) {
   cursor: pointer;
 }
+
+/* Heads-up practice table */
+.practice-table-shell {
+  min-height: 540px;
+  overflow: hidden;
+  border: 1px solid rgb(var(--border));
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 45%, rgb(var(--surface-2)), rgb(var(--surface)) 68%);
+  padding: clamp(12px, 2.5vw, 28px);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 0.12);
+}
+
+.practice-felt {
+  position: relative;
+  min-height: 490px;
+  overflow: hidden;
+  border: 10px solid rgb(42 31 24);
+  border-radius: 45% / 26%;
+  background:
+    radial-gradient(circle at 50% 46%, rgb(var(--felt) / 0.95), rgb(var(--felt)) 48%, rgb(8 75 55) 100%),
+    repeating-linear-gradient(45deg, rgb(255 255 255 / 0.018) 0 1px, transparent 1px 5px);
+  box-shadow:
+    inset 0 0 0 2px rgb(255 255 255 / 0.08),
+    inset 0 0 60px rgb(0 0 0 / 0.25),
+    0 8px 18px rgb(0 0 0 / 0.2);
+}
+
+.practice-seat {
+  width: min(270px, 38vw);
+  border: 1px solid rgb(255 255 255 / 0.15);
+  border-radius: 8px;
+  background: rgb(7 12 16 / 0.78);
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+  color: white;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.practice-seat-active {
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 2px rgb(var(--accent) / 0.25), 0 8px 24px rgb(0 0 0 / 0.24);
+}
+
+.practice-opponent-seat,
+.practice-hero-seat {
+  position: absolute;
+  left: 50%;
+  z-index: 5;
+  transform: translateX(-50%);
+}
+
+.practice-opponent-seat {
+  top: 18px;
+}
+
+.practice-hero-seat {
+  bottom: 30px;
+}
+
+.practice-board {
+  position: absolute;
+  left: 50%;
+  top: 49%;
+  z-index: 4;
+  display: flex;
+  transform: translate(-50%, -50%);
+  gap: 6px;
+}
+
+.practice-pot {
+  position: absolute;
+  left: 50%;
+  top: calc(49% + 52px);
+  z-index: 4;
+  display: flex;
+  min-height: 32px;
+  transform: translateX(-50%);
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 9999px;
+  background: rgb(4 10 12 / 0.66);
+  padding: 4px 10px;
+  color: white;
+  font-size: 12px;
+}
+
+.playing-card {
+  display: inline-flex;
+  width: 48px;
+  height: 66px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(0 0 0 / 0.18);
+  border-radius: 6px;
+  background: rgb(255 255 255);
+  box-shadow: 0 3px 9px rgb(0 0 0 / 0.25);
+  color: rgb(17 24 39);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.05;
+}
+
+.playing-card-red {
+  color: rgb(190 24 93);
+}
+
+.playing-card-back {
+  border-color: rgb(255 255 255 / 0.35);
+  background:
+    linear-gradient(135deg, transparent 42%, rgb(255 255 255 / 0.14) 42% 48%, transparent 48%),
+    linear-gradient(45deg, transparent 42%, rgb(255 255 255 / 0.12) 42% 48%, transparent 48%),
+    rgb(21 72 98);
+  background-size: 10px 10px;
+  color: rgb(255 255 255 / 0.76);
+  font-size: 10px;
+}
+
+.playing-card-empty {
+  border-color: rgb(255 255 255 / 0.18);
+  background: rgb(0 0 0 / 0.12);
+  box-shadow: none;
+}
+
+.practice-action-strip {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  width: min(90%, 680px);
+  transform: translateX(-50%);
+  justify-content: center;
+  gap: 10px;
+  overflow: hidden;
+  color: rgb(255 255 255 / 0.82);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.practice-table-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.26);
+  padding: 16px;
+}
+
+.practice-empty-table {
+  display: flex;
+  min-height: 490px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 0 32px;
+}
+
+.practice-seat-ghost {
+  opacity: 0.48;
+}
+
+.practice-action-dock {
+  position: sticky;
+  bottom: calc(4.25rem + env(safe-area-inset-bottom));
+  z-index: 30;
+  margin-top: 12px;
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--border));
+  border-radius: 8px;
+  background: rgb(var(--bg) / 0.95);
+  padding: 8px;
+  box-shadow: 0 -8px 30px rgb(0 0 0 / 0.1);
+  backdrop-filter: blur(12px);
+}
+
+.practice-action-button {
+  display: inline-flex;
+  min-height: 48px;
+  min-width: 136px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgb(var(--border));
+  border-radius: 6px;
+  padding: 0 14px;
+  color: rgb(var(--fg));
+  font-size: 14px;
+  font-weight: 700;
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.practice-action-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(var(--accent));
+}
+
+.practice-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.practice-action-fold:hover:not(:disabled) {
+  border-color: rgb(var(--fold));
+  background: rgb(var(--fold) / 0.12);
+}
+
+.practice-action-call:hover:not(:disabled),
+.practice-action-check:hover:not(:disabled) {
+  border-color: rgb(var(--call));
+  background: rgb(var(--call) / 0.12);
+}
+
+.practice-action-bet:hover:not(:disabled),
+.practice-action-raise:hover:not(:disabled) {
+  border-color: rgb(var(--raise));
+  background: rgb(var(--raise) / 0.12);
+}
+
+.practice-action-all-in:hover:not(:disabled) {
+  border-color: rgb(var(--allin));
+  background: rgb(var(--allin) / 0.12);
+}
+
+@media (min-width: 768px) {
+  .practice-table-shell {
+    min-height: 540px;
+  }
+
+  .practice-felt,
+  .practice-empty-table {
+    min-height: 480px;
+  }
+
+  .practice-seat {
+    width: 280px;
+  }
+
+  .playing-card {
+    width: 56px;
+    height: 76px;
+    font-size: 17px;
+  }
+
+  .practice-pot {
+    top: calc(49% + 60px);
+  }
+
+  .practice-action-dock {
+    position: static;
+  }
+}
+
+@media (max-width: 480px) {
+  .practice-table-shell {
+    min-height: 430px;
+    padding: 8px;
+  }
+
+  .practice-felt,
+  .practice-empty-table {
+    min-height: 410px;
+  }
+
+  .practice-felt {
+    border-width: 7px;
+    border-radius: 42% / 18%;
+  }
+
+  .practice-seat {
+    width: min(250px, 78vw);
+  }
+
+  .practice-board {
+    gap: 3px;
+  }
+
+  .playing-card {
+    width: 40px;
+    height: 56px;
+    border-radius: 5px;
+    font-size: 13px;
+  }
+
+  .practice-pot {
+    top: calc(49% + 45px);
+  }
+
+  .practice-hero-seat {
+    bottom: 16px;
+  }
+
+  .practice-opponent-seat {
+    top: 10px;
+  }
+
+  .practice-action-strip {
+    display: none;
+  }
+
+  .practice-action-button {
+    min-width: 0;
+  }
+}

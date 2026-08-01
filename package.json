@@ -11,13 +11,23 @@
     "test:watch": "vitest",
     "preflop:catalog": "node scripts/generate-preflop-catalog.mjs",
     "preflop:compare-blueprints": "node scripts/compare-blueprint-artifacts.mjs",
-    "test:blueprint-compare": "node --test scripts/compare-blueprint-artifacts.test.mjs"
+    "test:blueprint-compare": "node --test scripts/compare-blueprint-artifacts.test.mjs",
+    "policy:export": "node scripts/policy/export-shards.mjs",
+    "policy:import": "node scripts/policy/import-dynamo.mjs",
+    "policy:verify": "node scripts/policy/verify-dynamo.mjs",
+    "policy:activate": "node scripts/policy/activate-or-rollback.mjs",
+    "policy:size": "node scripts/policy/audit-size.mjs",
+    "policy:validate-seeds": "node scripts/policy/validate-full-hand-seeds.mjs",
+    "test:policy-tools": "node --test scripts/policy/*.test.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1101.0",
+    "@vercel/oidc-aws-credentials-provider": "^3.3.1",
     "lucide-react": "^1.26.0",
     "next": "15.1.6",
     "react": "19.0.0",
     "react-dom": "19.0.0",
+    "server-only": "^0.0.1",
     "zustand": "5.0.3"
   },
   "devDependencies": {
@@ -25,6 +35,7 @@
     "@types/react": "19.0.7",
     "@types/react-dom": "19.0.3",
     "autoprefixer": "10.4.20",
+    "fake-indexeddb": "^6.2.5",
     "postcss": "8.5.1",
     "tailwindcss": "3.4.17",
     "typescript": "5.7.3",

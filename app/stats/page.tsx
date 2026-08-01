@@ -1,608 +1,319 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
   BarChart3,
-  CalendarDays,
-  Check,
   Clock3,
-  Crosshair,
-  Flame,
+  Database,
   Gauge,
   Layers3,
-  MapPin,
-  RotateCcw,
-  Table2,
+  RefreshCw,
+  ShieldAlert,
   Target,
   Trash2,
   TrendingDown,
-  TrendingUp,
-  X,
-  Zap,
-  type LucideIcon,
 } from 'lucide-react';
+import { cardToStr } from '@/lib/cards';
 import {
   clearPracticeHistory,
-  loadPracticeHistory,
+  loadPracticeHands,
   subscribePracticeHistory,
 } from '@/lib/practice-history';
-import {
-  analyzePractice,
-  type PracticeRecord,
-  type StatBreakdown,
-} from '@/lib/practice-stats';
-import { positionLabelForSeats } from '@/lib/positions';
+import { analyzePractice } from '@/lib/practice-stats';
+import type {
+  EvBreakdown,
+  PracticeDecisionRecord,
+  PracticeHandRecord,
+} from '@/lib/practice-types';
 
-function formatPercent(value: number): string {
+function bb(value: number | null): string {
+  return value === null ? '—' : `${value.toFixed(3)}bb`;
+}
+
+function duration(value: number): string {
+  if (!value) return '—';
+  return value < 1_000 ? `${Math.round(value)}ms` : `${(value / 1_000).toFixed(1)}s`;
+}
+
+function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
-function formatDuration(milliseconds: number): string {
-  if (milliseconds < 1000) return `${milliseconds} ms`;
-  return `${(milliseconds / 1000).toFixed(1)} s`;
-}
-
-function formatTrend(value: number): string {
-  const points = Math.round(Math.abs(value) * 100);
-  if (points === 0) return 'No change';
-  return `${value > 0 ? '+' : '-'}${points} pts`;
-}
-
-function formatAnsweredAt(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(timestamp);
-}
-
-function accuracyFor(records: PracticeRecord[]): number {
-  if (records.length === 0) return 0;
-  return records.filter((record) => record.correct).length / records.length;
-}
-
-interface SummaryCardProps {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  detail: string;
-}
-
 function SummaryCard({
-  icon: Icon,
   label,
   value,
   detail,
-}: SummaryCardProps) {
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  icon: typeof Gauge;
+}) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-4 sm:p-5">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-muted">{label}</span>
+    <div className="border-t border-border py-4 sm:p-5 sm:first:border-l-0">
+      <div className="flex items-center justify-between gap-3 text-sm text-muted">
+        <span>{label}</span>
         <Icon className="h-4 w-4 text-accent" aria-hidden="true" />
       </div>
-      <p className="mt-3 font-mono text-2xl font-semibold text-fg">{value}</p>
+      <p className="mt-3 font-mono text-2xl font-semibold">{value}</p>
       <p className="mt-1 text-xs leading-5 text-muted">{detail}</p>
     </div>
   );
 }
 
-interface BreakdownPanelProps {
-  title: string;
-  description: string;
-  icon: LucideIcon;
-  items: StatBreakdown[];
-  overallAccuracy: number;
-}
-
-function BreakdownPanel({
+function Breakdown({
   title,
-  description,
-  icon: Icon,
   items,
-  overallAccuracy,
-}: BreakdownPanelProps) {
+}: {
+  title: string;
+  items: EvBreakdown[];
+}) {
   return (
-    <section
-      aria-labelledby={`breakdown-${title.replace(/\s+/g, '-').toLowerCase()}`}
-      className="overflow-hidden rounded-lg border border-border bg-surface"
-    >
-      <div className="flex items-start gap-3 border-b border-border px-4 py-4 sm:px-5">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-surface-2 text-accent">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </div>
-        <div>
-          <h3
-            id={`breakdown-${title.replace(/\s+/g, '-').toLowerCase()}`}
-            className="text-sm font-semibold text-fg"
-          >
-            {title}
-          </h3>
-          <p className="mt-0.5 text-xs leading-5 text-muted">{description}</p>
-        </div>
+    <section className="overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">{title}</h2>
       </div>
-
-      <div className="divide-y divide-border">
-        {items.map((item) => {
-          const difference = item.accuracy - overallAccuracy;
-          const assessment =
-            item.attempts < 3
-              ? 'Need more data'
-              : Math.abs(difference) < 0.005
-              ? 'At average'
-              : difference > 0
-                ? 'Strength'
-                : 'Focus';
-
-          return (
-            <div key={item.key} className="px-4 py-3.5 sm:px-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-fg">{item.label}</p>
-                  <p className="mt-0.5 text-xs text-muted">
-                    {item.correct} of {item.attempts} correct
-                  </p>
+      {items.length === 0 ? (
+        <p className="p-4 text-sm text-muted">No decisions in this breakdown yet.</p>
+      ) : (
+        <div className="divide-y divide-border">
+          {items.slice(0, 8).map((item) => {
+            const width = Math.min(100, (item.averageEvLossBb ?? 0) * 200);
+            return (
+              <div key={item.key} className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium capitalize">{item.label}</p>
+                    <p className="mt-1 text-xs text-muted">
+                      {item.decisions} decisions · {item.graded} graded
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="font-mono text-sm font-semibold">{bb(item.averageEvLossBb)}</p>
+                    <p className="mt-1 text-[11px] text-muted">{percent(item.lowConfidencePercentage)} low confidence</p>
+                  </div>
                 </div>
-                <div className="shrink-0 text-right">
-                  <p className="font-mono text-sm font-semibold text-fg">
-                    {formatPercent(item.accuracy)}
-                  </p>
-                  <p
-                    className={
-                      'mt-0.5 text-xs font-medium ' +
-                      (assessment === 'Strength'
-                        ? 'text-accent'
-                        : assessment === 'Focus'
-                          ? 'text-raise'
-                          : 'text-muted')
-                    }
-                  >
-                    {assessment}
-                  </p>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
+                  <div
+                    className="h-full rounded-full bg-raise"
+                    style={{ width: `${Math.max(item.graded ? 1 : 0, width)}%` }}
+                  />
                 </div>
               </div>
-              <div
-                className="mt-3 h-1.5 overflow-hidden rounded bg-surface-2"
-                role="img"
-                aria-label={`${item.label}: ${formatPercent(item.accuracy)} accuracy`}
-              >
-                <div
-                  className={
-                    'h-full rounded ' +
-                    (assessment === 'Focus' ? 'bg-raise' : 'bg-accent')
-                  }
-                  style={{ width: `${item.accuracy * 100}%` }}
-                />
-              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CostlyDecision({
+  decision,
+  hand,
+}: {
+  decision: PracticeDecisionRecord;
+  hand?: PracticeHandRecord;
+}) {
+  return (
+    <details className="group border-b border-border last:border-b-0">
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent sm:px-5">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">
+            {decision.handBucket} · {decision.street} · {decision.chosenAction.label}
+          </p>
+          <p className="mt-1 font-mono text-xs text-muted">
+            {decision.heroCards.map(cardToStr).join(' ')} · {decision.depthBb}bb · {decision.position === 'button-small-blind' ? 'BTN / SB' : 'BB'}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="font-mono text-sm font-semibold text-raise">{bb(decision.evLossBb)}</p>
+          <p className="mt-1 text-[11px] capitalize text-muted">{decision.grade}</p>
+        </div>
+      </summary>
+      <div className="border-t border-border bg-surface-2/45 px-4 py-4 text-xs sm:px-5">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="font-semibold">Complete line</p>
+            <ol className="mt-2 space-y-1 text-muted">
+              {hand?.actions.map((action) => (
+                <li key={action.id}>
+                  {action.actor === hand.hero ? 'Hero' : 'Opponent'} · {action.street} · {action.label}
+                </li>
+              )) ?? <li>Action history unavailable</li>}
+            </ol>
+            {hand && (
+              <p className="mt-3 font-mono text-muted">
+                Board {hand.board.length ? hand.board.map(cardToStr).join(' ') : '—'} · Opponent {hand.opponentCards.map(cardToStr).join(' ')}
+              </p>
+            )}
+          </div>
+          <div>
+            <p className="font-semibold">Policy mix</p>
+            <div className="mt-2 space-y-2">
+              {decision.policyActions.map((action) => (
+                <div key={action.id} className="flex justify-between gap-3 text-muted">
+                  <span>{action.label}</span>
+                  <span className="font-mono">{percent(action.probability)} · {action.evBb === null ? 'EV unavailable' : `${action.evBb.toFixed(3)}bb`}</span>
+                </div>
+              ))}
             </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function LoadingState() {
-  return (
-    <div
-      className="grid min-h-[320px] place-items-center rounded-lg border border-border bg-surface"
-      role="status"
-    >
-      <div className="flex items-center gap-3 text-sm text-muted">
-        <RotateCcw className="h-4 w-4 animate-spin motion-reduce:animate-none" />
-        Loading practice history
-      </div>
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <section className="grid min-h-[440px] place-items-center border-y border-border py-16 text-center">
-      <div className="max-w-md">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-surface-2 text-accent">
-          <BarChart3 className="h-6 w-6" aria-hidden="true" />
+          </div>
         </div>
-        <h2 className="mt-5 text-xl font-semibold text-fg">No decisions recorded yet</h2>
-        <p className="mt-2 text-sm leading-6 text-muted">
-          Complete a practice set to establish your baseline. Your accuracy,
-          timing, strengths, and review areas will appear here.
-        </p>
-        <Link
-          href="/practice"
-          className="mt-6 inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition-opacity duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        >
-          Start practice
-          <ArrowRight className="h-4 w-4" aria-hidden="true" />
-        </Link>
+        {decision.lowConfidence && (
+          <p className="mt-4 flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 leading-5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            This record carries a {decision.confidence} confidence warning. Its grade is approximate or unavailable.
+          </p>
+        )}
       </div>
-    </section>
+    </details>
   );
 }
 
 export default function StatsPage() {
-  const [records, setRecords] = useState<PracticeRecord[] | null>(null);
-  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [hands, setHands] = useState<PracticeHandRecord[] | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
-    const refresh = () => setRecords(loadPracticeHistory());
-    refresh();
-    return subscribePracticeHistory(refresh);
+    let active = true;
+    const refresh = async () => {
+      const records = await loadPracticeHands();
+      if (active) setHands(records);
+    };
+    void refresh();
+    const unsubscribe = subscribePracticeHistory(() => void refresh());
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
-  const stats = useMemo(
-    () => (records === null ? null : analyzePractice(records)),
-    [records]
+  const stats = useMemo(() => (hands ? analyzePractice(hands) : null), [hands]);
+  const handById = useMemo(
+    () => new Map((hands ?? []).map((hand) => [hand.id, hand])),
+    [hands]
   );
 
-  const comparison = useMemo(() => {
-    if (!records) return null;
-    const ordered = [...records].sort(
-      (first, second) => second.answeredAt - first.answeredAt
-    );
-    const recent = ordered.slice(0, 20);
-    const previous = ordered.slice(20, 40);
-    return {
-      recentCount: recent.length,
-      previousCount: previous.length,
-      recentAccuracy: accuracyFor(recent),
-      previousAccuracy: accuracyFor(previous),
-    };
-  }, [records]);
+  async function clear() {
+    if (!window.confirm('Clear the new IndexedDB practice history on this device? This cannot be undone.')) return;
+    setClearing(true);
+    if (await clearPracticeHistory()) setHands([]);
+    setClearing(false);
+  }
 
-  const handleClear = () => {
-    clearPracticeHistory();
-    setConfirmingClear(false);
-  };
+  if (!stats || !hands) {
+    return (
+      <div className="grid min-h-[50vh] place-items-center" role="status">
+        <RefreshCw className="h-6 w-6 animate-spin text-accent motion-reduce:animate-none" aria-hidden="true" />
+        <span className="sr-only">Loading IndexedDB practice history</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-7 pb-12 pt-1 sm:gap-8 sm:pt-3">
-      <header className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="pb-10">
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-5">
         <div>
           <div className="flex items-center gap-2 font-mono text-xs font-semibold uppercase text-accent">
-            <span className="h-2 w-2 rounded-full bg-accent" aria-hidden="true" />
-            Practice report
+            <BarChart3 className="h-4 w-4" aria-hidden="true" />
+            Practice analysis
           </div>
-          <h1 className="mt-3 text-3xl font-bold text-fg sm:text-4xl">Stats</h1>
+          <h1 className="mt-3 text-3xl font-semibold">EV-loss stats</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-            See where your preflop decisions are reliable and what to train next.
+            Built only from the fresh IndexedDB hand schema. Unused legacy localStorage history is intentionally ignored.
           </p>
         </div>
-
-        {records && records.length > 0 && !confirmingClear && (
-          <button
-            type="button"
-            onClick={() => setConfirmingClear(true)}
-            className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 self-start rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-muted transition-colors duration-200 hover:border-raise hover:text-raise focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-raise focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:self-auto"
-          >
-            <Trash2 className="h-4 w-4" aria-hidden="true" />
-            Clear history
-          </button>
-        )}
-      </header>
-
-      {confirmingClear && records && records.length > 0 && (
-        <div
-          role="alertdialog"
-          aria-labelledby="clear-history-title"
-          aria-describedby="clear-history-description"
-          className="flex flex-col gap-4 rounded-lg border border-raise/40 bg-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"
-        >
-          <div>
-            <h2 id="clear-history-title" className="text-sm font-semibold text-fg">
-              Clear all practice history?
-            </h2>
-            <p id="clear-history-description" className="mt-1 text-sm text-muted">
-              This permanently removes {records.length}{' '}
-              {records.length === 1 ? 'decision' : 'decisions'} from this device.
-            </p>
-          </div>
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          {hands.length > 0 && (
             <button
               type="button"
-              onClick={() => setConfirmingClear(false)}
-              autoFocus
-              className="inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-fg transition-colors duration-200 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:flex-none"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleClear}
-              className="inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-2 rounded-md bg-raise px-4 py-2 text-sm font-semibold text-white transition-opacity duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-raise focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:flex-none"
+              disabled={clearing}
+              onClick={() => void clear()}
+              className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-4 text-sm font-semibold text-muted hover:border-raise hover:text-raise focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
             >
               <Trash2 className="h-4 w-4" aria-hidden="true" />
-              Clear
+              Clear history
             </button>
-          </div>
+          )}
+          <Link
+            href="/practice"
+            className="inline-flex min-h-11 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Practice
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Link>
         </div>
-      )}
+      </header>
 
-      {records === null || stats === null || comparison === null ? (
-        <LoadingState />
-      ) : records.length === 0 ? (
-        <EmptyState />
+      {stats.decisions === 0 ? (
+        <section className="mt-8 rounded-lg border border-dashed border-border p-10 text-center">
+          <Database className="mx-auto h-6 w-6 text-accent" aria-hidden="true" />
+          <h2 className="mt-3 text-lg font-semibold">No new-format decisions yet</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
+            Complete a decision on the heads-up table. Full-hand depths remain unavailable until validated; push/fold is ready now.
+          </p>
+        </section>
       ) : (
         <>
-          <section aria-labelledby="summary-title">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="font-mono text-xs font-medium uppercase text-muted">
-                  All practice
-                </p>
-                <h2 id="summary-title" className="mt-1 text-lg font-semibold text-fg">
-                  Performance summary
-                </h2>
-              </div>
-              <Link
-                href="/practice"
-                className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium text-fg transition-colors duration-200 hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                <Zap className="h-4 w-4" aria-hidden="true" />
-                <span className="hidden sm:inline">Practice again</span>
-                <span className="sm:hidden">Practice</span>
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <SummaryCard
-                icon={Crosshair}
-                label="Decisions"
-                value={stats.total.toLocaleString()}
-                detail={`${stats.correct.toLocaleString()} correct`}
-              />
-              <SummaryCard
-                icon={Target}
-                label="Accuracy"
-                value={formatPercent(stats.accuracy)}
-                detail={`${stats.total - stats.correct} to review`}
-              />
-              <SummaryCard
-                icon={Gauge}
-                label="Average time"
-                value={formatDuration(stats.averageResponseMs)}
-                detail="Per decision"
-              />
-              <SummaryCard
-                icon={Flame}
-                label="Day streak"
-                value={stats.streakDays.toLocaleString()}
-                detail={
-                  stats.streakDays === 1
-                    ? 'Consecutive practice day'
-                    : 'Consecutive practice days'
-                }
-              />
-            </div>
+          <section className="mt-6 grid border-y border-border sm:grid-cols-2 sm:divide-x sm:divide-border xl:grid-cols-4">
+            <SummaryCard icon={Gauge} label="Average EV loss" value={bb(stats.averageEvLossBb)} detail={`${stats.gradedDecisions} of ${stats.decisions} decisions graded`} />
+            <SummaryCard icon={TrendingDown} label="Total EV loss" value={stats.gradedDecisions ? bb(stats.totalEvLossBb) : '—'} detail={stats.trendEvLossBb === null ? 'Need 100 decisions for trend' : `${stats.trendEvLossBb > 0 ? '+' : ''}${stats.trendEvLossBb.toFixed(3)}bb recent vs previous`} />
+            <SummaryCard icon={ShieldAlert} label="Low confidence" value={percent(stats.lowConfidencePercentage)} detail="Includes unavailable action-EV estimates" />
+            <SummaryCard icon={Clock3} label="Response time" value={duration(stats.averageResponseMs)} detail={`${stats.hands} complete hands retained`} />
           </section>
 
-          <section
-            aria-labelledby="trend-title"
-            className="rounded-lg border border-border bg-surface p-4 sm:p-5"
-          >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-surface-2 text-accent">
-                  {stats.trend < 0 ? (
-                    <TrendingDown className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <TrendingUp className="h-4 w-4" aria-hidden="true" />
-                  )}
-                </div>
-                <div>
-                  <h2 id="trend-title" className="text-sm font-semibold text-fg">
-                    Recent performance
-                  </h2>
-                  <p className="mt-0.5 text-xs leading-5 text-muted">
-                    All range sets: your latest 20 decisions compared with the
-                    20 before them.
-                  </p>
-                </div>
-              </div>
+          {stats.gradedDecisions === 0 && (
+            <div className="mt-5 flex gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6">
+              <AlertTriangle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>The current push/fold v1 model records authentic frequencies but no action EVs. These decisions are retained as ungraded rather than assigned invented values.</p>
+            </div>
+          )}
 
-              {comparison.previousCount === 20 ? (
-                <div className="sm:text-right">
-                  <p
-                    className={
-                      'font-mono text-xl font-semibold ' +
-                      (stats.trend > 0
-                        ? 'text-accent'
-                        : stats.trend < 0
-                          ? 'text-raise'
-                          : 'text-fg')
-                    }
-                  >
-                    {formatTrend(stats.trend)}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted">accuracy change</p>
-                </div>
+          <div className="mt-6 grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
+            <Breakdown title="By street" items={stats.byStreet} />
+            <Breakdown title="By stack" items={stats.byStack} />
+            <Breakdown title="By position" items={stats.byPosition} />
+            <Breakdown title="By chosen action" items={stats.byAction} />
+            <Breakdown title="By mode" items={stats.byMode} />
+            <Breakdown title="By severity" items={stats.bySeverity} />
+          </div>
+
+          <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="overflow-hidden rounded-lg border border-border bg-surface">
+              <div className="border-b border-border px-4 py-4 sm:px-5">
+                <h2 className="text-sm font-semibold">Recent costly decisions</h2>
+                <p className="mt-1 text-xs text-muted">Expand a row for the complete cards, line, policy mix, and confidence.</p>
+              </div>
+              {stats.recentCostly.length > 0 ? (
+                stats.recentCostly.map((decision) => (
+                  <CostlyDecision key={decision.id} decision={decision} hand={handById.get(decision.handId)} />
+                ))
               ) : (
-                <p className="max-w-xs text-xs leading-5 text-muted sm:text-right">
-                  Record {Math.max(0, 40 - stats.total)} more{' '}
-                  {40 - stats.total === 1 ? 'decision' : 'decisions'} to unlock a
-                  comparison.
-                </p>
+                <p className="p-5 text-sm text-muted">No graded costly decisions yet.</p>
               )}
-            </div>
+            </section>
 
-            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <div>
-                <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="font-medium text-fg">
-                    Recent {comparison.recentCount}
-                  </span>
-                  <span className="font-mono font-semibold text-fg">
-                    {formatPercent(comparison.recentAccuracy)}
-                  </span>
-                </div>
-                <div className="mt-2 h-2 overflow-hidden rounded bg-surface-2">
-                  <div
-                    className="h-full rounded bg-accent"
-                    style={{ width: `${comparison.recentAccuracy * 100}%` }}
-                  />
-                </div>
+            <section className="rounded-lg border border-border bg-surface p-4">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-accent" aria-hidden="true" />
+                <h2 className="text-sm font-semibold">Adaptive weaknesses</h2>
               </div>
-              <div>
-                <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="font-medium text-fg">
-                    Previous {comparison.previousCount}
-                  </span>
-                  <span className="font-mono font-semibold text-fg">
-                    {comparison.previousCount > 0
-                      ? formatPercent(comparison.previousAccuracy)
-                      : 'Not available'}
-                  </span>
-                </div>
-                <div className="mt-2 h-2 overflow-hidden rounded bg-surface-2">
-                  {comparison.previousCount > 0 && (
-                    <div
-                      className="h-full rounded bg-muted"
-                      style={{ width: `${comparison.previousAccuracy * 100}%` }}
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section aria-labelledby="breakdowns-title">
-            <div className="mb-4">
-              <p className="font-mono text-xs font-medium uppercase text-muted">
-                Decision quality
-              </p>
-              <h2 id="breakdowns-title" className="mt-1 text-lg font-semibold text-fg">
-                Strengths and focus areas
-              </h2>
-              <p className="mt-1 text-xs leading-5 text-muted">
-                Each group is measured against your overall{' '}
-                {formatPercent(stats.accuracy)} accuracy.
-              </p>
-            </div>
-            <div className="grid items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
-              <BreakdownPanel
-                title="By table"
-                description="Heads-up, 6-max, and full-ring results."
-                icon={Table2}
-                items={stats.byFormat}
-                overallAccuracy={stats.accuracy}
-              />
-              <BreakdownPanel
-                title="By position"
-                description="Where you make the decision."
-                icon={MapPin}
-                items={stats.byPosition}
-                overallAccuracy={stats.accuracy}
-              />
-              <BreakdownPanel
-                title="By spot type"
-                description="First-in decisions and responses."
-                icon={Layers3}
-                items={stats.byCategory}
-                overallAccuracy={stats.accuracy}
-              />
-              <BreakdownPanel
-                title="By best action"
-                description="The chart's recommended response."
-                icon={Check}
-                items={stats.byAction}
-                overallAccuracy={stats.accuracy}
-              />
-              <BreakdownPanel
-                title="By range set"
-                description="Stack depth and source used for each decision."
-                icon={Gauge}
-                items={stats.byScenario}
-                overallAccuracy={stats.accuracy}
-              />
-            </div>
-          </section>
-
-          <section
-            aria-labelledby="recent-title"
-            className="overflow-hidden rounded-lg border border-border bg-surface"
-          >
-            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
-              <div>
-                <h2 id="recent-title" className="text-sm font-semibold text-fg">
-                  Recent decisions
-                </h2>
-                <p className="mt-0.5 text-xs text-muted">
-                  Your last {stats.recent.length} answers
-                </p>
-              </div>
-              <CalendarDays className="h-4 w-4 text-accent" aria-hidden="true" />
-            </div>
-            <div className="divide-y divide-border">
-              {stats.recent.map((record) => (
-                <article
-                  key={record.id}
-                  className="grid gap-3 px-4 py-4 sm:grid-cols-[52px_minmax(130px,1fr)_minmax(128px,0.8fr)_90px_116px] sm:items-center sm:px-5"
-                >
-                  <span className="w-fit rounded border border-border bg-surface-2 px-2 py-1 font-mono text-xs font-semibold text-fg">
-                    {record.handClass}
-                  </span>
-                  <div>
-                    <p className="text-sm font-medium text-fg">
-                      {positionLabelForSeats(record.hero, record.seats)}
-                      {record.villain
-                        ? ` vs ${positionLabelForSeats(
-                            record.villain,
-                            record.seats
-                          )}`
-                        : ''}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted">
-                      {record.category === 'RFI'
-                        ? record.scenario?.openingSize.kind === 'all-in'
-                          ? 'Push or fold'
-                          : 'Raise first in'
-                        : record.scenario?.openingSize.kind === 'all-in'
-                          ? 'Facing a shove'
-                          : 'Facing an open'}
-                      {' · '}
-                      {record.scenario?.label ?? 'Legacy curated baseline'}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:block">
-                    <span className="text-muted">Played </span>
-                    <span className="font-medium text-fg">{record.chosenAction}</span>
-                    <span className="text-muted sm:block">
-                      Default: {record.recommendedAction}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {record.correct ? (
-                      <Check className="h-4 w-4 text-accent" aria-hidden="true" />
-                    ) : (
-                      <X className="h-4 w-4 text-raise" aria-hidden="true" />
-                    )}
-                    <span
-                      className={
-                        'text-xs font-medium ' +
-                        (record.correct ? 'text-accent' : 'text-raise')
-                      }
-                    >
-                      {record.correct ? 'Correct' : 'Review'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 text-xs text-muted sm:block sm:text-right">
-                    <span className="inline-flex items-center gap-1">
-                      <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
-                      {formatDuration(record.responseMs)}
-                    </span>
-                    <time
-                      dateTime={new Date(record.answeredAt).toISOString()}
-                      className="sm:mt-1 sm:block"
-                    >
-                      {formatAnsweredAt(record.answeredAt)}
-                    </time>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
+              <p className="mt-2 text-xs leading-5 text-muted">The adaptive sampler considers the latest 200 graded decisions and keeps 30% authentic random coverage.</p>
+              <ol className="mt-4 space-y-3">
+                {stats.weaknesses.length ? stats.weaknesses.map((item) => (
+                  <li key={item.key} className="border-l-2 border-raise pl-3">
+                    <p className="text-xs font-semibold capitalize">{item.label}</p>
+                    <p className="mt-1 font-mono text-[11px] text-muted">{bb(item.averageEvLossBb)} average · {item.decisions} attempts</p>
+                  </li>
+                )) : <li className="text-xs text-muted">Need at least two decisions in a group.</li>}
+              </ol>
+            </section>
+          </div>
         </>
       )}
     </div>

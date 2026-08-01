@@ -1,176 +1,153 @@
-import {
-  formatForSeats,
-  positionLabelForSeats,
-} from '@/lib/positions';
 import type {
-  PracticeRecord,
+  EvBreakdown,
+  PracticeDecisionRecord,
+  PracticeHandRecord,
   PracticeStats,
-  StatBreakdown,
 } from '@/lib/practice-types';
 
+function mean(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
 function breakdown(
-  records: PracticeRecord[],
-  keyFor: (record: PracticeRecord) => string,
-  labelFor: (record: PracticeRecord) => string
-): StatBreakdown[] {
+  decisions: PracticeDecisionRecord[],
+  keyFor: (record: PracticeDecisionRecord) => string,
+  labelFor: (record: PracticeDecisionRecord) => string
+): EvBreakdown[] {
   const groups = new Map<
     string,
-    { label: string; attempts: number; correct: number }
+    { label: string; records: PracticeDecisionRecord[] }
   >();
-
-  for (const record of records) {
+  for (const record of decisions) {
     const key = keyFor(record);
-    const current = groups.get(key) ?? {
-      label: labelFor(record),
-      attempts: 0,
-      correct: 0,
-    };
-    current.attempts++;
-    if (record.correct) current.correct++;
+    const current = groups.get(key) ?? { label: labelFor(record), records: [] };
+    current.records.push(record);
     groups.set(key, current);
   }
-
   return [...groups.entries()]
-    .map(([key, value]) => ({
-      key,
-      ...value,
-      accuracy: value.attempts ? value.correct / value.attempts : 0,
-    }))
-    .sort((first, second) => second.attempts - first.attempts);
+    .map(([key, group]) => {
+      const losses = group.records
+        .map((record) => record.evLossBb)
+        .filter((loss): loss is number => loss !== null);
+      const lowConfidence = group.records.filter(
+        (record) => record.lowConfidence
+      ).length;
+      return {
+        key,
+        label: group.label,
+        decisions: group.records.length,
+        graded: losses.length,
+        averageEvLossBb: mean(losses),
+        totalEvLossBb: losses.reduce((sum, loss) => sum + loss, 0),
+        lowConfidencePercentage: group.records.length
+          ? lowConfidence / group.records.length
+          : 0,
+      };
+    })
+    .sort(
+      (first, second) =>
+        (second.averageEvLossBb ?? -1) - (first.averageEvLossBb ?? -1) ||
+        second.decisions - first.decisions
+    );
 }
 
-function localDay(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate()
-  ).getTime();
-}
-
-function calculateStreak(records: PracticeRecord[], now: number): number {
-  const days = [
-    ...new Set(records.map((record) => localDay(record.answeredAt))),
-  ].sort((first, second) => second - first);
-  if (days.length === 0) return 0;
-
-  const today = localDay(now);
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (days[0] !== today && days[0] !== yesterday.getTime()) return 0;
-
-  let streak = 1;
-  const cursor = new Date(days[0]);
-  for (let index = 1; index < days.length; index++) {
-    cursor.setDate(cursor.getDate() - 1);
-    if (days[index] !== cursor.getTime()) break;
-    streak++;
-  }
-  return streak;
-}
-
-function accuracy(records: PracticeRecord[]): number {
-  if (records.length === 0) return 0;
-  return records.filter((record) => record.correct).length / records.length;
+function averageLoss(records: PracticeDecisionRecord[]): number | null {
+  return mean(
+    records
+      .map((record) => record.evLossBb)
+      .filter((loss): loss is number => loss !== null)
+  );
 }
 
 export function analyzePractice(
-  records: PracticeRecord[],
-  now = Date.now()
+  hands: PracticeHandRecord[]
 ): PracticeStats {
-  const ordered = [...records].sort(
-    (first, second) => second.answeredAt - first.answeredAt
-  );
-  const correct = records.filter((record) => record.correct).length;
-  const recentWindow = ordered.slice(0, 20);
-  const previousWindow = ordered.slice(20, 40);
-  const byFormat = breakdown(
-    records,
-    (record) => String(record.seats),
-    (record) => formatForSeats(record.seats).label
+  const decisions = hands
+    .flatMap((hand) => hand.decisions)
+    .sort((first, second) => second.answeredAt - first.answeredAt);
+  const losses = decisions
+    .map((record) => record.evLossBb)
+    .filter((loss): loss is number => loss !== null);
+  const recent = decisions.slice(0, 50);
+  const previous = decisions.slice(50, 100);
+  const recentLoss = averageLoss(recent);
+  const previousLoss = averageLoss(previous);
+  const byStreet = breakdown(decisions, (record) => record.street, (record) => record.street);
+  const byStack = breakdown(
+    decisions,
+    (record) => String(record.depthBb),
+    (record) => `${record.depthBb}bb`
   );
   const byPosition = breakdown(
-    records,
-    (record) => `${record.seats}:${record.hero}`,
+    decisions,
+    (record) => record.position,
     (record) =>
-      `${formatForSeats(record.seats).label} · ${positionLabelForSeats(
-        record.hero,
-        record.seats
-      )}`
-  );
-  const byCategory = breakdown(
-    records,
-    (record) =>
-      `${record.category}:${record.scenario?.openingSize.kind ?? 'legacy'}`,
-    (record) =>
-      record.category === 'RFI'
-        ? record.scenario?.openingSize.kind === 'all-in'
-          ? 'Push or fold'
-          : 'Raise first in'
-        : record.scenario?.openingSize.kind === 'all-in'
-          ? 'Facing a shove'
-          : 'Facing an open'
+      record.position === 'button-small-blind' ? 'BTN / SB' : 'Big blind'
   );
   const byAction = breakdown(
-    records,
-    (record) => record.recommendedAction,
-    (record) => record.recommendedAction
+    decisions,
+    (record) => record.chosenAction.kind,
+    (record) => record.chosenAction.label
   );
-  const byScenario = breakdown(
-    records,
-    (record) =>
-      record.scenario?.scenarioId ??
-      `legacy-curated-${record.seats}-max-100bb`,
-    (record) =>
-      record.scenario
-        ? `${formatForSeats(record.seats).label} · ${record.scenario.effectiveStackBb}bb · ${
-            record.scenario.provenance.source === 'offline-solver'
-              ? 'Solver'
-              : 'Curated'
-          }`
-        : `${formatForSeats(record.seats).label} · Legacy curated`
+  const byMode = breakdown(
+    decisions,
+    (record) => record.mode,
+    (record) => record.mode.replace('-', ' ')
   );
-  const eligibleWeaknesses = [
-    ...byFormat,
-    ...byPosition,
-    ...byCategory,
-    ...byAction,
-    ...byScenario,
-  ].filter((item) => item.attempts >= 3);
+  const bySeverity = breakdown(
+    decisions,
+    (record) => record.grade,
+    (record) => record.grade
+  );
+  const lowConfidence = decisions.filter((record) => record.lowConfidence).length;
+  const weaknesses = breakdown(
+    decisions,
+    (record) =>
+      [record.street, record.position, record.depthBb, record.handBucket, record.facingAction].join('|'),
+    (record) =>
+      `${record.street} · ${record.position === 'button-small-blind' ? 'BTN / SB' : 'BB'} · ${record.handBucket} · ${record.facingAction}`
+  )
+    .filter((item) => item.decisions >= 2)
+    .slice(0, 6);
 
   return {
-    total: records.length,
-    correct,
-    accuracy: accuracy(records),
-    averageResponseMs: records.length
-      ? Math.round(
-          records.reduce((sum, record) => sum + record.responseMs, 0) /
-            records.length
-        )
+    hands: hands.length,
+    decisions: decisions.length,
+    gradedDecisions: losses.length,
+    averageEvLossBb: mean(losses),
+    totalEvLossBb: losses.reduce((sum, loss) => sum + loss, 0),
+    lowConfidencePercentage: decisions.length
+      ? lowConfidence / decisions.length
       : 0,
-    streakDays: calculateStreak(records, now),
-    trend:
-      recentWindow.length === 20 && previousWindow.length === 20
-        ? accuracy(recentWindow) - accuracy(previousWindow)
-        : 0,
-    byFormat,
+    averageResponseMs: decisions.length
+      ? decisions.reduce((sum, record) => sum + record.responseMs, 0) /
+        decisions.length
+      : 0,
+    trendEvLossBb:
+      recent.length === 50 &&
+      previous.length === 50 &&
+      recentLoss !== null &&
+      previousLoss !== null
+        ? recentLoss - previousLoss
+        : null,
+    byStreet,
+    byStack,
     byPosition,
-    byCategory,
     byAction,
-    byScenario,
-    weaknesses: eligibleWeaknesses
-      .sort(
-        (first, second) =>
-          first.accuracy - second.accuracy ||
-          second.attempts - first.attempts
-      )
-      .slice(0, 3),
-    recent: ordered.slice(0, 8),
+    byMode,
+    bySeverity,
+    weaknesses,
+    recentCostly: decisions
+      .filter((record) => record.evLossBb !== null)
+      .sort((first, second) => (second.evLossBb ?? 0) - (first.evLossBb ?? 0))
+      .slice(0, 12),
   };
 }
 
 export type {
-  PracticeRecord,
+  EvBreakdown,
+  PracticeDecisionRecord,
+  PracticeHandRecord,
   PracticeStats,
-  StatBreakdown,
 } from '@/lib/practice-types';

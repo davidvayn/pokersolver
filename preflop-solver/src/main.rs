@@ -51,6 +51,21 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
         "--root-deviation-seed",
         config.evaluation_controls.root_deviation_seed,
     )?;
+    config.evaluation_controls.action_value_deals = parse_or(
+        args,
+        "--action-value-deals",
+        config.evaluation_controls.action_value_deals,
+    )?;
+    config.evaluation_controls.action_value_seed = parse_or(
+        args,
+        "--action-value-seed",
+        config.evaluation_controls.action_value_seed,
+    )?;
+    config.dcfr.positive_regret_exponent =
+        parse_or(args, "--dcfr-alpha", config.dcfr.positive_regret_exponent)?;
+    config.dcfr.negative_regret_exponent =
+        parse_or(args, "--dcfr-beta", config.dcfr.negative_regret_exponent)?;
+    config.dcfr.strategy_exponent = parse_or(args, "--dcfr-gamma", config.dcfr.strategy_exponent)?;
     config.hand_abstraction.distribution_samples = parse_or(
         args,
         "--distribution-samples",
@@ -84,9 +99,15 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
         .any(|argument| argument == "--export-postflop-strategies");
     if args
         .iter()
-        .any(|argument| argument == "--trajectory-recall")
+        .any(|argument| argument == "--current-street-recall")
     {
-        config.recall_mode = RecallMode::Trajectory;
+        config.recall_mode = RecallMode::CurrentStreet;
+    }
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        config.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
     replace_list(
         args,
@@ -261,12 +282,18 @@ Blueprint options:
   --held-out-seed <integer>       Fixed evaluation seed
   --root-deviation-samples <int>  Default: 256 deals per hand class
   --root-deviation-seed <integer> Fixed local-deviation seed
+  --action-value-deals <integer>  Default: 10000 independent policy deals
+  --action-value-seed <integer>   Fixed per-action evaluation seed
+  --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)
+  --dcfr-beta <number>            Negative-regret exponent (default: 0)
+  --dcfr-gamma <number>           Average-strategy exponent (default: 2)
   --distribution-samples <int>    Default: 128 per visible-card bucket
   --equity-bins <int>             Default: 10
   --potential-bins <int>          Default: 3
   --preflop-runout-samples <int>  Default: 256
   --flop-runout-samples <int>     Default: 128
   --sample-turn-rivers            Sample instead of enumerating turn rivers
+  --compact-serving-grid          Remove 4bb/5bb opens; retain other sizes
   --open-sizes-bb <csv>           Default: 2,2.5,3,4,5
   --limp-raise-sizes-bb <csv>     Default: 3,4,5
   --three-bet-sizes-bb <csv>      Default: 7.5,9,11
@@ -282,7 +309,7 @@ Blueprint options:
   --checkpoint-every <integer>    Default: 0 (final only)
   --resume <path>                 Resume compatible checkpoint
   --export-postflop-strategies    Include trained postflop profile (large)
-  --trajectory-recall             Retain all prior street buckets (large)
+  --current-street-recall         Opt into imperfect recall (not publishable)
   --output <path>                 Default: blueprint-artifact.json"
     );
 }

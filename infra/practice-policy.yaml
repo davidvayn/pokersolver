@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Read-only hosted Poker Lab policy shards in us-west-2. Deploy this stack only in us-west-2.
+
+Parameters:
+  TableName:
+    Type: String
+    Default: poker-lab-practice-policy
+  BillingAlertEmail:
+    Type: String
+    Description: Email address that will confirm the AWS Budget subscription.
+  ImporterPrincipalArn:
+    Type: String
+    Description: ARN of the IAM or IAM Identity Center role authorized for the one-time CLI/SSO imports. Do not use a root user ARN.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 1
+    MinValue: 1
+  VercelOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: Existing global-issuer Vercel OIDC provider ARN ending in oidc-provider/oidc.vercel.com. Leave empty until the team/project trust is ready.
+  VercelOidcAudience:
+    Type: String
+    Default: ''
+    Description: Exact token audience, normally https://vercel.com/TEAM_SLUG.
+  VercelOidcSubject:
+    Type: String
+    Default: ''
+    Description: Exact or wildcard Vercel team/project subject. Required before creating the runtime role.
+
+Conditions:
+  HasVercelTrust: !And
+    - !Not [!Equals [!Ref VercelOidcProviderArn, '']]
+    - !Not [!Equals [!Ref VercelOidcAudience, '']]
+    - !Not [!Equals [!Ref VercelOidcSubject, '']]
+
+Resources:
+  PolicyTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 25
+        WriteCapacityUnits: 25
+      AttributeDefinitions:
+        - AttributeName: shardKey
+          AttributeType: S
+        - AttributeName: part
+          AttributeType: N
+      KeySchema:
+        - AttributeName: shardKey
+          KeyType: HASH
+        - AttributeName: part
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Application
+          Value: poker-lab
+        - Key: DataClass
+          Value: immutable-policy
+
+  ReadCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Poker policy reads reached 90 percent of fixed provisioned capacity for five minutes.
+      Namespace: AWS/DynamoDB
+      MetricName: ConsumedReadCapacityUnits
+      Dimensions:
+        - Name: TableName
+          Value: !Ref PolicyTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 6750
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  WriteCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Poker policy writes reached 90 percent of fixed provisioned capacity for five minutes.
+      Namespace: AWS/DynamoDB
+      MetricName: ConsumedWriteCapacityUnits
+      Dimensions:
+        - Name: TableName
+          Value: !Ref PolicyTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 6750
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub ${AWS::StackName}-monthly-cost
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: FORECASTED
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref BillingAlertEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref BillingAlertEmail
+              SubscriptionType: EMAIL
+
+  PolicyImporterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-importer
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref ImporterPrincipalArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ImportAndActivatePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource: !GetAtt PolicyTable.Arn
+
+  VercelPolicyReadRole:
+    Type: AWS::IAM::Role
+    Condition: HasVercelTrust
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-vercel-read
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref VercelOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                oidc.vercel.com:aud: !Ref VercelOidcAudience
+              StringLike:
+                oidc.vercel.com:sub: !Ref VercelOidcSubject
+      Policies:
+        - PolicyName: ReadImmutablePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource: !GetAtt PolicyTable.Arn
+
+Outputs:
+  PolicyTableName:
+    Value: !Ref PolicyTable
+  PolicyTableArn:
+    Value: !GetAtt PolicyTable.Arn
+  ImporterRoleArn:
+    Value: !GetAtt PolicyImporterRole.Arn
+  VercelReadRoleArn:
+    Condition: HasVercelTrust
+    Value: !GetAtt VercelPolicyReadRole.Arn

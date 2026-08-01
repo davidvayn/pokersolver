@@ -80,6 +80,8 @@ fn blueprint_command_writes_explicit_approximate_artifact() {
             "2",
             "--root-deviation-samples",
             "1",
+            "--action-value-deals",
+            "2",
             "--max-information-sets",
             "100000",
             "--output",
@@ -98,7 +100,7 @@ fn blueprint_command_writes_explicit_approximate_artifact() {
     assert_eq!(payload["approximate"], true);
     assert_eq!(
         payload["model"],
-        "hu-abstracted-external-sampling-rm-plus-linear-average-v2"
+        "hu-abstracted-external-sampling-dcfr-trajectory-v3"
     );
     assert_eq!(payload["metrics"]["training_iterations"], 2);
     assert_eq!(payload["validation"]["status"], "advisory_only");

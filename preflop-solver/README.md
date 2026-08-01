@@ -10,15 +10,18 @@ game semantics.
 1. Deterministic full-tree CFR+ for three-card Kuhn poker. Its tests check the
    known first-player game value of `-1/18` and compute exact exploitability by
    enumerating all pure best responses.
-2. Chance-sampled CFR+ for heads-up equal-stack push/fold Hold'em. Strategies
+2. Exact two-round limit Leduc CFR+ with physical card removal and an exact
+   information-set-consistent best-response evaluator. It provides the richer
+   imperfect-information convergence benchmark used by the Rust tests.
+3. Chance-sampled CFR+ for heads-up equal-stack push/fold Hold'em. Strategies
    are learned for all 1,326 exact two-card combinations. Chance sampling deals
    compatible hands, so card removal is retained.
-3. A versioned JSON exporter with exact-combo and 169-class strategy views,
+4. A versioned JSON exporter with exact-combo and 169-class strategy views,
    configuration, payoff convention, best-response metrics, and validation
    status.
-4. An experimental heads-up multi-street blueprint. It uses external-sampling
-   MCCFR, regret-matching+, post-delay linear averaging, exact sampled
-   deals/runouts, a
+5. An experimental heads-up multi-street blueprint. It uses external-sampling
+   Discounted CFR with alternating traversers, deterministic seeded chance,
+   trajectory recall, exact sampled deals/runouts, a
    configurable no-limit action grid, and coarse rollout-derived postflop
    buckets. The implementation covers limp, open, call, 3-bet, 4-bet, deeper
    raises and all-in preflop, then check, bet, fold, call, limited raises and
@@ -52,12 +55,14 @@ cargo run --release --manifest-path preflop-solver/Cargo.toml -- \
 
 cargo run --release --manifest-path preflop-solver/Cargo.toml -- \
   blueprint \
-  --effective-stack-bb 100 \
+  --effective-stack-bb 20 \
   --iterations 100000 \
   --max-information-sets 12000000 \
   --averaging-delay 20000 \
   --held-out-deals 30000 \
   --root-deviation-samples 512 \
+  --action-value-deals 30000 \
+  --export-postflop-strategies \
   --checkpoint /tmp/hu-blueprint.checkpoint.json \
   --checkpoint-every 100000 \
   --output /tmp/hu-blueprint.json
@@ -97,10 +102,16 @@ from the CLI.
 Postflop buckets include made-hand/draw/board texture plus deterministic
 rollout-derived equity, improvement, and future-category features. Rollouts use
 only the acting player's private cards and currently visible board, never the
-sampled opponent hand or unrevealed board. The default `current_street` recall
-mode drops earlier private/public bucket labels after each street while keeping
-the complete public action history. This is explicitly imperfect recall.
-`--trajectory-recall` retains every prior bucket at a substantial memory cost.
+sampled opponent hand or unrevealed board. The default `trajectory` recall mode
+retains every prior private/public bucket and the complete public action
+history, providing perfect recall inside the abstract game.
+`--current-street-recall` is an explicitly non-publishable, lower-memory
+experiment because it drops prior street buckets.
+
+DCFR uses alpha=1.5, beta=0, and gamma=2 by default. These parameters are
+serialized and can be varied with the `--dcfr-alpha`, `--dcfr-beta`, and
+`--dcfr-gamma` research flags. One seeded deal updates one traverser, and the
+traverser alternates each iteration.
 
 When an all-in reaches showdown before the river, the trainer integrates over
 unseen runouts instead of using the single board sampled for that traversal.
@@ -116,6 +127,12 @@ profile and can be resumed. Checkpoints are streamed to an atomic temporary
 file without cloning the in-memory node table. `--max-information-sets`
 provides a clean memory guard; an early stop is marked
 `validation.status=incomplete_advisory`.
+
+The public artifact contains only the frozen average policy, not regrets or the
+current training policy. Regrets remain solely in the resumable checkpoint. A
+separate seeded action-value pass forces every action at each reached served
+information set, follows the frozen average policy thereafter, and exports
+mean EV, standard error, best-action EV loss, and a low-confidence flag.
 
 Evaluation-only inputs live under `config.evaluation_controls`, separate from
 training inputs. The artifact exposes both a full `config_hash` and a
@@ -186,17 +203,31 @@ The root object contains:
   sizes, and future-street value functions are intentionally out of scope for
   this milestone.
 
+## Full-hand release protocol
+
+Train two independent 8–12 hour seeds for one depth at a time, starting at
+20bb, then 50bb and 100bb. Never publish an unfinished checkpoint or an
+`advisory_only` artifact. Use `npm run policy:validate-seeds` for the fail-closed
+activation gates and `npm run policy:export` only after it passes. Cross-seed
+stability is a reproducibility check, not equilibrium proof.
+
+If projected storage is too large, first quantize and shard without changing
+the game. Next test a compact open grid `2,2.5,3` plus all-in while preserving
+the existing street sizes and one postflop raise. Only then consider coarsening
+low-reach buckets. Any abstraction change requires two fresh seeds and every
+gate again.
+
 ## Blueprint limitations
 
 - The blueprint is much closer to a full heads-up 100bb game than push/fold,
   but it is still an action/card abstraction, not full-game GTO. It reports no
   exploitability or Nash-distance number. Self-play held-out EV is a smoke
   test, not a convergence certificate.
-- The default current-street postflop abstraction has imperfect recall.
-  Perfect-recall CFR convergence guarantees therefore do not transfer.
-- Unseen and pre-averaging held-out information sets fall back to uniform play,
-  and their fractions are reported. Cross-seed stability and a local best
-  response are still required before using output as solver-backed guidance.
+- Trajectory recall gives perfect recall within the chosen abstraction, but the
+  card/action abstraction itself remains lossy.
+- Evaluation reports unseen and pre-averaging information-set fractions. The
+  runtime never uses their uniform evaluation fallback: a missing serving node
+  pauses the table and is not scored.
 - The root local-deviation gap can reveal a poor root mix, but it fixes every
   later decision and the opponent to the exported average strategy. It neither
   computes a recursive best response nor bounds whole-game exploitability.

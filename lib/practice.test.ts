@@ -1,205 +1,281 @@
 import { describe, expect, it } from 'vitest';
-import { CHARTS } from '@/data/preflop/ranges';
 import {
-  analyzePractice,
-  createPracticeQuestion,
-  generatePracticeQuestions,
-  recordPracticeAnswer,
-  type PracticeRecord,
+  adaptiveGroups,
+  chooseAdaptiveGroup,
+  nextHeroSeat,
+  sanitizePracticeSettings,
+  structuralSettingsChanged,
 } from '@/lib/practice';
-import { TABLE_FORMATS } from '@/lib/positions';
-import type { PreflopChart } from '@/data/preflop/ranges';
+import {
+  applyAction,
+  assertChipConservation,
+  canonicalPolicyHash,
+  createHand,
+  engineLegalActions,
+  handBucket,
+  seededRandom,
+  totalPotBb,
+} from '@/lib/practice-engine';
+import {
+  gradeEvLoss,
+  gradePolicyChoice,
+  validatePolicyNode,
+} from '@/lib/practice-grading';
+import type {
+  PolicyNode,
+  PracticeDecisionRecord,
+} from '@/lib/practice-types';
+import { DEFAULT_PRACTICE_SETTINGS } from '@/lib/practice-types';
 
-describe('practice questions', () => {
-  it('respects format, category, and position rules', () => {
-    const questions = generatePracticeQuestions(
-      {
-        seats: 2,
-        scenarioId: 'curated-2-max-100bb',
-        categories: ['RFI'],
-        positions: ['BTN'],
-        questionCount: 12,
-      },
-      () => 0.5
-    );
-
-    expect(questions).toHaveLength(12);
-    expect(
-      questions.every(
-        (question) =>
-          question.seats === 2 &&
-          question.category === 'RFI' &&
-          question.hero === 'BTN'
-      )
-    ).toBe(true);
+function hand(seed = 1, depthBb = 20) {
+  return createHand({
+    id: `hand-${seed}`,
+    modelVersion: 'test-v1',
+    depthBb,
+    button: 'button-small-blind',
+    hero: 'button-small-blind',
+    random: seededRandom(seed),
   });
+}
 
-  it('only exposes formats with dedicated chart data', () => {
-    expect(TABLE_FORMATS.map((format) => format.seats)).toEqual([2, 6, 9]);
-  });
-
-  it('samples every 9-max position from dedicated full-ring charts', () => {
-    const questions = generatePracticeQuestions(
-      {
-        seats: 9,
-        scenarioId: 'curated-9-max-100bb',
-        categories: ['RFI', 'vs-RFI'],
-        positions: [
-          'UTG',
-          'UTG1',
-          'MP',
-          'LJ',
-          'HJ',
-          'CO',
-          'BTN',
-          'SB',
-          'BB',
-        ],
-        questionCount: 18,
-      },
-      () => 0.37
-    );
-
-    expect([...new Set(questions.map((question) => question.hero))].sort()).toEqual(
-      ['BB', 'BTN', 'CO', 'HJ', 'LJ', 'MP', 'SB', 'UTG', 'UTG1']
-    );
-    expect(
-      questions.every(
-        (question) =>
-          question.seats === 9 && question.chartId.startsWith('9max-')
-      )
-    ).toBe(true);
-  });
-
-  it('balances selected positions instead of overweighting chart-rich seats', () => {
-    const questions = generatePracticeQuestions(
-      {
-        seats: 6,
-        scenarioId: 'curated-6-max-100bb',
-        categories: ['RFI', 'vs-RFI'],
-        positions: ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'],
-        questionCount: 30,
-      },
-      () => 0.42
-    );
-    const counts = new Map<string, number>();
-    for (const question of questions) {
-      counts.set(question.hero, (counts.get(question.hero) ?? 0) + 1);
-    }
-
-    expect([...counts.keys()].sort()).toEqual(
-      ['BB', 'BTN', 'CO', 'MP', 'SB', 'UTG']
-    );
-    expect(Math.max(...counts.values()) - Math.min(...counts.values())).toBeLessThanOrEqual(1);
-    expect(
-      questions.filter((question) => question.recommendedAction === 'Fold')
-        .length
-    ).toBeLessThan(questions.length * 0.7);
-  });
-
-  it('derives the recommended action from chart frequencies', () => {
-    const chart = CHARTS.find((candidate) => candidate.id === 'rfi-UTG');
-    expect(chart).toBeDefined();
-
-    const premium = createPracticeQuestion(chart!, 'AA', 6, 'premium');
-    const weak = createPracticeQuestion(chart!, '72o', 6, 'weak');
-
-    expect(premium.recommendedAction).toBe('Raise');
-    expect(weak.recommendedAction).toBe('Fold');
-  });
-
-  it('grades the primary action instead of rewarding a minor mix', () => {
-    const mixedChart: PreflopChart = {
-      id: 'mixed',
-      title: 'Mixed',
-      hero: 'BTN',
-      category: 'RFI',
-      formats: [6],
-      actions: [{ name: 'Raise', color: 'red', range: 'AKs:0.02' }],
-    };
-    const question = createPracticeQuestion(mixedChart, 'AKs', 6, 'mixed');
-
-    expect(question.recommendedAction).toBe('Fold');
-    expect(question.strategy).toContainEqual({
-      action: 'Raise',
-      frequency: 0.02,
+describe('heads-up hand engine', () => {
+  it('deals unique cards, posts blinds, and is deterministic', () => {
+    const first = hand(42);
+    const second = hand(42);
+    expect(first).toEqual(second);
+    expect(first.stacksBb).toEqual({
+      'button-small-blind': 19.5,
+      'big-blind': 19,
     });
-    expect(question.correctActions).toEqual(['Fold']);
-    expect(recordPracticeAnswer(question, 'Raise', 100).correct).toBe(false);
-  });
-
-  it('records answers and computes useful breakdowns', () => {
-    const chart = CHARTS.find((candidate) => candidate.id === 'rfi-BTN')!;
-    const question = createPracticeQuestion(chart, 'AA', 6, 'one');
-    const records: PracticeRecord[] = [
-      recordPracticeAnswer(question, 'Raise', 1200, Date.UTC(2026, 6, 22)),
-      recordPracticeAnswer(question, 'Raise', 900, Date.UTC(2026, 6, 23)),
-      recordPracticeAnswer(question, 'Fold', 1500, Date.UTC(2026, 6, 23) + 1),
+    expect(totalPotBb(first)).toBe(1.5);
+    expect(first.toAct).toBe('button-small-blind');
+    const cards = [
+      ...first.holeCards['button-small-blind'],
+      ...first.holeCards['big-blind'],
+      ...first.deck,
     ];
-
-    const stats = analyzePractice(records, Date.UTC(2026, 6, 23, 12));
-
-    expect(stats.total).toBe(3);
-    expect(stats.correct).toBe(2);
-    expect(stats.accuracy).toBeCloseTo(2 / 3);
-    expect(stats.averageResponseMs).toBe(1200);
-    expect(stats.streakDays).toBe(2);
-    expect(stats.byPosition[0]).toMatchObject({
-      key: '6:BTN',
-      label: '6-max · BTN',
-      attempts: 3,
-      correct: 2,
-    });
-    expect(stats.byFormat[0]).toMatchObject({
-      key: '6',
-      label: '6-max',
-      attempts: 3,
-    });
+    expect(new Set(cards).size).toBe(52);
+    assertChipConservation(first);
   });
 
-  it('uses display labels for full-ring positions in stats', () => {
-    const chart = {
-      ...CHARTS.find((candidate) => candidate.id === 'rfi-UTG')!,
-      hero: 'UTG1' as const,
-    };
-    const question = createPracticeQuestion(chart, 'AA', 9, 'full-ring');
-    const stats = analyzePractice([
-      recordPracticeAnswer(question, 'Raise', 100),
+  it('gives the big blind its option after a limp and advances streets', () => {
+    const initial = hand();
+    const limped = applyAction(initial, {
+      id: 'call',
+      kind: 'call',
+      label: 'Call 0.5bb',
+    });
+    expect(limped.toAct).toBe('big-blind');
+    const flop = applyAction(limped, {
+      id: 'check',
+      kind: 'check',
+      label: 'Check',
+    });
+    expect(flop.street).toBe('flop');
+    expect(flop.board).toHaveLength(3);
+    expect(flop.toAct).toBe('big-blind');
+    expect(totalPotBb(flop)).toBe(2);
+    assertChipConservation(flop);
+  });
+
+  it('validates raises, settles folds, and conserves chips', () => {
+    const opened = applyAction(hand(), {
+      id: 'raise-2.5',
+      kind: 'raise',
+      label: 'Raise 2.5bb',
+      amountToBb: 2.5,
+    });
+    expect(opened.stacksBb['button-small-blind']).toBe(17.5);
+    const folded = applyAction(opened, {
+      id: 'fold',
+      kind: 'fold',
+      label: 'Fold',
+    });
+    expect(folded.terminal).toBe(true);
+    expect(folded.result?.winner).toBe('button-small-blind');
+    expect(folded.result?.potBb).toBe(3.5);
+    expect(folded.result?.netBb).toEqual({
+      'button-small-blind': 1,
+      'big-blind': -1,
+    });
+    assertChipConservation(folded);
+  });
+
+  it('runs out all-ins and reveals a settled showdown', () => {
+    const shoved = applyAction(hand(7), {
+      id: 'all-in',
+      kind: 'all-in',
+      label: 'All-in 20bb',
+      amountToBb: 20,
+    });
+    const called = applyAction(shoved, {
+      id: 'call',
+      kind: 'call',
+      label: 'Call 19bb',
+    });
+    expect(called.terminal).toBe(true);
+    expect(called.board).toHaveLength(5);
+    expect(called.result?.reason).toBe('showdown');
+    expect(called.result?.winningHand).toBeTruthy();
+    expect(called.result?.potBb).toBe(40);
+    assertChipConservation(called);
+  });
+
+  it('offers only generic legal actions and rejects undersized non-all-in raises', () => {
+    expect(engineLegalActions(hand()).map((action) => action.kind)).toEqual([
+      'fold',
+      'call',
+      'all-in',
     ]);
+    expect(() =>
+      applyAction(hand(), {
+        id: 'bad',
+        kind: 'raise',
+        label: 'Raise 1.5bb',
+        amountToBb: 1.5,
+      })
+    ).toThrow('minimum full raise');
+  });
 
-    expect(stats.byPosition[0]).toMatchObject({
-      key: '9:UTG1',
-      label: '9-max · UTG+1',
+  it('creates stable SHA-256 state hashes and canonical hand buckets', async () => {
+    const state = hand(9);
+    const first = await canonicalPolicyHash(state);
+    const second = await canonicalPolicyHash(state);
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(second).toBe(first);
+    expect(handBucket([48, 49])).toBe('AA');
+    expect(handBucket([51, 47])).toBe('AKs');
+    expect(handBucket([51, 46])).toBe('AKo');
+
+    const parityState = {
+      ...state,
+      modelVersion: 'test-v1',
+      depthBb: 20,
+      street: 'preflop' as const,
+      holeCards: {
+        'button-small-blind': [51, 47] as [number, number],
+        'big-blind': [0, 1] as [number, number],
+      },
+      board: [],
+      potBb: 0,
+      stacksBb: { 'button-small-blind': 19.5, 'big-blind': 19 },
+      streetBetsBb: { 'button-small-blind': 0.5, 'big-blind': 1 },
+      toAct: 'button-small-blind' as const,
+      actionHistory: [],
+    };
+    expect(await canonicalPolicyHash(parityState)).toBe(
+      'b61126532572af5ab17edbac4fc4a5a9976be22cec96813bff5c2fce64202ccb'
+    );
+  });
+});
+
+describe('EV grading and settings', () => {
+  const node: PolicyNode = {
+    stateHash: 'a'.repeat(64),
+    bestActionId: 'raise',
+    bestActionEvBb: 0.4,
+    actions: [
+      {
+        id: 'fold',
+        kind: 'fold',
+        label: 'Fold',
+        probability: 0.2,
+        evBb: 0.1,
+        standardErrorBb: 0.01,
+        confidence: 'high',
+      },
+      {
+        id: 'raise',
+        kind: 'raise',
+        label: 'Raise',
+        amountToBb: 2.5,
+        probability: 0.8,
+        evBb: 0.4,
+        standardErrorBb: 0.03,
+        confidence: 'low',
+      },
+    ],
+  };
+
+  it('uses the specified EV-loss boundaries and preserves confidence', () => {
+    expect(gradeEvLoss(0.01)).toBe('optimal');
+    expect(gradeEvLoss(0.05)).toBe('good');
+    expect(gradeEvLoss(0.25)).toBe('mistake');
+    expect(gradeEvLoss(0.251)).toBe('blunder');
+    expect(gradeEvLoss(null)).toBe('ungraded');
+    expect(gradePolicyChoice(node, 'fold')).toMatchObject({
+      evLossBb: 0.30000000000000004,
+      grade: 'blunder',
+      lowConfidence: false,
     });
+    expect(gradePolicyChoice(node, 'raise')).toMatchObject({
+      evLossBb: 0,
+      grade: 'optimal',
+      lowConfidence: true,
+    });
+    expect(validatePolicyNode(node)).toEqual([]);
   });
 
-  it('requires equal 20-answer windows before reporting a trend', () => {
-    const chart = CHARTS.find((candidate) => candidate.id === 'rfi-BTN')!;
-    const question = createPracticeQuestion(chart, 'AA', 6, 'trend');
-    const makeRecords = (count: number) =>
-      Array.from({ length: count }, (_, index) =>
-        recordPracticeAnswer(
-          question,
-          index < 20 ? 'Raise' : 'Fold',
-          100,
-          Date.UTC(2026, 6, 23) - index
-        )
-      );
-
-    expect(analyzePractice(makeRecords(21)).trend).toBe(0);
-    expect(analyzePractice(makeRecords(40)).trend).toBe(1);
+  it('falls back safely for malformed persisted settings and alternates seats', () => {
+    expect(sanitizePracticeSettings({ mode: 'bogus', depthBb: 999 }).mode).toBe(
+      'full-hand'
+    );
+    expect(nextHeroSeat('alternate', 0)).toBe('button-small-blind');
+    expect(nextHeroSeat('alternate', 1)).toBe('big-blind');
   });
 
-  it('expires a streak when the latest practice day is stale', () => {
-    const chart = CHARTS.find((candidate) => candidate.id === 'rfi-BTN')!;
-    const question = createPracticeQuestion(chart, 'AA', 6, 'streak');
-    const records = [
-      recordPracticeAnswer(question, 'Raise', 100, Date.UTC(2026, 0, 1)),
-      recordPracticeAnswer(question, 'Raise', 100, Date.UTC(2026, 0, 2)),
-    ];
-
+  it('queues structural table changes but treats a decision goal as run metadata', () => {
     expect(
-      analyzePractice(records, Date.UTC(2026, 6, 23, 12)).streakDays
-    ).toBe(0);
+      structuralSettingsChanged(DEFAULT_PRACTICE_SETTINGS, {
+        ...DEFAULT_PRACTICE_SETTINGS,
+        depthBb: 50,
+      })
+    ).toBe(true);
+    expect(
+      structuralSettingsChanged(DEFAULT_PRACTICE_SETTINGS, {
+        ...DEFAULT_PRACTICE_SETTINGS,
+        decisionGoal: 25,
+      })
+    ).toBe(false);
+  });
+});
+
+describe('adaptive sampling', () => {
+  function record(id: string, loss: number, bucket: string): PracticeDecisionRecord {
+    return {
+      id,
+      handId: id,
+      answeredAt: Number(id.replace(/\D/g, '')) || 1,
+      responseMs: 100,
+      modelVersion: 'test',
+      mode: 'full-hand',
+      depthBb: 20,
+      street: 'flop',
+      position: 'button-small-blind',
+      handBucket: bucket,
+      facingAction: 'check',
+      stateHash: 'a'.repeat(64),
+      board: [],
+      heroCards: [0, 1],
+      chosenAction: { id: 'check', kind: 'check', label: 'Check' },
+      policyActions: [],
+      chosenActionEvBb: 0,
+      bestActionEvBb: loss,
+      evLossBb: loss,
+      grade: gradeEvLoss(loss),
+      confidence: 'high',
+      lowConfidence: false,
+    };
+  }
+
+  it('uses only the latest 200 decisions and keeps a 30% authentic branch', () => {
+    const records = Array.from({ length: 210 }, (_, index) =>
+      record(`r${index + 1}`, index === 209 ? 0.5 : 0.01, index === 209 ? 'AA' : '72o')
+    );
+    const groups = adaptiveGroups(records);
+    expect(groups.reduce((sum, group) => sum + group.attempts, 0)).toBe(200);
+    expect(groups[0].handBucket).toBe('AA');
+    expect(chooseAdaptiveGroup(groups, () => 0.8)).toBeNull();
+    expect(chooseAdaptiveGroup(groups, () => 0)).not.toBeNull();
   });
 });

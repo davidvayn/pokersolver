@@ -1,5 +1,5 @@
 //! Coarse heads-up no-limit hold'em blueprint trained with external-sampling
-//! Monte Carlo CFR and regret-matching+.
+//! Monte Carlo Discounted CFR.
 //!
 //! This is intentionally a research-grade approximation, not a claim of a
 //! solved 100bb game. It samples exact cards while merging strategically
@@ -17,7 +17,7 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
 const EPSILON: f64 = 1e-9;
-const MODEL: &str = "hu-abstracted-external-sampling-rm-plus-linear-average-v2";
+const MODEL: &str = "hu-abstracted-external-sampling-dcfr-trajectory-v3";
 const SOLVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -101,6 +101,15 @@ impl Default for ActionAbstraction {
     }
 }
 
+impl ActionAbstraction {
+    pub fn compact_serving_candidate() -> Self {
+        Self {
+            open_sizes_bb: vec![2.0, 2.5, 3.0],
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BlueprintConfig {
     pub small_blind_bb: f64,
@@ -112,6 +121,7 @@ pub struct BlueprintConfig {
     pub averaging_delay: u64,
     pub export_postflop_strategies: bool,
     pub recall_mode: RecallMode,
+    pub dcfr: DcfrParameters,
     pub evaluation_controls: EvaluationControls,
     pub hand_abstraction: HandAbstraction,
     pub showdown_evaluation: ShowdownEvaluation,
@@ -126,11 +136,30 @@ pub enum RecallMode {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DcfrParameters {
+    pub positive_regret_exponent: f64,
+    pub negative_regret_exponent: f64,
+    pub strategy_exponent: f64,
+}
+
+impl Default for DcfrParameters {
+    fn default() -> Self {
+        Self {
+            positive_regret_exponent: 1.5,
+            negative_regret_exponent: 0.0,
+            strategy_exponent: 2.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct EvaluationControls {
     pub held_out_deals: u64,
     pub held_out_seed: u64,
     pub root_deviation_samples_per_class: u64,
     pub root_deviation_seed: u64,
+    pub action_value_deals: u64,
+    pub action_value_seed: u64,
 }
 
 impl Default for EvaluationControls {
@@ -140,6 +169,8 @@ impl Default for EvaluationControls {
             held_out_seed: 0xd1b5_4a32_d192_ed03,
             root_deviation_samples_per_class: 256,
             root_deviation_seed: 0xa24b_aed4_963e_e407,
+            action_value_deals: 10_000,
+            action_value_seed: 0x8a5c_d789_635d_2dff,
         }
     }
 }
@@ -189,7 +220,8 @@ impl Default for BlueprintConfig {
             seed: 1,
             averaging_delay: 1_000,
             export_postflop_strategies: false,
-            recall_mode: RecallMode::CurrentStreet,
+            recall_mode: RecallMode::Trajectory,
+            dcfr: DcfrParameters::default(),
             evaluation_controls: EvaluationControls::default(),
             hand_abstraction: HandAbstraction::default(),
             showdown_evaluation: ShowdownEvaluation::default(),
@@ -220,6 +252,18 @@ impl BlueprintConfig {
         }
         if self.evaluation_controls.root_deviation_samples_per_class == 0 {
             return Err("root-deviation samples per class must be positive".to_owned());
+        }
+        if self.evaluation_controls.action_value_deals == 0 {
+            return Err("action-value evaluation deals must be positive".to_owned());
+        }
+        if !self.dcfr.positive_regret_exponent.is_finite()
+            || !self.dcfr.negative_regret_exponent.is_finite()
+            || !self.dcfr.strategy_exponent.is_finite()
+            || self.dcfr.positive_regret_exponent < 0.0
+            || self.dcfr.negative_regret_exponent < 0.0
+            || self.dcfr.strategy_exponent < 0.0
+        {
+            return Err("DCFR exponents must be finite and non-negative".to_owned());
         }
         if self.hand_abstraction.distribution_samples == 0
             || self.hand_abstraction.equity_bins == 0
@@ -756,6 +800,8 @@ struct Node {
     strategy_sum: Vec<f64>,
     regret_updates: u64,
     average_visits: u64,
+    #[serde(default)]
+    last_discount_iteration: u64,
 }
 
 impl Node {
@@ -771,6 +817,7 @@ impl Node {
             descriptor,
             regret_updates: 0,
             average_visits: 0,
+            last_discount_iteration: 0,
         }
     }
 
@@ -785,6 +832,29 @@ impl Node {
 
     fn average_strategy(&self) -> Vec<f64> {
         normalize_or_uniform(self.strategy_sum.clone())
+    }
+
+    fn apply_dcfr_discount(&mut self, iteration: u64, parameters: &DcfrParameters) {
+        if iteration == 0 || self.last_discount_iteration == iteration {
+            return;
+        }
+        let time = iteration as f64;
+        let positive_power = time.powf(parameters.positive_regret_exponent);
+        let negative_power = time.powf(parameters.negative_regret_exponent);
+        let positive_factor = positive_power / (positive_power + 1.0);
+        let negative_factor = negative_power / (negative_power + 1.0);
+        let strategy_factor = (time / (time + 1.0)).powf(parameters.strategy_exponent);
+        for regret in &mut self.regrets {
+            *regret *= if *regret >= 0.0 {
+                positive_factor
+            } else {
+                negative_factor
+            };
+        }
+        for value in &mut self.strategy_sum {
+            *value *= strategy_factor;
+        }
+        self.last_discount_iteration = iteration;
     }
 }
 
@@ -845,11 +915,29 @@ pub struct ExportedInfoSet {
     pub pot_bb: f64,
     pub to_call_bb: f64,
     pub effective_stack_remaining_bb: f64,
-    pub regret_updates: u64,
-    pub average_visits: u64,
-    pub trained_average: bool,
     pub actions: Vec<StrategyAction>,
-    pub current_policy_actions: Vec<StrategyAction>,
+    pub action_values: Vec<ActionValueEstimate>,
+    pub best_action: Option<String>,
+    pub best_action_ev_bb: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ActionValueEstimate {
+    pub action: String,
+    pub samples: u64,
+    pub mean_ev_bb: f64,
+    pub standard_error_bb: f64,
+    pub best_action_ev_loss_bb: f64,
+    pub low_confidence: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ActionValueEvaluationMetrics {
+    pub deals: u64,
+    pub evaluated_information_sets: usize,
+    pub exported_information_set_coverage: f64,
+    pub reach_weighted_standard_error_coverage: f64,
+    pub standard_error_threshold_bb: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -925,6 +1013,7 @@ pub struct BlueprintMetrics {
     pub clipped_cumulative_regret_per_update_diagnostic_bb: f64,
     pub held_out: HeldOutMetrics,
     pub root_local_deviation: RootLocalDeviation,
+    pub action_value_evaluation: ActionValueEvaluationMetrics,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -987,7 +1076,7 @@ impl Trainer {
         if target.iterations < checkpoint.completed_iterations {
             return Err("target iterations precede checkpoint progress".to_owned());
         }
-        if checkpoint.schema_version != 1 {
+        if checkpoint.schema_version != 2 {
             return Err("unsupported checkpoint schema".to_owned());
         }
         // Reapply the same chip quantization used during traversal. Decimal
@@ -1032,7 +1121,7 @@ impl Trainer {
 
     fn write_checkpoint(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let checkpoint = BlueprintCheckpointRef {
-            schema_version: 1,
+            schema_version: 2,
             model: MODEL,
             approximate: true,
             config: &self.config,
@@ -1047,10 +1136,9 @@ impl Trainer {
 
     fn train(&mut self, control: &RunControl) -> Result<(), Box<dyn Error>> {
         while self.completed_iterations < self.config.iterations {
-            for traverser in 0..2 {
-                let deal = Deal::sample(&mut self.rng);
-                self.external_sampling(GameState::initial(&self.config), &deal, traverser);
-            }
+            let traverser = self.completed_iterations as usize % 2;
+            let deal = Deal::sample(&mut self.rng);
+            self.external_sampling(GameState::initial(&self.config), &deal, traverser);
             self.completed_iterations += 1;
             if self.nodes.len() >= self.config.max_information_sets {
                 break;
@@ -1108,6 +1196,7 @@ impl Trainer {
                     .collect::<Vec<_>>(),
                 "one abstraction key produced incompatible action sets"
             );
+            node.apply_dcfr_discount(self.completed_iterations + 1, &self.config.dcfr);
             node.current_strategy()
         };
 
@@ -1127,7 +1216,7 @@ impl Trainer {
                 .sum::<f64>();
             let node = self.nodes.get_mut(&key).expect("node inserted");
             for (regret, action_value) in node.regrets.iter_mut().zip(action_values) {
-                *regret = (*regret + action_value - node_value).max(0.0);
+                *regret += action_value - node_value;
             }
             node.regret_updates += 1;
             node_value
@@ -1138,10 +1227,8 @@ impl Trainer {
             // nodes during the other player's traversal.
             if self.completed_iterations >= self.config.averaging_delay {
                 let node = self.nodes.get_mut(&key).expect("node inserted");
-                let linear_weight =
-                    (self.completed_iterations - self.config.averaging_delay + 1) as f64;
                 for (sum, probability) in node.strategy_sum.iter_mut().zip(&strategy) {
-                    *sum += linear_weight * probability;
+                    *sum += probability;
                 }
                 node.average_visits += 1;
             }
@@ -1172,12 +1259,14 @@ impl Trainer {
             "seed": self.config.seed,
             "averaging_delay": self.config.averaging_delay,
             "recall_mode": self.config.recall_mode,
+            "dcfr": &self.config.dcfr,
             "hand_abstraction": &self.config.hand_abstraction,
             "showdown_evaluation": &self.config.showdown_evaluation,
             "action_abstraction": &self.config.action_abstraction,
         }))
         .expect("serializable training configuration");
         let training_config_hash = stable_hash(&training_hash_input);
+        let action_value_pass = evaluate_information_set_actions(&self.config, &self.nodes);
         let strategies = self
             .nodes
             .iter()
@@ -1186,45 +1275,74 @@ impl Trainer {
                     && (node.descriptor.street == Street::Preflop
                         || self.config.export_postflop_strategies)
             })
-            .map(|(key, node)| ExportedInfoSet {
-                key: format!("{key:016x}"),
-                actor: node.descriptor.actor,
-                street: node.descriptor.street,
-                hand_bucket_trajectory: node.descriptor.hand_bucket_trajectory.clone(),
-                public_bucket_trajectory: node.descriptor.public_bucket_trajectory.clone(),
-                public_history: self
-                    .public_histories
-                    .get(&node.descriptor.public_history_id)
-                    .expect("node history interned")
-                    .clone(),
-                pot_bb: node.descriptor.pot_bb,
-                to_call_bb: node.descriptor.to_call_bb,
-                effective_stack_remaining_bb: node.descriptor.effective_stack_remaining_bb,
-                regret_updates: node.regret_updates,
-                average_visits: node.average_visits,
-                trained_average: node.average_visits > 0,
-                actions: node
-                    .action_labels
-                    .iter()
-                    .cloned()
-                    .zip(node.average_strategy())
-                    .map(|(action, probability)| StrategyAction {
-                        action,
-                        probability,
-                    })
-                    .collect(),
-                current_policy_actions: node
-                    .action_labels
-                    .iter()
-                    .cloned()
-                    .zip(node.current_strategy())
-                    .map(|(action, probability)| StrategyAction {
-                        action,
-                        probability,
-                    })
-                    .collect(),
+            .map(|(key, node)| {
+                let evaluated = action_value_pass.information_sets.get(key);
+                let (action_values, best_action, best_action_ev_bb) =
+                    finalize_action_values(node, evaluated);
+                ExportedInfoSet {
+                    key: format!("{key:016x}"),
+                    actor: node.descriptor.actor,
+                    street: node.descriptor.street,
+                    hand_bucket_trajectory: node.descriptor.hand_bucket_trajectory.clone(),
+                    public_bucket_trajectory: node.descriptor.public_bucket_trajectory.clone(),
+                    public_history: self
+                        .public_histories
+                        .get(&node.descriptor.public_history_id)
+                        .expect("node history interned")
+                        .clone(),
+                    pot_bb: node.descriptor.pot_bb,
+                    to_call_bb: node.descriptor.to_call_bb,
+                    effective_stack_remaining_bb: node.descriptor.effective_stack_remaining_bb,
+                    actions: node
+                        .action_labels
+                        .iter()
+                        .cloned()
+                        .zip(node.average_strategy())
+                        .map(|(action, probability)| StrategyAction {
+                            action,
+                            probability,
+                        })
+                        .collect(),
+                    action_values,
+                    best_action,
+                    best_action_ev_bb,
+                }
             })
             .collect::<Vec<_>>();
+        let evaluated_exported = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| {
+                node.average_visits > 0
+                    && (node.descriptor.street == Street::Preflop
+                        || self.config.export_postflop_strategies)
+            })
+            .filter(|(key, _)| action_value_pass.information_sets.contains_key(key))
+            .count();
+        let mut evaluated_weight = 0.0;
+        let mut precise_weight = 0.0;
+        for (key, evaluation) in &action_value_pass.information_sets {
+            let Some(node) = self.nodes.get(key) else {
+                continue;
+            };
+            for (probability, accumulator) in
+                node.average_strategy().iter().zip(&evaluation.actions)
+            {
+                let weight = evaluation.visits as f64 * probability;
+                evaluated_weight += weight;
+                if accumulator.samples >= 2 && accumulator.standard_error() <= 0.02 {
+                    precise_weight += weight;
+                }
+            }
+        }
+        let action_value_evaluation = ActionValueEvaluationMetrics {
+            deals: self.config.evaluation_controls.action_value_deals,
+            evaluated_information_sets: action_value_pass.information_sets.len(),
+            exported_information_set_coverage: evaluated_exported as f64
+                / strategies.len().max(1) as f64,
+            reach_weighted_standard_error_coverage: precise_weight / evaluated_weight.max(EPSILON),
+            standard_error_threshold_bb: 0.02,
+        };
         let total_updates = self
             .nodes
             .values()
@@ -1234,6 +1352,7 @@ impl Trainer {
             .nodes
             .values()
             .flat_map(|node| node.regrets.iter())
+            .map(|regret| regret.max(0.0))
             .sum::<f64>();
         let held_out = evaluate_held_out(
             &self.config,
@@ -1242,12 +1361,13 @@ impl Trainer {
         );
         let root_local_deviation = evaluate_root_local_deviation(&self.config, &self.nodes);
         let mut provenance = vec![
-            "External-sampling MCCFR with regret-matching+ and post-delay linear averaging; traverser actions are enumerated and opponent/chance actions are sampled from the current strategy.".to_owned(),
+            "External-sampling Discounted CFR with alternating traverser updates; traverser actions are enumerated and opponent/chance actions are sampled deterministically from the seeded current strategy.".to_owned(),
             "Exact private cards and boards are sampled without replacement; information sets use lossy coarse rollout-derived strength/potential and public buckets plus an abstract no-limit action grid.".to_owned(),
             "All-in showdowns before the river use deterministic conditional-expectation runout evaluation to reduce chance variance; sample counts and exact-turn behavior are recorded in config.showdown_evaluation.".to_owned(),
             "Rake-free, equal-stack, heads-up cash model with no ante; button posts the small blind, acts first preflop, and acts last postflop.".to_owned(),
             "Reported regret is a training diagnostic, not exploitability or a Nash-distance certificate.".to_owned(),
             "Root local-deviation evaluation forces one button action at a time against the fixed average continuation/opponent policy. It is a one-step local best response with sampling error and is not exploitability or a full best response.".to_owned(),
+            "A separate seeded evaluation pass records counterfactual values and standard errors for every action at each reached served information set. Low-sample or >0.02bb-standard-error values are flagged low confidence.".to_owned(),
         ];
         if self.config.recall_mode == RecallMode::CurrentStreet {
             provenance.push(
@@ -1277,7 +1397,7 @@ impl Trainer {
                         self.config.max_information_sets
                     )
                 }),
-                sampled_deals: self.completed_iterations * 2,
+                sampled_deals: self.completed_iterations,
                 terminal_evaluations: self.terminal_evaluations,
                 information_sets: self.nodes.len(),
                 preflop_information_sets: self
@@ -1300,6 +1420,7 @@ impl Trainer {
                     / total_updates.max(1) as f64,
                 held_out,
                 root_local_deviation,
+                action_value_evaluation,
             },
             config: self.config.clone(),
             validation: BlueprintValidation {
@@ -1773,6 +1894,116 @@ impl ValueAccumulator {
     }
 }
 
+#[derive(Clone, Debug)]
+struct InformationSetActionEvaluation {
+    visits: u64,
+    action_labels: Vec<String>,
+    actions: Vec<ValueAccumulator>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ActionValuePass {
+    information_sets: BTreeMap<u64, InformationSetActionEvaluation>,
+}
+
+fn evaluate_information_set_actions(
+    config: &BlueprintConfig,
+    nodes: &BTreeMap<u64, Node>,
+) -> ActionValuePass {
+    let mut chance_rng = SplitMix64::new(config.evaluation_controls.action_value_seed);
+    let mut pass = ActionValuePass::default();
+    for deal_index in 0..config.evaluation_controls.action_value_deals {
+        let deal = Deal::sample(&mut chance_rng);
+        let mut state = GameState::initial(config);
+        while state.terminal.is_none() {
+            let actions = state.legal_actions(config);
+            let (key, _, _) = information_set(&state, &deal, config);
+            let strategy = match nodes.get(&key) {
+                Some(node) => node.average_strategy(),
+                None => vec![1.0 / actions.len() as f64; actions.len()],
+            };
+
+            if let Some(node) = nodes.get(&key).filter(|node| node.average_visits > 0) {
+                let entry = pass.information_sets.entry(key).or_insert_with(|| {
+                    InformationSetActionEvaluation {
+                        visits: 0,
+                        action_labels: node.action_labels.clone(),
+                        actions: vec![ValueAccumulator::default(); actions.len()],
+                    }
+                });
+                debug_assert_eq!(entry.action_labels, node.action_labels);
+                entry.visits += 1;
+                for (action_index, action) in actions.iter().enumerate() {
+                    let rollout_seed = config.evaluation_controls.action_value_seed
+                        ^ deal_index.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                        ^ key.rotate_left(17)
+                        ^ (action_index as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                    let mut rollout_rng = SplitMix64::new(rollout_seed);
+                    let mut coverage = CoverageCounter::default();
+                    let button_value = rollout_average_policy(
+                        state.apply(action, config),
+                        &deal,
+                        config,
+                        nodes,
+                        &mut rollout_rng,
+                        &mut coverage,
+                    );
+                    let actor_value = if state.actor == 0 {
+                        button_value
+                    } else {
+                        -button_value
+                    };
+                    entry.actions[action_index].observe(actor_value, &coverage);
+                }
+            }
+
+            let selected = sample_index(&strategy, &mut chance_rng);
+            state = state.apply(&actions[selected], config);
+        }
+    }
+    pass
+}
+
+fn finalize_action_values(
+    node: &Node,
+    evaluation: Option<&InformationSetActionEvaluation>,
+) -> (Vec<ActionValueEstimate>, Option<String>, Option<f64>) {
+    let Some(evaluation) = evaluation else {
+        return (Vec::new(), None, None);
+    };
+    debug_assert_eq!(node.action_labels, evaluation.action_labels);
+    let best_ev = evaluation
+        .actions
+        .iter()
+        .map(ValueAccumulator::mean)
+        .max_by(f64::total_cmp)
+        .expect("information set has actions");
+    let best_index = evaluation
+        .actions
+        .iter()
+        .position(|accumulator| (accumulator.mean() - best_ev).abs() <= EPSILON)
+        .expect("best action value is present");
+    let values = node
+        .action_labels
+        .iter()
+        .cloned()
+        .zip(&evaluation.actions)
+        .map(|(action, accumulator)| ActionValueEstimate {
+            action,
+            samples: accumulator.samples,
+            mean_ev_bb: accumulator.mean(),
+            standard_error_bb: accumulator.standard_error(),
+            best_action_ev_loss_bb: (best_ev - accumulator.mean()).max(0.0),
+            low_confidence: accumulator.samples < 2 || accumulator.standard_error() > 0.02,
+        })
+        .collect();
+    (
+        values,
+        Some(node.action_labels[best_index].clone()),
+        Some(best_ev),
+    )
+}
+
 fn evaluate_root_local_deviation(
     config: &BlueprintConfig,
     nodes: &BTreeMap<u64, Node>,
@@ -2000,6 +2231,8 @@ mod tests {
                 held_out_seed: 41,
                 root_deviation_samples_per_class: 1,
                 root_deviation_seed: 43,
+                action_value_deals: 4,
+                action_value_seed: 47,
             },
             hand_abstraction: HandAbstraction {
                 distribution_samples: 4,
@@ -2125,8 +2358,9 @@ mod tests {
                 .map(|action| action.probability)
                 .sum::<f64>();
             assert!((sum - 1.0).abs() < 1e-9);
-            assert!(info_set.trained_average);
             assert_eq!(info_set.street, Street::Preflop);
+            assert!(!info_set.actions.is_empty());
+            assert!(info_set.action_values.len() <= info_set.actions.len());
         }
         assert_eq!(first.validation.status, "advisory_only");
         assert!(first.artifact_id.starts_with("hu-blueprint-6bb-i3-s1-"));
@@ -2168,6 +2402,14 @@ mod tests {
             12
         );
         assert!(deviation.aggregate_local_deviation_gain_bb >= 0.0);
+        assert_eq!(first.metrics.action_value_evaluation.deals, 4);
+        assert!(
+            first
+                .metrics
+                .action_value_evaluation
+                .evaluated_information_sets
+                > 0
+        );
         assert!(
             deviation
                 .aggregate_local_deviation_gain_standard_error_bb
@@ -2194,6 +2436,57 @@ mod tests {
                     && class.local_deviation_gain_99pct_lower_bound_bb >= 0.0
             );
         }
+    }
+
+    #[test]
+    fn dcfr_discounting_uses_separate_regret_and_strategy_factors() {
+        let mut node = Node {
+            descriptor: NodeDescriptor {
+                actor: Position::ButtonSmallBlind,
+                street: Street::Preflop,
+                hand_bucket_trajectory: vec!["preflop:AA".to_owned()],
+                public_bucket_trajectory: Vec::new(),
+                public_history_id: 1,
+                pot_bb: 1.5,
+                to_call_bb: 0.5,
+                effective_stack_remaining_bb: 99.5,
+            },
+            action_labels: vec!["fold".to_owned(), "call".to_owned()],
+            regrets: vec![4.0, -4.0],
+            strategy_sum: vec![4.0, 4.0],
+            regret_updates: 1,
+            average_visits: 1,
+            last_discount_iteration: 0,
+        };
+        node.apply_dcfr_discount(1, &DcfrParameters::default());
+        assert_eq!(node.regrets, vec![2.0, -2.0]);
+        assert_eq!(node.strategy_sum, vec![1.0, 1.0]);
+        node.apply_dcfr_discount(1, &DcfrParameters::default());
+        assert_eq!(node.regrets, vec![2.0, -2.0]);
+    }
+
+    #[test]
+    fn publishable_defaults_use_trajectory_recall() {
+        let config = BlueprintConfig::default();
+        assert_eq!(config.recall_mode, RecallMode::Trajectory);
+        assert_eq!(config.dcfr, DcfrParameters::default());
+    }
+
+    #[test]
+    fn compact_grid_only_removes_four_and_five_big_blind_opens() {
+        let compact = ActionAbstraction::compact_serving_candidate();
+        assert_eq!(compact.open_sizes_bb, vec![2.0, 2.5, 3.0]);
+        assert_eq!(
+            compact.flop_bet_pot_fractions,
+            ActionAbstraction::default().flop_bet_pot_fractions
+        );
+        assert_eq!(compact.postflop_raise_cap, 1);
+        assert!(compact.include_all_in);
+        let config = BlueprintConfig {
+            action_abstraction: compact,
+            ..BlueprintConfig::default()
+        };
+        assert!(config.validate().is_ok());
     }
 
     #[test]

@@ -7,10 +7,11 @@ decisions, tracking weaknesses, and running local postflop solves.
 
 - **Preflop**: heads-up, 6-max, and 9-max opening and response charts on a
   13x13 hand matrix.
-- **Practice**: configurable random preflop spots generated from the bundled
-  chart library.
-- **Stats**: locally stored accuracy, trend, position, spot-type, and action
-  analysis.
+- **Practice**: an always-mounted heads-up cash table with exact-card dealing,
+  push/fold drills, policy-frequency feedback, and fail-closed full-hand model
+  loading.
+- **Stats**: IndexedDB-backed EV-loss, confidence, response-time, breakdown,
+  trend, and costly-decision analysis for the new practice history.
 - **Postflop solver**: browser-worker CFR+ and full-width extensive-form
   fictitious play (XFP) implementations compiled from Rust to WebAssembly.
 - **AI analysis**: optional provider-backed spot analysis using a key that stays
@@ -48,20 +49,28 @@ with direct links to Practice and the preflop range library.
 | Hand evaluator | `lib/evaluator.ts` |
 | Equity engine | `lib/equity/` |
 | Preflop chart data | `data/preflop/` |
-| Practice and stats model | `lib/practice.ts` |
+| Practice state machine | `lib/practice-engine.ts` |
+| Policy/grading model | `lib/practice-types.ts`, `lib/practice-grading.ts` |
+| Practice settings and adaptive sampling | `lib/practice.ts` |
 | Practice persistence | `lib/practice-history.ts` |
+| Policy shard codec/client | `lib/policy-codec.ts`, `lib/practice-policy-client.ts` |
+| Policy runtime API | `app/api/practice/` |
+| Hosted-policy infrastructure/tools | `infra/`, `scripts/policy/` |
 | Table formats and current spot | `lib/positions.ts`, `lib/store.ts` |
 | Solver worker boundary | `lib/solver/` |
 | Rust solver source | `wasm/src/` |
 | AI integrations | `lib/ai/`, `app/api/ai/analyze/route.ts` |
 
-The current solver is a single-street all-in-equity model. It supports a
-configurable bet/raise tree and produces converged strategy frequencies with
-either CFR+ or XFP, but it does not model separate decisions across multiple
-postflop streets. XFP is initialized with the same-iteration CFR+ strategy,
-then trains by exact best-response self-play using realization-reach-corrected
-behavioral averaging; its result includes cross-play EVs against that CFR+
-baseline.
+The browser solver is a single-street all-in-equity model. The separate Rust
+blueprint trainer under `preflop-solver/` models multi-street abstract heads-up
+play with external-sampling DCFR and trajectory-recall information sets. Its
+full-hand outputs remain advisory and hidden from Practice until two
+independent seeds pass every validation and storage gate; Practice never
+substitutes fabricated strategy when a model or shard is unavailable.
+
+The bundled push/fold corpus remains available at 2/3/5/8/10/12/15/20bb. It
+provides validated action frequencies but not counterfactual action EVs, so
+those decisions are retained as explicitly ungraded.
 
 ## Rebuild WebAssembly
 
