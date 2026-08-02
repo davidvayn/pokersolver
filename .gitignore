@@ -11,3 +11,6 @@ next-env.d.ts
 /wasm/pkg
 /wasm/pkg-node
 /preflop-solver/target
+/preflop-solver/.venv-neural
+/preflop-solver/neural/runs
+__pycache__/

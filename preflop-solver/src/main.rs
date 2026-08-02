@@ -13,12 +13,67 @@ fn main() -> Result<(), Box<dyn Error>> {
         "kuhn" => run_kuhn(&args[1..]),
         "solve" => run_push_fold(&args[1..]),
         "blueprint" => run_blueprint(&args[1..]),
+        "neural-samples" => run_neural_samples(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
         }
         unknown => Err(format!("unknown command: {unknown}").into()),
     }
+}
+
+fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    let traversals = parse_or(args, "--traversals", 100u64)?;
+    let start_iteration = parse_or(args, "--start-iteration", 0u64)?;
+    game.iterations = traversals.max(2);
+    game.averaging_delay = 0;
+    game.showdown_evaluation.preflop_runout_samples = parse_or(
+        args,
+        "--preflop-runout-samples",
+        game.showdown_evaluation.preflop_runout_samples,
+    )?;
+    game.showdown_evaluation.flop_runout_samples = parse_or(
+        args,
+        "--flop-runout-samples",
+        game.showdown_evaluation.flop_runout_samples,
+    )?;
+    if args
+        .iter()
+        .any(|argument| argument == "--sample-turn-rivers")
+    {
+        game.showdown_evaluation.exact_turn_rivers = false;
+    }
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("neural-samples.jsonl.gz"));
+    let max_records = parse_or(args, "--max-records", 50_000usize)?;
+    let seed = parse_or(args, "--seed", 1u64)?;
+    let network_path = value(args, "--networks").map(PathBuf::from);
+    let trajectory_sampling = args
+        .iter()
+        .any(|argument| argument == "--sample-trajectories");
+    let value_rollouts_per_action = parse_or(args, "--value-rollouts-per-action", 1u32)?;
+    blueprint::neural::generate_samples(blueprint::neural::SampleGenerationConfig {
+        game,
+        traversals,
+        start_iteration,
+        seed,
+        max_records,
+        output: output.clone(),
+        network_path,
+        trajectory_sampling,
+        value_rollouts_per_action,
+    })?;
+    eprintln!("wrote compact neural traversal batch {}", output.display());
+    Ok(())
 }
 
 fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -262,6 +317,7 @@ Usage:
   preflop-solver kuhn [--iterations 20000]
   preflop-solver solve [options]
   preflop-solver blueprint [options]
+  preflop-solver neural-samples [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5
@@ -310,6 +366,21 @@ Blueprint options:
   --resume <path>                 Resume compatible checkpoint
   --export-postflop-strategies    Include trained postflop profile (large)
   --current-street-recall         Opt into imperfect recall (not publishable)
-  --output <path>                 Default: blueprint-artifact.json"
+  --output <path>                 Default: blueprint-artifact.json
+
+Neural sample options:
+  --effective-stack-bb <number>   Default: 20
+  --traversals <integer>          Default: 100 alternating traversers
+  --start-iteration <integer>     Global iteration used for weighting/parity
+  --seed <integer>                Deterministic batch chance seed
+  --max-records <integer>         Default: 50000 bounded output guard
+  --networks <path>               Frozen advantage-network JSON (uniform if absent)
+  --sample-trajectories           Sample both players; evaluation only
+  --value-rollouts-per-action <N> Independent external samples per value target; default: 1
+  --preflop-runout-samples <int>  Default: 256
+  --flop-runout-samples <int>     Default: 128
+  --sample-turn-rivers            Sample instead of enumerating turn rivers
+  --compact-serving-grid          Opt-in reduced open grid
+  --output <path>                 Default: neural-samples.jsonl.gz"
     );
 }

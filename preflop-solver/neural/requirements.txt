@@ -1,0 +1,4 @@
+# Free/open-source local training dependencies. Keep exact versions so seed
+# resumes use the same numerical implementation.
+mlx==0.32.0
+numpy==2.4.2

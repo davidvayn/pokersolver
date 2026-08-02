@@ -105,6 +105,7 @@ export function createHand(options: CreateHandOptions): HandState {
     toAct: 'button-small-blind',
     pendingActors: ['button-small-blind', 'big-blind'],
     lastFullRaiseBb: 1,
+    raiseReopened: true,
     actionHistory: [],
     terminal: false,
     result: null,
@@ -198,6 +199,9 @@ function assertActionLegal(state: HandState, action: LegalAction): void {
   if (action.kind === 'all-in' && !isAllIn) {
     throw new Error('All-in amount must use the actor’s full stack');
   }
+  if (state.raiseReopened === false) {
+    throw new Error('A short all-in did not reopen raising');
+  }
 }
 
 function collectStreetBets(state: HandState): HandState {
@@ -237,6 +241,7 @@ function dealNextStreet(state: HandState): HandState {
     toAct: first,
     pendingActors: [first, state.button],
     lastFullRaiseBb: BIG_BLIND_BB,
+    raiseReopened: true,
   };
 }
 
@@ -374,9 +379,11 @@ export function applyAction(state: HandState, action: LegalAction): HandState {
     action.kind === 'bet' || action.kind === 'raise' || action.kind === 'all-in';
   if (aggressive && amountTo > beforeHighest + EPSILON) {
     const raiseSize = roundMoney(amountTo - beforeHighest);
-    if (raiseSize + EPSILON >= state.lastFullRaiseBb) {
+    const fullRaise = raiseSize + EPSILON >= state.lastFullRaiseBb;
+    if (fullRaise) {
       next.lastFullRaiseBb = raiseSize;
     }
+    next.raiseReopened = fullRaise;
     next.pendingActors = [opponent];
   } else {
     next.pendingActors = next.pendingActors.filter((seat) => seat !== actor);

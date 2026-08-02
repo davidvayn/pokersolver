@@ -29,8 +29,8 @@ Use the `@/` TypeScript path alias for repository-root imports.
   changes here; seed the RNG with `seedRng()` when testing equity sampling.
 - `data/preflop/ranges.ts` is the shared source for the preflop library and
   practice questions. Keep format metadata and action ranges valid and
-  disjoint. Practice history is client-only localStorage data managed through
-  `lib/practice-history.ts`.
+  disjoint. Practice history and opponent evidence are client-only IndexedDB
+  data managed through `lib/practice-history.ts`.
 - Browser work must stay off the main thread. `lib/equity/client.ts` /
   `worker.ts` and `lib/solver/client.ts` / `worker.ts` are paired transport
   layers. Serialize `Map`s as entry arrays across worker messages; do not pass

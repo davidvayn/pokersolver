@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cardToStr } from '@/lib/cards';
 import type {
+  OpponentModelSnapshot,
   PolicyManifest,
   PracticeDecisionRecord,
   PracticeHandRecord,
@@ -31,6 +32,7 @@ interface AnalystRailProps {
   manifest: PolicyManifest | null;
   sessionDecisions: PracticeDecisionRecord[];
   historyWarning: string;
+  opponentModel: OpponentModelSnapshot | null;
 }
 
 const TABS: Array<{ value: RailTab; label: string; icon: typeof Info }> = [
@@ -118,6 +120,20 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
             {feedback.confidence === 'unavailable'
               ? 'This legacy push/fold corpus contains frequencies but no per-action EV estimates. The choice is saved as ungraded.'
               : 'This is a low-reach node with a noisier action-value estimate. Treat the grade as approximate.'}
+          </p>
+        </div>
+      )}
+
+      {feedback.opponentModel && (
+        <div className="rounded-md border border-border bg-surface-2 p-3 text-xs leading-5">
+          <p className="font-semibold">Opponent adaptation for this hand</p>
+          <p className="mt-1 text-muted">
+            {feedback.opponentModel.observations} local observations · response weight{' '}
+            {pct(feedback.opponentModel.responseWeight)} · confidence{' '}
+            {pct(feedback.opponentModel.confidence)}
+          </p>
+          <p className="mt-1 text-muted">
+            Your decision was graded against the frozen baseline.
           </p>
         </div>
       )}
@@ -269,6 +285,28 @@ function SettingsPanel({
         </span>
       </label>
 
+      {shown.mode !== 'push-fold' && (
+        <label className="block text-xs font-semibold uppercase text-muted">
+          Opponent policy
+          <select
+            value={shown.opponentStyle}
+            onChange={(event) =>
+              patch({
+                opponentStyle: event.target
+                  .value as PracticeSettings['opponentStyle'],
+              })
+            }
+            className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg"
+          >
+            <option value="adaptive-exploitative">Adaptive exploitative</option>
+            <option value="baseline">Frozen baseline</option>
+          </select>
+          <span className="mt-2 block text-xs font-normal normal-case leading-5 text-muted">
+            Adaptation uses only local history, starts at zero, and remains capped by the pinned model.
+          </span>
+        </label>
+      )}
+
       <label className="block text-xs font-semibold uppercase text-muted">
         Optional goal
         <select
@@ -319,6 +357,12 @@ function HistoryPanel({ recentHands }: { recentHands: PracticeHandRecord[] }) {
                   ? `Lost ${hand.result.potBb.toFixed(1)}bb pot`
                   : 'Round complete'}
           </p>
+          {hand.opponentModel && (
+            <p className="mt-1 text-xs text-muted">
+              Opponent response {pct(hand.opponentModel.responseWeight)} from{' '}
+              {hand.opponentModel.observations} local observations
+            </p>
+          )}
         </li>
       ))}
     </ol>
@@ -364,6 +408,7 @@ export function AnalystRail({
   manifest,
   sessionDecisions,
   historyWarning,
+  opponentModel,
 }: AnalystRailProps) {
   return (
     <aside className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm" aria-label="Table analyst">
@@ -391,12 +436,28 @@ export function AnalystRail({
         {tab === 'feedback' && <FeedbackPanel feedback={feedback} />}
         {tab === 'history' && <HistoryPanel recentHands={recentHands} />}
         {tab === 'settings' && (
-          <SettingsPanel
-            settings={settings}
-            pendingSettings={pendingSettings}
-            onSettingsChange={onSettingsChange}
-            fullDepths={fullDepths}
-          />
+          <>
+            <SettingsPanel
+              settings={settings}
+              pendingSettings={pendingSettings}
+              onSettingsChange={onSettingsChange}
+              fullDepths={fullDepths}
+            />
+            {opponentModel && manifest?.runtime?.kind === 'neural-deep-cfr-v1' && (
+              <div className="border-t border-border p-4 text-xs leading-5">
+                <p className="font-semibold">Local opponent evidence</p>
+                <p className="mt-1 text-muted">
+                  {opponentModel.observations} observations ·{' '}
+                  {opponentModel.stableEvidence} stable · confidence{' '}
+                  {pct(opponentModel.confidence)}
+                </p>
+                <p className="mt-1 text-muted">
+                  Current response weight {pct(opponentModel.responseWeight)} (cap{' '}
+                  {pct(opponentModel.maximumResponseWeight)}). No hand data leaves this browser.
+                </p>
+              </div>
+            )}
+          </>
         )}
         {tab === 'stats' && <StatsPanel decisions={sessionDecisions} />}
       </div>
@@ -408,6 +469,11 @@ export function AnalystRail({
           </summary>
           <div className="mt-3 space-y-2 leading-5 text-muted">
             <p>{manifest.label} · {manifest.version}</p>
+            {manifest.runtime?.kind === 'neural-deep-cfr-v1' && (
+              <p>
+                Frozen Deep CFR baseline plus a confidence-capped exploit response. Weights are immutable static artifacts; opponent evidence stays in local IndexedDB.
+              </p>
+            )}
             <p>
               {manifest.abstraction.blindsBb.join('/')}bb blinds · {manifest.abstraction.rake} rake · {manifest.abstraction.recall} recall
             </p>

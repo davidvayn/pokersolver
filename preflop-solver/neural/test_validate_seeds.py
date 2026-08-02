@@ -1,0 +1,89 @@
+import unittest
+
+import mlx.core as mx
+import numpy as np
+
+from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT
+from validate_seeds import compare
+
+
+def state(private_cards):
+    return {
+        "private_cards": private_cards,
+        "board": [],
+        "street": "preflop",
+        "actor": 0,
+        "button": 0,
+        "pot_bb": 0.0,
+        "stacks_bb": [19.5, 19.0],
+        "street_bets_bb": [0.5, 1.0],
+        "total_committed_bb": [0.5, 1.0],
+        "to_call_bb": 0.5,
+        "last_full_raise_bb": 1.0,
+        "raise_reopened": True,
+        "trajectory": [],
+    }
+
+
+def record(private_cards):
+    return {
+        "state": state(private_cards),
+        "actions": [
+            {"kind": "fold", "amount_to_bb": None},
+            {"kind": "call", "amount_to_bb": None},
+        ],
+    }
+
+
+class UniformModel:
+    def __call__(self, features):
+        return mx.zeros((features.shape[0], 1))
+
+
+class RankMarkerModel:
+    """Prefers call only when canonical card zero is visible."""
+
+    def __call__(self, features):
+        values = np.asarray(features)
+        marker = values[:, 0]
+        fold = values[:, STATE_FEATURE_COUNT]
+        call = values[:, STATE_FEATURE_COUNT + 2]
+        logits = marker * (-4.0 * fold + 4.0 * call)
+        return mx.array(logits.reshape((-1, 1)))
+
+
+class ReachAwareValidationTests(unittest.TestCase):
+    def test_empirical_trajectory_comparison_keeps_repeated_visits(self):
+        divergent = record([0, 4])
+        agreeing = record([48, 44])
+        result = compare(
+            UniformModel(),
+            RankMarkerModel(),
+            [[divergent, divergent, agreeing]],
+            20,
+            "test trajectory distribution",
+            True,
+        )
+        self.assertEqual(result["decisions"], 3)
+        self.assertAlmostEqual(result["primary_action_agreement"], 1.0 / 3.0)
+        self.assertEqual(result["sampling_method"], "empirical_pure_trajectories")
+        self.assertAlmostEqual(result["street_breakdown"]["preflop"]["reach_mass"], 1.0)
+
+    def test_policy_corpora_receive_equal_mixture_mass(self):
+        divergent = record([0, 4])
+        agreeing = record([48, 44])
+        result = compare(
+            UniformModel(),
+            RankMarkerModel(),
+            [[divergent, divergent], [agreeing]],
+            20,
+            "equal policy mixture",
+            True,
+        )
+        self.assertEqual(result["decisions"], 3)
+        self.assertAlmostEqual(result["primary_action_agreement"], 0.5)
+        self.assertAlmostEqual(result["effective_decisions"], 8.0 / 3.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -33,6 +33,10 @@ import {
   savePracticeHand,
   subscribePracticeHistory,
 } from '@/lib/practice-history';
+import {
+  adaptationConfigForRuntime,
+  buildOpponentModel,
+} from '@/lib/opponent-model';
 import { PUSH_FOLD_MANIFEST } from '@/lib/practice-models';
 import {
   PolicyUnavailableError,
@@ -48,6 +52,8 @@ import {
   DEFAULT_PRACTICE_SETTINGS,
   type HandState,
   type LegalAction,
+  type OpponentModelSnapshot,
+  type OpponentPolicyTrace,
   type PolicyManifest,
   type PolicyNode,
   type PracticeDecisionRecord,
@@ -99,12 +105,15 @@ function stopAfterPreflop(state: HandState): HandState {
 async function checkedPolicyNode(
   client: PracticePolicyClient,
   pinned: PinnedPracticeModel,
-  state: HandState
-): Promise<PolicyNode> {
-  const stateHash = await canonicalPolicyHash(state);
-  const node = await client.lookup(pinned, stateHash);
+  state: HandState,
+  profile: OpponentModelSnapshot,
+  usage: 'grading' | 'opponent'
+): Promise<{ node: PolicyNode; trace: OpponentPolicyTrace | null }> {
+  const result = await client.lookupState({ pinned, state, profile, usage });
+  const { node } = result;
+  const expectedHash = await canonicalPolicyHash(state);
   const errors = validatePolicyNode(node);
-  if (node.stateHash !== stateHash) errors.push('Policy node hash mismatch');
+  if (node.stateHash !== expectedHash) errors.push('Policy node hash mismatch');
   for (const action of node.actions) {
     try {
       applyAction(state, action);
@@ -119,7 +128,7 @@ async function checkedPolicyNode(
       `The pinned policy node failed validation: ${errors.join('; ')}`
     );
   }
-  return node;
+  return result;
 }
 
 async function advancePolicyToHero(input: {
@@ -127,13 +136,22 @@ async function advancePolicyToHero(input: {
   pinned: PinnedPracticeModel;
   state: HandState;
   mode: PracticeSettings['mode'];
+  profile: OpponentModelSnapshot;
   onProgress: (state: HandState) => void;
+  onOpponentPolicy: (trace: OpponentPolicyTrace) => void;
 }): Promise<{ state: HandState; node: PolicyNode | null }> {
   let state = input.state;
   while (!state.terminal && state.toAct !== state.hero) {
-    const node = await checkedPolicyNode(input.client, input.pinned, state);
+    const lookup = await checkedPolicyNode(
+      input.client,
+      input.pinned,
+      state,
+      input.profile,
+      'opponent'
+    );
+    if (lookup.trace) input.onOpponentPolicy(lookup.trace);
     const previous = state;
-    state = applyAction(state, samplePolicyAction(node.actions));
+    state = applyAction(state, samplePolicyAction(lookup.node.actions));
     input.onProgress(state);
     if (
       input.mode === 'preflop' &&
@@ -147,7 +165,15 @@ async function advancePolicyToHero(input: {
   if (state.terminal) return { state, node: null };
   return {
     state,
-    node: await checkedPolicyNode(input.client, input.pinned, state),
+    node: (
+      await checkedPolicyNode(
+        input.client,
+        input.pinned,
+        state,
+        input.profile,
+        'grading'
+      )
+    ).node,
   };
 }
 
@@ -174,6 +200,8 @@ export default function PracticePage() {
   const [feedback, setFeedback] =
     useState<PracticeDecisionRecord | null>(null);
   const [recentHands, setRecentHands] = useState<PracticeHandRecord[]>([]);
+  const [opponentModel, setOpponentModel] =
+    useState<OpponentModelSnapshot | null>(null);
   const [sessionDecisions, setSessionDecisions] = useState<
     PracticeDecisionRecord[]
   >([]);
@@ -187,6 +215,9 @@ export default function PracticePage() {
   const requestId = useRef(0);
   const policyClientRef = useRef<PracticePolicyClient | null>(null);
   const pinnedModelRef = useRef<PinnedPracticeModel | null>(null);
+  const recentHandsRef = useRef<PracticeHandRecord[]>([]);
+  const opponentModelRef = useRef<OpponentModelSnapshot | null>(null);
+  const opponentQueriesRef = useRef<OpponentPolicyTrace[]>([]);
   const goalTargetRef = useRef<number | null>(null);
   const goalReachedRef = useRef(false);
   const mobileSheetRef = useRef<HTMLElement | null>(null);
@@ -205,6 +236,9 @@ export default function PracticePage() {
       setActiveNode(null);
       setCurrentHandDecisions([]);
       setHandManifest(null);
+      setOpponentModel(null);
+      opponentModelRef.current = null;
+      opponentQueriesRef.current = [];
       goalReachedRef.current = false;
       pinnedModelRef.current = null;
 
@@ -242,6 +276,17 @@ export default function PracticePage() {
         const pinned = await client.pinFullHandModel(nextSettings.depthBb);
         if (currentRequest !== requestId.current) return;
         pinnedModelRef.current = pinned;
+        const neuralRuntime =
+          pinned.manifest.runtime?.kind === 'neural-deep-cfr-v1'
+            ? pinned.manifest.runtime
+            : undefined;
+        const profile = buildOpponentModel(
+          recentHandsRef.current,
+          neuralRuntime ? nextSettings.opponentStyle : 'baseline',
+          adaptationConfigForRuntime(neuralRuntime)
+        );
+        opponentModelRef.current = profile;
+        setOpponentModel(profile);
         setHandManifest(pinned.manifest);
         setSpot(null);
         handStartedAt.current = Date.now();
@@ -264,8 +309,14 @@ export default function PracticePage() {
             pinned,
             state: initial,
             mode: nextSettings.mode,
+            profile,
             onProgress: (progress) => {
               if (currentRequest === requestId.current) setState(progress);
+            },
+            onOpponentPolicy: (trace) => {
+              if (currentRequest === requestId.current) {
+                opponentQueriesRef.current.push(trace);
+              }
             },
           });
           if (currentRequest !== requestId.current) return;
@@ -306,6 +357,9 @@ export default function PracticePage() {
         // beginHand will show a fail-closed unavailable state below.
       }
       setManifests(availableManifests);
+      const hands = await loadPracticeHands(500);
+      recentHandsRef.current = hands;
+      setRecentHands(hands.slice(0, 100));
       const availableDepths = fullHandDepths(availableManifests);
       const persistenceSafe =
         loaded.dealMode === 'adaptive'
@@ -334,10 +388,12 @@ export default function PracticePage() {
   useEffect(() => {
     let active = true;
     const refresh = async () => {
-      const hands = await loadPracticeHands(100);
-      if (active) setRecentHands(hands);
+      const hands = await loadPracticeHands(500);
+      if (active) {
+        recentHandsRef.current = hands;
+        setRecentHands(hands.slice(0, 100));
+      }
     };
-    void refresh();
     const unsubscribe = subscribePracticeHistory(() => void refresh());
     return () => {
       active = false;
@@ -420,16 +476,18 @@ export default function PracticePage() {
       board: [...finished.board],
       actions: finished.actionHistory,
       decisions,
+      opponentModel: opponentModelRef.current ?? undefined,
+      opponentPolicyQueries: [...opponentQueriesRef.current],
       result: finished.result,
     };
     setState(finished);
     setActiveNode(null);
-    setRecentHands((current) =>
-      [
-        handRecord,
-        ...current.filter((hand) => hand.id !== handRecord.id),
-      ].slice(0, 100)
-    );
+    const profileHistory = [
+      handRecord,
+      ...recentHandsRef.current.filter((hand) => hand.id !== handRecord.id),
+    ].slice(0, 500);
+    recentHandsRef.current = profileHistory;
+    setRecentHands(profileHistory.slice(0, 100));
     setCompletedHands((current) => current + 1);
     setStatus('review');
     setRailTab('feedback');
@@ -506,6 +564,7 @@ export default function PracticePage() {
         chosenAction: action,
         policyActions: node.actions,
         ...grade,
+        opponentModel: opponentModelRef.current ?? undefined,
       };
       const handDecisions = [...currentHandDecisions, decision];
       const decisionCount = sessionDecisions.length + 1;
@@ -537,7 +596,8 @@ export default function PracticePage() {
 
   async function resumeFullHand() {
     const pinned = pinnedModelRef.current;
-    if (!state || !pinned || state.terminal) {
+    const profile = opponentModelRef.current;
+    if (!state || !pinned || !profile || state.terminal) {
       void beginHand(settings, completedHands);
       return;
     }
@@ -551,8 +611,14 @@ export default function PracticePage() {
         pinned,
         state,
         mode: settings.mode,
+        profile,
         onProgress: (progress) => {
           if (currentRequest === requestId.current) setState(progress);
+        },
+        onOpponentPolicy: (trace) => {
+          if (currentRequest === requestId.current) {
+            opponentQueriesRef.current.push(trace);
+          }
         },
       });
       if (currentRequest !== requestId.current) return;
@@ -627,7 +693,7 @@ export default function PracticePage() {
             Practice table
           </div>
           <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted sm:block">
-            Play exact-card heads-up spots against a pinned policy. Strategy is shown as Approximate GTO with its measured validation and abstraction assumptions.
+            Play exact-card heads-up spots against a pinned baseline. Accepted strategy is labeled Approximate GTO; adaptive opponent responses are reported separately and never change your grading target.
           </p>
         </div>
         <Link
@@ -698,6 +764,7 @@ export default function PracticePage() {
             manifest={manifest}
             sessionDecisions={sessionDecisions}
             historyWarning={historyWarning}
+            opponentModel={opponentModel}
           />
         </div>
       </div>
@@ -749,6 +816,7 @@ export default function PracticePage() {
               manifest={manifest}
               sessionDecisions={sessionDecisions}
               historyWarning={historyWarning}
+              opponentModel={opponentModel}
             />
           </section>
         </div>

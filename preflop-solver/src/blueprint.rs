@@ -16,6 +16,8 @@ use std::fs;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
+pub mod neural;
+
 const EPSILON: f64 = 1e-9;
 const MODEL: &str = "hu-abstracted-external-sampling-dcfr-trajectory-v3";
 const SOLVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -400,6 +402,27 @@ enum ActionKind {
     RaiseTo(f64),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TrajectoryActionKind {
+    Fold,
+    Check,
+    Call,
+    Bet,
+    Raise,
+    AllIn,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct TrajectoryAction {
+    actor: usize,
+    street: Street,
+    kind: TrajectoryActionKind,
+    amount_bb: f64,
+    amount_to_bb: Option<f64>,
+    pot_after_bb: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct LegalAction {
     label: String,
@@ -417,6 +440,7 @@ struct GameState {
     checks: u8,
     raise_reopened: bool,
     public_history: Vec<String>,
+    trajectory: Vec<TrajectoryAction>,
     terminal: Option<Terminal>,
 }
 
@@ -435,6 +459,7 @@ impl GameState {
                 "blinds:{:.3}/{:.3}",
                 config.small_blind_bb, config.big_blind_bb
             )],
+            trajectory: Vec::new(),
             terminal: None,
         }
     }
@@ -508,7 +533,11 @@ impl GameState {
             let minimum_to = current_bet + self.last_full_raise.max(config.big_blind_bb);
             let mut seen = BTreeSet::new();
             for target in targets {
-                let target = target.min(max_to);
+                // The browser engine and canonical policy hash both use
+                // milliblind chip accounting. Keep traversal semantics at the
+                // same boundary instead of retaining invisible sub-milliblind
+                // pot-fraction differences.
+                let target = quantize(target.min(max_to), 0.001);
                 if target + EPSILON < minimum_to || target >= max_to - EPSILON {
                     continue;
                 }
@@ -529,6 +558,7 @@ impl GameState {
                 }
             }
             if abstraction.include_all_in {
+                let max_to = quantize(max_to, 0.001);
                 actions.push(LegalAction {
                     label: format!(
                         "{}_all_in_to_{:.3}bb",
@@ -593,6 +623,10 @@ impl GameState {
         let mut next = self.clone();
         let player = self.actor;
         let opponent = 1 - player;
+        let before_invested = self.invested[player];
+        let before_street_invested = self.street_invested[player];
+        let before_highest = self.street_invested[player].max(self.street_invested[opponent]);
+        let maximum_to = before_street_invested + self.remaining(player, config);
         next.public_history
             .push(format!("{:?}:p{}:{}", self.street, player, action.label));
         match action.kind {
@@ -638,6 +672,27 @@ impl GameState {
                 next.actor = opponent;
             }
         }
+        let paid = (next.invested[player] - before_invested).max(0.0);
+        let (kind, amount_to_bb) = match action.kind {
+            ActionKind::Fold => (TrajectoryActionKind::Fold, None),
+            ActionKind::Check => (TrajectoryActionKind::Check, None),
+            ActionKind::Call => (TrajectoryActionKind::Call, None),
+            ActionKind::RaiseTo(target) if (target - maximum_to).abs() <= EPSILON => {
+                (TrajectoryActionKind::AllIn, Some(target))
+            }
+            ActionKind::RaiseTo(target) if before_highest <= EPSILON => {
+                (TrajectoryActionKind::Bet, Some(target))
+            }
+            ActionKind::RaiseTo(target) => (TrajectoryActionKind::Raise, Some(target)),
+        };
+        next.trajectory.push(TrajectoryAction {
+            actor: player,
+            street: self.street,
+            kind,
+            amount_bb: paid,
+            amount_to_bb,
+            pot_after_bb: next.pot(),
+        });
         next
     }
 

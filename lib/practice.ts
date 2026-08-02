@@ -24,6 +24,7 @@ const HERO_SEATS = new Set([
   'big-blind',
 ]);
 const DEAL_MODES = new Set(['authentic', 'adaptive']);
+const OPPONENT_STYLES = new Set(['baseline', 'adaptive-exploitative']);
 const GOALS = new Set(['continuous', 25, 50, 100]);
 const POSTFLOP_STREETS = new Set(['flop', 'turn', 'river']);
 
@@ -56,6 +57,9 @@ export function sanitizePracticeSettings(value: unknown): PracticeSettings {
     dealMode: DEAL_MODES.has(candidate.dealMode ?? '')
       ? (candidate.dealMode as PracticeSettings['dealMode'])
       : DEFAULT_PRACTICE_SETTINGS.dealMode,
+    opponentStyle: OPPONENT_STYLES.has(candidate.opponentStyle ?? '')
+      ? (candidate.opponentStyle as PracticeSettings['opponentStyle'])
+      : DEFAULT_PRACTICE_SETTINGS.opponentStyle,
     decisionGoal: GOALS.has(candidate.decisionGoal ?? '')
       ? (candidate.decisionGoal as PracticeSettings['decisionGoal'])
       : DEFAULT_PRACTICE_SETTINGS.decisionGoal,
@@ -92,6 +96,7 @@ export function structuralSettingsChanged(
     current.pushFoldDepthBb !== next.pushFoldDepthBb ||
     current.heroSeat !== next.heroSeat ||
     current.dealMode !== next.dealMode ||
+    current.opponentStyle !== next.opponentStyle ||
     current.postflopStreets.join(',') !== next.postflopStreets.join(',')
   );
 }

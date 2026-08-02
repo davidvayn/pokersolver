@@ -1,6 +1,11 @@
 'use client';
 
-import type { PracticeHandRecord } from '@/lib/practice-types';
+import { OPPONENT_PROFILE_FEATURE_COUNT } from '@/lib/opponent-model';
+import type {
+  OpponentModelSnapshot,
+  OpponentPolicyTrace,
+  PracticeHandRecord,
+} from '@/lib/practice-types';
 
 export const PRACTICE_DB_NAME = 'poker-lab-practice-v3';
 export const PRACTICE_DB_VERSION = 1;
@@ -72,8 +77,80 @@ export function isPracticeHandRecord(value: unknown): value is PracticeHandRecor
     Array.isArray(hand.board) &&
     Array.isArray(hand.actions) &&
     Array.isArray(hand.decisions) &&
+    (hand.opponentModel === undefined ||
+      isOpponentModelSnapshot(hand.opponentModel)) &&
+    (hand.opponentPolicyQueries === undefined ||
+      (Array.isArray(hand.opponentPolicyQueries) &&
+        hand.opponentPolicyQueries.every(isOpponentPolicyTrace))) &&
     !!hand.result &&
     typeof hand.result === 'object'
+  );
+}
+
+function isOpponentPolicyTrace(value: unknown): value is OpponentPolicyTrace {
+  if (!value || typeof value !== 'object') return false;
+  const trace = value as Partial<OpponentPolicyTrace>;
+  const distributions = [
+    trace.baselineActions,
+    trace.responseActions,
+    trace.servedActions,
+  ];
+  return (
+    typeof trace.stateHash === 'string' &&
+    /^[a-f0-9]{64}$/.test(trace.stateHash) &&
+    typeof trace.modelVersion === 'string' &&
+    typeof trace.profileVersion === 'string' &&
+    typeof trace.evidenceCount === 'number' &&
+    Number.isInteger(trace.evidenceCount) &&
+    trace.evidenceCount >= 0 &&
+    typeof trace.confidence === 'number' &&
+    trace.confidence >= 0 &&
+    trace.confidence <= 1 &&
+    typeof trace.responseWeight === 'number' &&
+    trace.responseWeight >= 0 &&
+    trace.responseWeight <= 1 &&
+    distributions.every(
+      (distribution) =>
+        Array.isArray(distribution) &&
+        distribution.length > 0 &&
+        distribution.every(
+          (action) =>
+            typeof action.id === 'string' &&
+            typeof action.probability === 'number' &&
+            Number.isFinite(action.probability) &&
+            action.probability >= 0 &&
+            action.probability <= 1
+        ) &&
+        Math.abs(
+          distribution.reduce((sum, action) => sum + action.probability, 0) - 1
+        ) <= 1e-6
+    )
+  );
+}
+
+function isOpponentModelSnapshot(value: unknown): value is OpponentModelSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const profile = value as Partial<OpponentModelSnapshot>;
+  return (
+    profile.schema === 'local-opponent-profile-v1' &&
+    typeof profile.version === 'string' &&
+    profile.source === 'local-indexeddb' &&
+    typeof profile.observations === 'number' &&
+    Number.isInteger(profile.observations) &&
+    profile.observations >= 0 &&
+    typeof profile.stableEvidence === 'number' &&
+    Number.isInteger(profile.stableEvidence) &&
+    typeof profile.confidence === 'number' &&
+    profile.confidence >= 0 &&
+    profile.confidence <= 1 &&
+    typeof profile.responseWeight === 'number' &&
+    profile.responseWeight >= 0 &&
+    profile.responseWeight <= 1 &&
+    Array.isArray(profile.features) &&
+    profile.features.length === OPPONENT_PROFILE_FEATURE_COUNT &&
+    profile.features.every(
+      (feature) => typeof feature === 'number' && Number.isFinite(feature)
+    )
   );
 }
 

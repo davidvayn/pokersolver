@@ -7,6 +7,7 @@ import {
   savePracticeHand,
 } from '@/lib/practice-history';
 import { analyzePractice } from '@/lib/practice-stats';
+import { buildOpponentModel } from '@/lib/opponent-model';
 import type {
   PracticeDecisionRecord,
   PracticeHandRecord,
@@ -101,6 +102,31 @@ describe('fresh IndexedDB practice history', () => {
   it('ignores malformed writes instead of contaminating the fresh schema', async () => {
     expect(await savePracticeHand({ id: 'broken' } as PracticeHandRecord)).toBe(false);
     expect(await loadPracticeHands()).toEqual([]);
+  });
+
+  it('retains the local profile and auditable policy blend without a server database', async () => {
+    const record = hand('h3', [decision('d3', 0.02)]);
+    record.opponentModel = buildOpponentModel([], 'baseline');
+    record.opponentPolicyQueries = [
+      {
+        stateHash: 'b'.repeat(64),
+        modelVersion: record.modelVersion,
+        profileVersion: record.opponentModel.version,
+        evidenceCount: 0,
+        confidence: 0,
+        responseWeight: 0,
+        baselineActions: [{ id: 'check', probability: 1 }],
+        responseActions: [{ id: 'check', probability: 1 }],
+        servedActions: [{ id: 'check', probability: 1 }],
+      },
+    ];
+    expect(await savePracticeHand(record)).toBe(true);
+    const [loaded] = await loadPracticeHands();
+    expect(loaded.opponentModel?.source).toBe('local-indexeddb');
+    expect(loaded.opponentPolicyQueries?.[0]).toMatchObject({
+      responseWeight: 0,
+      evidenceCount: 0,
+    });
   });
 
   it('aggregates EV loss, ungraded decisions, confidence, and costly records', () => {

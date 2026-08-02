@@ -10,6 +10,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { awsCredentialsProvider } from '@vercel/oidc-aws-credentials-provider';
 import type { PolicyManifest } from '@/lib/practice-types';
+import { isValidatedFullHandManifest } from '@/lib/practice-models';
 
 export const POLICY_REGION = 'us-west-2';
 const TABLE_NAME = process.env.PRACTICE_POLICY_TABLE;
@@ -219,35 +220,7 @@ function isAcceptedManifest(value: unknown): value is PolicyManifest {
     validation?.status === 'accepted';
   if (!baseAccepted) return false;
   if (manifest.subtype !== 'full-hand') return manifest.subtype === 'push-fold';
-  if (!validation) return false;
-  return (
-    manifest.depthsBb!.length > 0 &&
-    manifest.depthsBb!.every((depth) => [20, 50, 100].includes(depth)) &&
-    typeof validation.exploitabilityEstimateBb === 'number' &&
-    validation.exploitabilityEstimateBb <= 0.05 &&
-    typeof validation.exploitabilityUpper99Bb === 'number' &&
-    validation.exploitabilityUpper99Bb <= 0.1 &&
-    typeof validation.crossSeedFrequencyMae === 'number' &&
-    validation.crossSeedFrequencyMae <= 0.05 &&
-    typeof validation.primaryActionAgreement === 'number' &&
-    validation.primaryActionAgreement >= 0.85 &&
-    typeof validation.maximumAggregateActionDelta === 'number' &&
-    validation.maximumAggregateActionDelta <= 0.03 &&
-    typeof validation.policyCoverage === 'number' &&
-    validation.policyCoverage >= 0.9999 &&
-    typeof validation.actionEvStandardErrorCoverage === 'number' &&
-    validation.actionEvStandardErrorCoverage >= 0.95 &&
-    typeof validation.projectedStorageBytes === 'number' &&
-    validation.projectedStorageBytes <= 20 * 1024 ** 3 &&
-    validation.rawProbabilitySumsValid === true &&
-    validation.quantizedProbabilitySumsValid === true &&
-    validation.independentSeedCount === 2 &&
-    Array.isArray(validation.trainingHoursPerSeed) &&
-    validation.trainingHoursPerSeed.length === 2 &&
-    validation.trainingHoursPerSeed.every(
-      (hours) => Number.isFinite(hours) && hours >= 8 && hours <= 12
-    )
-  );
+  return isValidatedFullHandManifest(value);
 }
 
 export async function readHostedManifests(): Promise<PolicyManifest[]> {

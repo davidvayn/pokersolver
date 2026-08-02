@@ -13,12 +13,14 @@
     "preflop:compare-blueprints": "node scripts/compare-blueprint-artifacts.mjs",
     "test:blueprint-compare": "node --test scripts/compare-blueprint-artifacts.test.mjs",
     "policy:export": "node scripts/policy/export-shards.mjs",
+    "policy:export-neural": "node scripts/policy/export-neural-artifact.mjs",
     "policy:import": "node scripts/policy/import-dynamo.mjs",
     "policy:verify": "node scripts/policy/verify-dynamo.mjs",
     "policy:activate": "node scripts/policy/activate-or-rollback.mjs",
     "policy:size": "node scripts/policy/audit-size.mjs",
     "policy:validate-seeds": "node scripts/policy/validate-full-hand-seeds.mjs",
-    "test:policy-tools": "node --test scripts/policy/*.test.mjs"
+    "test:policy-tools": "node --test scripts/policy/*.test.mjs",
+    "test:neural-trainer": "preflop-solver/.venv-neural/bin/python -m unittest discover -s preflop-solver/neural -p 'test_*.py'"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1101.0",

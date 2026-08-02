@@ -11,6 +11,7 @@ export type PracticeStreet = 'preflop' | 'flop' | 'turn' | 'river';
 export type Seat = 'button-small-blind' | 'big-blind';
 export type HeroSeatMode = 'alternate' | 'button-small-blind' | 'big-blind';
 export type DealMode = 'authentic' | 'adaptive';
+export type OpponentStyle = 'baseline' | 'adaptive-exploitative';
 export type DecisionGoal = 'continuous' | 25 | 50 | 100;
 export type ActionKind =
   | 'fold'
@@ -29,6 +30,7 @@ export interface PracticeSettings {
   postflopStreets: Array<Exclude<PracticeStreet, 'preflop'>>;
   heroSeat: HeroSeatMode;
   dealMode: DealMode;
+  opponentStyle: OpponentStyle;
   decisionGoal: DecisionGoal;
 }
 
@@ -75,6 +77,7 @@ export interface HandState {
   toAct: Seat | null;
   pendingActors: Seat[];
   lastFullRaiseBb: number;
+  raiseReopened: boolean;
   actionHistory: PublicAction[];
   terminal: boolean;
   result: HandResult | null;
@@ -115,17 +118,51 @@ export interface PolicyNode {
   reachProbability?: number;
 }
 
+export interface ActionAbstraction {
+  openSizesBb: number[];
+  limpRaiseSizesBb: number[];
+  threeBetSizesBb: number[];
+  fourBetSizesBb: number[];
+  deeperRaisePotFractions: number[];
+  preflopRaiseCap: number;
+  flopBetPotFractions: number[];
+  turnRiverBetPotFractions: number[];
+  postflopRaisePotFractions: number[];
+  postflopRaiseCap: number;
+  includeAllIn: boolean;
+}
+
+export interface NeuralPolicyRuntime {
+  kind: 'neural-deep-cfr-v1';
+  artifactUrl: string;
+  artifactSha256: string;
+  stateFeatureSchema: 'hu-cash-trajectory-poker-aware-v4';
+  actionFeatureSchema: 'hu-cash-legal-action-v1';
+  opponentProfileSchema: 'local-opponent-profile-v1';
+  actionAbstraction: ActionAbstraction;
+  adaptation: {
+    minimumObservations: number;
+    fullConfidenceObservations: number;
+    maximumResponseWeight: number;
+  };
+}
+
+export interface ShardedPolicyRuntime {
+  kind: 'binary-policy-shards-v1';
+}
+
 export interface PolicyManifest {
   schemaVersion: number;
   version: string;
   model: string;
-  label: 'Approximate GTO';
+  label: 'Approximate GTO' | 'Experimental self-play';
   subtype: 'full-hand' | 'push-fold';
   active: boolean;
   depthsBb: number[];
   generatedAt: string;
   stateSchema: string;
   shardSchema: string;
+  runtime?: ShardedPolicyRuntime | NeuralPolicyRuntime;
   abstraction: {
     blindsBb: [number, number];
     anteBb: number;
@@ -135,6 +172,35 @@ export interface PolicyManifest {
     recall: string;
   };
   validation: PolicyValidationSummary;
+}
+
+export interface OpponentModelSnapshot {
+  schema: 'local-opponent-profile-v1';
+  version: string;
+  source: 'local-indexeddb';
+  observations: number;
+  stableEvidence: number;
+  confidence: number;
+  responseWeight: number;
+  maximumResponseWeight: number;
+  reason:
+    | 'baseline-selected'
+    | 'insufficient-evidence'
+    | 'unstable-evidence'
+    | 'confidence-capped';
+  features: number[];
+}
+
+export interface OpponentPolicyTrace {
+  stateHash: string;
+  modelVersion: string;
+  profileVersion: string;
+  evidenceCount: number;
+  confidence: number;
+  responseWeight: number;
+  baselineActions: Array<{ id: string; probability: number }>;
+  responseActions: Array<{ id: string; probability: number }>;
+  servedActions: Array<{ id: string; probability: number }>;
 }
 
 export interface PostflopPracticeSample {
@@ -168,6 +234,7 @@ export interface PracticeDecisionRecord {
   grade: EvGrade;
   confidence: ConfidenceLevel;
   lowConfidence: boolean;
+  opponentModel?: OpponentModelSnapshot;
 }
 
 export interface PracticeHandRecord {
@@ -184,6 +251,8 @@ export interface PracticeHandRecord {
   board: Card[];
   actions: PublicAction[];
   decisions: PracticeDecisionRecord[];
+  opponentModel?: OpponentModelSnapshot;
+  opponentPolicyQueries?: OpponentPolicyTrace[];
   result: HandResult;
 }
 
@@ -223,6 +292,7 @@ export const DEFAULT_PRACTICE_SETTINGS: PracticeSettings = {
   postflopStreets: ['flop', 'turn', 'river'],
   heroSeat: 'alternate',
   dealMode: 'authentic',
+  opponentStyle: 'adaptive-exploitative',
   decisionGoal: 'continuous',
 };
 

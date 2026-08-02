@@ -67,11 +67,110 @@ cargo run --release --manifest-path preflop-solver/Cargo.toml -- \
   --checkpoint-every 100000 \
   --output /tmp/hu-blueprint.json
 
+python3 -m venv preflop-solver/.venv-neural
+preflop-solver/.venv-neural/bin/python -m pip install \
+  -r preflop-solver/neural/requirements.txt
+preflop-solver/.venv-neural/bin/python preflop-solver/neural/train.py \
+  --run-dir preflop-solver/neural/runs/20bb-seed-1 \
+  --depth-bb 20 \
+  --seed 1 \
+  --rounds 1000000 \
+  --artifact-every 500 \
+  --max-minutes 600
+
 npm run preflop:compare-blueprints -- \
   /tmp/hu-blueprint-seed-1.json \
   /tmp/hu-blueprint-seed-2.json \
   --require-pass
 ```
+
+### Neural full-hand training
+
+The CLI defaults pin the current leading 20bb research profile: 400 traversals
+per round, a 100,000-record reservoir, 256/128 hidden layers, batch size 1,024,
+100 optimizer steps per round, AdamW learning rate 0.001, control-variate scale
+0.5, authentic replay, one action-value sample, and exact turn/river runouts.
+Override these only for an explicitly named experiment. This profile remains
+research-only and is not an activated or release-validated policy.
+
+The neural path keeps game semantics in this Rust crate and uses the free,
+MIT-licensed MLX framework only for batched optimization. Each iteration block
+freezes the two current advantage networks, alternates traversers, samples exact
+cards, enumerates the traverser's actions, and writes complete legal-action
+decisions with instantaneous advantage, average-strategy, and action-value
+targets. The Python orchestrator expands the compact records into the pinned
+suit-canonical browser feature schema and verifies a cross-language feature
+digest for every action before accepting it.
+
+The v4 state schema has 716 values. It keeps the exact-card encoding and adds
+64 cheap, suit-invariant poker features for made-hand category, pair and
+overpair relationships, board rank/suit multiplicity, straight windows,
+flush/backdoor and straight draws, and board wetness. The new first-layer
+columns are initialized to zero so a resumed comparison starts from the old
+representation instead of an unrelated random projection.
+
+Advantage learning follows the bootstrapped cumulative-advantage recurrence
+from Deep DCFR+: each round clips the frozen prior network's negative outputs,
+discounts the positive outputs, adds the current sampled advantages, and fits
+only the current round's complete decisions. The average-policy reservoir
+remains fixed-capacity and uses grouped masked softmax cross-entropy. Replay
+arrays use bounded `float16` memory maps rather than retaining a growing game
+tree. Network weights and AdamW optimizer state are checkpointed after every
+round, along with deterministic Python/NumPy reservoir state. Re-running the
+same command resumes the existing run; changing an immutable setting is
+rejected. See the [Deep DCFR+ paper](https://arxiv.org/abs/2511.08174) for the
+algorithmic basis; no third-party research implementation is vendored.
+
+The scalar action-value target is trained in effective-stack fractions and
+converted back to big blinds at the Rust traversal and browser-artifact
+boundaries. At sampled opponent nodes it can be used as an action-dependent
+control variate: `sum(policy * baseline) + sampled_value - sampled_baseline`.
+The actor-perspective prediction is sign-corrected for the traverser first.
+This estimator preserves the policy-weighted expectation; the configured
+baseline scale controls variance only and does not change the target game.
+
+Value-target calibration can average multiple independently seeded external
+samples for each traverser action. The primary traversal sample is reused and
+extra samples use a canonical state/action seed, so they cannot advance the CFR
+RNG or change regret and average-policy records. This setting affects only the
+separate action-value head and is pinned in the dataset, run, and artifact
+metadata.
+
+The four-sample 20bb pilot did not improve cross-seed policy stability enough
+to justify its roughly fourfold traversal cost, so one sample per action remains
+the default. A matched zero-control-variate pair also regressed, supporting the
+current 0.5 baseline scale. Both options remain explicit research controls.
+
+The research CLI can opt into replay-street stratification without changing
+Rust trajectory generation. It weights each example by its empirical reservoir
+street probability divided by its realized batch probability, preserving the
+authentic replay objective. The equal-four-street 20bb pilot did not improve
+cross-seed stability, so authentic uniform replay remains the default. Any
+proposal and correction method are pinned in run and artifact metadata.
+
+Configured checkpoints and the final round export a framework-neutral `PLNP`
+browser binary, but these files remain `training_not_activated`. The independent
+validator samples pure exact-card trajectories (both players sampled once per
+decision), preserves repeated visits, mixes equal hand-corpus mass from both
+frozen seeds, and separately samples uniform-action forced-deviation hands.
+Cross-seed stability and coverage still do not estimate exploitability or
+action-EV uncertainty, so the validator fails those release gates closed. The
+validator separately reports a research-only continuation bar (6% MAE, 80%
+primary-action agreement, and 4% maximum aggregate delta), which can never
+activate a model. A 512/256-width pilot improved the round-10 comparison but
+regressed by round 25, so the 256/128 architecture remains the short-run
+default. Lowering that wider model's constant learning rate from 0.001 to
+0.0003 was also worse at the round-10 early-stop checkpoint. Experimental model
+versions include a training-config fingerprint to
+prevent differently configured artifacts from sharing a cache key. The
+exploit-response head is initially a no-op copy of the baseline policy; it
+cannot change play until a separately validated opponent-response phase
+supplies genuine profile-conditioned weights.
+
+The short 20bb paired-pilot evidence and rejected alternatives are recorded in
+`docs/validation/20bb-neural-short-pairs.md`.
+
+See `neural/OPEN_SOURCE_SOFTWARE.md` for the dependency/license inventory.
 
 Stacks include posted blinds. Small-blind payoff is measured relative to the
 start of the hand:
