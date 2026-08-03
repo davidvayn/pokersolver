@@ -14,12 +14,54 @@ fn main() -> Result<(), Box<dyn Error>> {
         "solve" => run_push_fold(&args[1..]),
         "blueprint" => run_blueprint(&args[1..]),
         "neural-samples" => run_neural_samples(&args[1..]),
+        "neural-certificate" => run_neural_certificate(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
         }
         unknown => Err(format!("unknown command: {unknown}").into()),
     }
+}
+
+fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for neural certification")?;
+    let certificate = blueprint::neural::certify_exploitability_upper_bound(
+        blueprint::neural::ExploitabilityCertificateConfig {
+            game,
+            deals: parse_or(args, "--deals", 10_000u64)?,
+            seed: parse_or(args, "--seed", 0xA11CE5EEDu64)?,
+            confidence: parse_or(args, "--confidence", 0.99f64)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+            network_path,
+        },
+    )?;
+    let output = serde_json::to_string_pretty(&certificate)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+    }
+    println!("{output}");
+    Ok(())
 }
 
 fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -322,6 +364,7 @@ Usage:
   preflop-solver solve [options]
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
+  preflop-solver neural-certificate [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5
@@ -386,6 +429,16 @@ Neural sample options:
   --flop-runout-samples <int>     Default: 128
   --sample-turn-rivers            Sample instead of enumerating turn rivers
   --compact-serving-grid          Opt-in reduced open grid
-  --output <path>                 Default: neural-samples.jsonl.gz"
+  --output <path>                 Default: neural-samples.jsonl.gz
+
+Neural certificate options:
+  --effective-stack-bb <number>   Default: 20
+  --networks <path>               Required frozen policy-network JSON
+  --deals <integer>               Default: 10000 exact-card chance samples
+  --seed <integer>                Default: deterministic evaluation seed
+  --confidence <number>           Default: 0.99 one-sided bound
+  --threads <integer>             Default: available logical CPUs
+  --compact-serving-grid          Match an opt-in reduced-open model
+  --output <path>                 Optional JSON certificate file"
     );
 }

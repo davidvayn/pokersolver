@@ -68,7 +68,7 @@ LEADING_20BB_PROFILE = {
     "artifact_every": 10,
     "preflop_runout_samples": 256,
     "flop_runout_samples": 128,
-    "value_rollouts_per_action": 1,
+    "value_rollouts_per_action": 4,
 }
 
 
@@ -1055,12 +1055,27 @@ def evaluate_models(
     metrics["current_strategy_snapshot_actions"] = len(absolute_policy_errors)
 
     value_squared: list[float] = []
+    uncertainty_absolute: list[float] = []
     for features, targets, _ in heldout["value"][:4096]:
-        predicted = np.asarray(models["value"](mx.array(features)))[:, 0]
-        value_squared.extend(np.square(predicted - targets[:, 0]).tolist())
+        predicted = np.asarray(models["value"](mx.array(features)))
+        value_squared.extend(np.square(predicted[:, 0] - targets[:, 0]).tolist())
+        predicted_standard_error = ACTION_VALUE_STANDARD_ERROR_FLOOR_BB + np.logaddexp(
+            0.0, predicted[:, 1]
+        )
+        target_standard_error = ACTION_VALUE_STANDARD_ERROR_FLOOR_BB + np.logaddexp(
+            0.0, targets[:, 1]
+        )
+        uncertainty_absolute.extend(
+            np.abs(predicted_standard_error - target_standard_error).tolist()
+        )
     metrics["action_value_rmse_bb"] = (
         math.sqrt(sum(value_squared) / len(value_squared)) * depth_bb
         if value_squared
+        else None
+    )
+    metrics["action_value_standard_error_mae_bb"] = (
+        sum(uncertainty_absolute) / len(uncertainty_absolute)
+        if uncertainty_absolute
         else None
     )
     metrics["value_actions"] = len(value_squared)

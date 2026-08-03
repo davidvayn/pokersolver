@@ -1,0 +1,55 @@
+{
+  "schema": "hu-neural-long-run-plan-v1",
+  "modelVersion": "hu-20bb-deep-dcfr-v1",
+  "depthBb": 20,
+  "seeds": [5101, 5102],
+  "monitorIntervalSeconds": 600,
+  "minimumFreeDiskGiB": 20,
+  "targetTrainingHoursPerSeed": 8,
+  "stages": [
+    {
+      "name": "narrow-preflop",
+      "minutes": 240,
+      "runDirectory": "20bb-long-v1-narrow-seed{seed}",
+      "hiddenSizes": "256,128",
+      "learningRate": 0.001,
+      "learningRateFinal": 0.0003,
+      "learningRateDecayStartRound": 50,
+      "learningRateDecayEndRound": 70
+    },
+    {
+      "name": "wide-postflop",
+      "minutes": 240,
+      "runDirectory": "20bb-long-v1-wide-seed{seed}",
+      "hiddenSizes": "512,256",
+      "learningRate": 0.001,
+      "learningRateFinal": 0.0003,
+      "learningRateDecayStartRound": 10,
+      "learningRateDecayEndRound": 25
+    }
+  ],
+  "sharedTraining": {
+    "traversalsPerRound": 400,
+    "reservoirCapacity": 100000,
+    "batchSize": 1024,
+    "stepsPerRound": 100,
+    "advantageAlpha": 2.0,
+    "varianceBaselineScale": 0.5,
+    "valueRolloutsPerAction": 4,
+    "artifactEvery": 50,
+    "preflopRunoutSamples": 256,
+    "flopRunoutSamples": 128,
+    "replayStreetProposal": "authentic",
+    "exactTurnRivers": true,
+    "compactServingGrid": false
+  },
+  "postRunValidation": {
+    "trajectoryTraversalsPerSeed": 10000,
+    "actionValueRolloutsPerAction": 64,
+    "exploitabilityCertificateDeals": 125000,
+    "exploitabilityCertificateConfidence": 0.99,
+    "exploitabilityCertificateThreads": 8,
+    "independentEvaluationSeed": 2718281828,
+    "certificateSeed": 43248410349
+  }
+}

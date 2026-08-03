@@ -89,7 +89,7 @@ npm run preflop:compare-blueprints -- \
 The CLI defaults pin the current leading 20bb research profile: 400 traversals
 per round, a 100,000-record reservoir, 256/128 hidden layers, batch size 1,024,
 100 optimizer steps per round, AdamW learning rate 0.001, control-variate scale
-0.5, authentic replay, one action-value sample, and exact turn/river runouts.
+0.5, authentic replay, four action-value samples, and exact turn/river runouts.
 Override these only for an explicitly named experiment. This profile remains
 research-only and is not an activated or release-validated policy.
 
@@ -136,10 +136,43 @@ RNG or change regret and average-policy records. This setting affects only the
 separate action-value head and is pinned in the dataset, run, and artifact
 metadata.
 
-The four-sample 20bb pilot did not improve cross-seed policy stability enough
-to justify its roughly fourfold traversal cost, so one sample per action remains
-the default. A matched zero-control-variate pair also regressed, supporting the
-current 0.5 baseline scale. Both options remain explicit research controls.
+The original four-sample pilot predated the trainable uncertainty head and was
+not a clean comparison for the final trainer. A matched v14 one-versus-four
+rollout pair found that four rollouts improved four of six authentic/forced
+stability measures, reduced the worst authentic aggregate delta from 6.08% to
+3.72%, and supplied a genuine standard-error target at 2.43 times the measured
+training cost. Four samples per action are therefore pinned for the 20bb long
+run. A matched zero-control-variate pair regressed, supporting the current 0.5
+baseline scale.
+
+The frozen long-pair plan is `neural/long-run-20bb-v1.json`. It assigns two
+fresh seeds four hours of narrow preflop training and four hours of wide
+postflop training each, for eight training hours per composite seed and 16
+seed-hours total. Its launcher accounts for completed atomic-round time across
+resumes, runs each stage's two seeds concurrently, checkpoints on interruption,
+and emits progress every ten minutes:
+
+```bash
+preflop-solver/.venv-neural/bin/python \
+  preflop-solver/neural/long_run.py --preflight-only
+preflop-solver/.venv-neural/bin/python \
+  preflop-solver/neural/long_run.py
+```
+
+After both stages finish, the launcher prints the fully pinned validation
+command for the four routed run directories. The plan reserves 125,000 exact
+deals per candidate certificate; after splitting the 1% family error budget
+across two observed seeds, its Hoeffding chance margin remains below the
+0.10bb release threshold.
+
+The full-game release validator includes a separate conservative certificate.
+For each exact complete deal, a relaxed responder observes both private hands
+and the full runout and solves the betting tree against the frozen network.
+This response class contains every legal imperfect-information response, and a
+one-sided Hoeffding bound covers independent chance sampling. The calculation
+is deterministic across thread counts and parallelizes exact deals; because the
+information relaxation is deliberately strong, it may reject a good strategy
+and can never be replaced by a neural approximate best response.
 
 The research CLI can opt into replay-street stratification without changing
 Rust trajectory generation. It weights each example by its empirical reservoir

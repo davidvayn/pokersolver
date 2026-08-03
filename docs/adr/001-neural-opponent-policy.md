@@ -128,7 +128,17 @@ mean and standard error, trains the uncertainty output instead of a fixed
 placeholder, and passes the EV-confidence gate only when every action is at or
 below 0.02bb for at least 95% of reached decisions. Approximate responses are
 useful lower-bound evidence, not the required full-game exploitability upper
-bound, so that release gate remains fail-closed.
+bound. The release evaluator instead relaxes each responder to observe both
+private hands and the complete runout, solves the frozen-policy betting tree
+exactly, and places a one-sided 99% Hoeffding bound over uniform exact-card
+deals. The relaxation contains every legal response and therefore supplies a
+genuine but potentially loose upper bound. Exact deals parallelize without
+changing their deterministic reduction order. Because promotion selects the
+lower of two observed seed bounds, each candidate receives 0.5% error budget;
+Bonferroni control preserves a one-sided 99% family confidence bound. The frozen
+125,000-deal budget keeps the resulting Hoeffding margin below 0.10bb even when
+the sample loss is zero. A result above the release gate fails closed; it cannot
+be replaced by cross-seed stability or a learned best response.
 
 Until then, full-hand depths remain hidden and the only active manifest is the
 previously validated push/fold corpus.

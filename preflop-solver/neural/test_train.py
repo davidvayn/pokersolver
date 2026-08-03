@@ -69,7 +69,7 @@ class NeuralTrainerTests(unittest.TestCase):
         self.assertIsNone(args.learning_rate_decay_end_round)
         self.assertEqual(args.variance_baseline_scale, 0.5)
         self.assertEqual(args.replay_street_proposal, "authentic")
-        self.assertEqual(args.value_rollouts_per_action, 1)
+        self.assertEqual(args.value_rollouts_per_action, 4)
         self.assertFalse(args.sample_turn_rivers)
 
     def test_v9_resume_migration_adds_only_semantic_defaults(self):

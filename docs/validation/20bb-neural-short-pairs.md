@@ -215,12 +215,57 @@ had every action at or below 0.02bb, demonstrating that the new gate fails
 closed rather than accepting the former fixed uncertainty target. This smoke
 corpus is pipeline evidence only, not a quality estimate.
 
-The real pair still needs a predeclared rollout-count pilot, a genuine
-full-game exploitability upper-bound method, and an end-to-end browser
-acceptance pass before launch. Sparse advantage snapshots preserve an
-SD-CFR-style teacher comparison at artifact rounds so the final average-policy
-network can be challenged without rerunning training. Do not activate this
-candidate.
+## Final rollout-count pair and long-run preflight
+
+The final v14 control and candidate used the same two seeds, 256/128 network,
+4,000 traversals, fresh uncertainty head, and independent 1,000-trajectory
+evaluation corpus. Only the action-value rollout count changed.
+
+| Rollouts | Authentic MAE | Primary agreement | Max aggregate delta | Forced MAE | Forced agreement | Forced max delta |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 9.46% | 62.00% | 6.08% | 9.53% | 61.77% | 5.67% |
+| 4 | 9.26% | 61.83% | 3.72% | 9.59% | 63.47% | 3.84% |
+
+Four rollouts improved four of six measures, most importantly both aggregate
+delta checks, while making the measured pair 2.43 times slower. Peak resident
+memory remained comparable: 0.85–0.93GB for one rollout and 0.87–0.92GB for
+four. A one-rollout target reports zero sample variance and trains false
+certainty; four rollouts provide a real uncertainty label. Four is therefore
+frozen for the long pair despite the mixed early policy signal.
+
+The Rust evaluator now computes a genuine, conservative whole-game upper
+bound. On each uniformly sampled exact complete deal, both response evaluations
+may observe both private hands and the complete board and choose exactly through
+the betting tree. That relaxed response class contains every legal
+imperfect-information response, so its expectation is an upper bound rather
+than an approximate-best-response lower bound. A one-sided Hoeffding margin
+covers chance sampling. Each seed uses 99.5% confidence so selecting the lower
+of two stable seeds retains a family-wise one-sided 99% guarantee. Exact deals
+run in parallel while results are reduced
+in deterministic sample order; 16 poor-policy smoke deals reproduced identical
+statistics at one and eight threads and improved wall time from 20.8s to 6.4s.
+The relaxation is intentionally severe and may remain too loose to promote any
+candidate; that is a safe rejection, not permission to weaken the gate.
+
+`preflop-solver/neural/long-run-20bb-v1.json` freezes fresh seeds 5101/5102,
+four rollout targets, authentic replay, exact turn/river runouts, the leading
+narrow preflop and wide postflop schedules, a 20GB free-disk floor, post-run
+validation budgets, and ten-minute monitoring. The resumable launcher passed
+dependency, release-build, disk (228GB free), plan, and dry-run checks. It gives
+each composite seed four narrow hours plus four wide hours: eight hours per seed
+and 16 seed-hours total.
+
+Pre-run browser acceptance covered the inactive full-hand state and a complete
+push/fold hand at 375/768/1024/1440px, light/dark, and reduced motion. It found
+no horizontal overflow or application console errors; the 375px action dock
+ended exactly at the fixed bottom-navigation boundary, and the accessible
+mobile analyst dialog focused and trapped keyboard navigation correctly. A
+validated full-hand and sampled postflop completion remain post-training
+release checks because those artifacts do not exist before the long run.
+
+Sparse advantage snapshots preserve an SD-CFR-style teacher comparison at
+artifact rounds so the final average-policy network can be challenged without
+rerunning training. Do not activate any current candidate.
 
 Every browser artifact in this table remains `training_not_activated`.
 `data/practice/full-hand-manifests.json` remains empty.

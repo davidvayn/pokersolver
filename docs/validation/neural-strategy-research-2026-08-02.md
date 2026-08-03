@@ -54,16 +54,29 @@ No model is activated by this work. The full-hand registry remains empty.
   excluded from browser artifacts. Each snapshot manifest records both hashes,
   its traversal count, and its DCFR strategy weight.
 
-## Remaining before a long release candidate
+## Long-run readiness
 
-1. Use short paired pilots to choose an action-value rollout count that improves
-   the variance baseline enough to justify its compute cost.
-2. Predeclare the chosen v14 configuration and run two fresh independent seeds;
-   old v13 checkpoints are evaluation components, not resumable v14 training.
-3. Implement or obtain a valid full-game exploitability upper bound. An
-   approximate neural best response is not an upper bound and cannot open the
-   release gate.
-4. Compare the final average-policy network against the sparse direct-policy
-   teacher on identical held-out corpora, then keep only the better validated
+The short paired rollout comparison, frozen v14 launch plan, bounded-memory
+preflight, deterministic parallel exploitability certificate, and pre-run
+browser matrix are complete. Four action-value rollouts are selected because
+they improved four of six paired stability metrics, materially reduced both
+aggregate-delta checks, and are the smallest tested count that produces a real
+sample-standard-error target.
+
+The remaining work is downstream of training rather than a prerequisite to
+starting it:
+
+1. Run the two fresh independent composite seeds from the checked-in plan.
+2. Compare the final average-policy network against the sparse direct-policy
+   teacher on identical held-out corpora, then retain only the better validated
    serving approach.
-5. Complete the browser acceptance matrix before adding an active manifest.
+3. Run the full post-training gates, compose the selected seed, and complete
+   full-hand/preflop/postflop browser acceptance before adding an active
+   manifest.
+
+The certificate is a true upper bound because it enlarges the responder's
+information and then solves every betting action exactly; it is not a learned
+approximate response. Its one-sided Hoeffding chance bound and exact-card deals
+are deterministic across thread counts. The information relaxation is
+conservative enough that a good policy may still fail. That outcome keeps the
+depth hidden and does not justify relabeling a lower bound as release evidence.

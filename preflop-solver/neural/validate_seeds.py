@@ -228,6 +228,70 @@ def evaluation_records(
     return records
 
 
+def exploitability_certificate(
+    root: Path,
+    depth_bb: int,
+    deals: int,
+    seed: int,
+    confidence: float,
+    threads: int,
+    compact_grid: bool,
+    policy_model: ActionScorer,
+    postflop_policy_model: ActionScorer | None = None,
+) -> dict[str, Any]:
+    subprocess.run(
+        ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    binary = root / "preflop-solver/target/release/preflop-solver"
+    with tempfile.TemporaryDirectory() as directory:
+        network_path = Path(directory) / "certificate-networks.json"
+        network = scorer_json(policy_model)
+        bundle: dict[str, Any] = {
+            "schema": NETWORK_SCHEMA,
+            "input_size": INPUT_FEATURE_COUNT,
+            "strategy_transform": "softmax",
+            "networks": [network, network],
+        }
+        if postflop_policy_model is not None:
+            postflop = scorer_json(postflop_policy_model)
+            bundle["postflop_networks"] = [postflop, postflop]
+        network_path.write_text(
+            json.dumps(bundle, separators=(",", ":")), encoding="utf-8"
+        )
+        command = [
+            str(binary),
+            "neural-certificate",
+            "--effective-stack-bb",
+            str(depth_bb),
+            "--networks",
+            str(network_path),
+            "--deals",
+            str(deals),
+            "--seed",
+            str(seed),
+            "--confidence",
+            str(confidence),
+            "--threads",
+            str(threads),
+        ]
+        if compact_grid:
+            command.append("--compact-serving-grid")
+        result = subprocess.run(
+            command, cwd=root, check=True, capture_output=True, text=True
+        )
+    certificate = json.loads(result.stdout)
+    if (
+        certificate.get("schema") != "hu-neural-clairvoyant-upper-bound-v1"
+        or certificate.get("confidence") != confidence
+        or certificate.get("deals") != deals
+    ):
+        raise RuntimeError("full-game exploitability certificate is invalid")
+    return certificate
+
+
 def action_ev_standard_error_summary(
     datasets: list[list[dict[str, Any]]], threshold_bb: float = 0.02
 ) -> dict[str, Any]:
@@ -380,6 +444,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--postflop-run-b", type=Path)
     parser.add_argument("--postflop-round", type=int)
     parser.add_argument("--action-value-rollouts-per-action", type=int, default=0)
+    parser.add_argument("--exploitability-certificate-deals", type=int, default=0)
+    parser.add_argument("--exploitability-certificate-seed", type=int, default=0xA11CE5EED)
+    parser.add_argument("--exploitability-certificate-threads", type=int, default=8)
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -398,6 +465,10 @@ def main() -> None:
         raise ValueError("a postflop artifact round requires postflop run directories")
     if args.action_value_rollouts_per_action == 1 or args.action_value_rollouts_per_action < 0:
         raise ValueError("action-EV rollouts must be zero (disabled) or at least two")
+    if args.exploitability_certificate_deals == 1 or args.exploitability_certificate_deals < 0:
+        raise ValueError("certificate deals must be zero (disabled) or at least two")
+    if args.exploitability_certificate_threads <= 0:
+        raise ValueError("certificate threads must be positive")
     root = Path(__file__).resolve().parents[2]
     first_state, first_model = load_run(args.run_a.resolve(), args.round_number)
     second_state, second_model = load_run(args.run_b.resolve(), args.round_number)
@@ -483,6 +554,40 @@ def main() -> None:
     action_ev_uncertainty = action_ev_standard_error_summary(
         [first_reach_records, second_reach_records]
     )
+    # Seed selection happens after observing both bounds. Split the 1% error
+    # budget across the two candidates so the selected minimum remains a
+    # family-wise one-sided 99% upper bound.
+    selected_certificate_confidence = 0.99
+    per_seed_certificate_confidence = 1.0 - (
+        1.0 - selected_certificate_confidence
+    ) / 2.0
+    exploitability_certificates = (
+        [
+            exploitability_certificate(
+                root,
+                int(config["depth_bb"]),
+                args.exploitability_certificate_deals,
+                args.exploitability_certificate_seed,
+                per_seed_certificate_confidence,
+                args.exploitability_certificate_threads,
+                bool(config["compact_serving_grid"]),
+                model,
+                postflop_policy_model=postflop_models[index]
+                if postflop_models
+                else None,
+            )
+            for index, model in enumerate((first_model, second_model))
+        ]
+        if args.exploitability_certificate_deals > 0
+        else []
+    )
+    selected_exploitability_upper = min(
+        (
+            float(certificate["exploitability_upper_bound_bb"])
+            for certificate in exploitability_certificates
+        ),
+        default=None,
+    )
     gates = {
         "action_frequency_mae_at_most_0_05": cross_seed["action_frequency_mae"] <= 0.05,
         "primary_action_agreement_at_least_0_85": cross_seed["primary_action_agreement"] >= 0.85,
@@ -491,7 +596,9 @@ def main() -> None:
         "reach_weighting_valid": cross_seed["reach_weighted"],
         "coverage_at_least_0_9999": cross_seed["lookup_coverage"] >= 0.9999,
         "independent_seed_count_at_least_2": True,
-        "exploitability_upper_99_at_most_0_10": False,
+        "exploitability_upper_99_at_most_0_10": selected_exploitability_upper
+        is not None
+        and selected_exploitability_upper <= 0.10,
         "action_ev_standard_error_coverage_at_least_0_95": action_ev_uncertainty[
             "available"
         ]
@@ -505,7 +612,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v6",
+        "schema": "hu-neural-cross-seed-validation-v7",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
@@ -519,6 +626,14 @@ def main() -> None:
         "cross_seed": cross_seed,
         "forced_deviation": forced_deviation,
         "action_ev_uncertainty": action_ev_uncertainty,
+        "exploitability_certificates": exploitability_certificates,
+        "selected_exploitability_upper_bound_bb": selected_exploitability_upper,
+        "selected_exploitability_confidence": selected_certificate_confidence
+        if exploitability_certificates
+        else None,
+        "exploitability_selection_method": "minimum_of_two_seed_bounds_with_bonferroni_family_error_control"
+        if exploitability_certificates
+        else None,
         "artifacts": [
             verify_artifact(latest_artifact(first_state, args.round_number)),
             verify_artifact(latest_artifact(second_state, args.round_number)),
@@ -534,7 +649,9 @@ def main() -> None:
         "status": "rejected_not_activated",
         "reasons": [
             "Cross-seed stability is a reproducibility check, not equilibrium proof.",
-            "A statistically valid full-game exploitability upper bound has not been computed.",
+            "The 99% clairvoyant full-game exploitability upper bound has not reached 0.10bb."
+            if not gates["exploitability_upper_99_at_most_0_10"]
+            else "The conservative 99% full-game exploitability upper bound passed.",
             "Independent action-EV standard-error coverage has not reached the release gate."
             if not gates["action_ev_standard_error_coverage_at_least_0_95"]
             else "Independent action-EV standard-error coverage passed; this does not establish exploitability.",

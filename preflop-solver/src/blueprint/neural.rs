@@ -40,6 +40,35 @@ pub struct SampleGenerationConfig {
     pub value_rollouts_per_action: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExploitabilityCertificateConfig {
+    pub game: BlueprintConfig,
+    pub deals: u64,
+    pub seed: u64,
+    pub confidence: f64,
+    pub threads: usize,
+    pub network_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ExploitabilityCertificate {
+    pub schema: &'static str,
+    pub method: &'static str,
+    pub depth_bb: f64,
+    pub deals: u64,
+    pub seed: u64,
+    pub confidence: f64,
+    pub threads: usize,
+    pub exact_betting_tree_nodes: u64,
+    pub sample_mean_exploitability_bb: f64,
+    pub sample_standard_error_bb: f64,
+    pub hoeffding_margin_bb: f64,
+    pub exploitability_upper_bound_bb: f64,
+    pub relaxation: &'static str,
+    pub guarantee: &'static str,
+    pub assumptions: Vec<&'static str>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct TrainingNetworkBundle {
     schema: String,
@@ -1178,6 +1207,176 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
     Ok(())
 }
 
+fn clairvoyant_response_value(
+    generator: &SampleGenerator,
+    state: GameState,
+    deal: &Deal,
+    responder: usize,
+    visited_nodes: &mut u64,
+) -> f64 {
+    *visited_nodes += 1;
+    if state.terminal.is_some() {
+        let utility_p0 = state.utility_p0(deal, &generator.config.game);
+        return if responder == 0 {
+            utility_p0
+        } else {
+            -utility_p0
+        };
+    }
+    let actions = state.legal_actions(&generator.config.game);
+    let strategy = generator.current_strategy(&state, deal, &actions);
+    if state.actor == responder {
+        actions
+            .iter()
+            .map(|action| {
+                clairvoyant_response_value(
+                    generator,
+                    state.apply(action, &generator.config.game),
+                    deal,
+                    responder,
+                    visited_nodes,
+                )
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
+    } else {
+        actions
+            .iter()
+            .zip(strategy)
+            .map(|(action, probability)| {
+                probability
+                    * clairvoyant_response_value(
+                        generator,
+                        state.apply(action, &generator.config.game),
+                        deal,
+                        responder,
+                        visited_nodes,
+                    )
+            })
+            .sum()
+    }
+}
+
+/// Compute a conservative upper bound by relaxing the responder's information.
+///
+/// For every sampled complete deal, the responder observes both private hands
+/// and the full runout, then solves the entire betting tree exactly against the
+/// frozen policy. This responder contains every legal imperfect-information
+/// response, so its expected value upper-bounds true exploitability. Hoeffding's
+/// inequality bounds the remaining i.i.d. chance-sampling error.
+pub fn certify_exploitability_upper_bound(
+    config: ExploitabilityCertificateConfig,
+) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
+    if config.deals < 2 {
+        return Err("exploitability certification requires at least two deals".into());
+    }
+    if !config.confidence.is_finite() || !(0.0..1.0).contains(&config.confidence) {
+        return Err("certificate confidence must be strictly between zero and one".into());
+    }
+    if config.threads == 0 {
+        return Err("certificate thread count must be positive".into());
+    }
+    let generator = SampleGenerator::new(SampleGenerationConfig {
+        game: config.game.clone(),
+        traversals: 1,
+        start_iteration: 0,
+        seed: config.seed,
+        max_records: 1,
+        output: PathBuf::from("unused-certificate.jsonl.gz"),
+        network_path: Some(config.network_path),
+        trajectory_sampling: false,
+        evaluate_trajectory_values: false,
+        value_rollouts_per_action: 1,
+    })?;
+    if generator.networks.is_none() {
+        return Err("exploitability certification requires a frozen policy".into());
+    }
+    let mut rng = SplitMix64::new(config.seed);
+    let deals = (0..config.deals)
+        .map(|_| Deal::sample(&mut rng))
+        .collect::<Vec<_>>();
+    let worker_count = config.threads.min(deals.len());
+    let chunk_size = deals.len().div_ceil(worker_count);
+    // `Deal` owns mutable rollout caches and is Send but intentionally not
+    // Sync. Give every worker an owned chunk so no cache crosses a thread.
+    let deal_chunks = deals
+        .chunks(chunk_size)
+        .map(<[Deal]>::to_vec)
+        .collect::<Vec<_>>();
+    let evaluated = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for chunk in deal_chunks {
+            let generator = &generator;
+            let game = &config.game;
+            handles.push(scope.spawn(move || {
+                chunk
+                    .into_iter()
+                    .map(|deal| {
+                        let mut visited_nodes = 0u64;
+                        let response_p0 = clairvoyant_response_value(
+                            generator,
+                            GameState::initial(game),
+                            &deal,
+                            0,
+                            &mut visited_nodes,
+                        );
+                        let response_p1 = clairvoyant_response_value(
+                            generator,
+                            GameState::initial(game),
+                            &deal,
+                            1,
+                            &mut visited_nodes,
+                        );
+                        (
+                            ((response_p0 + response_p1) / 2.0).clamp(0.0, game.effective_stack_bb),
+                            visited_nodes,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("certificate worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut visited_nodes = 0u64;
+    let mut mean = 0.0;
+    let mut squared_deviation_sum = 0.0;
+    let depth = config.game.effective_stack_bb;
+    for (index, (exploitability, nodes)) in evaluated.into_iter().enumerate() {
+        visited_nodes += nodes;
+        let sample_index = index + 1;
+        let delta = exploitability - mean;
+        mean += delta / sample_index as f64;
+        squared_deviation_sum += delta * (exploitability - mean);
+    }
+    let sample_variance = squared_deviation_sum / (config.deals - 1) as f64;
+    let sample_standard_error = (sample_variance.max(0.0) / config.deals as f64).sqrt();
+    let alpha = 1.0 - config.confidence;
+    let margin = depth * ((1.0 / alpha).ln() / (2.0 * config.deals as f64)).sqrt();
+    Ok(ExploitabilityCertificate {
+        schema: "hu-neural-clairvoyant-upper-bound-v1",
+        method: "complete_deal_clairvoyant_best_response_with_hoeffding_ucb",
+        depth_bb: depth,
+        deals: config.deals,
+        seed: config.seed,
+        confidence: config.confidence,
+        threads: worker_count,
+        exact_betting_tree_nodes: visited_nodes,
+        sample_mean_exploitability_bb: mean,
+        sample_standard_error_bb: sample_standard_error,
+        hoeffding_margin_bb: margin,
+        exploitability_upper_bound_bb: (mean + margin).min(depth),
+        relaxation: "each responder observes both private hands and the complete board runout",
+        guarantee: "the relaxed responder contains all legal imperfect-information responses, so its i.i.d. chance expectation upper-bounds true exploitability",
+        assumptions: vec![
+            "complete deals are independent uniform samples from the exact card-removal distribution",
+            "the frozen opponent network is evaluated exactly on every reached betting action",
+            "utilities are zero-sum and bounded to the effective stack in absolute value",
+        ],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1359,6 +1558,51 @@ mod tests {
             bundle.policy_network(Street::River, 1).layers[0].biases,
             [4.0]
         );
+    }
+
+    #[test]
+    fn clairvoyant_certificate_is_deterministic_and_upper_bounded() {
+        let network = serde_json::json!({
+            "layers": [{
+                "input_size": MODEL_INPUT_COUNT,
+                "output_size": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; MODEL_INPUT_COUNT],
+                "biases": [0.0]
+            }]
+        });
+        let bundle = serde_json::json!({
+            "schema": TRAINING_NETWORK_SCHEMA,
+            "input_size": MODEL_INPUT_COUNT,
+            "strategy_transform": "softmax",
+            "networks": [network.clone(), network]
+        });
+        let path = std::env::temp_dir().join(format!(
+            "pokersolver-neural-certificate-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 2.0;
+        let make = || ExploitabilityCertificateConfig {
+            game: game.clone(),
+            deals: 8,
+            seed: 73,
+            confidence: 0.99,
+            threads: 2,
+            network_path: path.clone(),
+        };
+        let first = certify_exploitability_upper_bound(make()).unwrap();
+        let second = certify_exploitability_upper_bound(make()).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&first).unwrap(),
+            serde_json::to_vec(&second).unwrap()
+        );
+        assert!(first.exact_betting_tree_nodes > 0);
+        assert!(first.sample_mean_exploitability_bb >= 0.0);
+        assert!(first.exploitability_upper_bound_bb >= first.sample_mean_exploitability_bb);
+        assert!(first.exploitability_upper_bound_bb <= 2.0);
     }
 
     #[test]
