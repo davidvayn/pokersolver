@@ -54,6 +54,7 @@ with direct links to Practice and the preflop range library.
 | Practice settings and adaptive sampling | `lib/practice.ts` |
 | Practice persistence | `lib/practice-history.ts` |
 | Policy shard codec/client | `lib/policy-codec.ts`, `lib/practice-policy-client.ts` |
+| Neural artifact/runtime | `lib/neural-policy.ts`, `scripts/policy/export-neural-artifact.mjs` |
 | Policy runtime API | `app/api/practice/` |
 | Hosted-policy infrastructure/tools | `infra/`, `scripts/policy/` |
 | Table formats and current spot | `lib/positions.ts`, `lib/store.ts` |

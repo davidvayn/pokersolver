@@ -202,11 +202,25 @@ research checkpoint.
 
 This hybrid still misses even the relaxed 6%/80% continuation bar and all
 production equilibrium/EV gates remain fail-closed. The browser artifact and
-practice runtime also still expose one baseline network; the dual-network
-route exists only in the training/evaluation interface. Before a long pair,
-freeze and implement the routed artifact schema, confirm deterministic
-end-to-end serving, and add the exploitability-upper-bound and action-EV
-uncertainty evaluators. Do not activate this candidate.
+practice runtime now implement the frozen schema-2 street route. Actual seed
+4501 and 4502 composites exported twice to byte-identical 8,720,729-byte
+artifacts. The browser selects the narrow round-60 component preflop and the
+wide round-50 component postflop for baseline policy, exploit response, and
+action value together.
+
+Fresh v14 paired smoke runs also completed with measured per-action standard
+errors. A two-traversal evaluation reached six decisions with valid probability
+sums and complete lookup coverage. Only 16.7% of those tiny-sample decisions
+had every action at or below 0.02bb, demonstrating that the new gate fails
+closed rather than accepting the former fixed uncertainty target. This smoke
+corpus is pipeline evidence only, not a quality estimate.
+
+The real pair still needs a predeclared rollout-count pilot, a genuine
+full-game exploitability upper-bound method, and an end-to-end browser
+acceptance pass before launch. Sparse advantage snapshots preserve an
+SD-CFR-style teacher comparison at artifact rounds so the final average-policy
+network can be challenged without rerunning training. Do not activate this
+candidate.
 
 Every browser artifact in this table remains `training_not_activated`.
 `data/practice/full-hand-manifests.json` remains empty.

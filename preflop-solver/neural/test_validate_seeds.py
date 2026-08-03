@@ -4,7 +4,11 @@ import mlx.core as mx
 import numpy as np
 
 from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT
-from validate_seeds import StreetRoutedModel, compare
+from validate_seeds import (
+    StreetRoutedModel,
+    action_ev_standard_error_summary,
+    compare,
+)
 
 
 def state(private_cards):
@@ -53,6 +57,22 @@ class RankMarkerModel:
 
 
 class ReachAwareValidationTests(unittest.TestCase):
+    def test_action_ev_gate_requires_every_action_at_a_served_decision(self):
+        precise = {
+            **record([0, 4]),
+            "action_value_standard_errors_bb": [0.01, 0.02],
+        }
+        noisy = {
+            **record([48, 44]),
+            "action_value_standard_errors_bb": [0.01, 0.03],
+        }
+        result = action_ev_standard_error_summary([[precise, noisy]])
+        self.assertTrue(result["available"])
+        self.assertEqual(result["decisions"], 2)
+        self.assertAlmostEqual(result["decision_coverage"], 0.5)
+        self.assertAlmostEqual(result["action_coverage"], 0.75)
+        self.assertAlmostEqual(result["maximum_standard_error_bb"], 0.03)
+
     def test_street_routed_model_selects_the_matching_component(self):
         features = np.zeros((2, INPUT_FEATURE_COUNT), dtype=np.float32)
         features[0, 104] = 1.0

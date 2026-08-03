@@ -14,6 +14,7 @@
     "test:blueprint-compare": "node --test scripts/compare-blueprint-artifacts.test.mjs",
     "policy:export": "node scripts/policy/export-shards.mjs",
     "policy:export-neural": "node scripts/policy/export-neural-artifact.mjs",
+    "policy:compose-neural": "node scripts/policy/export-neural-artifact.mjs",
     "policy:import": "node scripts/policy/import-dynamo.mjs",
     "policy:verify": "node scripts/policy/verify-dynamo.mjs",
     "policy:activate": "node scripts/policy/activate-or-rollback.mjs",

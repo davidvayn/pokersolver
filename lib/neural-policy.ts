@@ -72,8 +72,14 @@ export interface DenseNetworkDescriptor {
   layers: DenseLayerDescriptor[];
 }
 
+export interface NeuralNetworkGroup {
+  baselinePolicy: DenseNetworkDescriptor;
+  exploitResponse: DenseNetworkDescriptor;
+  baselineActionValue: DenseNetworkDescriptor;
+}
+
 export interface NeuralPolicyArtifactMetadata {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   kind: 'deep-cfr-baseline-response';
   modelVersion: string;
   depthBb: number;
@@ -90,10 +96,15 @@ export interface NeuralPolicyArtifactMetadata {
     standardErrorFloorBb: number;
     highConfidenceMaximumBb: number;
   };
-  networks: {
-    baselinePolicy: DenseNetworkDescriptor;
-    exploitResponse: DenseNetworkDescriptor;
-    baselineActionValue: DenseNetworkDescriptor;
+  routing?: {
+    kind: 'street-v1';
+    preflopModelVersion: string;
+    postflopModelVersion: string;
+  };
+  networks: NeuralNetworkGroup & {
+    postflopBaselinePolicy?: DenseNetworkDescriptor;
+    postflopExploitResponse?: DenseNetworkDescriptor;
+    postflopBaselineActionValue?: DenseNetworkDescriptor;
   };
 }
 
@@ -545,13 +556,14 @@ function activate(value: number, activation: NeuralActivation): number {
 }
 
 function networkShapeErrors(
-  network: DenseNetworkDescriptor,
+  network: DenseNetworkDescriptor | undefined,
   expectedInput: number,
   expectedOutput: number,
   parameterCount: number,
   name: string
 ): string[] {
   const errors: string[] = [];
+  if (!network) return [`${name} is missing`];
   if (network.layers.length === 0) return [`${name} has no layers`];
   let input = expectedInput;
   for (const [index, layer] of network.layers.entries()) {
@@ -585,7 +597,9 @@ function networkShapeErrors(
 export function validateNeuralArtifact(artifact: NeuralPolicyArtifact): string[] {
   const { metadata, parameters } = artifact;
   const errors: string[] = [];
-  if (metadata.schemaVersion !== 1) errors.push('Unsupported artifact schema');
+  if (![1, 2].includes(metadata.schemaVersion)) {
+    errors.push('Unsupported artifact schema');
+  }
   if (metadata.kind !== 'deep-cfr-baseline-response') {
     errors.push('Unsupported neural policy kind');
   }
@@ -661,6 +675,29 @@ export function validateNeuralArtifact(artifact: NeuralPolicyArtifact): string[]
     errors.push('Value calibration is invalid');
   }
   const stateAction = NEURAL_STATE_FEATURE_COUNT + NEURAL_ACTION_FEATURE_COUNT;
+  const postflopNetworks = [
+    metadata.networks.postflopBaselinePolicy,
+    metadata.networks.postflopExploitResponse,
+    metadata.networks.postflopBaselineActionValue,
+  ];
+  const postflopNetworkCount = postflopNetworks.filter(Boolean).length;
+  if (
+    (metadata.schemaVersion === 2 && postflopNetworkCount !== 3) ||
+    (postflopNetworkCount > 0 && postflopNetworkCount !== 3)
+  ) {
+    errors.push('Street-routed postflop network group is incomplete');
+  }
+  if (metadata.schemaVersion === 2) {
+    if (
+      metadata.routing?.kind !== 'street-v1' ||
+      !metadata.routing.preflopModelVersion ||
+      !metadata.routing.postflopModelVersion
+    ) {
+      errors.push('Street-routed model provenance is invalid');
+    }
+  } else if (metadata.routing || postflopNetworkCount > 0) {
+    errors.push('Artifact schema 1 cannot declare street routing');
+  }
   errors.push(
     ...networkShapeErrors(
       metadata.networks.baselinePolicy,
@@ -684,6 +721,31 @@ export function validateNeuralArtifact(artifact: NeuralPolicyArtifact): string[]
       'baselineActionValue'
     )
   );
+  if (postflopNetworkCount === 3) {
+    errors.push(
+      ...networkShapeErrors(
+        metadata.networks.postflopBaselinePolicy,
+        stateAction,
+        1,
+        parameters.length,
+        'postflopBaselinePolicy'
+      ),
+      ...networkShapeErrors(
+        metadata.networks.postflopExploitResponse,
+        stateAction + OPPONENT_PROFILE_FEATURE_COUNT,
+        1,
+        parameters.length,
+        'postflopExploitResponse'
+      ),
+      ...networkShapeErrors(
+        metadata.networks.postflopBaselineActionValue,
+        stateAction,
+        2,
+        parameters.length,
+        'postflopBaselineActionValue'
+      )
+    );
+  }
   if (parameters.some((value) => !Number.isFinite(value))) {
     errors.push('Parameters contain a non-finite value');
   }
@@ -742,6 +804,32 @@ function softplus(value: number): number {
   return Math.log1p(Math.exp(value));
 }
 
+export function neuralNetworksForStreet(
+  metadata: NeuralPolicyArtifactMetadata,
+  street: PracticeStreet
+): NeuralNetworkGroup {
+  if (street === 'preflop' || metadata.schemaVersion === 1) {
+    return metadata.networks;
+  }
+  const {
+    postflopBaselinePolicy,
+    postflopExploitResponse,
+    postflopBaselineActionValue,
+  } = metadata.networks;
+  if (
+    !postflopBaselinePolicy ||
+    !postflopExploitResponse ||
+    !postflopBaselineActionValue
+  ) {
+    throw new Error('Street-routed neural artifact has no postflop network group');
+  }
+  return {
+    baselinePolicy: postflopBaselinePolicy,
+    exploitResponse: postflopExploitResponse,
+    baselineActionValue: postflopBaselineActionValue,
+  };
+}
+
 export async function inferNeuralPolicy(input: {
   artifact: NeuralPolicyArtifact;
   state: HandState;
@@ -775,6 +863,7 @@ export async function inferNeuralPolicy(input: {
   const legal = neuralLegalActions(input.state, metadata.actionAbstraction);
   if (legal.length === 0) throw new Error('Neural policy has no legal actions');
   const stateFeatures = encodeNeuralState(input.state);
+  const networks = neuralNetworksForStreet(metadata, input.state.street);
   const baselineLogits: number[] = [];
   const responseLogits: number[] = [];
   const valueOutputs: number[][] = [];
@@ -784,18 +873,18 @@ export async function inferNeuralPolicy(input: {
       ...encodeNeuralAction(input.state, action),
     ];
     baselineLogits.push(
-      runDenseNetwork(metadata.networks.baselinePolicy, parameters, stateAction)[0]
+      runDenseNetwork(networks.baselinePolicy, parameters, stateAction)[0]
     );
     valueOutputs.push(
       runDenseNetwork(
-        metadata.networks.baselineActionValue,
+        networks.baselineActionValue,
         parameters,
         stateAction
       )
     );
     if (input.usage === 'opponent') {
       responseLogits.push(
-        runDenseNetwork(metadata.networks.exploitResponse, parameters, [
+        runDenseNetwork(networks.exploitResponse, parameters, [
           ...stateAction,
           ...input.profile.features,
         ])[0]
@@ -847,6 +936,18 @@ export async function inferNeuralPolicy(input: {
           evidenceCount: input.profile.observations,
           confidence: input.profile.confidence,
           responseWeight,
+          networkRoute:
+            metadata.schemaVersion === 2
+              ? input.state.street === 'preflop'
+                ? 'preflop'
+                : 'postflop'
+              : undefined,
+          componentModelVersion:
+            metadata.schemaVersion === 2
+              ? input.state.street === 'preflop'
+                ? metadata.routing?.preflopModelVersion
+                : metadata.routing?.postflopModelVersion
+              : undefined,
           baselineActions: legal.map((action, index) => ({
             id: action.id,
             probability: baseline[index],

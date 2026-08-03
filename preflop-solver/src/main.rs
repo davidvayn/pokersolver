@@ -60,6 +60,9 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     let trajectory_sampling = args
         .iter()
         .any(|argument| argument == "--sample-trajectories");
+    let evaluate_trajectory_values = args
+        .iter()
+        .any(|argument| argument == "--evaluate-action-values");
     let value_rollouts_per_action = parse_or(args, "--value-rollouts-per-action", 1u32)?;
     blueprint::neural::generate_samples(blueprint::neural::SampleGenerationConfig {
         game,
@@ -70,6 +73,7 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
         output: output.clone(),
         network_path,
         trajectory_sampling,
+        evaluate_trajectory_values,
         value_rollouts_per_action,
     })?;
     eprintln!("wrote compact neural traversal batch {}", output.display());
@@ -376,6 +380,7 @@ Neural sample options:
   --max-records <integer>         Default: 50000 bounded output guard
   --networks <path>               Frozen advantage-network JSON (uniform if absent)
   --sample-trajectories           Sample both players; evaluation only
+  --evaluate-action-values       Evaluate every reached trajectory action; requires 2+ rollouts
   --value-rollouts-per-action <N> Independent external samples per value target; default: 1
   --preflop-runout-samples <int>  Default: 256
   --flop-runout-samples <int>     Default: 128

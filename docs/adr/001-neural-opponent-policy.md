@@ -22,7 +22,9 @@ Use one neural architecture:
 1. A frozen Deep DCFR+ average-policy network is the robust baseline. Its
    cumulative advantages are bootstrapped from the frozen prior round, clipped,
    discounted, and updated from grouped legal-action samples. The frozen
-   average policy remains the only baseline serving output.
+   average policy remains the only baseline serving output. A serving artifact
+   may route one independently validated component preflop and another on flop,
+   turn, and river; policy, response, and value heads always route together.
 2. A separate one-sided Deep CFR response network is trained against a
    versioned opponent-profile schema.
 3. A separately evaluated baseline action-value head supplies feedback and
@@ -63,6 +65,12 @@ are separate privacy and product decisions. Existing DynamoDB policy-shard
 support remains compatible with old tabular manifests but is not a dependency
 of the neural path.
 
+Schema-2 neural artifacts retain the same binary envelope and add an explicit
+`street-v1` route, component model versions, and a second postflop network
+group. The worker selects the group from the exact hand street and records the
+route and component version in the opponent trace. Schema-1 artifacts remain
+readable. A missing or partial routed group fails validation.
+
 ## Artifact contract
 
 The compact binary envelope is:
@@ -93,6 +101,18 @@ public/models/practice/<version>/<depth>bb.bin --url
 /models/practice/<version>/<depth>bb.bin` to produce the binary and its digest.
 The command refuses overwrite through exclusive creation.
 
+Use `npm run policy:compose-neural -- --preflop-input <model.json>
+--postflop-input <model.json> --model-version <version> --output <path> --url
+<immutable-url>` to compose compatible components. The exporter validates both
+inputs before shifting postflop parameter offsets and refuses depth, schema,
+abstraction, adaptation, or calibration mismatches.
+
+Fresh v14 runs retain the two advantage networks only at browser artifact
+rounds. Each offline `teacher-snapshot.json` pins hashes, completed traversals,
+DCFR strategy weight, and the regret-matching transform. These bounded
+snapshots enable a later SD-CFR-style direct-average comparison without placing
+the ensemble in the browser or claiming that it is already superior.
+
 ## Promotion gates
 
 The registry stays empty until two independent 8–12 hour full-game seeds for a
@@ -101,6 +121,14 @@ upper bound, cross-seed frequency MAE, primary-action agreement, aggregate
 action delta, authentic and forced-deviation coverage, action-EV uncertainty,
 probability integrity, and projected storage. Cross-seed agreement is only a
 reproducibility gate, never equilibrium proof.
+
+Independent trajectory evaluation can estimate every legal action with two or
+more deterministically seeded external-sampling rollouts. It records the sample
+mean and standard error, trains the uncertainty output instead of a fixed
+placeholder, and passes the EV-confidence gate only when every action is at or
+below 0.02bb for at least 95% of reached decisions. Approximate responses are
+useful lower-bound evidence, not the required full-game exploitability upper
+bound, so that release gate remains fail-closed.
 
 Until then, full-hand depths remain hidden and the only active manifest is the
 previously validated push/fold corpus.

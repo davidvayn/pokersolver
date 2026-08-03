@@ -198,6 +198,8 @@ export interface OpponentPolicyTrace {
   evidenceCount: number;
   confidence: number;
   responseWeight: number;
+  networkRoute?: 'preflop' | 'postflop';
+  componentModelVersion?: string;
   baselineActions: Array<{ id: string; probability: number }>;
   responseActions: Array<{ id: string; probability: number }>;
   servedActions: Array<{ id: string; probability: number }>;

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -21,6 +22,7 @@ from train import (
     backfill_street_file,
     backfill_legacy_replay_streets,
     expand_state_action,
+    export_teacher_snapshot,
     initialize_models,
     load_optimizer,
     linear_layers,
@@ -72,7 +74,7 @@ class NeuralTrainerTests(unittest.TestCase):
 
     def test_v9_resume_migration_adds_only_semantic_defaults(self):
         config = RunConfig(
-            schema="hu-neural-mlx-run-v13",
+            schema="hu-neural-mlx-run-v14",
             depth_bb=20,
             seed=4501,
             reservoir_capacity=100_000,
@@ -241,6 +243,46 @@ class NeuralTrainerTests(unittest.TestCase):
             weights = np.asarray(linear_layers(model)[0].weight)
             self.assertTrue(np.all(weights[:, TEXTURE_FEATURE_OFFSET:STATE_FEATURE_COUNT] == 0))
             self.assertTrue(np.any(weights[:, :TEXTURE_FEATURE_OFFSET] != 0))
+
+    def test_sparse_teacher_snapshot_is_hashed_at_artifact_rounds(self):
+        config = RunConfig(
+            schema="test",
+            depth_bb=20,
+            seed=17,
+            reservoir_capacity=100,
+            hidden_sizes=(8, 4),
+            batch_size=8,
+            learning_rate=1e-3,
+            learning_rate_final=None,
+            learning_rate_decay_start_round=None,
+            learning_rate_decay_end_round=None,
+            traversals_per_round=4,
+            steps_per_round=1,
+            advantage_alpha=2,
+            variance_baseline_scale=0.5,
+            replay_street_proposal=None,
+            value_rollouts_per_action=2,
+            artifact_every=1,
+            preflop_runout_samples=4,
+            flop_runout_samples=4,
+            exact_turn_rivers=False,
+            compact_serving_grid=False,
+        )
+        models, _ = initialize_models(config)
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = export_teacher_snapshot(
+                models, Path(directory), config, 3
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schema"], "hu-sparse-sd-cfr-teacher-v1")
+            self.assertEqual(manifest["completedTraversals"], 12)
+            self.assertEqual(manifest["strategyWeight"], 144.0)
+            for descriptor in manifest["models"].values():
+                payload = (Path(directory) / descriptor["file"]).read_bytes()
+                self.assertEqual(descriptor["bytes"], len(payload))
+                self.assertEqual(
+                    descriptor["sha256"], hashlib.sha256(payload).hexdigest()
+                )
 
     def test_learning_rate_decay_preserves_boundary_then_interpolates(self):
         config = RunConfig(

@@ -10,6 +10,7 @@ import {
   NEURAL_STATE_FEATURE_COUNT,
   NEURAL_STATE_FEATURE_SCHEMA,
   NeuralArtifactClient,
+  neuralNetworksForStreet,
   neuralLegalActions,
   type DenseNetworkDescriptor,
   type NeuralPolicyArtifact,
@@ -119,6 +120,52 @@ function artifact(): NeuralPolicyArtifact {
       },
     },
     parameters: Float32Array.from(parameters),
+  };
+}
+
+function routedArtifact(): NeuralPolicyArtifact {
+  const preflop = artifact();
+  const postflop = artifact();
+  const postflopPolicy = postflop.metadata.networks.baselinePolicy;
+  const allInWeight =
+    postflopPolicy.layers[0].weightOffset + NEURAL_STATE_FEATURE_COUNT + 5;
+  postflop.parameters[allInWeight] = 4;
+  const offset = preflop.parameters.length;
+  const shifted = (network: DenseNetworkDescriptor): DenseNetworkDescriptor => ({
+    layers: network.layers.map((layer) => ({
+      ...layer,
+      weightOffset: layer.weightOffset + offset,
+      biasOffset: layer.biasOffset + offset,
+    })),
+  });
+  return {
+    metadata: {
+      ...preflop.metadata,
+      schemaVersion: 2,
+      modelVersion: 'deep-cfr-routed-test-v2',
+      parameterCount: preflop.parameters.length + postflop.parameters.length,
+      routing: {
+        kind: 'street-v1',
+        preflopModelVersion: preflop.metadata.modelVersion,
+        postflopModelVersion: postflop.metadata.modelVersion,
+      },
+      networks: {
+        ...preflop.metadata.networks,
+        postflopBaselinePolicy: shifted(
+          postflop.metadata.networks.baselinePolicy
+        ),
+        postflopExploitResponse: shifted(
+          postflop.metadata.networks.exploitResponse
+        ),
+        postflopBaselineActionValue: shifted(
+          postflop.metadata.networks.baselineActionValue
+        ),
+      },
+    },
+    parameters: Float32Array.from([
+      ...preflop.parameters,
+      ...postflop.parameters,
+    ]),
   };
 }
 
@@ -256,6 +303,58 @@ describe('frozen neural policy runtime', () => {
     expect(servedAllIn.probability).toBeGreaterThan(baselineAllIn.probability);
     expect(grading.node.bestActionId).toBe('call');
     expect(grading.node.actions.every((action) => action.confidence === 'high')).toBe(true);
+  });
+
+  it('routes every inference head by street and records component provenance', async () => {
+    const model = routedArtifact();
+    const initial = createHand({
+      modelVersion: model.metadata.modelVersion,
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'button-small-blind',
+      random: seededRandom(29),
+    });
+    const profile = buildOpponentModel([], 'routed');
+    expect(
+      neuralNetworksForStreet(model.metadata, 'preflop').baselinePolicy
+    ).toBe(model.metadata.networks.baselinePolicy);
+    expect(
+      neuralNetworksForStreet(model.metadata, 'river').baselinePolicy
+    ).toBe(model.metadata.networks.postflopBaselinePolicy);
+    const preflop = await inferNeuralPolicy({
+      artifact: model,
+      state: initial,
+      profile,
+      usage: 'opponent',
+    });
+    const flopState: HandState = {
+      ...initial,
+      street: 'flop',
+      board: [4, 9, 14],
+      potBb: 2,
+      streetBetsBb: {
+        'button-small-blind': 0,
+        'big-blind': 0,
+      },
+      toAct: 'button-small-blind',
+      actionHistory: [],
+    };
+    const postflop = await inferNeuralPolicy({
+      artifact: model,
+      state: flopState,
+      profile,
+      usage: 'opponent',
+    });
+    expect(preflop.trace).toMatchObject({
+      networkRoute: 'preflop',
+      componentModelVersion: 'deep-cfr-test-v1',
+    });
+    expect(postflop.trace).toMatchObject({
+      networkRoute: 'postflop',
+      componentModelVersion: 'deep-cfr-test-v1',
+    });
+    const allIn = postflop.node.actions.find((action) => action.id === 'all-in');
+    expect(allIn?.probability).toBeGreaterThan(0.8);
   });
 
   it('verifies immutable artifact hashes and never falls back after corruption', async () => {

@@ -150,6 +150,7 @@ def evaluation_records(
     compact_grid: bool,
     policy_model: ActionScorer | None = None,
     postflop_policy_model: ActionScorer | None = None,
+    action_value_rollouts_per_action: int = 0,
 ) -> list[dict[str, Any]]:
     subprocess.run(
         ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
@@ -184,6 +185,16 @@ def evaluation_records(
             command.append("--sample-turn-rivers")
         if compact_grid:
             command.append("--compact-serving-grid")
+        if action_value_rollouts_per_action > 0:
+            if action_value_rollouts_per_action < 2:
+                raise ValueError("action-EV evaluation requires at least two rollouts per action")
+            command.extend(
+                (
+                    "--evaluate-action-values",
+                    "--value-rollouts-per-action",
+                    str(action_value_rollouts_per_action),
+                )
+            )
         if policy_model is not None:
             network = scorer_json(policy_model)
             postflop_network = (
@@ -210,7 +221,46 @@ def evaluation_records(
         raise RuntimeError("independent evaluation trajectory set was truncated")
     if metadata["sampling_mode"] != "trajectory":
         raise RuntimeError("independent evaluation did not use pure trajectory sampling")
+    if action_value_rollouts_per_action > 0 and not metadata.get(
+        "evaluates_trajectory_action_values"
+    ):
+        raise RuntimeError("independent evaluation omitted requested action values")
     return records
+
+
+def action_ev_standard_error_summary(
+    datasets: list[list[dict[str, Any]]], threshold_bb: float = 0.02
+) -> dict[str, Any]:
+    decisions = 0
+    precise_decisions = 0
+    actions = 0
+    precise_actions = 0
+    maximum_standard_error = 0.0
+    for records in datasets:
+        for record in records:
+            errors = record.get("action_value_standard_errors_bb")
+            if errors is None:
+                continue
+            if len(errors) != len(record["actions"]) or not np.all(np.isfinite(errors)):
+                raise RuntimeError("action-EV evaluation returned invalid standard errors")
+            decisions += 1
+            actions += len(errors)
+            precise = [float(error) <= threshold_bb for error in errors]
+            precise_actions += sum(precise)
+            precise_decisions += int(all(precise))
+            maximum_standard_error = max(
+                maximum_standard_error, max((float(error) for error in errors), default=0.0)
+            )
+    return {
+        "available": decisions > 0,
+        "sampling_method": "independent_deterministic_external_sampling_rollouts",
+        "threshold_bb": threshold_bb,
+        "decisions": decisions,
+        "actions": actions,
+        "decision_coverage": precise_decisions / decisions if decisions else 0.0,
+        "action_coverage": precise_actions / actions if actions else 0.0,
+        "maximum_standard_error_bb": maximum_standard_error if decisions else None,
+    }
 
 
 def policy(model: Any, features: np.ndarray) -> np.ndarray:
@@ -329,6 +379,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--postflop-run-a", type=Path)
     parser.add_argument("--postflop-run-b", type=Path)
     parser.add_argument("--postflop-round", type=int)
+    parser.add_argument("--action-value-rollouts-per-action", type=int, default=0)
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -345,6 +396,8 @@ def main() -> None:
         raise ValueError("both postflop run directories are required for street routing")
     if args.postflop_round is not None and args.postflop_run_a is None:
         raise ValueError("a postflop artifact round requires postflop run directories")
+    if args.action_value_rollouts_per_action == 1 or args.action_value_rollouts_per_action < 0:
+        raise ValueError("action-EV rollouts must be zero (disabled) or at least two")
     root = Path(__file__).resolve().parents[2]
     first_state, first_model = load_run(args.run_a.resolve(), args.round_number)
     second_state, second_model = load_run(args.run_b.resolve(), args.round_number)
@@ -402,11 +455,13 @@ def main() -> None:
         *evaluation_arguments,
         policy_model=first_model,
         postflop_policy_model=postflop_models[0] if postflop_models else None,
+        action_value_rollouts_per_action=args.action_value_rollouts_per_action,
     )
     second_reach_records = evaluation_records(
         *evaluation_arguments,
         policy_model=second_model,
         postflop_policy_model=postflop_models[1] if postflop_models else None,
+        action_value_rollouts_per_action=args.action_value_rollouts_per_action,
     )
     forced_records = evaluation_records(*evaluation_arguments)
     cross_seed = compare(
@@ -425,6 +480,9 @@ def main() -> None:
         "fixed-seed uniform-policy forced-deviation exact-card trajectories",
         False,
     )
+    action_ev_uncertainty = action_ev_standard_error_summary(
+        [first_reach_records, second_reach_records]
+    )
     gates = {
         "action_frequency_mae_at_most_0_05": cross_seed["action_frequency_mae"] <= 0.05,
         "primary_action_agreement_at_least_0_85": cross_seed["primary_action_agreement"] >= 0.85,
@@ -434,7 +492,10 @@ def main() -> None:
         "coverage_at_least_0_9999": cross_seed["lookup_coverage"] >= 0.9999,
         "independent_seed_count_at_least_2": True,
         "exploitability_upper_99_at_most_0_10": False,
-        "action_ev_standard_error_coverage_at_least_0_95": False,
+        "action_ev_standard_error_coverage_at_least_0_95": action_ev_uncertainty[
+            "available"
+        ]
+        and action_ev_uncertainty["decision_coverage"] >= 0.95,
     }
     research_pilot_gates = {
         "action_frequency_mae_at_most_0_06": cross_seed["action_frequency_mae"] <= 0.06,
@@ -444,7 +505,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v5",
+        "schema": "hu-neural-cross-seed-validation-v6",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
@@ -457,6 +518,7 @@ def main() -> None:
         ],
         "cross_seed": cross_seed,
         "forced_deviation": forced_deviation,
+        "action_ev_uncertainty": action_ev_uncertainty,
         "artifacts": [
             verify_artifact(latest_artifact(first_state, args.round_number)),
             verify_artifact(latest_artifact(second_state, args.round_number)),
@@ -473,7 +535,9 @@ def main() -> None:
         "reasons": [
             "Cross-seed stability is a reproducibility check, not equilibrium proof.",
             "A statistically valid full-game exploitability upper bound has not been computed.",
-            "Independent action-EV standard-error coverage has not reached the release gate.",
+            "Independent action-EV standard-error coverage has not reached the release gate."
+            if not gates["action_ev_standard_error_coverage_at_least_0_95"]
+            else "Independent action-EV standard-error coverage passed; this does not establish exploitability.",
         ],
     }
     if postflop_states is not None:

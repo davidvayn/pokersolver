@@ -45,13 +45,15 @@ MAX_TRAJECTORY_ACTIONS = 32
 MAX_POLICY_ACTIONS = 8
 STREETS = ("preflop", "flop", "turn", "river")
 ACTIONS = ("fold", "check", "call", "bet", "raise", "all_in")
-RUN_SCHEMA = "hu-neural-mlx-run-v13"
+RUN_SCHEMA = "hu-neural-mlx-run-v14"
 LEGACY_RESUME_SCHEMA = "hu-neural-mlx-run-v9"
 NETWORK_SCHEMA = "hu-neural-training-networks-v4"
 STATE_FEATURE_SCHEMA = "hu-cash-trajectory-poker-aware-v4"
 POKER_FEATURE_OFFSET = 604
 TEXTURE_FEATURE_OFFSET = 652
 TEXTURE_FEATURE_COUNT = 64
+ACTION_VALUE_STANDARD_ERROR_FLOOR_BB = 0.005
+UNEVALUATED_STANDARD_ERROR_PRIOR_BB = 0.10
 ADVANTAGE_UPDATE = "bootstrapped_deep_dcfr_plus_vr_zero_init_texture"
 STOP_REQUESTED = False
 LEADING_20BB_PROFILE = {
@@ -700,7 +702,10 @@ def load_jsonl_gzip(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     with gzip.open(path, "rt", encoding="utf-8") as stream:
         metadata = json.loads(next(stream))
         records = [json.loads(line) for line in stream if line.strip()]
-    if metadata.get("schema") != "hu-neural-traversal-jsonl-v6":
+    if metadata.get("schema") not in (
+        "hu-neural-traversal-jsonl-v6",
+        "hu-neural-traversal-jsonl-v7",
+    ):
         raise ValueError("Rust traversal shard has an incompatible schema")
     if metadata.get("state_feature_count") != STATE_FEATURE_COUNT:
         raise ValueError("Rust and MLX state feature schemas differ")
@@ -752,6 +757,7 @@ def ingest_records(
         actions = record["actions"]
         targets = record["targets"]
         values = record.get("action_values_bb")
+        standard_errors = record.get("action_value_standard_errors_bb")
         if len(actions) == 0 or len(actions) != len(targets):
             raise ValueError("training record has inconsistent action targets")
         kind = record["kind"]
@@ -809,21 +815,51 @@ def ingest_records(
         if values is not None:
             if len(values) != len(actions):
                 raise ValueError("action-value target count is invalid")
+            if standard_errors is not None and (
+                len(standard_errors) != len(actions)
+                or not np.all(np.isfinite(standard_errors))
+                or np.any(np.asarray(standard_errors) < 0)
+            ):
+                raise ValueError("action-value standard-error targets are invalid")
             # Fit values in stack-normalized utility units so Huber regression
             # does not spend nearly every update in its saturated linear tail.
             # Exporters scale the value mean back to big blinds at boundaries.
             value_targets = np.asarray(values, dtype=np.float32) / depth_bb
+            uncertainty_bb = (
+                np.asarray(standard_errors, dtype=np.float32)
+                if standard_errors is not None
+                else np.full(
+                    len(actions),
+                    UNEVALUATED_STANDARD_ERROR_PRIOR_BB,
+                    dtype=np.float32,
+                )
+            )
+            raw_uncertainty_targets = np.asarray(
+                [
+                    inverse_softplus(
+                        max(
+                            float(standard_error)
+                            - ACTION_VALUE_STANDARD_ERROR_FLOOR_BB,
+                            1e-4,
+                        )
+                    )
+                    for standard_error in uncertainty_bb
+                ],
+                dtype=np.float32,
+            )
+            combined_value_targets = np.stack(
+                (value_targets, raw_uncertainty_targets), axis=1
+            )
             if holdout_group:
-                heldout["value"].append((group_features, value_targets, 1.0))
+                heldout["value"].append((group_features, combined_value_targets, 1.0))
             else:
-                raw_uncertainty = inverse_softplus(0.10)
                 for action_index, features in enumerate(group_features):
                     value_reservoir = reservoirs["value"]
                     if not isinstance(value_reservoir, ReplayReservoir):
                         raise TypeError("value samples require an action reservoir")
                     value_reservoir.add(
                         features,
-                        np.asarray([value_targets[action_index], raw_uncertainty], dtype=np.float32),
+                        combined_value_targets[action_index],
                         1.0,
                         street,
                         reservoir_rng,
@@ -1021,7 +1057,7 @@ def evaluate_models(
     value_squared: list[float] = []
     for features, targets, _ in heldout["value"][:4096]:
         predicted = np.asarray(models["value"](mx.array(features)))[:, 0]
-        value_squared.extend(np.square(predicted - targets).tolist())
+        value_squared.extend(np.square(predicted - targets[:, 0]).tolist())
     metrics["action_value_rmse_bb"] = (
         math.sqrt(sum(value_squared) / len(value_squared)) * depth_bb
         if value_squared
@@ -1175,6 +1211,42 @@ def camel_action_abstraction(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def export_teacher_snapshot(
+    models: dict[str, ActionScorer],
+    artifact_dir: Path,
+    config: RunConfig,
+    round_number: int,
+) -> Path:
+    """Retain a bounded, offline SD-CFR teacher candidate at artifact rounds."""
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    teacher_models: dict[str, dict[str, Any]] = {}
+    for player in ("advantage_p0", "advantage_p1"):
+        teacher_path = artifact_dir / f"{player}.safetensors"
+        save_model(models[player], teacher_path)
+        payload = teacher_path.read_bytes()
+        teacher_models[player] = {
+            "file": teacher_path.name,
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    completed_traversals = round_number * config.traversals_per_round
+    manifest_path = artifact_dir / "teacher-snapshot.json"
+    atomic_json(
+        manifest_path,
+        {
+            "schema": "hu-sparse-sd-cfr-teacher-v1",
+            "purpose": "offline_direct_average_policy_comparison_only",
+            "round": round_number,
+            "completedTraversals": completed_traversals,
+            "strategyWeight": float(completed_traversals**2),
+            "strategyTransform": "regret_matching",
+            "networkSchema": NETWORK_SCHEMA,
+            "models": teacher_models,
+        },
+    )
+    return manifest_path
+
+
 def export_browser_artifact(
     root: Path,
     run_dir: Path,
@@ -1247,6 +1319,13 @@ def export_browser_artifact(
             "primaryTraversalSampleReused": True,
             "extraRandomness": "canonical_state_action_seeded",
         },
+        "valueUncertaintyTraining": {
+            "kind": "sample_standard_error"
+            if config.value_rollouts_per_action >= 2
+            else "unevaluated_prior",
+            "standardErrorFloorBb": ACTION_VALUE_STANDARD_ERROR_FLOOR_BB,
+            "unevaluatedPriorBb": UNEVALUATED_STANDARD_ERROR_PRIOR_BB,
+        },
         "actionAbstraction": camel_action_abstraction(action_abstraction),
         "adaptation": {
             "minimumObservations": 50,
@@ -1254,7 +1333,7 @@ def export_browser_artifact(
             "maximumResponseWeight": 0.5,
         },
         "valueCalibration": {
-            "standardErrorFloorBb": 0.005,
+            "standardErrorFloorBb": ACTION_VALUE_STANDARD_ERROR_FLOOR_BB,
             "highConfidenceMaximumBb": 0.02,
         },
         "networks": {
@@ -1265,6 +1344,7 @@ def export_browser_artifact(
     }
     artifact_dir = run_dir / "artifacts" / f"round-{round_number:06d}"
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    export_teacher_snapshot(models, artifact_dir, config, round_number)
     source_path = artifact_dir / "model-source.json"
     binary_path = artifact_dir / "model.bin"
     source_path.write_text(

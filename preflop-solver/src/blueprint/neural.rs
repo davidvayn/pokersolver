@@ -20,7 +20,7 @@ pub const ACTION_FEATURE_COUNT: usize = 9;
 pub const MODEL_INPUT_COUNT: usize = STATE_FEATURE_COUNT + ACTION_FEATURE_COUNT;
 pub const MAX_TRAJECTORY_ACTIONS: usize = 32;
 
-const DATASET_SCHEMA: &str = "hu-neural-traversal-jsonl-v6";
+const DATASET_SCHEMA: &str = "hu-neural-traversal-jsonl-v7";
 const TRAINING_NETWORK_SCHEMA: &str = "hu-neural-training-networks-v4";
 const POKER_FEATURE_OFFSET: usize = 604;
 const TEXTURE_FEATURE_OFFSET: usize = 652;
@@ -36,6 +36,7 @@ pub struct SampleGenerationConfig {
     pub output: PathBuf,
     pub network_path: Option<PathBuf>,
     pub trajectory_sampling: bool,
+    pub evaluate_trajectory_values: bool,
     pub value_rollouts_per_action: u32,
 }
 
@@ -237,6 +238,7 @@ struct TrainingSample {
     feature_sha256: Vec<String>,
     targets: Vec<f32>,
     action_values_bb: Option<Vec<f32>>,
+    action_value_standard_errors_bb: Option<Vec<f32>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -255,6 +257,7 @@ struct DatasetMetadata<'a> {
     truncated: bool,
     sampling_mode: &'static str,
     value_rollouts_per_action: u32,
+    evaluates_trajectory_action_values: bool,
     action_abstraction: &'a ActionAbstraction,
 }
 
@@ -280,6 +283,12 @@ impl SampleGenerator {
         }
         if config.value_rollouts_per_action == 0 {
             return Err("value rollouts per action must be positive".into());
+        }
+        if config.evaluate_trajectory_values && !config.trajectory_sampling {
+            return Err("trajectory action-value evaluation requires trajectory sampling".into());
+        }
+        if config.evaluate_trajectory_values && config.value_rollouts_per_action < 2 {
+            return Err("trajectory action-value evaluation requires at least two rollouts".into());
         }
         let networks = match &config.network_path {
             Some(path) => {
@@ -458,25 +467,26 @@ impl SampleGenerator {
         }
     }
 
-    fn action_value_targets(
+    fn action_value_estimates(
         &self,
         state: &GameState,
         deal: &Deal,
         actions: &[LegalAction],
         traverser: usize,
         iteration: u64,
-        primary_values: &[f64],
-    ) -> Vec<f64> {
+        primary_values: Option<&[f64]>,
+    ) -> (Vec<f64>, Option<Vec<f64>>) {
         let samples = self.config.value_rollouts_per_action;
-        if samples == 1 {
-            return primary_values.to_vec();
-        }
-        actions
+        let estimates = actions
             .iter()
             .enumerate()
             .map(|(action_index, action)| {
-                let mut total = primary_values[action_index];
-                for sample_index in 1..samples {
+                let mut values = Vec::with_capacity(samples as usize);
+                if let Some(primary) = primary_values {
+                    values.push(primary[action_index]);
+                }
+                let first_independent_sample = u32::from(primary_values.is_some());
+                for sample_index in first_independent_sample..samples {
                     let mut rng = SplitMix64::new(value_rollout_seed(
                         &self.config,
                         state,
@@ -485,16 +495,34 @@ impl SampleGenerator {
                         iteration,
                         sample_index,
                     ));
-                    total += self.value_only_external_sampling(
+                    values.push(self.value_only_external_sampling(
                         state.apply(action, &self.config.game),
                         deal,
                         traverser,
                         &mut rng,
-                    );
+                    ));
                 }
-                total / samples as f64
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                let standard_error = if values.len() >= 2 {
+                    let squared_deviations = values
+                        .iter()
+                        .map(|value| (value - mean).powi(2))
+                        .sum::<f64>();
+                    (squared_deviations / ((values.len() - 1) * values.len()) as f64).sqrt()
+                } else {
+                    f64::NAN
+                };
+                (mean, standard_error)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let means = estimates.iter().map(|(mean, _)| *mean).collect();
+        let standard_errors = (samples >= 2).then(|| {
+            estimates
+                .iter()
+                .map(|(_, standard_error)| *standard_error)
+                .collect()
+        });
+        (means, standard_errors)
     }
 
     fn sample_trajectory(
@@ -510,6 +538,16 @@ impl SampleGenerator {
         let actions = state.legal_actions(&self.config.game);
         debug_assert!(!actions.is_empty());
         let strategy = self.current_strategy(&state, deal, &actions);
+        let (action_values, action_value_standard_errors) = if self
+            .config
+            .evaluate_trajectory_values
+        {
+            let (values, standard_errors) =
+                self.action_value_estimates(&state, deal, &actions, state.actor, iteration, None);
+            (Some(values), standard_errors)
+        } else {
+            (None, None)
+        };
         self.push_record(training_sample(
             SampleKind::AverageStrategy,
             iteration,
@@ -519,7 +557,8 @@ impl SampleGenerator {
             deal,
             &actions,
             strategy.clone(),
-            None,
+            action_values,
+            action_value_standard_errors,
             &self.config.game,
         ));
         let selected = sample_index(&strategy, &mut self.rng);
@@ -563,8 +602,14 @@ impl SampleGenerator {
                 .zip(&values)
                 .map(|(probability, value)| probability * value)
                 .sum::<f64>();
-            let action_value_targets =
-                self.action_value_targets(&state, deal, &actions, traverser, iteration, &values);
+            let (action_value_targets, action_value_standard_errors) = self.action_value_estimates(
+                &state,
+                deal,
+                &actions,
+                traverser,
+                iteration,
+                Some(&values),
+            );
             self.push_record(training_sample(
                 if traverser == 0 {
                     SampleKind::AdvantageP0
@@ -579,6 +624,7 @@ impl SampleGenerator {
                 &actions,
                 values.iter().map(|value| value - node_value).collect(),
                 Some(action_value_targets),
+                action_value_standard_errors,
                 &self.config.game,
             ));
             node_value
@@ -595,6 +641,7 @@ impl SampleGenerator {
                 deal,
                 &actions,
                 strategy.clone(),
+                None,
                 None,
                 &self.config.game,
             ));
@@ -671,6 +718,7 @@ fn training_sample(
     actions: &[LegalAction],
     targets: Vec<f64>,
     action_values: Option<Vec<f64>>,
+    action_value_standard_errors: Option<Vec<f64>>,
     config: &BlueprintConfig,
 ) -> TrainingSample {
     let feature_sha256 = actions
@@ -690,6 +738,8 @@ fn training_sample(
         feature_sha256,
         targets: targets.into_iter().map(|value| value as f32).collect(),
         action_values_bb: action_values
+            .map(|values| values.into_iter().map(|value| value as f32).collect()),
+        action_value_standard_errors_bb: action_value_standard_errors
             .map(|values| values.into_iter().map(|value| value as f32).collect()),
     }
 }
@@ -1114,6 +1164,7 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
             "external_sampling"
         },
         value_rollouts_per_action: config.value_rollouts_per_action,
+        evaluates_trajectory_action_values: config.evaluate_trajectory_values,
         action_abstraction: &config.game.action_abstraction,
     };
     serde_json::to_writer(&mut writer, &metadata)?;
@@ -1328,6 +1379,7 @@ mod tests {
             output: PathBuf::from("unused.jsonl.gz"),
             network_path: None,
             trajectory_sampling: false,
+            evaluate_trajectory_values: false,
             value_rollouts_per_action: 1,
         };
         let (_, first, attempted) = SampleGenerator::new(make()).unwrap().run().unwrap();
@@ -1370,6 +1422,7 @@ mod tests {
             output: PathBuf::from("unused.jsonl.gz"),
             network_path: None,
             trajectory_sampling: false,
+            evaluate_trajectory_values: false,
             value_rollouts_per_action,
         };
         let (_, primary, _) = SampleGenerator::new(make(1)).unwrap().run().unwrap();
@@ -1390,9 +1443,23 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .remove("action_values_bb");
+            first_without_values
+                .as_object_mut()
+                .unwrap()
+                .remove("action_value_standard_errors_bb");
+            second_without_values
+                .as_object_mut()
+                .unwrap()
+                .remove("action_value_standard_errors_bb");
             assert_eq!(first_without_values, second_without_values);
         }
         assert!(value_target_changed);
+        assert!(averaged.iter().any(|sample| {
+            sample
+                .action_value_standard_errors_bb
+                .as_ref()
+                .is_some_and(|values| values.iter().all(|value| value.is_finite()))
+        }));
     }
 
     #[test]
@@ -1411,6 +1478,7 @@ mod tests {
             output: PathBuf::from("unused.jsonl.gz"),
             network_path: None,
             trajectory_sampling: true,
+            evaluate_trajectory_values: false,
             value_rollouts_per_action: 1,
         };
         let (_, records, attempted) = SampleGenerator::new(config).unwrap().run().unwrap();
@@ -1422,5 +1490,42 @@ mod tests {
         assert!(records
             .iter()
             .all(|sample| sample.weight == 1.0 && sample.reach_probability > 0.0));
+    }
+
+    #[test]
+    fn trajectory_action_value_evaluation_is_deterministic_and_reports_standard_errors() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        game.showdown_evaluation.preflop_runout_samples = 4;
+        game.showdown_evaluation.flop_runout_samples = 4;
+        game.showdown_evaluation.exact_turn_rivers = false;
+        let make = || SampleGenerationConfig {
+            game: game.clone(),
+            traversals: 2,
+            start_iteration: 0,
+            seed: 31,
+            max_records: 128,
+            output: PathBuf::from("unused.jsonl.gz"),
+            network_path: None,
+            trajectory_sampling: true,
+            evaluate_trajectory_values: true,
+            value_rollouts_per_action: 3,
+        };
+        let (_, first, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
+        let (_, second, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
+        assert_eq!(
+            serde_json::to_vec(&first).unwrap(),
+            serde_json::to_vec(&second).unwrap()
+        );
+        for sample in first {
+            let values = sample.action_values_bb.unwrap();
+            let errors = sample.action_value_standard_errors_bb.unwrap();
+            assert_eq!(values.len(), sample.actions.len());
+            assert_eq!(errors.len(), sample.actions.len());
+            assert!(values.iter().all(|value| value.is_finite()));
+            assert!(errors
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0));
+        }
     }
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   artifactDescriptor,
+  composeStreetRoutedArtifact,
   encodeNeuralArtifact,
 } from './export-neural-artifact.mjs';
 
@@ -11,6 +12,8 @@ function validSource() {
     metadata: {
       schemaVersion: 1,
       kind: 'deep-cfr-baseline-response',
+      modelVersion: 'component-a',
+      depthBb: 20,
       stateFeatureSchema: 'hu-cash-trajectory-poker-aware-v4',
       stateFeatureCount: 716,
       actionFeatureSchema: 'hu-cash-legal-action-v1',
@@ -62,4 +65,39 @@ test('refuses non-finite weights and mutable application URLs', () => {
     /finite/
   );
   assert.throws(() => artifactDescriptor(Buffer.alloc(1), '/api/model'), /immutable/);
+});
+
+test('composes immutable preflop and postflop components with shifted offsets', () => {
+  const preflop = validSource();
+  const postflop = validSource();
+  postflop.metadata.modelVersion = 'component-b';
+  postflop.parameters[0] = 7;
+  const routed = composeStreetRoutedArtifact(
+    preflop,
+    postflop,
+    'street-routed-test-experimental'
+  );
+  assert.equal(routed.metadata.schemaVersion, 2);
+  assert.deepEqual(routed.metadata.routing, {
+    kind: 'street-v1',
+    preflopModelVersion: 'component-a',
+    postflopModelVersion: 'component-b',
+  });
+  assert.equal(routed.parameters.length, preflop.parameters.length * 2);
+  assert.equal(routed.parameters[preflop.parameters.length], 7);
+  assert.equal(
+    routed.metadata.networks.postflopBaselinePolicy.layers[0].weightOffset,
+    preflop.parameters.length
+  );
+  assert.doesNotThrow(() => encodeNeuralArtifact(routed));
+});
+
+test('refuses to compose incompatible street components', () => {
+  const preflop = validSource();
+  const postflop = validSource();
+  postflop.metadata.depthBb = 50;
+  assert.throws(
+    () => composeStreetRoutedArtifact(preflop, postflop, 'bad-route'),
+    /depthBb/
+  );
 });

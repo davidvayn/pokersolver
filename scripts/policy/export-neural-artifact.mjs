@@ -44,7 +44,7 @@ export function encodeNeuralArtifact(source) {
   if (!source || typeof source !== 'object') throw new Error('Model source must be an object');
   const { metadata, parameters } = source;
   if (!metadata || typeof metadata !== 'object') throw new Error('Model metadata is required');
-  if (metadata.schemaVersion !== 1 || metadata.kind !== 'deep-cfr-baseline-response') {
+  if (![1, 2].includes(metadata.schemaVersion) || metadata.kind !== 'deep-cfr-baseline-response') {
     throw new Error('Unsupported neural artifact schema');
   }
   if (
@@ -92,6 +92,50 @@ export function encodeNeuralArtifact(source) {
     parameters.length,
     'baselineActionValue'
   );
+  const postflopNetworks = [
+    metadata.networks?.postflopBaselinePolicy,
+    metadata.networks?.postflopExploitResponse,
+    metadata.networks?.postflopBaselineActionValue,
+  ];
+  const postflopNetworkCount = postflopNetworks.filter(Boolean).length;
+  if (metadata.schemaVersion === 1 && (metadata.routing || postflopNetworkCount > 0)) {
+    throw new Error('Artifact schema 1 cannot declare street routing');
+  }
+  if (
+    metadata.schemaVersion === 2 &&
+    (metadata.routing?.kind !== 'street-v1' ||
+      !metadata.routing.preflopModelVersion ||
+      !metadata.routing.postflopModelVersion ||
+      postflopNetworkCount !== 3)
+  ) {
+    throw new Error('Street-routed artifact metadata is incomplete');
+  }
+  if (postflopNetworkCount > 0 && postflopNetworkCount !== 3) {
+    throw new Error('Street-routed postflop network group is incomplete');
+  }
+  if (postflopNetworkCount === 3) {
+    validateNetwork(
+      metadata.networks.postflopBaselinePolicy,
+      stateAction,
+      1,
+      parameters.length,
+      'postflopBaselinePolicy'
+    );
+    validateNetwork(
+      metadata.networks.postflopExploitResponse,
+      stateAction + metadata.opponentProfileFeatureCount,
+      1,
+      parameters.length,
+      'postflopExploitResponse'
+    );
+    validateNetwork(
+      metadata.networks.postflopBaselineActionValue,
+      stateAction,
+      2,
+      parameters.length,
+      'postflopBaselineActionValue'
+    );
+  }
   const metadataBytes = Buffer.from(JSON.stringify(metadata));
   const output = Buffer.allocUnsafe(HEADER_BYTES + metadataBytes.length + parameters.length * 4);
   MAGIC.copy(output, 0);
@@ -106,6 +150,82 @@ export function encodeNeuralArtifact(source) {
     offset += 4;
   }
   return output;
+}
+
+function sameJson(first, second) {
+  return JSON.stringify(first) === JSON.stringify(second);
+}
+
+function shiftedNetwork(network, parameterOffset) {
+  return {
+    layers: network.layers.map((layer) => ({
+      ...layer,
+      weightOffset: layer.weightOffset + parameterOffset,
+      biasOffset: layer.biasOffset + parameterOffset,
+    })),
+  };
+}
+
+export function composeStreetRoutedArtifact(preflop, postflop, modelVersion) {
+  // Validate the independent components before copying any descriptor offsets.
+  encodeNeuralArtifact(preflop);
+  encodeNeuralArtifact(postflop);
+  if (preflop.metadata.schemaVersion !== 1 || postflop.metadata.schemaVersion !== 1) {
+    throw new Error('Street routing currently composes two single-network schema-1 artifacts');
+  }
+  if (typeof modelVersion !== 'string' || modelVersion.length === 0) {
+    throw new Error('A composite model version is required');
+  }
+  const compatibleFields = [
+    'depthBb',
+    'stateFeatureSchema',
+    'stateFeatureCount',
+    'actionFeatureSchema',
+    'actionFeatureCount',
+    'opponentProfileSchema',
+    'opponentProfileFeatureCount',
+    'actionAbstraction',
+    'adaptation',
+    'valueCalibration',
+  ];
+  for (const field of compatibleFields) {
+    if (!sameJson(preflop.metadata[field], postflop.metadata[field])) {
+      throw new Error(`Street-routed components disagree on ${field}`);
+    }
+  }
+  const parameterOffset = preflop.parameters.length;
+  const parameters = [...preflop.parameters, ...postflop.parameters];
+  return {
+    metadata: {
+      ...preflop.metadata,
+      schemaVersion: 2,
+      modelVersion,
+      parameterCount: parameters.length,
+      routing: {
+        kind: 'street-v1',
+        preflopModelVersion: preflop.metadata.modelVersion,
+        postflopModelVersion: postflop.metadata.modelVersion,
+      },
+      networks: {
+        baselinePolicy: preflop.metadata.networks.baselinePolicy,
+        exploitResponse: preflop.metadata.networks.exploitResponse,
+        baselineActionValue: preflop.metadata.networks.baselineActionValue,
+        postflopBaselinePolicy: shiftedNetwork(
+          postflop.metadata.networks.baselinePolicy,
+          parameterOffset
+        ),
+        postflopExploitResponse: shiftedNetwork(
+          postflop.metadata.networks.exploitResponse,
+          parameterOffset
+        ),
+        postflopBaselineActionValue: shiftedNetwork(
+          postflop.metadata.networks.baselineActionValue,
+          parameterOffset
+        ),
+      },
+    },
+    parameters,
+  };
 }
 
 export function artifactDescriptor(bytes, artifactUrl) {
@@ -124,10 +244,32 @@ export function artifactDescriptor(bytes, artifactUrl) {
 
 async function run() {
   const args = parseArgs(process.argv.slice(2));
-  const input = path.resolve(required(args, '--input'));
   const output = path.resolve(required(args, '--output'));
   const artifactUrl = required(args, '--url');
-  const source = JSON.parse(await readFile(input, 'utf8'));
+  const input = args.get('--input');
+  const preflopInput = args.get('--preflop-input');
+  const postflopInput = args.get('--postflop-input');
+  if (Boolean(input) === Boolean(preflopInput || postflopInput)) {
+    throw new Error('Provide either --input or both street component inputs');
+  }
+  let source;
+  if (input) {
+    source = JSON.parse(await readFile(path.resolve(input), 'utf8'));
+  } else {
+    if (!preflopInput || !postflopInput) {
+      throw new Error('Both --preflop-input and --postflop-input are required');
+    }
+    const [preflop, postflop] = await Promise.all(
+      [preflopInput, postflopInput].map(async (component) =>
+        JSON.parse(await readFile(path.resolve(component), 'utf8'))
+      )
+    );
+    source = composeStreetRoutedArtifact(
+      preflop,
+      postflop,
+      required(args, '--model-version')
+    );
+  }
   const bytes = encodeNeuralArtifact(source);
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, bytes, { flag: 'wx' });
