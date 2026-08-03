@@ -86,12 +86,18 @@ def load_plan(path: Path) -> dict[str, Any]:
     confidence = float(validation.get("exploitabilityCertificateConfidence", 0))
     deals = int(validation.get("exploitabilityCertificateDeals", 0))
     selected_preflop_round = int(validation.get("selectedPreflopRound", 0))
+    selected_postflop_round = int(validation.get("selectedPostflopRound", 0))
+    use_latest_postflop = validation.get("useLatestPostflopArtifact") is True
     if not 0 < confidence < 1 or deals < 2:
         raise ValueError("exploitability certificate settings are invalid")
     if (
         selected_preflop_round <= 0
         or selected_preflop_round % int(shared["artifactEvery"]) != 0
-        or validation.get("useLatestPostflopArtifact") is not True
+        or (selected_postflop_round > 0) == use_latest_postflop
+        or (
+            selected_postflop_round > 0
+            and selected_postflop_round % int(shared["artifactEvery"]) != 0
+        )
     ):
         raise ValueError("routed validation artifact selection is invalid")
     per_seed_alpha = (1.0 - confidence) / len(seeds)
@@ -202,7 +208,7 @@ def validation_command(plan: dict[str, Any]) -> list[str]:
         return RUNS_DIRECTORY / stage["runDirectory"].format(seed=seed)
 
     first_seed, second_seed = plan["seeds"]
-    return [
+    command = [
         str(PYTHON),
         str(VALIDATOR),
         str(run_directory(preflop_stage, first_seed)),
@@ -213,22 +219,32 @@ def validation_command(plan: dict[str, Any]) -> list[str]:
         str(run_directory(postflop_stage, second_seed)),
         "--round",
         str(validation["selectedPreflopRound"]),
-        "--postflop-latest",
-        "--traversals",
-        str(validation["trajectoryTraversalsPerSeed"]),
-        "--seed",
-        str(validation["independentEvaluationSeed"]),
-        "--action-value-rollouts-per-action",
-        str(validation["actionValueRolloutsPerAction"]),
-        "--exploitability-certificate-deals",
-        str(validation["exploitabilityCertificateDeals"]),
-        "--exploitability-certificate-seed",
-        str(validation["certificateSeed"]),
-        "--exploitability-certificate-threads",
-        str(validation["exploitabilityCertificateThreads"]),
-        "--output",
-        str(RUNS_DIRECTORY / f"{plan['modelVersion']}-validation.json"),
     ]
+    if int(validation.get("selectedPostflopRound", 0)) > 0:
+        command.extend(
+            ["--postflop-round", str(validation["selectedPostflopRound"])]
+        )
+    else:
+        command.append("--postflop-latest")
+    command.extend(
+        [
+            "--traversals",
+            str(validation["trajectoryTraversalsPerSeed"]),
+            "--seed",
+            str(validation["independentEvaluationSeed"]),
+            "--action-value-rollouts-per-action",
+            str(validation["actionValueRolloutsPerAction"]),
+            "--exploitability-certificate-deals",
+            str(validation["exploitabilityCertificateDeals"]),
+            "--exploitability-certificate-seed",
+            str(validation["certificateSeed"]),
+            "--exploitability-certificate-threads",
+            str(validation["exploitabilityCertificateThreads"]),
+            "--output",
+            str(RUNS_DIRECTORY / f"{plan['modelVersion']}-validation.json"),
+        ]
+    )
+    return command
 
 
 def preflight(plan: dict[str, Any], build: bool = True) -> dict[str, Any]:

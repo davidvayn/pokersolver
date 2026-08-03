@@ -169,8 +169,8 @@ The completed narrow stage retained round 250 as its serving candidate after a
 5,000-trajectory fixed-seed comparison against the final round 310. Round 250
 won authentic MAE, both agreement checks, and both aggregate-delta checks;
 round 310 only improved forced-deviation MAE by 0.05 percentage point. Routed
-validation therefore pins narrow round 250 while selecting the latest immutable
-wide artifact independently.
+validation therefore pins narrow round 250 while selecting the wide artifact
+independently.
 
 After wide round 100 improved all six routed stability measures over round 50,
 the user authorized a 9.5-hour per-seed extension beyond the original eight-hour
@@ -179,6 +179,11 @@ wide stage 13.5 hours total. The extension is conditional rather than an
 automatic "latest wins" run: every 50-round routed checkpoint is evaluated on
 the same held-out seed, and broad regression across two consecutive checkpoints
 stops the extension.
+
+The 5,000-trajectory comparison at wide round 150 regressed on all six routed
+aggregate measures versus round 100. Wide round 100 is therefore the protected
+serving candidate while training continues to the next independent decision
+point at round 200; a newer checkpoint must beat it rather than merely exist.
 
 The full-game release validator includes a separate conservative certificate.
 For each exact complete deal, a relaxed responder observes both private hands

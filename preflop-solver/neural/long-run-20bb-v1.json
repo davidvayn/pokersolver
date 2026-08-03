@@ -46,7 +46,7 @@
   },
   "postRunValidation": {
     "selectedPreflopRound": 250,
-    "useLatestPostflopArtifact": true,
+    "selectedPostflopRound": 100,
     "trajectoryTraversalsPerSeed": 10000,
     "actionValueRolloutsPerAction": 64,
     "exploitabilityCertificateDeals": 125000,
