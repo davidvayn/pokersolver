@@ -46,6 +46,8 @@ class LongRunTests(unittest.TestCase):
         self.assertIn("--postflop-run-a", joined)
         self.assertIn("20bb-long-v1-wide-seed5101", joined)
         self.assertIn("20bb-long-v1-wide-seed5102", joined)
+        self.assertIn("--round 250", joined)
+        self.assertIn("--postflop-latest", joined)
         self.assertIn("--traversals 10000", joined)
         self.assertIn("--action-value-rollouts-per-action 64", joined)
         self.assertIn("--exploitability-certificate-deals 125000", joined)

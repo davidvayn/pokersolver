@@ -165,6 +165,13 @@ deals per candidate certificate; after splitting the 1% family error budget
 across two observed seeds, its Hoeffding chance margin remains below the
 0.10bb release threshold.
 
+The completed narrow stage retained round 250 as its serving candidate after a
+5,000-trajectory fixed-seed comparison against the final round 310. Round 250
+won authentic MAE, both agreement checks, and both aggregate-delta checks;
+round 310 only improved forced-deviation MAE by 0.05 percentage point. Routed
+validation therefore pins narrow round 250 while selecting the latest immutable
+wide artifact independently.
+
 The full-game release validator includes a separate conservative certificate.
 For each exact complete deal, a relaxed responder observes both private hands
 and the full runout and solves the betting tree against the frozen network.

@@ -78,8 +78,15 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("long-run plan requires post-run validation settings")
     confidence = float(validation.get("exploitabilityCertificateConfidence", 0))
     deals = int(validation.get("exploitabilityCertificateDeals", 0))
+    selected_preflop_round = int(validation.get("selectedPreflopRound", 0))
     if not 0 < confidence < 1 or deals < 2:
         raise ValueError("exploitability certificate settings are invalid")
+    if (
+        selected_preflop_round <= 0
+        or selected_preflop_round % int(shared["artifactEvery"]) != 0
+        or validation.get("useLatestPostflopArtifact") is not True
+    ):
+        raise ValueError("routed validation artifact selection is invalid")
     per_seed_alpha = (1.0 - confidence) / len(seeds)
     certificate_margin = float(plan["depthBb"]) * math.sqrt(
         math.log(1.0 / per_seed_alpha) / (2.0 * deals)
@@ -197,6 +204,9 @@ def validation_command(plan: dict[str, Any]) -> list[str]:
         str(run_directory(postflop_stage, first_seed)),
         "--postflop-run-b",
         str(run_directory(postflop_stage, second_seed)),
+        "--round",
+        str(validation["selectedPreflopRound"]),
+        "--postflop-latest",
         "--traversals",
         str(validation["trajectoryTraversalsPerSeed"]),
         "--seed",

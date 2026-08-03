@@ -443,6 +443,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--postflop-run-a", type=Path)
     parser.add_argument("--postflop-run-b", type=Path)
     parser.add_argument("--postflop-round", type=int)
+    parser.add_argument("--postflop-latest", action="store_true")
     parser.add_argument("--action-value-rollouts-per-action", type=int, default=0)
     parser.add_argument("--exploitability-certificate-deals", type=int, default=0)
     parser.add_argument("--exploitability-certificate-seed", type=int, default=0xA11CE5EED)
@@ -463,6 +464,10 @@ def main() -> None:
         raise ValueError("both postflop run directories are required for street routing")
     if args.postflop_round is not None and args.postflop_run_a is None:
         raise ValueError("a postflop artifact round requires postflop run directories")
+    if args.postflop_latest and args.postflop_run_a is None:
+        raise ValueError("latest postflop selection requires postflop run directories")
+    if args.postflop_latest and args.postflop_round is not None:
+        raise ValueError("postflop round and latest selection are mutually exclusive")
     if args.action_value_rollouts_per_action == 1 or args.action_value_rollouts_per_action < 0:
         raise ValueError("action-EV rollouts must be zero (disabled) or at least two")
     if args.exploitability_certificate_deals == 1 or args.exploitability_certificate_deals < 0:
@@ -481,7 +486,9 @@ def main() -> None:
     postflop_models = None
     if args.postflop_run_a is not None:
         postflop_round = (
-            args.postflop_round
+            None
+            if args.postflop_latest
+            else args.postflop_round
             if args.postflop_round is not None
             else args.round_number
         )

@@ -44,6 +44,8 @@
     "compactServingGrid": false
   },
   "postRunValidation": {
+    "selectedPreflopRound": 250,
+    "useLatestPostflopArtifact": true,
     "trajectoryTraversalsPerSeed": 10000,
     "actionValueRolloutsPerAction": 64,
     "exploitabilityCertificateDeals": 125000,
