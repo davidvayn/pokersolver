@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
@@ -7,6 +8,7 @@ from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT
 from validate_seeds import (
     StreetRoutedModel,
     action_ev_standard_error_summary,
+    apply_weight_overrides,
     compare,
 )
 
@@ -57,6 +59,10 @@ class RankMarkerModel:
 
 
 class ReachAwareValidationTests(unittest.TestCase):
+    def test_weight_overrides_must_remain_a_paired_seed_comparison(self):
+        with self.assertRaisesRegex(ValueError, "paired frozen weight"):
+            apply_weight_overrides([], (Path("seed-a.safetensors"), None))
+
     def test_action_ev_gate_requires_every_action_at_a_served_decision(self):
         precise = {
             **record([0, 4]),

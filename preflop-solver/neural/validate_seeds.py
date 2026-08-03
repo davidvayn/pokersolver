@@ -139,6 +139,32 @@ def verify_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def verify_weight_override(path: Path) -> dict[str, Any]:
+    payload = path.read_bytes()
+    return {
+        "path": str(path),
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def apply_weight_overrides(
+    models: list[ActionScorer], paths: tuple[Path | None, Path | None]
+) -> list[dict[str, Any]]:
+    if (paths[0] is None) != (paths[1] is None):
+        raise ValueError("both paired frozen weight overrides are required")
+    if paths[0] is None:
+        return []
+    verified: list[dict[str, Any]] = []
+    for model, unresolved in zip(models, paths):
+        assert unresolved is not None
+        path = unresolved.resolve()
+        model.load_weights(str(path))
+        mx.eval(model.parameters())
+        verified.append(verify_weight_override(path))
+    return verified
+
+
 def evaluation_records(
     root: Path,
     depth_bb: int,
@@ -440,10 +466,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--traversals", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0x8A5CD789)
     parser.add_argument("--round", type=int, dest="round_number")
+    parser.add_argument("--weights-a", type=Path)
+    parser.add_argument("--weights-b", type=Path)
     parser.add_argument("--postflop-run-a", type=Path)
     parser.add_argument("--postflop-run-b", type=Path)
     parser.add_argument("--postflop-round", type=int)
     parser.add_argument("--postflop-latest", action="store_true")
+    parser.add_argument("--postflop-weights-a", type=Path)
+    parser.add_argument("--postflop-weights-b", type=Path)
     parser.add_argument("--action-value-rollouts-per-action", type=int, default=0)
     parser.add_argument("--exploitability-certificate-deals", type=int, default=0)
     parser.add_argument("--exploitability-certificate-seed", type=int, default=0xA11CE5EED)
@@ -462,6 +492,12 @@ def main() -> None:
         raise ValueError("postflop artifact round must be positive")
     if (args.postflop_run_a is None) != (args.postflop_run_b is None):
         raise ValueError("both postflop run directories are required for street routing")
+    if (args.weights_a is None) != (args.weights_b is None):
+        raise ValueError("both preflop frozen weight overrides are required")
+    if (args.postflop_weights_a is None) != (args.postflop_weights_b is None):
+        raise ValueError("both postflop frozen weight overrides are required")
+    if args.postflop_weights_a is not None and args.postflop_run_a is None:
+        raise ValueError("postflop weight overrides require postflop run directories")
     if args.postflop_round is not None and args.postflop_run_a is None:
         raise ValueError("a postflop artifact round requires postflop run directories")
     if args.postflop_latest and args.postflop_run_a is None:
@@ -482,8 +518,12 @@ def main() -> None:
     config = first_state["config"]
     if first_state["config"]["seed"] == second_state["config"]["seed"]:
         raise RuntimeError("cross-seed validation requires independent training seeds")
+    preflop_weight_overrides = apply_weight_overrides(
+        [first_model, second_model], (args.weights_a, args.weights_b)
+    )
     postflop_states = None
     postflop_models = None
+    postflop_weight_overrides: list[dict[str, Any]] = []
     if args.postflop_run_a is not None:
         postflop_round = (
             None
@@ -513,6 +553,10 @@ def main() -> None:
             raise RuntimeError("street-routed components must align their independent seeds")
         postflop_states = [first_postflop_state, second_postflop_state]
         postflop_models = [first_postflop_model, second_postflop_model]
+        postflop_weight_overrides = apply_weight_overrides(
+            postflop_models,
+            (args.postflop_weights_a, args.postflop_weights_b),
+        )
         comparison_models = [
             StreetRoutedModel(first_model, first_postflop_model),
             StreetRoutedModel(second_model, second_postflop_model),
@@ -619,7 +663,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v7",
+        "schema": "hu-neural-cross-seed-validation-v8",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
@@ -645,6 +689,10 @@ def main() -> None:
             verify_artifact(latest_artifact(first_state, args.round_number)),
             verify_artifact(latest_artifact(second_state, args.round_number)),
         ],
+        "frozen_weight_overrides": {
+            "preflop": preflop_weight_overrides,
+            "postflop": postflop_weight_overrides,
+        },
         "gates": gates,
         "research_pilot": {
             "purpose": "continuation evidence only; never sufficient for model activation",

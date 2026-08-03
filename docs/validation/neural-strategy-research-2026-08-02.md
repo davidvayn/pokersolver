@@ -54,7 +54,7 @@ No model is activated by this work. The full-hand registry remains empty.
   excluded from browser artifacts. Each snapshot manifest records both hashes,
   its traversal count, and its DCFR strategy weight.
 
-## Long-run readiness
+## Launch readiness (pre-run record)
 
 The short paired rollout comparison, frozen v14 launch plan, bounded-memory
 preflight, deterministic parallel exploitability certificate, and pre-run
@@ -63,8 +63,8 @@ they improved four of six paired stability metrics, materially reduced both
 aggregate-delta checks, and are the smallest tested count that produces a real
 sample-standard-error target.
 
-The remaining work is downstream of training rather than a prerequisite to
-starting it:
+At launch time, the remaining work was downstream of training rather than a
+prerequisite to starting it:
 
 1. Run the two fresh independent composite seeds from the checked-in plan.
 2. Compare the final average-policy network against the sparse direct-policy
@@ -80,3 +80,35 @@ approximate response. Its one-sided Hoeffding chance bound and exact-card deals
 are deterministic across thread counts. The information relaxation is
 conservative enough that a good policy may still fail. That outcome keeps the
 depth hidden and does not justify relabeling a lower bound as release evidence.
+
+## Long-run outcome and temporal distillation
+
+The paired 20bb run completed 310 narrow rounds for each seed. Round 250 was
+stronger than round 310 on an independent 5,000-trajectory comparison, so it
+is the protected preflop checkpoint. The initial wide stage completed 133
+rounds per seed and selected round 100. An authorized extension was stopped
+cleanly after rounds 150 and 200 both regressed against round 100 on broad
+held-out comparisons; the atomic runs remain resumable at rounds 208 and 205.
+Continuing the same updates was therefore rejected as non-productive compute.
+
+Temporal logit averaging was then tested without changing the game. An 80/20
+round-250/300 preflop teacher improved all six authentic/forced stability
+measures, and an 80/20 round-100/200 postflop teacher improved the routed
+candidate. Each teacher was distilled independently into a single frozen
+network per seed. On a fresh 5,000-trajectory confirmation seed, the combined
+students improved over the protected round-250/100 route as follows:
+
+| Distribution | Metric | Protected | Distilled |
+| --- | --- | ---: | ---: |
+| Authentic reach | action-frequency MAE | 0.06324 | 0.06119 |
+| Authentic reach | primary-action agreement | 78.64% | 79.34% |
+| Authentic reach | maximum aggregate delta | 0.00886 | 0.00793 |
+| Forced deviation | action-frequency MAE | 0.07129 | 0.06900 |
+| Forced deviation | primary-action agreement | 76.28% | 77.24% |
+| Forced deviation | maximum aggregate delta | 0.01193 | 0.01066 |
+
+The validator hashes paired frozen-weight overrides and evaluates their actual
+reach rather than treating the original checkpoint artifacts as the candidate.
+This result is a genuine stability improvement, but it still fails the 0.05
+MAE and 85% primary-agreement release gates. It remains hidden and must not be
+described as Approximate GTO.

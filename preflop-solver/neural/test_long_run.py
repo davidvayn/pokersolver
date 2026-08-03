@@ -21,6 +21,13 @@ class LongRunTests(unittest.TestCase):
         self.assertEqual(self.plan["authorizedExtensionHoursPerSeed"], 9.5)
         self.assertEqual(self.plan["sharedTraining"]["valueRolloutsPerAction"], 4)
         self.assertEqual(self.plan["monitorIntervalSeconds"], 600)
+        self.assertEqual(
+            self.plan["executionOutcome"]["status"],
+            "stopped_after_two_consecutive_postflop_regressions",
+        )
+        self.assertEqual(
+            self.plan["executionOutcome"]["selectedPostflopRound"], 100
+        )
 
     def test_certificate_budget_can_clear_the_bound_at_zero_sample_loss(self):
         validation = self.plan["postRunValidation"]

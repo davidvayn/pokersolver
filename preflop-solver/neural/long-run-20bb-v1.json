@@ -7,6 +7,14 @@
   "minimumFreeDiskGiB": 20,
   "targetTrainingHoursPerSeed": 8,
   "authorizedExtensionHoursPerSeed": 9.5,
+  "executionOutcome": {
+    "status": "stopped_after_two_consecutive_postflop_regressions",
+    "narrowCompletedRounds": [310, 310],
+    "wideCompletedRounds": [208, 205],
+    "selectedPreflopRound": 250,
+    "selectedPostflopRound": 100,
+    "resumable": true
+  },
   "stages": [
     {
       "name": "narrow-preflop",
