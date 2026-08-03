@@ -56,14 +56,40 @@ class LogitEnsemble:
         return result
 
 
+class ProbabilityEnsemble:
+    def __init__(self, models: list[ActionScorer], weights: list[float]):
+        self.models = models
+        self.weights = weights
+
+    def __call__(self, features: Any) -> Any:
+        probabilities = None
+        for model, weight in zip(self.models, self.weights):
+            logits = np.asarray(model(features)).reshape(-1)
+            weighted = softmax(logits.astype(np.float64)) * weight
+            probabilities = weighted if probabilities is None else probabilities + weighted
+        assert probabilities is not None
+        return mx.array(np.log(np.maximum(probabilities, 1e-12))[:, None])
+
+
 def teacher_targets(
-    models: list[ActionScorer], weights: list[float], features: np.ndarray
+    models: list[ActionScorer],
+    weights: list[float],
+    features: np.ndarray,
+    ensemble_space: str,
 ) -> np.ndarray:
-    logits = sum(
-        weight * np.asarray(model(mx.array(features))).reshape(-1)
-        for model, weight in zip(models, weights)
-    )
-    return softmax(logits.astype(np.float64)).astype(np.float32)
+    logits = [
+        np.asarray(model(mx.array(features))).reshape(-1)
+        for model in models
+    ]
+    if ensemble_space == "logit":
+        combined = sum(weight * values for values, weight in zip(logits, weights))
+        return softmax(combined.astype(np.float64)).astype(np.float32)
+    if ensemble_space == "probability":
+        return sum(
+            weight * softmax(values.astype(np.float64))
+            for values, weight in zip(logits, weights)
+        ).astype(np.float32)
+    raise ValueError("unknown checkpoint ensemble space")
 
 
 def decision_dataset(
@@ -72,6 +98,7 @@ def decision_dataset(
     teacher_models: list[ActionScorer],
     weights: list[float],
     distill_street: str,
+    ensemble_space: str,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     dataset: list[tuple[np.ndarray, np.ndarray]] = []
     for record in records:
@@ -84,7 +111,14 @@ def decision_dataset(
                 for action in record["actions"]
             ]
         ).astype(np.float16)
-        dataset.append((features, teacher_targets(teacher_models, weights, features)))
+        dataset.append(
+            (
+                features,
+                teacher_targets(
+                    teacher_models, weights, features, ensemble_space
+                ),
+            )
+        )
     if not dataset:
         raise RuntimeError(
             f"distillation corpus reached no {distill_street} decisions"
@@ -185,6 +219,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wide-weights-a", type=Path)
     parser.add_argument("--wide-weights-b", type=Path)
     parser.add_argument("--checkpoint-weights", default="100:0.8,200:0.2")
+    parser.add_argument(
+        "--ensemble-space", choices=("logit", "probability"), default="logit"
+    )
     parser.add_argument("--training-trajectories", type=int, default=1000)
     parser.add_argument("--evaluation-trajectories", type=int, default=1000)
     parser.add_argument("--steps", type=int, default=500)
@@ -281,6 +318,7 @@ def main() -> None:
             teachers[index],
             weights,
             args.distill_street,
+            args.ensemble_space,
         )
         losses = train_student(
             student,
@@ -308,13 +346,16 @@ def main() -> None:
     baseline_routed = [
         StreetRoutedModel(narrow_models[index], wide_models[index]) for index in range(2)
     ]
+    ensemble_type = (
+        LogitEnsemble if args.ensemble_space == "logit" else ProbabilityEnsemble
+    )
     if args.distill_street == "preflop":
         student_routed = [
             StreetRoutedModel(students[index], wide_models[index]) for index in range(2)
         ]
         teacher_routed = [
             StreetRoutedModel(
-                LogitEnsemble(teachers[index], weights), wide_models[index]
+                ensemble_type(teachers[index], weights), wide_models[index]
             )
             for index in range(2)
         ]
@@ -324,13 +365,14 @@ def main() -> None:
         ]
         teacher_routed = [
             StreetRoutedModel(
-                narrow_models[index], LogitEnsemble(teachers[index], weights)
+                narrow_models[index], ensemble_type(teachers[index], weights)
             )
             for index in range(2)
         ]
     report = {
         "schema": "hu-checkpoint-ensemble-distillation-v1",
         "distill_street": args.distill_street,
+        "ensemble_space": args.ensemble_space,
         "protected_rounds": {
             "preflop": args.narrow_round,
             "postflop": args.wide_round,

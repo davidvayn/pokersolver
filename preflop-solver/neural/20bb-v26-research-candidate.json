@@ -1,0 +1,62 @@
+{
+  "schema": "hu-neural-research-candidate-v1",
+  "modelVersion": "hu-20bb-deep-dcfr-v26-research",
+  "depthBb": 20,
+  "status": "rejected_not_activated",
+  "trainingSeeds": [5101, 5102],
+  "components": {
+    "preflop": {
+      "ensembleSpace": "probability",
+      "checkpointRounds": [150, 200, 250, 300],
+      "checkpointWeights": [0.25, 0.25, 0.25, 0.25],
+      "studentBytes": [876050, 876050],
+      "studentSha256": [
+        "bede19e230cda7dbf30a4a39df9e9393d12d2090c921d993e6d67d3f53a18157",
+        "6c02fc99c1b5c65160bde4fdc1d708df0a51c8c254a820a6eacc82a2ccbc4b3b"
+      ]
+    },
+    "postflop": {
+      "ensembleSpace": "probability",
+      "checkpointRounds": [50, 100, 150, 200],
+      "checkpointWeights": [0.25, 0.25, 0.25, 0.25],
+      "studentBytes": [2013717, 2013717],
+      "studentSha256": [
+        "cbc7135f6c4aa38232d511a71d05db1c0f6c5aa0fcd8b58e799c1fbc311eb427",
+        "fba9ae94b3af651a0057cd0e20c91de0c1be0985821b33db5470f2a95c97d07f"
+      ]
+    }
+  },
+  "freshValidation": {
+    "seed": 2236067977,
+    "trajectoriesPerDistribution": 5000,
+    "authentic": {
+      "actionFrequencyMae": 0.056882,
+      "primaryActionAgreement": 0.801537,
+      "maximumAggregateActionDelta": 0.003619
+    },
+    "forcedDeviation": {
+      "actionFrequencyMae": 0.066006,
+      "primaryActionAgreement": 0.778056,
+      "maximumAggregateActionDelta": 0.017
+    }
+  },
+  "exploitabilityScout": {
+    "method": "complete_deal_clairvoyant_best_response_with_hoeffding_ucb",
+    "seed": 43248410349,
+    "dealsPerCandidate": 5000,
+    "perCandidateConfidence": 0.995,
+    "exactBettingTreeNodesPerCandidate": 87700000,
+    "sampleMeanBb": [4.830807442751493, 4.8414417899404025],
+    "sampleStandardErrorBb": [0.0344307160154854, 0.03485043263379204],
+    "hoeffdingMarginBb": 0.460361482600273,
+    "upperBoundBb": [5.291168925351767, 5.301803272540676],
+    "interpretation": "valid_but_too_loose_for_release_due_to_clairvoyant_information_relaxation"
+  },
+  "gates": {
+    "researchPilotStability": true,
+    "releaseActionFrequencyMae": false,
+    "releasePrimaryActionAgreement": false,
+    "releaseExploitabilityUpperBound": false,
+    "releaseActionEvUncertainty": false
+  }
+}

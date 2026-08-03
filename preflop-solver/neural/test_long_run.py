@@ -11,6 +11,9 @@ class LongRunTests(unittest.TestCase):
     def setUp(self):
         self.plan_path = Path(__file__).resolve().with_name("long-run-20bb-v1.json")
         self.plan = load_plan(self.plan_path)
+        self.candidate = json.loads(
+            self.plan_path.with_name("20bb-v26-research-candidate.json").read_text()
+        )
 
     def test_plan_pins_two_fresh_seeds_and_the_authorized_extension(self):
         self.assertEqual(self.plan["seeds"], [5101, 5102])
@@ -78,6 +81,18 @@ class LongRunTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(training_seconds(path), 9.75)
+
+    def test_research_candidate_fails_closed_with_reproducible_components(self):
+        self.assertEqual(self.candidate["status"], "rejected_not_activated")
+        self.assertTrue(self.candidate["gates"]["researchPilotStability"])
+        self.assertFalse(self.candidate["gates"]["releaseExploitabilityUpperBound"])
+        self.assertEqual(
+            self.candidate["components"]["preflop"]["ensembleSpace"],
+            "probability",
+        )
+        for route in ("preflop", "postflop"):
+            for digest in self.candidate["components"][route]["studentSha256"]:
+                self.assertEqual(len(digest), 64)
 
 
 if __name__ == "__main__":
