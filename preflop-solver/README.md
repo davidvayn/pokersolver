@@ -172,6 +172,14 @@ round 310 only improved forced-deviation MAE by 0.05 percentage point. Routed
 validation therefore pins narrow round 250 while selecting the latest immutable
 wide artifact independently.
 
+After wide round 100 improved all six routed stability measures over round 50,
+the user authorized a 9.5-hour per-seed extension beyond the original eight-hour
+composite budget. The plan now leaves narrow fixed at four hours and gives the
+wide stage 13.5 hours total. The extension is conditional rather than an
+automatic "latest wins" run: every 50-round routed checkpoint is evaluated on
+the same held-out seed, and broad regression across two consecutive checkpoints
+stops the extension.
+
 The full-game release validator includes a separate conservative certificate.
 For each exact complete deal, a relaxed responder observes both private hands
 and the full runout and solves the betting tree against the frozen network.

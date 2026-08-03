@@ -67,8 +67,15 @@ def load_plan(path: Path) -> dict[str, Any]:
                 raise ValueError("long-run directories must be unique local names")
             run_directories.add(rendered)
     target_hours = float(plan.get("targetTrainingHoursPerSeed", 0))
-    if not 8 <= target_hours <= 12 or abs(total_minutes / 60 - target_hours) > 1e-9:
-        raise ValueError("stage time must equal the declared 8–12 hour per-seed budget")
+    extension_hours = float(plan.get("authorizedExtensionHoursPerSeed", 0))
+    if (
+        not 8 <= target_hours <= 12
+        or extension_hours < 0
+        or abs(total_minutes / 60 - target_hours - extension_hours) > 1e-9
+    ):
+        raise ValueError(
+            "stage time must equal the base 8–12 hour budget plus its authorized extension"
+        )
     if int(shared.get("valueRolloutsPerAction", 0)) < 2:
         raise ValueError("long-run uncertainty training requires at least two value rollouts")
     if int(plan.get("monitorIntervalSeconds", 0)) < 60:
@@ -256,8 +263,15 @@ def preflight(plan: dict[str, Any], build: bool = True) -> dict[str, Any]:
         "logicalCpus": os.cpu_count(),
         "modelVersion": plan["modelVersion"],
         "seeds": plan["seeds"],
-        "trainingHoursPerSeed": plan["targetTrainingHoursPerSeed"],
-        "totalSeedComputeHours": plan["targetTrainingHoursPerSeed"] * len(plan["seeds"]),
+        "baseTrainingHoursPerSeed": plan["targetTrainingHoursPerSeed"],
+        "authorizedExtensionHoursPerSeed": plan["authorizedExtensionHoursPerSeed"],
+        "trainingHoursPerSeed": plan["targetTrainingHoursPerSeed"]
+        + plan["authorizedExtensionHoursPerSeed"],
+        "totalSeedComputeHours": (
+            plan["targetTrainingHoursPerSeed"]
+            + plan["authorizedExtensionHoursPerSeed"]
+        )
+        * len(plan["seeds"]),
     }
 
 

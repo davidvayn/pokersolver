@@ -6,6 +6,7 @@
   "monitorIntervalSeconds": 600,
   "minimumFreeDiskGiB": 20,
   "targetTrainingHoursPerSeed": 8,
+  "authorizedExtensionHoursPerSeed": 9.5,
   "stages": [
     {
       "name": "narrow-preflop",
@@ -19,7 +20,7 @@
     },
     {
       "name": "wide-postflop",
-      "minutes": 240,
+      "minutes": 810,
       "runDirectory": "20bb-long-v1-wide-seed{seed}",
       "hiddenSizes": "512,256",
       "learningRate": 0.001,

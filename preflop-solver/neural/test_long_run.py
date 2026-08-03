@@ -12,11 +12,13 @@ class LongRunTests(unittest.TestCase):
         self.plan_path = Path(__file__).resolve().with_name("long-run-20bb-v1.json")
         self.plan = load_plan(self.plan_path)
 
-    def test_plan_pins_two_fresh_seeds_and_eight_hours_each(self):
+    def test_plan_pins_two_fresh_seeds_and_the_authorized_extension(self):
         self.assertEqual(self.plan["seeds"], [5101, 5102])
         self.assertEqual(
-            sum(stage["minutes"] for stage in self.plan["stages"]), 8 * 60
+            sum(stage["minutes"] for stage in self.plan["stages"]), 17.5 * 60
         )
+        self.assertEqual(self.plan["targetTrainingHoursPerSeed"], 8)
+        self.assertEqual(self.plan["authorizedExtensionHoursPerSeed"], 9.5)
         self.assertEqual(self.plan["sharedTraining"]["valueRolloutsPerAction"], 4)
         self.assertEqual(self.plan["monitorIntervalSeconds"], 600)
 
@@ -38,6 +40,11 @@ class LongRunTests(unittest.TestCase):
         self.assertIn("--value-rollouts-per-action 4", joined)
         self.assertIn("--learning-rate-decay-start-round 50", joined)
         self.assertIn("--artifact-every 50", joined)
+
+        wide_command = " ".join(
+            trainer_command(self.plan, self.plan["stages"][1], 5101, 90)
+        )
+        self.assertIn("20bb-long-v1-wide-seed5101", wide_command)
 
     def test_validation_command_routes_stages_and_pins_release_budgets(self):
         joined = " ".join(validation_command(self.plan))
