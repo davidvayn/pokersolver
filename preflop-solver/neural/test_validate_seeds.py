@@ -4,7 +4,7 @@ import mlx.core as mx
 import numpy as np
 
 from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT
-from validate_seeds import compare
+from validate_seeds import StreetRoutedModel, compare
 
 
 def state(private_cards):
@@ -53,6 +53,22 @@ class RankMarkerModel:
 
 
 class ReachAwareValidationTests(unittest.TestCase):
+    def test_street_routed_model_selects_the_matching_component(self):
+        features = np.zeros((2, INPUT_FEATURE_COUNT), dtype=np.float32)
+        features[0, 104] = 1.0
+
+        class ConstantModel:
+            def __init__(self, value):
+                self.value = value
+
+            def __call__(self, values):
+                return mx.full((values.shape[0], 1), self.value)
+
+        result = np.asarray(
+            StreetRoutedModel(ConstantModel(3.0), ConstantModel(7.0))(mx.array(features))
+        ).reshape(-1)
+        np.testing.assert_array_equal(result, np.asarray([3.0, 7.0]))
+
     def test_empirical_trajectory_comparison_keeps_repeated_visits(self):
         divergent = record([0, 4])
         agreeing = record([48, 44])

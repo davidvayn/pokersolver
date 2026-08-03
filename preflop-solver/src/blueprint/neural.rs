@@ -46,9 +46,22 @@ struct TrainingNetworkBundle {
     strategy_transform: StrategyTransform,
     networks: Vec<DenseScorer>,
     #[serde(default)]
+    postflop_networks: Option<Vec<DenseScorer>>,
+    #[serde(default)]
     sampling_baseline: Option<DenseScorer>,
     #[serde(default)]
     sampling_baseline_scale: Option<f64>,
+}
+
+impl TrainingNetworkBundle {
+    fn policy_network(&self, street: Street, actor: usize) -> &DenseScorer {
+        let networks = if street == Street::Preflop {
+            &self.networks
+        } else {
+            self.postflop_networks.as_ref().unwrap_or(&self.networks)
+        };
+        &networks[actor]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -281,6 +294,14 @@ impl SampleGenerator {
                 for network in &bundle.networks {
                     network.validate(MODEL_INPUT_COUNT, 1)?;
                 }
+                if let Some(networks) = &bundle.postflop_networks {
+                    if networks.len() != 2 {
+                        return Err("postflop training network bundle is incompatible".into());
+                    }
+                    for network in networks {
+                        network.validate(MODEL_INPUT_COUNT, 1)?;
+                    }
+                }
                 if let Some(baseline) = &bundle.sampling_baseline {
                     baseline.validate(MODEL_INPUT_COUNT, 1)?;
                     let scale = bundle.sampling_baseline_scale.unwrap_or(0.0);
@@ -337,7 +358,7 @@ impl SampleGenerator {
         let Some(bundle) = &self.networks else {
             return vec![1.0 / actions.len() as f64; actions.len()];
         };
-        let network = &bundle.networks[state.actor];
+        let network = bundle.policy_network(state.street, state.actor);
         let state_features = encode_state_features(state, deal, &self.config.game);
         let action_features = actions
             .iter()
@@ -1249,6 +1270,44 @@ mod tests {
             }
             assert_eq!(batched[index].to_bits(), (values[0] as f64).to_bits());
         }
+    }
+
+    #[test]
+    fn street_routed_bundle_selects_preflop_and_postflop_networks() {
+        let scorer = |marker| DenseScorer {
+            layers: vec![DenseLayer {
+                input_size: MODEL_INPUT_COUNT,
+                output_size: 1,
+                activation: DenseActivation::Linear,
+                weights: vec![0.0; MODEL_INPUT_COUNT],
+                biases: vec![marker],
+            }],
+        };
+        let bundle = TrainingNetworkBundle {
+            schema: TRAINING_NETWORK_SCHEMA.to_owned(),
+            input_size: MODEL_INPUT_COUNT,
+            strategy_transform: StrategyTransform::Softmax,
+            networks: vec![scorer(1.0), scorer(2.0)],
+            postflop_networks: Some(vec![scorer(3.0), scorer(4.0)]),
+            sampling_baseline: None,
+            sampling_baseline_scale: None,
+        };
+        assert_eq!(
+            bundle.policy_network(Street::Preflop, 0).layers[0].biases,
+            [1.0]
+        );
+        assert_eq!(
+            bundle.policy_network(Street::Preflop, 1).layers[0].biases,
+            [2.0]
+        );
+        assert_eq!(
+            bundle.policy_network(Street::Flop, 0).layers[0].biases,
+            [3.0]
+        );
+        assert_eq!(
+            bundle.policy_network(Street::River, 1).layers[0].biases,
+            [4.0]
+        );
     }
 
     #[test]

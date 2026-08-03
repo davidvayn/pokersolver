@@ -4,8 +4,11 @@ Status: experimental, rejected, and not activated.
 
 ## Method
 
-All comparisons below use two independent training seeds and the same 1,000
-deterministic evaluation hands per corpus (`seed=9001`). The evaluator samples
+All comparisons below use two independent training seeds. The original reports
+use 1,000 deterministic evaluation traversals per corpus (`seed=9001`); the
+street-routed reports use the validator's pinned `0x8A5CD789` seed. The final
+candidate was also checked with 2,000 traversals at the previously unseen
+`314159265` seed. The evaluator samples
 pure exact-card trajectories, samples both players once at every decision,
 preserves repeated visits, and gives equal total mass to the two frozen-policy
 corpora. The forced-deviation corpus samples both players uniformly. This
@@ -55,6 +58,12 @@ replace any release gate.
 | v14 512/256 hidden layers, round 10 | 4,000 | 8.93% | 63.45% | 2.49% | 9.67% |
 | v14 512/256 hidden layers, round 25 | 10,000 | 8.50% | 66.14% | 4.65% | 9.46% |
 | v15 512/256, learning rate 0.0003, round 10 | 4,000 | 10.08% | 60.15% | 2.19% | 10.46% |
+| v16 512/256, linear decay, round 25 | 10,000 | 7.85% | 64.63% | 3.92% | 8.62% |
+| v9 r50 preflop + v16 r25 postflop | 20,000 / 10,000 | 6.86% | 76.29% | 1.45% | 7.18% |
+| v9 r50 preflop + v16 r50 postflop | 20,000 each | 6.39% | 78.45% | 1.02% | 7.00% |
+| v17 r60 preflop + v16 r50 postflop | 24,000 / 20,000 | 6.29% | 78.76% | 0.42% | 6.93% |
+| same frozen hybrid, independent 2,000-traversal corpus | 24,000 / 20,000 | 6.31% | 78.09% | 0.64% | 6.99% |
+| v17 r70 preflop + v16 r50 postflop | 28,000 / 20,000 | 6.31% | 77.82% | 0.80% | 6.95% |
 
 Deep DCFR+ substantially improves stability over v5, and the standard v6
 schedule is better than either increasing optimizer steps or doubling samples
@@ -156,12 +165,48 @@ rounds, and stopped at rounds 13 and 12 without truncation. Do not extend this
 pair. A future optimization-schedule experiment would need warmup or decay
 rather than simply lowering the constant rate.
 
-Retain v9 as the leading short-run configuration, but do not promote it or
+At this stage, retain v9 as the leading short-run configuration, but do not promote it or
 extrapolate a production pass from cross-seed stability. None of v11 through
 v15 clears the research-only continuation bar, much less the release gates.
 The next paired pilot should test optimization stability rather than another
 value-target or replay change and compare against the exact v9 checkpoints
 before spending 8–12 hours on independent seeds.
+
+## Linear-decay and street-routed pairs
+
+The v16 pair retained the 512/256 model's 0.001 learning rate through round 10
+and decayed it linearly to 0.0003 at round 25. Its round-10 parameters were
+bit-identical to v14, and deterministic interrupted/resumed smoke runs produced
+byte-identical artifacts. Decay improved v14's round-25 MAE, aggregate delta,
+and forced-line MAE, but primary agreement remained weak. Street breakdowns
+showed the wider network was substantially more stable postflop while the
+256/128 v9 network was more stable preflop.
+
+The evaluator therefore gained an optional exact street route: the primary
+network is used preflop and a separately validated network is used on flop,
+turn, and river. Rust generates each composite policy's authentic reachable
+trajectories with the routed networks; Python uses the same route for frequency
+comparison. This is not a union-support approximation. v9 round 50 plus v16
+round 50 improved all headline stability measures over either early component,
+reaching 6.39% MAE, 78.45% agreement, and a 1.02-point maximum aggregate delta.
+
+A constant-rate v9 continuation increased agreement to 79.42% at round 70 but
+worsened MAE to 6.78% and forced-line MAE to 7.50%. v17 reproduced every one of
+v9's 660,868 round-50 artifact parameters exactly, then decayed the narrow
+network from 0.001 at round 50 toward 0.0003 at round 70. Round 60 was the best
+checkpoint: the routed hybrid reached 6.29% MAE, 78.76% agreement, a 0.42-point
+aggregate delta, and 6.93% forced-line MAE. The independent 2,000-traversal
+corpus confirmed 6.31%, 78.09%, 0.64 points, and 6.99%, respectively. Further
+decay to round 70 reduced agreement, so round 60 is frozen as the leading
+research checkpoint.
+
+This hybrid still misses even the relaxed 6%/80% continuation bar and all
+production equilibrium/EV gates remain fail-closed. The browser artifact and
+practice runtime also still expose one baseline network; the dual-network
+route exists only in the training/evaluation interface. Before a long pair,
+freeze and implement the routed artifact schema, confirm deterministic
+end-to-end serving, and add the exploitability-upper-bound and action-EV
+uncertainty evaluators. Do not activate this candidate.
 
 Every browser artifact in this table remains `training_not_activated`.
 `data/practice/full-hand-manifests.json` remains empty.

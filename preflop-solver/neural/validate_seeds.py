@@ -81,6 +81,31 @@ def immutable_game_config(state: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def routing_compatible_config(state: dict[str, Any]) -> dict[str, Any]:
+    """Fields that must agree before composing independently trained streets."""
+    config = state["config"]
+    return {
+        key: config[key]
+        for key in (
+            "depth_bb",
+            "preflop_runout_samples",
+            "flop_runout_samples",
+            "exact_turn_rivers",
+            "compact_serving_grid",
+        )
+    }
+
+
+class StreetRoutedModel:
+    def __init__(self, preflop: ActionScorer, postflop: ActionScorer):
+        self.preflop = preflop
+        self.postflop = postflop
+
+    def __call__(self, features: Any) -> Any:
+        preflop_mask = features[:, 104:105] > 0.5
+        return mx.where(preflop_mask, self.preflop(features), self.postflop(features))
+
+
 def latest_artifact(
     state: dict[str, Any],
     round_number: int | None = None,
@@ -124,6 +149,7 @@ def evaluation_records(
     sample_turn_rivers: bool,
     compact_grid: bool,
     policy_model: ActionScorer | None = None,
+    postflop_policy_model: ActionScorer | None = None,
 ) -> list[dict[str, Any]]:
     subprocess.run(
         ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
@@ -160,16 +186,21 @@ def evaluation_records(
             command.append("--compact-serving-grid")
         if policy_model is not None:
             network = scorer_json(policy_model)
+            postflop_network = (
+                scorer_json(postflop_policy_model)
+                if postflop_policy_model is not None
+                else None
+            )
+            bundle = {
+                "schema": NETWORK_SCHEMA,
+                "input_size": INPUT_FEATURE_COUNT,
+                "strategy_transform": "softmax",
+                "networks": [network, network],
+            }
+            if postflop_network is not None:
+                bundle["postflop_networks"] = [postflop_network, postflop_network]
             network_path.write_text(
-                json.dumps(
-                    {
-                        "schema": NETWORK_SCHEMA,
-                        "input_size": INPUT_FEATURE_COUNT,
-                        "strategy_transform": "softmax",
-                        "networks": [network, network],
-                    },
-                    separators=(",", ":"),
-                ),
+                json.dumps(bundle, separators=(",", ":")),
                 encoding="utf-8",
             )
             command.extend(("--networks", str(network_path)))
@@ -182,7 +213,7 @@ def evaluation_records(
     return records
 
 
-def policy(model: ActionScorer, features: np.ndarray) -> np.ndarray:
+def policy(model: Any, features: np.ndarray) -> np.ndarray:
     logits = np.asarray(model(mx.array(features))).reshape(-1)
     probabilities = softmax(logits.astype(np.float64))
     if not np.all(np.isfinite(probabilities)) or abs(float(probabilities.sum()) - 1.0) > 1e-6:
@@ -191,8 +222,8 @@ def policy(model: ActionScorer, features: np.ndarray) -> np.ndarray:
 
 
 def compare(
-    first_model: ActionScorer,
-    second_model: ActionScorer,
+    first_model: Any,
+    second_model: Any,
     datasets: list[list[dict[str, Any]]],
     depth_bb: int,
     distribution: str,
@@ -295,6 +326,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--traversals", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0x8A5CD789)
     parser.add_argument("--round", type=int, dest="round_number")
+    parser.add_argument("--postflop-run-a", type=Path)
+    parser.add_argument("--postflop-run-b", type=Path)
+    parser.add_argument("--postflop-round", type=int)
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -305,6 +339,12 @@ def main() -> None:
         raise ValueError("evaluation traversals must be positive")
     if args.round_number is not None and args.round_number <= 0:
         raise ValueError("artifact round must be positive")
+    if args.postflop_round is not None and args.postflop_round <= 0:
+        raise ValueError("postflop artifact round must be positive")
+    if (args.postflop_run_a is None) != (args.postflop_run_b is None):
+        raise ValueError("both postflop run directories are required for street routing")
+    if args.postflop_round is not None and args.postflop_run_a is None:
+        raise ValueError("a postflop artifact round requires postflop run directories")
     root = Path(__file__).resolve().parents[2]
     first_state, first_model = load_run(args.run_a.resolve(), args.round_number)
     second_state, second_model = load_run(args.run_b.resolve(), args.round_number)
@@ -313,6 +353,41 @@ def main() -> None:
     config = first_state["config"]
     if first_state["config"]["seed"] == second_state["config"]["seed"]:
         raise RuntimeError("cross-seed validation requires independent training seeds")
+    postflop_states = None
+    postflop_models = None
+    if args.postflop_run_a is not None:
+        postflop_round = (
+            args.postflop_round
+            if args.postflop_round is not None
+            else args.round_number
+        )
+        first_postflop_state, first_postflop_model = load_run(
+            args.postflop_run_a.resolve(), postflop_round
+        )
+        second_postflop_state, second_postflop_model = load_run(
+            args.postflop_run_b.resolve(), postflop_round
+        )
+        if immutable_game_config(first_postflop_state) != immutable_game_config(
+            second_postflop_state
+        ):
+            raise RuntimeError("postflop runs do not share an identical training configuration")
+        if routing_compatible_config(first_state) != routing_compatible_config(
+            first_postflop_state
+        ):
+            raise RuntimeError("preflop and postflop runs use incompatible game abstractions")
+        if [first_state["config"]["seed"], second_state["config"]["seed"]] != [
+            first_postflop_state["config"]["seed"],
+            second_postflop_state["config"]["seed"],
+        ]:
+            raise RuntimeError("street-routed components must align their independent seeds")
+        postflop_states = [first_postflop_state, second_postflop_state]
+        postflop_models = [first_postflop_model, second_postflop_model]
+        comparison_models = [
+            StreetRoutedModel(first_model, first_postflop_model),
+            StreetRoutedModel(second_model, second_postflop_model),
+        ]
+    else:
+        comparison_models = [first_model, second_model]
     evaluation_arguments = (
         root,
         int(config["depth_bb"]),
@@ -323,20 +398,28 @@ def main() -> None:
         not bool(config["exact_turn_rivers"]),
         bool(config["compact_serving_grid"]),
     )
-    first_reach_records = evaluation_records(*evaluation_arguments, policy_model=first_model)
-    second_reach_records = evaluation_records(*evaluation_arguments, policy_model=second_model)
+    first_reach_records = evaluation_records(
+        *evaluation_arguments,
+        policy_model=first_model,
+        postflop_policy_model=postflop_models[0] if postflop_models else None,
+    )
+    second_reach_records = evaluation_records(
+        *evaluation_arguments,
+        policy_model=second_model,
+        postflop_policy_model=postflop_models[1] if postflop_models else None,
+    )
     forced_records = evaluation_records(*evaluation_arguments)
     cross_seed = compare(
-        first_model,
-        second_model,
+        comparison_models[0],
+        comparison_models[1],
         [first_reach_records, second_reach_records],
         int(config["depth_bb"]),
         "equal mixture of both frozen policies over authentic exact-card deals",
         True,
     )
     forced_deviation = compare(
-        first_model,
-        second_model,
+        comparison_models[0],
+        comparison_models[1],
         [forced_records],
         int(config["depth_bb"]),
         "fixed-seed uniform-policy forced-deviation exact-card trajectories",
@@ -361,7 +444,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v4",
+        "schema": "hu-neural-cross-seed-validation-v5",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
@@ -393,6 +476,28 @@ def main() -> None:
             "Independent action-EV standard-error coverage has not reached the release gate.",
         ],
     }
+    if postflop_states is not None:
+        report["policy_routing"] = {
+            "preflop": [str(args.run_a.resolve()), str(args.run_b.resolve())],
+            "postflop": [
+                str(args.postflop_run_a.resolve()),
+                str(args.postflop_run_b.resolve()),
+            ],
+            "completed_traversals": [
+                postflop_round
+                * int(postflop_states[0]["config"]["traversals_per_round"])
+                if postflop_round is not None
+                else postflop_states[0]["completed_traversals"],
+                postflop_round
+                * int(postflop_states[1]["config"]["traversals_per_round"])
+                if postflop_round is not None
+                else postflop_states[1]["completed_traversals"],
+            ],
+        }
+        report["artifacts"].extend(
+            verify_artifact(latest_artifact(state, postflop_round))
+            for state in postflop_states
+        )
     report["integrity_valid"] = all(
         artifact["descriptor_matches"] and artifact["magic_valid"] for artifact in report["artifacts"]
     )

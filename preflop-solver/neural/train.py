@@ -12,6 +12,7 @@ Artifacts remain experimental until independent validation promotes them.
 from __future__ import annotations
 
 import argparse
+import copy
 import gzip
 import hashlib
 import json
@@ -44,7 +45,8 @@ MAX_TRAJECTORY_ACTIONS = 32
 MAX_POLICY_ACTIONS = 8
 STREETS = ("preflop", "flop", "turn", "river")
 ACTIONS = ("fold", "check", "call", "bet", "raise", "all_in")
-RUN_SCHEMA = "hu-neural-mlx-run-v12"
+RUN_SCHEMA = "hu-neural-mlx-run-v13"
+LEGACY_RESUME_SCHEMA = "hu-neural-mlx-run-v9"
 NETWORK_SCHEMA = "hu-neural-training-networks-v4"
 STATE_FEATURE_SCHEMA = "hu-cash-trajectory-poker-aware-v4"
 POKER_FEATURE_OFFSET = 604
@@ -77,6 +79,9 @@ class RunConfig:
     hidden_sizes: tuple[int, int]
     batch_size: int
     learning_rate: float
+    learning_rate_final: float | None
+    learning_rate_decay_start_round: int | None
+    learning_rate_decay_end_round: int | None
     traversals_per_round: int
     steps_per_round: int
     advantage_alpha: float
@@ -1215,6 +1220,15 @@ def export_browser_artifact(
             "activationRound": 2,
         },
         "valueTrainingUnits": "effective_stack_fraction_exported_as_bb",
+        "optimizerSchedule": {
+            "kind": "linear_after_round"
+            if config.learning_rate_final is not None
+            else "constant",
+            "initialLearningRate": config.learning_rate,
+            "finalLearningRate": config.learning_rate_final,
+            "decayStartRound": config.learning_rate_decay_start_round,
+            "decayEndRound": config.learning_rate_decay_end_round,
+        },
         "textureFeatureInitialization": "zero_first_layer_columns",
         "replaySampling": {
             "kind": "four_street_stratified_importance_corrected"
@@ -1285,6 +1299,110 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def migrate_legacy_resume_state(
+    state: dict[str, Any], config: RunConfig, config_hash: str
+) -> tuple[dict[str, Any], bool]:
+    """Upgrade the exact v9 leading run without weakening config pinning."""
+    if state.get("schema") == RUN_SCHEMA:
+        return state, False
+    if state.get("schema") != LEGACY_RESUME_SCHEMA:
+        raise RuntimeError("resume configuration differs from the existing neural run")
+    legacy_config = copy.deepcopy(state.get("config", {}))
+    if legacy_config.get("schema") != LEGACY_RESUME_SCHEMA:
+        raise RuntimeError("legacy neural run has an inconsistent config schema")
+    legacy_config["schema"] = RUN_SCHEMA
+    legacy_config.setdefault("learning_rate_final", None)
+    legacy_config.setdefault("learning_rate_decay_start_round", None)
+    legacy_config.setdefault("learning_rate_decay_end_round", None)
+    legacy_config.setdefault("replay_street_proposal", None)
+    legacy_config.setdefault("value_rollouts_per_action", 1)
+    expected_config = json.loads(json.dumps(asdict(config)))
+    if legacy_config != expected_config:
+        raise RuntimeError("resume configuration differs from the existing neural run")
+    migrated = copy.deepcopy(state)
+    migrated["schema"] = RUN_SCHEMA
+    migrated["config"] = expected_config
+    migrated["config_hash"] = config_hash
+    migrated["migrations"] = migrated.get("migrations", []) + [
+        {
+            "from": LEGACY_RESUME_SCHEMA,
+            "to": RUN_SCHEMA,
+            "kind": "additive_default_fields_only",
+        }
+    ]
+    return migrated, True
+
+
+def backfill_street_file(
+    source_path: Path,
+    street_path: Path,
+    capacity: int,
+    size: int,
+    feature_width: int,
+) -> bool:
+    """Recover v9 replay street ids from the pinned state one-hot features."""
+    if street_path.exists():
+        return False
+    expected_bytes = capacity * feature_width * np.dtype(np.float16).itemsize
+    if not source_path.exists() or source_path.stat().st_size != expected_bytes:
+        raise RuntimeError(f"cannot reconstruct replay streets from {source_path}")
+    if size < 0 or size > capacity:
+        raise RuntimeError("legacy replay reservoir size is invalid")
+    source = np.memmap(
+        source_path,
+        dtype=np.float16,
+        mode="r",
+        shape=(capacity, feature_width),
+    )
+    temporary = street_path.with_suffix(".tmp")
+    streets = np.memmap(temporary, dtype=np.uint8, mode="w+", shape=(capacity,))
+    streets[:] = 0
+    for start in range(0, size, 8192):
+        stop = min(start + 8192, size)
+        encoded = np.asarray(source[start:stop, 104:108], dtype=np.float32)
+        if not np.all(np.sum(encoded, axis=1) == 1.0) or not np.all(
+            (encoded == 0.0) | (encoded == 1.0)
+        ):
+            raise RuntimeError("legacy replay contains invalid street one-hot features")
+        streets[start:stop] = np.argmax(encoded, axis=1).astype(np.uint8)
+    streets.flush()
+    del streets
+    del source
+    os.replace(temporary, street_path)
+    return True
+
+
+def backfill_legacy_replay_streets(run_dir: Path, state: dict[str, Any]) -> None:
+    if int(state.get("completed_rounds", 0)) == 0:
+        return
+    migrated_from_v9 = any(
+        migration.get("from") == LEGACY_RESUME_SCHEMA
+        for migration in state.get("migrations", [])
+    )
+    replay_dir = run_dir / "replay"
+    summaries = state.get("reservoirs", {})
+    missing = []
+    for name in ("value", "advantage_p0", "advantage_p1", "average_strategy"):
+        street_path = replay_dir / f"{name}.street.u8"
+        if not street_path.exists():
+            missing.append(name)
+    if missing and not migrated_from_v9:
+        raise RuntimeError("replay reservoir is missing pinned street metadata")
+    capacity = int(state["config"]["reservoir_capacity"])
+    for name in missing:
+        is_value = name == "value"
+        source_path = replay_dir / (
+            f"{name}.features.f16" if is_value else f"{name}.states.f16"
+        )
+        backfill_street_file(
+            source_path,
+            replay_dir / f"{name}.street.u8",
+            capacity,
+            int(summaries[name]["size"]),
+            INPUT_FEATURE_COUNT if is_value else STATE_FEATURE_COUNT,
+        )
+
+
 def nested_tuple(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(nested_tuple(item) for item in value)
@@ -1294,6 +1412,30 @@ def nested_tuple(value: Any) -> Any:
 def peak_resident_bytes() -> int:
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(usage) if sys.platform == "darwin" else int(usage * 1024)
+
+
+def scheduled_learning_rate(config: RunConfig, round_number: int) -> float:
+    final = config.learning_rate_final
+    start = config.learning_rate_decay_start_round
+    end = config.learning_rate_decay_end_round
+    if final is None:
+        return config.learning_rate
+    if start is None or end is None:
+        raise ValueError("a final learning rate requires decay start and end rounds")
+    if round_number <= start:
+        return config.learning_rate
+    if round_number >= end:
+        return final
+    progress = (round_number - start) / (end - start)
+    return config.learning_rate + (final - config.learning_rate) * progress
+
+
+def set_optimizer_learning_rate(
+    optimizers: dict[str, optim.Optimizer], learning_rate: float
+) -> None:
+    for optimizer in optimizers.values():
+        optimizer.learning_rate = learning_rate
+    mx.eval(*(optimizer.state for optimizer in optimizers.values()))
 
 
 def initialize_models(config: RunConfig) -> tuple[dict[str, ActionScorer], dict[str, optim.Optimizer]]:
@@ -1439,6 +1581,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--depth-bb", type=int, choices=(20, 50, 100), default=20)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--rounds", type=int, default=2)
+    parser.add_argument(
+        "--target-round",
+        type=int,
+        help="stop at this total round; safer than --rounds when resuming",
+    )
     parser.add_argument("--max-minutes", type=float)
     parser.add_argument(
         "--traversals-per-round",
@@ -1485,6 +1632,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--learning-rate", type=float, default=LEADING_20BB_PROFILE["learning_rate"]
     )
+    parser.add_argument("--learning-rate-final", type=float)
+    parser.add_argument("--learning-rate-decay-start-round", type=int)
+    parser.add_argument("--learning-rate-decay-end-round", type=int)
     parser.add_argument(
         "--preflop-runout-samples",
         type=int,
@@ -1522,10 +1672,12 @@ def main() -> None:
         raise ValueError("--replay-street-proposal requires four probabilities")
     if (
         args.rounds <= 0
+        or (args.target_round is not None and args.target_round <= 0)
         or args.traversals_per_round <= 0
         or args.steps_per_round < 0
         or args.advantage_alpha <= 0
         or args.value_rollouts_per_action <= 0
+        or args.learning_rate <= 0
         or not 0 <= args.variance_baseline_scale <= 1
         or (
             street_proposal is not None
@@ -1537,6 +1689,18 @@ def main() -> None:
         or args.artifact_every <= 0
     ):
         raise ValueError("training counts or replay/control parameters are invalid")
+    decay_values = (
+        args.learning_rate_final,
+        args.learning_rate_decay_start_round,
+        args.learning_rate_decay_end_round,
+    )
+    if any(value is not None for value in decay_values) and (
+        any(value is None for value in decay_values)
+        or args.learning_rate_final <= 0
+        or args.learning_rate_decay_start_round < 1
+        or args.learning_rate_decay_end_round <= args.learning_rate_decay_start_round
+    ):
+        raise ValueError("learning-rate decay requires a positive final rate and start < end")
     if args.reservoir_capacity < 100 or args.batch_size <= 0:
         raise ValueError("reservoir capacity and batch size are too small")
     hidden = tuple(int(value) for value in args.hidden_sizes.split(","))
@@ -1550,6 +1714,9 @@ def main() -> None:
         hidden_sizes=(hidden[0], hidden[1]),
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        learning_rate_final=args.learning_rate_final,
+        learning_rate_decay_start_round=args.learning_rate_decay_start_round,
+        learning_rate_decay_end_round=args.learning_rate_decay_end_round,
         traversals_per_round=args.traversals_per_round,
         steps_per_round=args.steps_per_round,
         advantage_alpha=args.advantage_alpha,
@@ -1579,8 +1746,11 @@ def main() -> None:
     state: dict[str, Any]
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        if state.get("schema") != RUN_SCHEMA or state.get("config_hash") != config_hash:
+        state, migrated = migrate_legacy_resume_state(state, config, config_hash)
+        if state.get("config_hash") != config_hash:
             raise RuntimeError("resume configuration differs from the existing neural run")
+        if migrated:
+            atomic_json(state_path, state)
     else:
         state = {
             "schema": RUN_SCHEMA,
@@ -1595,6 +1765,8 @@ def main() -> None:
             "status": "training",
         }
         atomic_json(state_path, state)
+
+    backfill_legacy_replay_streets(run_dir, state)
 
     models, optimizers = initialize_models(config)
     if int(state["completed_rounds"]) > 0:
@@ -1646,7 +1818,13 @@ def main() -> None:
     started = time.monotonic()
     deadline = started + args.max_minutes * 60 if args.max_minutes is not None else None
     first_round = int(state["completed_rounds"]) + 1
-    last_round = int(state["completed_rounds"]) + args.rounds
+    last_round = (
+        args.target_round
+        if args.target_round is not None
+        else int(state["completed_rounds"]) + args.rounds
+    )
+    if last_round < first_round:
+        raise ValueError("target round must exceed the completed round")
     action_abstraction: dict[str, Any] | None = None
     exported_rounds = {int(artifact["round"]) for artifact in state.get("artifacts", [])}
 
@@ -1654,6 +1832,8 @@ def main() -> None:
         if STOP_REQUESTED or (deadline is not None and time.monotonic() >= deadline):
             break
         round_started = time.monotonic()
+        round_learning_rate = scheduled_learning_rate(config, round_number)
+        set_optimizer_learning_rate(optimizers, round_learning_rate)
         shard = generate_shard(
             binary,
             run_dir,
@@ -1738,6 +1918,7 @@ def main() -> None:
             "variance_baseline_scale": config.variance_baseline_scale,
             "replay_street_proposal": config.replay_street_proposal,
             "value_rollouts_per_action": config.value_rollouts_per_action,
+            "learning_rate": round_learning_rate,
             "records": len(records),
             "records_truncated": bool(metadata["truncated"]),
             "losses": losses,
