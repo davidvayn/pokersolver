@@ -21,6 +21,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-cache-refresh" => run_preflop_cache_refresh(&args[1..]),
         "preflop-dcfr" => run_preflop_dcfr(&args[1..]),
         "preflop-evaluate" => run_preflop_evaluate(&args[1..]),
+        "preflop-attribution" => run_preflop_attribution(&args[1..]),
+        "preflop-compact" => run_preflop_compact(&args[1..]),
         "preflop-distill-samples" => run_preflop_distill_samples(&args[1..]),
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
         "full-game-lbr" => run_full_game_lbr(&args[1..]),
@@ -225,8 +227,36 @@ fn run_preflop_dcfr(args: &[String]) -> Result<(), Box<dyn Error>> {
     let output = value(args, "--output")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("preflop-policy.json"));
-    let artifact =
-        blueprint::preflop::solve_preflop(&cache, iterations, seed, model_version, &cache_path)?;
+    let dcfr = blueprint::DcfrParameters {
+        positive_regret_exponent: parse_or(
+            args,
+            "--dcfr-alpha",
+            cache.game.dcfr.positive_regret_exponent,
+        )?,
+        negative_regret_exponent: parse_or(
+            args,
+            "--dcfr-beta",
+            cache.game.dcfr.negative_regret_exponent,
+        )?,
+        strategy_exponent: parse_or(args, "--dcfr-gamma", cache.game.dcfr.strategy_exponent)?,
+    };
+    let variant = match value(args, "--solver").as_deref().unwrap_or("dcfr") {
+        "dcfr" => blueprint::preflop::PreflopSolverVariant::Dcfr,
+        "mccfr-plus" => blueprint::preflop::PreflopSolverVariant::MccfrPlus,
+        other => return Err(format!("unsupported preflop solver variant: {other}").into()),
+    };
+    let artifact = blueprint::preflop::solve_preflop_with_options(
+        &cache,
+        &cache_path,
+        blueprint::preflop::PreflopSolveOptions {
+            iterations,
+            seed,
+            model_version,
+            dcfr,
+            exploration_probability: parse_or(args, "--exploration", 0.05f64)?,
+            variant,
+        },
+    )?;
     artifact.write(&output)?;
     println!(
         "{}",
@@ -256,6 +286,46 @@ fn run_preflop_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
         fs::write(path, format!("{output}\n"))?;
     }
     println!("{output}");
+    Ok(())
+}
+
+fn run_preflop_attribution(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for preflop attribution")?;
+    let policy_path = value(args, "--policy")
+        .map(PathBuf::from)
+        .ok_or("--policy is required for preflop attribution")?;
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
+    let attribution = blueprint::preflop::attribute_policy_leaks(
+        &cache,
+        &policy,
+        parse_or(args, "--top", 50usize)?,
+    )?;
+    let output = serde_json::to_string_pretty(&attribution)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+    }
+    println!("{output}");
+    Ok(())
+}
+
+fn run_preflop_compact(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let policy_path = value(args, "--policy")
+        .map(PathBuf::from)
+        .ok_or("--policy is required for compact preflop export")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-policy.bin"));
+    let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
+    let summary = blueprint::preflop::export_compact_preflop_policy(&policy, &output)?;
+    println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
 }
 
@@ -692,7 +762,11 @@ Preflop continuation/solve options:
   preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
   preflop-cache-refresh --cache <json.gz> --output <json.gz>
   preflop-dcfr --cache <json.gz> [--iterations 100000] [--seed 1]
+    [--solver dcfr|mccfr-plus] [--dcfr-alpha 1.5] [--dcfr-beta 0]
+    [--dcfr-gamma 2] [--exploration 0.05]
   preflop-evaluate --cache <json.gz> --policy <json> [--output <json>]
+  preflop-attribution --cache <json.gz> --policy <json> [--top 50] [--output <json>]
+  preflop-compact --policy <json> [--output <bin>]
   preflop-distill-samples --cache <json.gz> --policy <json> --output <jsonl.gz>
   preflop-evaluate-neural --cache <json.gz> --networks <json> [--output <json>]
 

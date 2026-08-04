@@ -25,7 +25,26 @@ use std::path::{Path, PathBuf};
 const CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v1";
 const POLICY_SCHEMA: &str = "hu-tabular-preflop-dcfr-v1";
 const EVALUATION_SCHEMA: &str = "hu-preflop-information-set-response-v1";
+const ATTRIBUTION_SCHEMA: &str = "hu-preflop-local-leak-attribution-v1";
 const EXTERNAL_SAMPLING_EXPLORATION: f64 = 0.05;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreflopSolverVariant {
+    #[default]
+    Dcfr,
+    MccfrPlus,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreflopSolveOptions {
+    pub iterations: u64,
+    pub seed: u64,
+    pub model_version: String,
+    pub dcfr: DcfrParameters,
+    pub exploration_probability: f64,
+    pub variant: PreflopSolverVariant,
+}
 
 #[derive(Clone, Debug)]
 pub struct ContinuationCacheConfig {
@@ -229,6 +248,10 @@ pub struct PreflopPolicyArtifact {
     pub seed: u64,
     pub iterations: u64,
     pub sampling_exploration_probability: f64,
+    #[serde(default)]
+    pub solver_dcfr: DcfrParameters,
+    #[serde(default)]
+    pub solver_variant: PreflopSolverVariant,
     pub continuation_cache_sha256: String,
     pub game: BlueprintConfig,
     pub strategies: Vec<PreflopPolicyEntry>,
@@ -264,6 +287,12 @@ impl PreflopPolicyArtifact {
         self.game.validate()?;
         if self.game.effective_stack_bb != self.depth_bb
             || !(0.0..1.0).contains(&self.sampling_exploration_probability)
+            || !self.solver_dcfr.positive_regret_exponent.is_finite()
+            || !self.solver_dcfr.negative_regret_exponent.is_finite()
+            || !self.solver_dcfr.strategy_exponent.is_finite()
+            || self.solver_dcfr.positive_regret_exponent < 0.0
+            || self.solver_dcfr.negative_regret_exponent < 0.0
+            || self.solver_dcfr.strategy_exponent < 0.0
             || self.continuation_cache_sha256.len() != 64
             || !self
                 .continuation_cache_sha256
@@ -307,6 +336,50 @@ pub struct PreflopEvaluation {
     pub interpretation: String,
 }
 
+/// A policy-reach-weighted one-step deviation diagnostic.  The action values
+/// hold every later decision at the evaluated policy, so these rows identify
+/// concrete local leaks without pretending that their sum is a full best
+/// response or an exploitability decomposition.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PreflopLeakEntry {
+    pub key: String,
+    pub player: usize,
+    pub hand_class: String,
+    pub public_history: Vec<String>,
+    pub reach_probability: f64,
+    pub action_labels: Vec<String>,
+    pub policy_probabilities: Vec<f64>,
+    pub action_values_bb: Vec<f64>,
+    pub policy_value_bb: f64,
+    pub best_action: String,
+    pub best_action_value_bb: f64,
+    pub conditional_ev_gain_bb: f64,
+    pub reach_weighted_ev_gain_bb_per_hand: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PreflopPublicHistoryLeak {
+    pub player: usize,
+    pub public_history: Vec<String>,
+    pub information_sets: usize,
+    pub policy_reach_probability: f64,
+    pub reach_weighted_ev_gain_bb_per_hand: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PreflopLeakAttribution {
+    pub schema: String,
+    pub corpus_deals: usize,
+    pub policy_model_version: String,
+    pub top_per_player: usize,
+    pub evaluated_information_sets: [usize; 2],
+    pub total_policy_reach_weighted_local_gain_bb: [f64; 2],
+    pub policy_lookup_coverage: f64,
+    pub players: [Vec<PreflopLeakEntry>; 2],
+    pub public_histories: [Vec<PreflopPublicHistoryLeak>; 2],
+    pub interpretation: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct DistillationDatasetSummary {
     pub schema: &'static str,
@@ -314,6 +387,20 @@ pub struct DistillationDatasetSummary {
     pub policy_information_sets: usize,
     pub covered_policy_information_sets: usize,
     pub coverage: f64,
+    pub output: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CompactPreflopPolicySummary {
+    pub schema: &'static str,
+    pub format_version: u16,
+    pub model_version: String,
+    pub information_sets: usize,
+    pub probabilities: usize,
+    pub bytes: u64,
+    pub sha256: String,
+    pub maximum_probability_quantization_error: f64,
+    pub quantized_probability_sums_valid: bool,
     pub output: String,
 }
 
@@ -442,22 +529,60 @@ struct PreflopDcfrSolver<'a> {
     rng: SplitMix64,
     iterations: u64,
     discounts: DiscountAccumulator,
+    exploration_probability: f64,
+    variant: PreflopSolverVariant,
 }
 
 impl<'a> PreflopDcfrSolver<'a> {
+    #[cfg(test)]
     fn new(cache: &'a ContinuationCache, seed: u64) -> Self {
+        Self::with_parameters(
+            cache,
+            seed,
+            cache.game.dcfr.clone(),
+            EXTERNAL_SAMPLING_EXPLORATION,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_parameters(
+        cache: &'a ContinuationCache,
+        seed: u64,
+        dcfr: DcfrParameters,
+        exploration_probability: f64,
+    ) -> Self {
+        Self::with_variant(
+            cache,
+            seed,
+            dcfr,
+            exploration_probability,
+            PreflopSolverVariant::Dcfr,
+        )
+    }
+
+    fn with_variant(
+        cache: &'a ContinuationCache,
+        seed: u64,
+        dcfr: DcfrParameters,
+        exploration_probability: f64,
+        variant: PreflopSolverVariant,
+    ) -> Self {
         Self {
             cache,
             nodes: BTreeMap::new(),
             rng: SplitMix64::new(seed),
             iterations: 0,
-            discounts: DiscountAccumulator::new(cache.game.dcfr.clone()),
+            discounts: DiscountAccumulator::new(dcfr),
+            exploration_probability,
+            variant,
         }
     }
 
     fn train(&mut self, iterations: u64) {
         while self.iterations < iterations {
-            self.discounts.advance(self.iterations + 1);
+            if self.variant == PreflopSolverVariant::Dcfr {
+                self.discounts.advance(self.iterations + 1);
+            }
             let traverser = self.iterations as usize % 2;
             let deal_index = self.rng.index(self.cache.deals.len());
             let deal = self.cache.deal(deal_index);
@@ -503,7 +628,9 @@ impl<'a> PreflopDcfrSolver<'a> {
                     .map(|action| action.label.clone())
                     .collect::<Vec<_>>()
             );
-            node.apply_dcfr_discount(self.iterations + 1, &self.discounts);
+            if self.variant == PreflopSolverVariant::Dcfr {
+                node.apply_dcfr_discount(self.iterations + 1, &self.discounts);
+            }
             node.current_strategy()
         };
 
@@ -528,23 +655,31 @@ impl<'a> PreflopDcfrSolver<'a> {
             let node = self.nodes.get_mut(&key).expect("preflop node inserted");
             for (regret, value) in node.regrets.iter_mut().zip(values) {
                 *regret += sampled_opponent_reach_ratio * (value - node_value);
+                if self.variant == PreflopSolverVariant::MccfrPlus {
+                    *regret = regret.max(0.0);
+                }
             }
             node.regret_updates += 1;
             node_value
         } else {
             let node = self.nodes.get_mut(&key).expect("preflop node inserted");
+            let averaging_weight = if self.variant == PreflopSolverVariant::MccfrPlus {
+                (self.iterations + 1) as f64
+            } else {
+                1.0
+            };
             for (sum, probability) in node.strategy_sum.iter_mut().zip(&strategy) {
                 // The opponent's earlier actions were drawn from the exploratory
                 // behavior policy. Correct their sampled reach back to the target
                 // policy before accumulating the average strategy.
-                *sum += sampled_opponent_reach_ratio * probability;
+                *sum += averaging_weight * sampled_opponent_reach_ratio * probability;
             }
             node.average_visits += 1;
             let behavior = strategy
                 .iter()
                 .map(|probability| {
-                    (1.0 - EXTERNAL_SAMPLING_EXPLORATION) * probability
-                        + EXTERNAL_SAMPLING_EXPLORATION / strategy.len() as f64
+                    (1.0 - self.exploration_probability) * probability
+                        + self.exploration_probability / strategy.len() as f64
                 })
                 .collect::<Vec<_>>();
             let selected = sample_index(&behavior, &mut self.rng);
@@ -566,6 +701,8 @@ impl<'a> PreflopDcfrSolver<'a> {
         seed: u64,
         cache_sha256: String,
     ) -> PreflopPolicyArtifact {
+        let solver_dcfr = self.discounts.parameters.clone();
+        let solver_variant = self.variant;
         let strategies = self
             .nodes
             .into_iter()
@@ -593,7 +730,9 @@ impl<'a> PreflopDcfrSolver<'a> {
             depth_bb: self.cache.depth_bb,
             seed,
             iterations: self.iterations,
-            sampling_exploration_probability: EXTERNAL_SAMPLING_EXPLORATION,
+            sampling_exploration_probability: self.exploration_probability,
+            solver_dcfr,
+            solver_variant,
             continuation_cache_sha256: cache_sha256,
             game: self.cache.game.clone(),
             strategies,
@@ -866,14 +1005,175 @@ pub fn solve_preflop(
     model_version: String,
     cache_path: &Path,
 ) -> Result<PreflopPolicyArtifact, Box<dyn Error>> {
-    if iterations == 0 {
+    solve_preflop_with_parameters(
+        cache,
+        iterations,
+        seed,
+        model_version,
+        cache_path,
+        cache.game.dcfr.clone(),
+        EXTERNAL_SAMPLING_EXPLORATION,
+    )
+}
+
+pub fn solve_preflop_with_parameters(
+    cache: &ContinuationCache,
+    iterations: u64,
+    seed: u64,
+    model_version: String,
+    cache_path: &Path,
+    dcfr: DcfrParameters,
+    exploration_probability: f64,
+) -> Result<PreflopPolicyArtifact, Box<dyn Error>> {
+    solve_preflop_with_options(
+        cache,
+        cache_path,
+        PreflopSolveOptions {
+            iterations,
+            seed,
+            model_version,
+            dcfr,
+            exploration_probability,
+            variant: PreflopSolverVariant::Dcfr,
+        },
+    )
+}
+
+pub fn solve_preflop_with_options(
+    cache: &ContinuationCache,
+    cache_path: &Path,
+    options: PreflopSolveOptions,
+) -> Result<PreflopPolicyArtifact, Box<dyn Error>> {
+    if options.iterations == 0 {
         return Err("preflop DCFR iterations must be positive".into());
     }
-    let mut solver = PreflopDcfrSolver::new(cache, seed);
-    solver.train(iterations);
-    let artifact = solver.artifact(model_version, seed, sha256_file(cache_path)?);
+    if !options.dcfr.positive_regret_exponent.is_finite()
+        || !options.dcfr.negative_regret_exponent.is_finite()
+        || !options.dcfr.strategy_exponent.is_finite()
+        || options.dcfr.positive_regret_exponent < 0.0
+        || options.dcfr.negative_regret_exponent < 0.0
+        || options.dcfr.strategy_exponent < 0.0
+        || !(0.0..1.0).contains(&options.exploration_probability)
+    {
+        return Err("preflop DCFR parameters are invalid".into());
+    }
+    let mut solver = PreflopDcfrSolver::with_variant(
+        cache,
+        options.seed,
+        options.dcfr,
+        options.exploration_probability,
+        options.variant,
+    );
+    solver.train(options.iterations);
+    let artifact = solver.artifact(
+        options.model_version,
+        options.seed,
+        sha256_file(cache_path)?,
+    );
     artifact.validate()?;
     Ok(artifact)
+}
+
+pub fn export_compact_preflop_policy(
+    artifact: &PreflopPolicyArtifact,
+    output: &Path,
+) -> Result<CompactPreflopPolicySummary, Box<dyn Error>> {
+    const MAGIC: &[u8; 8] = b"HUPFTAB1";
+    const FORMAT_VERSION: u16 = 1;
+    artifact.validate()?;
+    if artifact.model_version.len() > u16::MAX as usize
+        || artifact.strategies.len() > u32::MAX as usize
+    {
+        return Err("compact preflop policy metadata is too large".into());
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = output.with_extension("tmp");
+    let mut writer = BufWriter::new(fs::File::create(&temporary)?);
+    writer.write_all(MAGIC)?;
+    writer.write_all(&FORMAT_VERSION.to_le_bytes())?;
+    writer.write_all(&artifact.depth_bb.to_le_bytes())?;
+    writer.write_all(&(artifact.model_version.len() as u16).to_le_bytes())?;
+    writer.write_all(artifact.model_version.as_bytes())?;
+    writer.write_all(&(artifact.strategies.len() as u32).to_le_bytes())?;
+    let mut probabilities = 0usize;
+    let mut maximum_error = 0.0f64;
+    let mut sums_valid = true;
+    for entry in &artifact.strategies {
+        if entry.key.len() > u16::MAX as usize
+            || entry.action_labels.len() > u8::MAX as usize
+            || entry
+                .action_labels
+                .iter()
+                .any(|label| label.len() > u8::MAX as usize)
+        {
+            return Err("compact preflop policy entry is too large".into());
+        }
+        let quantized = quantize_probabilities_u16(&entry.probabilities);
+        sums_valid &= quantized.iter().map(|value| *value as u64).sum::<u64>() == u16::MAX as u64;
+        for (original, encoded) in entry.probabilities.iter().zip(&quantized) {
+            maximum_error = maximum_error.max((original - *encoded as f64 / u16::MAX as f64).abs());
+        }
+        probabilities += quantized.len();
+        writer.write_all(&(entry.key.len() as u16).to_le_bytes())?;
+        writer.write_all(entry.key.as_bytes())?;
+        writer.write_all(&[entry.action_labels.len() as u8])?;
+        for label in &entry.action_labels {
+            writer.write_all(&[label.len() as u8])?;
+            writer.write_all(label.as_bytes())?;
+        }
+        for probability in quantized {
+            writer.write_all(&probability.to_le_bytes())?;
+        }
+    }
+    writer.flush()?;
+    drop(writer);
+    fs::rename(&temporary, output)?;
+    let bytes = fs::metadata(output)?.len();
+    Ok(CompactPreflopPolicySummary {
+        schema: "hu-compact-tabular-preflop-policy-summary-v1",
+        format_version: FORMAT_VERSION,
+        model_version: artifact.model_version.clone(),
+        information_sets: artifact.strategies.len(),
+        probabilities,
+        bytes,
+        sha256: sha256_file(output)?,
+        maximum_probability_quantization_error: maximum_error,
+        quantized_probability_sums_valid: sums_valid,
+        output: output.display().to_string(),
+    })
+}
+
+fn quantize_probabilities_u16(probabilities: &[f64]) -> Vec<u16> {
+    let scale = u16::MAX as f64;
+    let scaled = probabilities
+        .iter()
+        .map(|probability| probability * scale)
+        .collect::<Vec<_>>();
+    let mut quantized = scaled
+        .iter()
+        .map(|value| value.floor() as u16)
+        .collect::<Vec<_>>();
+    let assigned = quantized.iter().map(|value| *value as u64).sum::<u64>();
+    let remaining = u16::MAX as u64 - assigned;
+    let mut order = scaled
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (index, value - value.floor()))
+        .collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    for (index, _) in order.into_iter().take(remaining as usize) {
+        quantized[index] += 1;
+    }
+    quantized
 }
 
 pub fn compare_continuation_caches(
@@ -1158,6 +1458,93 @@ pub fn evaluate_policy(
     }
 }
 
+pub fn attribute_policy_leaks(
+    cache: &ContinuationCache,
+    artifact: &PreflopPolicyArtifact,
+    top_per_player: usize,
+) -> Result<PreflopLeakAttribution, Box<dyn Error>> {
+    if cache.game != artifact.game {
+        return Err("preflop policy and continuation cache use different games".into());
+    }
+    if top_per_player == 0 {
+        return Err("preflop leak attribution requires at least one row per player".into());
+    }
+    let policy = ArtifactPolicy::new(artifact);
+    let mut counters = LookupCounters::default();
+    let mut players: [Vec<PreflopLeakEntry>; 2] = std::array::from_fn(|_| Vec::new());
+    collect_local_leak_entries(
+        cache,
+        &policy,
+        root_worlds(cache),
+        &mut players,
+        &mut counters,
+    );
+    let evaluated_information_sets = [players[0].len(), players[1].len()];
+    let total_policy_reach_weighted_local_gain_bb = std::array::from_fn(|player| {
+        players[player]
+            .iter()
+            .map(|entry| entry.reach_weighted_ev_gain_bb_per_hand)
+            .sum()
+    });
+    let public_histories = std::array::from_fn(|player| {
+        let mut groups = BTreeMap::<Vec<String>, (usize, f64, f64)>::new();
+        for entry in &players[player] {
+            let group = groups
+                .entry(entry.public_history.clone())
+                .or_insert((0, 0.0, 0.0));
+            group.0 += 1;
+            group.1 += entry.reach_probability;
+            group.2 += entry.reach_weighted_ev_gain_bb_per_hand;
+        }
+        let mut groups = groups
+            .into_iter()
+            .map(
+                |(public_history, (information_sets, policy_reach_probability, gain))| {
+                    PreflopPublicHistoryLeak {
+                        player,
+                        public_history,
+                        information_sets,
+                        policy_reach_probability,
+                        reach_weighted_ev_gain_bb_per_hand: gain,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            right
+                .reach_weighted_ev_gain_bb_per_hand
+                .total_cmp(&left.reach_weighted_ev_gain_bb_per_hand)
+                .then_with(|| left.public_history.cmp(&right.public_history))
+        });
+        groups
+    });
+    for entries in &mut players {
+        entries.sort_by(|left, right| {
+            right
+                .reach_weighted_ev_gain_bb_per_hand
+                .total_cmp(&left.reach_weighted_ev_gain_bb_per_hand)
+                .then_with(|| left.key.cmp(&right.key))
+        });
+        entries.truncate(top_per_player);
+    }
+    Ok(PreflopLeakAttribution {
+        schema: ATTRIBUTION_SCHEMA.to_owned(),
+        corpus_deals: cache.deals.len(),
+        policy_model_version: artifact.model_version.clone(),
+        top_per_player,
+        evaluated_information_sets,
+        total_policy_reach_weighted_local_gain_bb,
+        policy_lookup_coverage: if counters.queries == 0 {
+            0.0
+        } else {
+            1.0 - counters.misses as f64 / counters.queries as f64
+        },
+        players,
+        public_histories,
+        interpretation: "policy-reach-weighted one-step deviation gains with all later decisions fixed to the evaluated policy; rows localize leaks but are not additive best-response contributions or a full-game exploitability estimate".to_owned(),
+    })
+}
+
 pub fn evaluate_neural_policy(
     cache: &ContinuationCache,
     network_path: &Path,
@@ -1368,6 +1755,111 @@ fn root_worlds(cache: &ContinuationCache) -> Vec<WeightedWorld> {
             weight,
         })
         .collect()
+}
+
+fn collect_local_leak_entries<P: Policy>(
+    cache: &ContinuationCache,
+    policy: &P,
+    worlds: Vec<WeightedWorld>,
+    players: &mut [Vec<PreflopLeakEntry>; 2],
+    counters: &mut LookupCounters,
+) {
+    if worlds.is_empty()
+        || worlds[0].state.terminal.is_some()
+        || worlds[0].state.street != Street::Preflop
+    {
+        return;
+    }
+    let actor = worlds[0].state.actor;
+    debug_assert!(worlds.iter().all(|world| world.state.actor == actor));
+    let mut information_sets = BTreeMap::<String, Vec<WeightedWorld>>::new();
+    for world in &worlds {
+        let deal = cache.deal(world.deal_index);
+        information_sets
+            .entry(information_key(&world.state, &deal))
+            .or_default()
+            .push(world.clone());
+    }
+    for (key, group) in information_sets {
+        let actions = group[0].state.legal_actions(&cache.game);
+        let deal = cache.deal(group[0].deal_index);
+        let probabilities = policy.strategy(&group[0].state, &deal, &actions, counters);
+        let reach_probability = group.iter().map(|world| world.weight).sum::<f64>();
+        if reach_probability <= 0.0 {
+            continue;
+        }
+        let action_weighted_values = actions
+            .iter()
+            .map(|action| {
+                let p0_value = policy_value_worlds(
+                    cache,
+                    policy,
+                    group
+                        .iter()
+                        .map(|world| WeightedWorld {
+                            state: world.state.apply(action, &cache.game),
+                            deal_index: world.deal_index,
+                            weight: world.weight,
+                        })
+                        .collect(),
+                    counters,
+                );
+                if actor == 0 {
+                    p0_value
+                } else {
+                    -p0_value
+                }
+            })
+            .collect::<Vec<_>>();
+        let policy_weighted_value = probabilities
+            .iter()
+            .zip(&action_weighted_values)
+            .map(|(probability, value)| probability * value)
+            .sum::<f64>();
+        let (best_index, best_weighted_value) = action_weighted_values
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .expect("preflop information set has a legal action");
+        let reach_weighted_gain = (best_weighted_value - policy_weighted_value).max(0.0);
+        players[actor].push(PreflopLeakEntry {
+            key,
+            player: actor,
+            hand_class: hand_class(&deal, actor),
+            public_history: group[0].state.public_history.clone(),
+            reach_probability,
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            policy_probabilities: probabilities,
+            action_values_bb: action_weighted_values
+                .iter()
+                .map(|value| value / reach_probability)
+                .collect(),
+            policy_value_bb: policy_weighted_value / reach_probability,
+            best_action: actions[best_index].label.clone(),
+            best_action_value_bb: best_weighted_value / reach_probability,
+            conditional_ev_gain_bb: reach_weighted_gain / reach_probability,
+            reach_weighted_ev_gain_bb_per_hand: reach_weighted_gain,
+        });
+    }
+
+    let actions = worlds[0].state.legal_actions(&cache.game);
+    for (action_index, action) in actions.iter().enumerate() {
+        let branch = worlds
+            .iter()
+            .filter_map(|world| {
+                let deal = cache.deal(world.deal_index);
+                let strategy = policy.strategy(&world.state, &deal, &actions, counters);
+                let probability = strategy[action_index];
+                (probability > 0.0).then(|| WeightedWorld {
+                    state: world.state.apply(action, &cache.game),
+                    deal_index: world.deal_index,
+                    weight: world.weight * probability,
+                })
+            })
+            .collect();
+        collect_local_leak_entries(cache, policy, branch, players, counters);
+    }
 }
 
 fn best_response_worlds<P: Policy>(
@@ -1851,6 +2343,95 @@ mod tests {
             .strategies
             .iter()
             .all(|entry| (entry.probabilities.iter().sum::<f64>() - 1.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn custom_solver_parameters_are_recorded_and_validated() {
+        let cache = synthetic_cache(7);
+        let dcfr = DcfrParameters {
+            positive_regret_exponent: 2.0,
+            negative_regret_exponent: 0.5,
+            strategy_exponent: 3.0,
+        };
+        let mut solver = PreflopDcfrSolver::with_parameters(&cache, 11, dcfr.clone(), 0.02);
+        solver.train(200);
+        let artifact = solver.artifact("test-v28".to_owned(), 11, "a".repeat(64));
+        artifact.validate().unwrap();
+        assert_eq!(artifact.solver_dcfr, dcfr);
+        assert_eq!(artifact.sampling_exploration_probability, 0.02);
+    }
+
+    #[test]
+    fn mccfr_plus_clamps_regrets_and_records_variant() {
+        let cache = synthetic_cache(7);
+        let mut solver = PreflopDcfrSolver::with_variant(
+            &cache,
+            11,
+            DcfrParameters::default(),
+            0.05,
+            PreflopSolverVariant::MccfrPlus,
+        );
+        solver.train(200);
+        assert!(solver
+            .nodes
+            .values()
+            .flat_map(|node| &node.regrets)
+            .all(|regret| *regret >= 0.0));
+        let artifact = solver.artifact("test-v28-plus".to_owned(), 11, "a".repeat(64));
+        assert_eq!(artifact.solver_variant, PreflopSolverVariant::MccfrPlus);
+        artifact.validate().unwrap();
+    }
+
+    #[test]
+    fn compact_policy_quantization_preserves_probability_sums() {
+        let cache = synthetic_cache(7);
+        let mut solver = PreflopDcfrSolver::new(&cache, 11);
+        solver.train(200);
+        let artifact = solver.artifact("test-v28".to_owned(), 11, "a".repeat(64));
+        let output = std::env::temp_dir().join(format!(
+            "pokersolver-compact-preflop-{}.bin",
+            std::process::id()
+        ));
+        let summary = export_compact_preflop_policy(&artifact, &output).unwrap();
+        let bytes = fs::read(&output).unwrap();
+        fs::remove_file(&output).unwrap();
+        assert_eq!(&bytes[..8], b"HUPFTAB1");
+        assert_eq!(summary.information_sets, artifact.strategies.len());
+        assert!(summary.quantized_probability_sums_valid);
+        assert!(summary.maximum_probability_quantization_error <= 1.0 / u16::MAX as f64);
+    }
+
+    #[test]
+    fn leak_attribution_is_reach_weighted_sorted_and_bounded() {
+        let cache = synthetic_cache(7);
+        let mut solver = PreflopDcfrSolver::new(&cache, 11);
+        solver.train(200);
+        let artifact = solver.artifact("test-v27".to_owned(), 11, "a".repeat(64));
+        let attribution = attribute_policy_leaks(&cache, &artifact, 3).unwrap();
+        assert_eq!(attribution.schema, ATTRIBUTION_SCHEMA);
+        assert_eq!(attribution.players[0].len(), 3);
+        assert_eq!(attribution.players[1].len(), 3);
+        assert!(attribution.policy_lookup_coverage > 0.5);
+        assert!(attribution
+            .public_histories
+            .iter()
+            .all(|histories| !histories.is_empty()
+                && histories.windows(2).all(|pair| {
+                    pair[0].reach_weighted_ev_gain_bb_per_hand
+                        >= pair[1].reach_weighted_ev_gain_bb_per_hand
+                })));
+        for entries in &attribution.players {
+            assert!(entries.windows(2).all(|pair| {
+                pair[0].reach_weighted_ev_gain_bb_per_hand
+                    >= pair[1].reach_weighted_ev_gain_bb_per_hand
+            }));
+            assert!(entries.iter().all(|entry| {
+                entry.reach_probability > 0.0
+                    && entry.conditional_ev_gain_bb >= 0.0
+                    && entry.action_labels.len() == entry.action_values_bb.len()
+                    && entry.action_labels.len() == entry.policy_probabilities.len()
+            }));
+        }
     }
 
     #[test]

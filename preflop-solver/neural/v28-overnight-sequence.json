@@ -1,0 +1,65 @@
+{
+  "schema": "hu-v28-overnight-sequence-v1",
+  "modelVersion": "hu-20bb-v28-tabular-preflop-research",
+  "depthBb": 20,
+  "status": "running_not_activated",
+  "continuationCaches": {
+    "dealsPerCache": 26520,
+    "completeExactComboCyclesPerCache": 10,
+    "rolloutsPerLeaf": 16,
+    "policyMixture": "frozen_v26_models_selected_round_robin_per_rollout",
+    "trainingSeeds": [8309, 8317],
+    "validationSeed": 8329,
+    "sealedFinalHoldoutSeed": 8353,
+    "dataUse": {
+      "T1": "training_only",
+      "T2": "training_only",
+      "V": "candidate_selection_only",
+      "H": "opened_once_after_candidate_selection"
+    }
+  },
+  "solverCandidates": [
+    {
+      "name": "baseline_dcfr",
+      "variant": "dcfr",
+      "positiveRegretExponent": 1.5,
+      "negativeRegretExponent": 0,
+      "strategyExponent": 2,
+      "explorationProbability": 0.05
+    },
+    {
+      "name": "static_schedule_ablation",
+      "variant": "dcfr",
+      "positiveRegretExponent": 2,
+      "negativeRegretExponent": 0.5,
+      "strategyExponent": 3,
+      "explorationProbability": 0.02
+    },
+    {
+      "name": "external_sampling_mccfr_plus",
+      "variant": "mccfr_plus",
+      "positiveRegretExponent": 1.5,
+      "negativeRegretExponent": 0,
+      "strategyExponent": 2,
+      "explorationProbability": 0.05
+    }
+  ],
+  "selection": {
+    "pairedSeeds": true,
+    "candidateIterations": [10000000, 100000000, 300000000],
+    "selectionCorpus": "V",
+    "finalConfirmationCorpus": "H",
+    "allowValidationOrHoldoutInTraining": false
+  },
+  "releaseGates": {
+    "maximumExploitabilityBbPerHand": 0.05,
+    "maximumOneSided99PercentUpperBoundBbPerHand": 0.1,
+    "maximumReachWeightedCrossSeedMae": 0.05,
+    "minimumPrimaryActionAgreement": 0.85,
+    "maximumAggregateActionDelta": 0.03,
+    "minimumLookupCoverage": 0.9999,
+    "minimumActionEvSeCoverage": 0.95,
+    "maximumActionEvStandardErrorBb": 0.02
+  },
+  "failureMode": "remain_rejected_and_begin_range_conditioned_postflop_value_oracle_pilot"
+}
