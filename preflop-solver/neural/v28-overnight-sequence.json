@@ -59,7 +59,7 @@
     "maximumAggregateActionDelta": 0.03,
     "minimumLookupCoverage": 0.9999,
     "minimumActionEvSeCoverage": 0.95,
-    "maximumActionEvStandardErrorBb": 0.02
+    "actionEvStandardErrorThresholdBb": 0.02
   },
   "failureMode": "remain_rejected_and_begin_range_conditioned_postflop_value_oracle_pilot"
 }
