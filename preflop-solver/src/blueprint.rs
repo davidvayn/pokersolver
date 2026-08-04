@@ -17,6 +17,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
 pub mod neural;
+pub mod preflop;
+pub mod response;
 
 const EPSILON: f64 = 1e-9;
 const MODEL: &str = "hu-abstracted-external-sampling-dcfr-trajectory-v3";

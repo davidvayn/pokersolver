@@ -26,6 +26,10 @@ game semantics.
    buckets. The implementation covers limp, open, call, 3-bet, 4-bet, deeper
    raises and all-in preflop, then check, bet, fold, call, limited raises and
    all-in through the river.
+6. A dedicated 20bb preflop research path with information-set-consistent best
+   responses, cached frozen-neural postflop continuations, constant-memory
+   tabular DCFR, exact-combo neural distillation, and an independently evaluated
+   whole-game learned response with a range-conditioned postflop resolver.
 
 Card integers and combo keys match `lib/cards.ts`:
 
@@ -82,6 +86,19 @@ npm run preflop:compare-blueprints -- \
   /tmp/hu-blueprint-seed-1.json \
   /tmp/hu-blueprint-seed-2.json \
   --require-pass
+
+# Dedicated preflop/response research commands (see --help for all controls).
+preflop-solver/target/release/preflop-solver preflop-cache \
+  --networks /tmp/v26-seed-a.json --networks-b /tmp/v26-seed-b.json \
+  --deals 13260 --rollouts-per-leaf 4 --output /tmp/oracle-a.json.gz
+preflop-solver/target/release/preflop-solver preflop-cache-compare \
+  --cache-a /tmp/oracle-a.json.gz --cache-b /tmp/oracle-b.json.gz
+preflop-solver/target/release/preflop-solver preflop-dcfr \
+  --cache /tmp/oracle-a.json.gz --iterations 2000000 --seed 7601 \
+  --output /tmp/preflop-policy.json
+preflop-solver/target/release/preflop-solver full-game-lbr \
+  --networks /tmp/routed-policy.json --training-deals 10000 \
+  --evaluation-deals 10000 --rollouts-per-action 8 --output /tmp/response.json
 ```
 
 ### Neural full-hand training
@@ -222,6 +239,8 @@ supplies genuine profile-conditioned weights.
 
 The short 20bb paired-pilot evidence and rejected alternatives are recorded in
 `docs/validation/20bb-neural-short-pairs.md`.
+The dedicated v27 preflop and learned-response sequence is recorded in
+`docs/validation/20bb-v27-preflop-resolver.md`.
 
 See `neural/OPEN_SOURCE_SOFTWARE.md` for the dependency/license inventory.
 

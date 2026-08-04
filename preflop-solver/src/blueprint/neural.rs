@@ -83,6 +83,33 @@ struct TrainingNetworkBundle {
     sampling_baseline_scale: Option<f64>,
 }
 
+/// Frozen inference-only policy shared by the neural sampler, preflop
+/// continuation oracle, and response evaluators. Keeping inference in one
+/// implementation prevents the offline solver from silently using different
+/// feature or action semantics than the browser artifact.
+pub(super) struct FrozenPolicy {
+    bundle: TrainingNetworkBundle,
+}
+
+impl FrozenPolicy {
+    pub(super) fn load(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
+        let file = fs::File::open(path)?;
+        let bundle: TrainingNetworkBundle = serde_json::from_reader(BufReader::new(file))?;
+        validate_training_bundle(&bundle)?;
+        Ok(Self { bundle })
+    }
+
+    pub(super) fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Vec<f64> {
+        strategy_from_bundle(&self.bundle, state, deal, actions, config)
+    }
+}
+
 impl TrainingNetworkBundle {
     fn policy_network(&self, street: Street, actor: usize) -> &DenseScorer {
         let networks = if street == Street::Preflop {
@@ -91,6 +118,56 @@ impl TrainingNetworkBundle {
             self.postflop_networks.as_ref().unwrap_or(&self.networks)
         };
         &networks[actor]
+    }
+}
+
+fn validate_training_bundle(bundle: &TrainingNetworkBundle) -> Result<(), Box<dyn Error>> {
+    if bundle.schema != TRAINING_NETWORK_SCHEMA
+        || bundle.input_size != MODEL_INPUT_COUNT
+        || bundle.networks.len() != 2
+    {
+        return Err("training network bundle is incompatible".into());
+    }
+    for network in &bundle.networks {
+        network.validate(MODEL_INPUT_COUNT, 1)?;
+    }
+    if let Some(networks) = &bundle.postflop_networks {
+        if networks.len() != 2 {
+            return Err("postflop training network bundle is incompatible".into());
+        }
+        for network in networks {
+            network.validate(MODEL_INPUT_COUNT, 1)?;
+        }
+    }
+    if let Some(baseline) = &bundle.sampling_baseline {
+        baseline.validate(MODEL_INPUT_COUNT, 1)?;
+        let scale = bundle.sampling_baseline_scale.unwrap_or(0.0);
+        if !scale.is_finite() || !(0.0..=1.0).contains(&scale) {
+            return Err("sampling baseline scale must be between zero and one".into());
+        }
+    }
+    Ok(())
+}
+
+fn strategy_from_bundle(
+    bundle: &TrainingNetworkBundle,
+    state: &GameState,
+    deal: &Deal,
+    actions: &[LegalAction],
+    config: &BlueprintConfig,
+) -> Vec<f64> {
+    let network = bundle.policy_network(state.street, state.actor);
+    let state_features = encode_state_features(state, deal, config);
+    let action_features = actions
+        .iter()
+        .map(|action| encode_action_features(state, action, config))
+        .collect::<Vec<_>>();
+    let scores = network.score_state_actions(&state_features, &action_features);
+    match bundle.strategy_transform {
+        StrategyTransform::RegretMatching => {
+            normalize_or_uniform(scores.into_iter().map(|value| value.max(0.0)).collect())
+        }
+        StrategyTransform::Softmax => stable_softmax(&scores),
     }
 }
 
@@ -323,30 +400,7 @@ impl SampleGenerator {
             Some(path) => {
                 let file = fs::File::open(path)?;
                 let bundle: TrainingNetworkBundle = serde_json::from_reader(BufReader::new(file))?;
-                if bundle.schema != TRAINING_NETWORK_SCHEMA
-                    || bundle.input_size != MODEL_INPUT_COUNT
-                    || bundle.networks.len() != 2
-                {
-                    return Err("training network bundle is incompatible".into());
-                }
-                for network in &bundle.networks {
-                    network.validate(MODEL_INPUT_COUNT, 1)?;
-                }
-                if let Some(networks) = &bundle.postflop_networks {
-                    if networks.len() != 2 {
-                        return Err("postflop training network bundle is incompatible".into());
-                    }
-                    for network in networks {
-                        network.validate(MODEL_INPUT_COUNT, 1)?;
-                    }
-                }
-                if let Some(baseline) = &bundle.sampling_baseline {
-                    baseline.validate(MODEL_INPUT_COUNT, 1)?;
-                    let scale = bundle.sampling_baseline_scale.unwrap_or(0.0);
-                    if !scale.is_finite() || !(0.0..=1.0).contains(&scale) {
-                        return Err("sampling baseline scale must be between zero and one".into());
-                    }
-                }
+                validate_training_bundle(&bundle)?;
                 Some(bundle)
             }
             None => None,
@@ -396,19 +450,7 @@ impl SampleGenerator {
         let Some(bundle) = &self.networks else {
             return vec![1.0 / actions.len() as f64; actions.len()];
         };
-        let network = bundle.policy_network(state.street, state.actor);
-        let state_features = encode_state_features(state, deal, &self.config.game);
-        let action_features = actions
-            .iter()
-            .map(|action| encode_action_features(state, action, &self.config.game))
-            .collect::<Vec<_>>();
-        let scores = network.score_state_actions(&state_features, &action_features);
-        match bundle.strategy_transform {
-            StrategyTransform::RegretMatching => {
-                normalize_or_uniform(scores.into_iter().map(|value| value.max(0.0)).collect())
-            }
-            StrategyTransform::Softmax => stable_softmax(&scores),
-        }
+        strategy_from_bundle(bundle, state, deal, actions, &self.config.game)
     }
 
     fn sampled_value_baseline(
@@ -771,6 +813,30 @@ fn training_sample(
         action_value_standard_errors_bb: action_value_standard_errors
             .map(|values| values.into_iter().map(|value| value as f32).collect()),
     }
+}
+
+pub(super) fn average_strategy_record_json(
+    state: &GameState,
+    deal: &Deal,
+    actions: &[LegalAction],
+    targets: Vec<f64>,
+    weight: f32,
+    config: &BlueprintConfig,
+) -> serde_json::Value {
+    serde_json::to_value(training_sample(
+        SampleKind::AverageStrategy,
+        0,
+        weight,
+        1.0,
+        state,
+        deal,
+        actions,
+        targets,
+        None,
+        None,
+        config,
+    ))
+    .expect("average-strategy sample is serializable")
 }
 
 fn feature_sha256(features: &[f32]) -> String {

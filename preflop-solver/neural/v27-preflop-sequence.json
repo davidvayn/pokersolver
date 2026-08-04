@@ -1,0 +1,124 @@
+{
+  "schema": "hu-v27-preflop-sequence-v1",
+  "modelVersion": "hu-20bb-v27-tabular-distilled-research",
+  "depthBb": 20,
+  "status": "rejected_not_activated",
+  "continuationOracles": {
+    "seeds": [8201, 8297],
+    "dealsPerOracle": 13260,
+    "completeExactComboCyclesPerOracle": 5,
+    "rolloutsPerLeaf": 4,
+    "policyMixture": "frozen_v26_model_selected_round_robin_per_rollout",
+    "cacheSha256": [
+      "bd3883cf998d57d5d855e4377f2e6bf42514964b2d236b7fedab060d8df32314",
+      "7cda16ca9a0cbb94de691d305cda78c25d37a2b421d333a25879174d5f419ec8"
+    ],
+    "mergedCacheSha256": "9677c61507baba284fa8b093df80ad1ade6d460c5a1a0633a0f4ca6969a7b1ad",
+    "mergedLeafValues": 1299480,
+    "mergedActionEvSeCoverageAt0_02Bb": 0.568549727583341,
+    "mergedMaximumActionEvStandardErrorBb": 11.065783934422962,
+    "frozenBundleSha256": [
+      "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+      "1fa3a15d3cfa3c3da9a7eca7c5654ca1aa1cca9945cf019d8ebb5c148f7e31a5"
+    ]
+  },
+  "tabularDcfr": {
+    "seeds": [7601, 7602],
+    "candidateIterations": [2000000, 10000000],
+    "selectedIterations": 10000000,
+    "positiveRegretExponent": 1.5,
+    "negativeRegretExponent": 0.0,
+    "strategyExponent": 2.0,
+    "behaviorExplorationProbability": 0.05,
+    "alternatingTraversers": true,
+    "importanceCorrected": true,
+    "constantMemoryLazyDiscounting": true,
+    "trainingExploitabilityBbPerHand": [0.13214752516675807, 0.1332596425345716],
+    "oracleAExploitabilityBbPerHand": [0.3248260557378434, 0.3261542609905509],
+    "oracleBExploitabilityBbPerHand": [0.31499110188240126, 0.31816006955399495],
+    "crossSeed": {
+      "reachWeightedActionFrequencyMae": 0.04437294810957281,
+      "primaryActionAgreement": 0.8713704339505641,
+      "tieAwarePrimaryActionAgreementAt0_01": 0.8848471706530685,
+      "maximumAggregateActionDelta": 0.0007427690260296826,
+      "lookupIntersectionCoverage": 1.0
+    }
+  },
+  "distillation": {
+    "initialWeightSha256": [
+      "bede19e230cda7dbf30a4a39df9e9393d12d2090c921d993e6d67d3f53a18157",
+      "6c02fc99c1b5c65160bde4fdc1d708df0a51c8c254a820a6eacc82a2ccbc4b3b"
+    ],
+    "hiddenSizes": [256, 128],
+    "candidateSteps": [500, 2000, 5000],
+    "selectedSteps": 5000,
+    "batchSize": 512,
+    "learningRate": 0.0001,
+    "seed": 7701,
+    "exactPrivateComboExpansion": true,
+    "sequentialDatasetLoading": true,
+    "studentBytes": [876050, 876050],
+    "studentSha256": [
+      "151fc1d90a5c03f105e543c54d02d097df51c66a422d01e696731b9c83b409dd",
+      "fcb3c62aad24a86bd04b4bdd1be8a1cbe0522a6f6552f830a4a3101965e00a9e"
+    ],
+    "teacherFitActionFrequencyMae": [0.04596075415611267, 0.04363643005490303],
+    "teacherFitPrimaryAgreement": [0.8755432367324829, 0.8781691789627075],
+    "oracleAExploitabilityBbPerHand": [0.3481459653494614, 0.347964858349596],
+    "oracleBExploitabilityBbPerHand": [0.33426516970686965, 0.33303137280726614]
+  },
+  "routedFullHandValidation": {
+    "seed": 9277101,
+    "trajectoriesPerPolicy": 5000,
+    "actionValueRolloutsPerAction": 16,
+    "authentic": {
+      "actionFrequencyMae": 0.04391163464610228,
+      "primaryActionAgreement": 0.881718233701473,
+      "maximumAggregateActionDelta": 0.008457609642991179,
+      "lookupCoverage": 1.0
+    },
+    "forcedDeviation": {
+      "actionFrequencyMae": 0.04850659616378105,
+      "primaryActionAgreement": 0.8738863820432491,
+      "maximumAggregateActionDelta": 0.003984778284413765,
+      "lookupCoverage": 1.0
+    },
+    "actionEvUncertainty": {
+      "actionCoverageAt0_02Bb": 0.2276951454485643,
+      "decisionCoverageAt0_02Bb": 0.10332689552052832,
+      "maximumStandardErrorBb": 4.838347
+    }
+  },
+  "learnedResponse": {
+    "trainingDeals": 5000,
+    "evaluationDeals": 10000,
+    "rolloutsPerAction": 4,
+    "minimumRangeParticles": 2,
+    "deployOnlyConfidenceSupportedActions": true,
+    "v26PointLowerBoundBbPerHand": [0.0030416, 0.00749995],
+    "v27PointLowerBoundBbPerHand": [0.0058416, 0.011925],
+    "v26LowerConfidenceBound99PercentBbPerHand": [0.0, 0.0],
+    "v27LowerConfidenceBound99PercentBbPerHand": [0.0, 0.0],
+    "preflopLookupCoverageRange": [0.008365256821202408, 0.03543805371958937],
+    "postflopLookupCoverageRange": [0.0, 0.0010072747621712368]
+  },
+  "releaseGates": {
+    "maximumExploitabilityBbPerHand": 0.05,
+    "maximumOneSided99PercentUpperBoundBbPerHand": 0.1,
+    "maximumReachWeightedCrossSeedMae": 0.05,
+    "minimumPrimaryActionAgreement": 0.85,
+    "maximumAggregateActionDelta": 0.03,
+    "minimumLookupCoverage": 0.9999,
+    "minimumActionEvSeCoverage": 0.95,
+    "maximumActionEvStandardErrorBb": 0.02
+  },
+  "outcome": {
+    "selectedResearchStudents": [0, 1],
+    "activated": false,
+    "passedCrossSeedStability": true,
+    "passedExploitability": false,
+    "passedActionEvUncertainty": false,
+    "passedLearnedResponseCoverage": false,
+    "reason": "v27 improves materially over v26 and is compact, but oracle-relative preflop exploitability remains above 0.05bb/hand, action-EV uncertainty coverage is below 95%, no qualifying full-game exploitability upper bound exists, and the learned response has sparse lookup coverage"
+  }
+}

@@ -1,0 +1,1877 @@
+//! Range-consistent preflop solving and evaluation.
+//!
+//! The full neural game samples a complete deal at the root.  This module
+//! keeps those hidden chance outcomes together at responder decisions: one
+//! action is chosen for every world in the same observable preflop
+//! information set.  Flop continuations are frozen in a deterministic cache,
+//! turning the preflop portion into a finite, reproducible zero-sum game that
+//! can be solved tabularly and used as a neural distillation oracle.
+
+use super::neural::{average_strategy_record_json, FrozenPolicy};
+use super::*;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::cell::RefCell;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fs;
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+
+const CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v1";
+const POLICY_SCHEMA: &str = "hu-tabular-preflop-dcfr-v1";
+const EVALUATION_SCHEMA: &str = "hu-preflop-information-set-response-v1";
+const EXTERNAL_SAMPLING_EXPLORATION: f64 = 0.05;
+
+#[derive(Clone, Debug)]
+pub struct ContinuationCacheConfig {
+    pub game: BlueprintConfig,
+    pub deals: usize,
+    pub seed: u64,
+    pub rollouts_per_leaf: u32,
+    pub network_paths: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ContinuationEstimate {
+    pub mean_utility_p0_bb: f64,
+    pub action_standard_error_bb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CachedDeal {
+    pub holes: [[u8; 2]; 2],
+    pub board: [u8; 5],
+    pub continuations: BTreeMap<u64, ContinuationEstimate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ContinuationValidation {
+    pub complete: bool,
+    pub probability_values_finite: bool,
+    pub utilities_within_stack: bool,
+    pub leaf_values: usize,
+    pub fraction_action_se_at_most_0_02bb: f64,
+    pub maximum_action_standard_error_bb: f64,
+    #[serde(default)]
+    pub fraction_history_mean_se_at_most_0_02bb: f64,
+    #[serde(default)]
+    pub maximum_history_mean_standard_error_bb: f64,
+    #[serde(default)]
+    pub fraction_information_group_mean_se_at_most_0_25bb: f64,
+    #[serde(default)]
+    pub maximum_information_group_mean_standard_error_bb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ContinuationCache {
+    pub schema: String,
+    pub depth_bb: f64,
+    pub seed: u64,
+    pub rollouts_per_leaf: u32,
+    pub chance_sampling: String,
+    pub complete_exact_combo_cycles: usize,
+    #[serde(alias = "uniform_joint_deal_design")]
+    pub balanced_exact_combo_marginals: bool,
+    pub network_sha256: String,
+    #[serde(default)]
+    pub network_sha256s: Vec<String>,
+    #[serde(default)]
+    pub policy_mixture: String,
+    pub game: BlueprintConfig,
+    pub public_histories: BTreeMap<u64, Vec<String>>,
+    pub deals: Vec<CachedDeal>,
+    pub validation: ContinuationValidation,
+}
+
+impl ContinuationCache {
+    pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let file = fs::File::open(path)?;
+        let reader = BufReader::new(file);
+        let cache: Self = if path.extension().is_some_and(|extension| extension == "gz") {
+            serde_json::from_reader(GzDecoder::new(reader))?
+        } else {
+            serde_json::from_reader(reader)?
+        };
+        cache.validate()?;
+        Ok(cache)
+    }
+
+    pub fn write(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let temporary = path.with_extension("tmp");
+        let file = fs::File::create(&temporary)?;
+        let writer = BufWriter::new(file);
+        if path.extension().is_some_and(|extension| extension == "gz") {
+            let mut gzip = GzEncoder::new(writer, Compression::fast());
+            serde_json::to_writer(&mut gzip, self)?;
+            gzip.finish()?.flush()?;
+        } else {
+            let mut writer = writer;
+            serde_json::to_writer(&mut writer, self)?;
+            writer.flush()?;
+        }
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.schema != CONTINUATION_SCHEMA || self.deals.len() < 2 {
+            return Err("preflop continuation cache is incompatible".into());
+        }
+        if self.game.effective_stack_bb != self.depth_bb || self.rollouts_per_leaf < 2 {
+            return Err("preflop continuation cache metadata is invalid".into());
+        }
+        self.game.validate()?;
+        let expected = self.public_histories.len();
+        let expected_cycles = self.deals.len() / (2 * all_combos().len());
+        if expected == 0
+            || self.complete_exact_combo_cycles != expected_cycles
+            || self.balanced_exact_combo_marginals
+                != self.deals.len().is_multiple_of(2 * all_combos().len())
+            || self.network_sha256.len() != 64
+            || !self
+                .network_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || self.network_sha256s.iter().any(|digest| {
+                digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            || (self.network_sha256s.len() > 1 && self.policy_mixture.is_empty())
+            || self.deals.iter().any(|deal| {
+                deal.continuations.len() != expected
+                    || deal
+                        .continuations
+                        .keys()
+                        .any(|key| !self.public_histories.contains_key(key))
+            })
+        {
+            return Err("preflop continuation cache is incomplete".into());
+        }
+        let depth = self.depth_bb;
+        if self
+            .deals
+            .iter()
+            .flat_map(|deal| deal.continuations.values())
+            .any(|value| {
+                !value.mean_utility_p0_bb.is_finite()
+                    || !value.action_standard_error_bb.is_finite()
+                    || value.action_standard_error_bb < 0.0
+                    || value.mean_utility_p0_bb.abs() > depth + EPSILON
+            })
+        {
+            return Err("preflop continuation cache contains invalid values".into());
+        }
+        if !self.validation.complete
+            || !self.validation.probability_values_finite
+            || !self.validation.utilities_within_stack
+            || self.validation.leaf_values != self.deals.len() * expected
+            || !in_unit_interval(self.validation.fraction_action_se_at_most_0_02bb)
+            || !in_unit_interval(self.validation.fraction_history_mean_se_at_most_0_02bb)
+            || !in_unit_interval(
+                self.validation
+                    .fraction_information_group_mean_se_at_most_0_25bb,
+            )
+            || !self.validation.maximum_action_standard_error_bb.is_finite()
+            || !self
+                .validation
+                .maximum_history_mean_standard_error_bb
+                .is_finite()
+            || !self
+                .validation
+                .maximum_information_group_mean_standard_error_bb
+                .is_finite()
+        {
+            return Err("preflop continuation cache validation summary is invalid".into());
+        }
+        Ok(())
+    }
+
+    fn deal(&self, index: usize) -> Deal {
+        let deal = &self.deals[index];
+        Deal::from_sampled_cards(deal.holes, deal.board)
+    }
+
+    fn continuation_value(&self, deal_index: usize, state: &GameState) -> f64 {
+        let history = history_key(state);
+        self.deals[deal_index].continuations[&history].mean_utility_p0_bb
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PreflopPolicyEntry {
+    pub key: String,
+    pub actor: usize,
+    pub hand_class: String,
+    pub public_history: Vec<String>,
+    pub action_labels: Vec<String>,
+    pub probabilities: Vec<f64>,
+    pub positive_regret_sum_bb: f64,
+    pub regret_updates: u64,
+    pub average_visits: u64,
+    #[serde(default)]
+    pub average_reach_weight: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PreflopPolicyArtifact {
+    pub schema: String,
+    pub model_version: String,
+    pub depth_bb: f64,
+    pub seed: u64,
+    pub iterations: u64,
+    pub sampling_exploration_probability: f64,
+    pub continuation_cache_sha256: String,
+    pub game: BlueprintConfig,
+    pub strategies: Vec<PreflopPolicyEntry>,
+    pub training_evaluation: PreflopEvaluation,
+}
+
+impl PreflopPolicyArtifact {
+    pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let artifact: Self = serde_json::from_reader(BufReader::new(fs::File::open(path)?))?;
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    pub fn write(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let temporary = path.with_extension("tmp");
+        let mut writer = BufWriter::new(fs::File::create(&temporary)?);
+        serde_json::to_writer_pretty(&mut writer, self)?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.schema != POLICY_SCHEMA || self.iterations == 0 || self.strategies.is_empty() {
+            return Err("tabular preflop policy artifact is incompatible".into());
+        }
+        self.game.validate()?;
+        if self.game.effective_stack_bb != self.depth_bb
+            || !(0.0..1.0).contains(&self.sampling_exploration_probability)
+            || self.continuation_cache_sha256.len() != 64
+            || !self
+                .continuation_cache_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("tabular preflop policy metadata is invalid".into());
+        }
+        let mut keys = BTreeSet::new();
+        for entry in &self.strategies {
+            if !keys.insert(&entry.key)
+                || entry.actor > 1
+                || entry.action_labels.is_empty()
+                || entry.action_labels.len() != entry.probabilities.len()
+                || entry
+                    .probabilities
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || (entry.probabilities.iter().sum::<f64>() - 1.0).abs() > 1e-9
+                || !entry.average_reach_weight.is_finite()
+                || entry.average_reach_weight < 0.0
+            {
+                return Err("tabular preflop policy has invalid probabilities".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PreflopEvaluation {
+    pub schema: String,
+    pub corpus_deals: usize,
+    pub policy_value_p0_bb: f64,
+    pub player_zero_best_response_bb: f64,
+    pub player_one_best_response_bb: f64,
+    pub nash_conv_bb: f64,
+    pub exploitability_bb_per_hand: f64,
+    pub responder_information_sets: [usize; 2],
+    pub policy_lookup_coverage: f64,
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DistillationDatasetSummary {
+    pub schema: &'static str,
+    pub records: usize,
+    pub policy_information_sets: usize,
+    pub covered_policy_information_sets: usize,
+    pub coverage: f64,
+    pub output: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ContinuationPlayerComparison {
+    pub player: usize,
+    pub common_groups: usize,
+    pub union_groups: usize,
+    pub group_coverage: f64,
+    pub sample_weighted_mean_absolute_delta_bb: f64,
+    pub sample_weighted_root_mean_squared_delta_bb: f64,
+    pub maximum_group_delta_bb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ContinuationCacheComparison {
+    pub schema: String,
+    pub depth_bb: f64,
+    pub cache_seeds: [u64; 2],
+    pub deal_counts: [usize; 2],
+    pub complete_exact_combo_cycles: [usize; 2],
+    pub network_mixtures_match: bool,
+    pub fraction_information_group_mean_se_at_most_0_25bb: [f64; 2],
+    pub maximum_information_group_mean_standard_error_bb: [f64; 2],
+    pub players: [ContinuationPlayerComparison; 2],
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SolverNode {
+    actor: usize,
+    hand_class: String,
+    public_history: Vec<String>,
+    action_labels: Vec<String>,
+    regrets: Vec<f64>,
+    strategy_sum: Vec<f64>,
+    regret_updates: u64,
+    average_visits: u64,
+    last_discount_iteration: u64,
+    last_discount_cumulative_logs: [f64; 3],
+}
+
+impl SolverNode {
+    fn new(state: &GameState, deal: &Deal, actions: &[LegalAction]) -> Self {
+        Self {
+            actor: state.actor,
+            hand_class: hand_class(deal, state.actor),
+            public_history: state.public_history.clone(),
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            regrets: vec![0.0; actions.len()],
+            strategy_sum: vec![0.0; actions.len()],
+            regret_updates: 0,
+            average_visits: 0,
+            last_discount_iteration: 0,
+            last_discount_cumulative_logs: [0.0; 3],
+        }
+    }
+
+    fn current_strategy(&self) -> Vec<f64> {
+        normalize_or_uniform(self.regrets.iter().map(|value| value.max(0.0)).collect())
+    }
+
+    fn average_strategy(&self) -> Vec<f64> {
+        normalize_or_uniform(self.strategy_sum.clone())
+    }
+
+    fn apply_dcfr_discount(&mut self, iteration: u64, discounts: &DiscountAccumulator) {
+        if iteration == 0 || self.last_discount_iteration == iteration {
+            return;
+        }
+        let factors = [
+            (discounts.cumulative_logs[0] - self.last_discount_cumulative_logs[0]).exp(),
+            (discounts.cumulative_logs[1] - self.last_discount_cumulative_logs[1]).exp(),
+            (discounts.cumulative_logs[2] - self.last_discount_cumulative_logs[2]).exp(),
+        ];
+        for regret in &mut self.regrets {
+            *regret *= if *regret >= 0.0 {
+                factors[0]
+            } else {
+                factors[1]
+            };
+        }
+        for probability in &mut self.strategy_sum {
+            *probability *= factors[2];
+        }
+        self.last_discount_iteration = iteration;
+        self.last_discount_cumulative_logs = discounts.cumulative_logs;
+    }
+}
+
+struct DiscountAccumulator {
+    parameters: DcfrParameters,
+    iteration: u64,
+    cumulative_logs: [f64; 3],
+}
+
+impl DiscountAccumulator {
+    fn new(parameters: DcfrParameters) -> Self {
+        Self {
+            parameters,
+            iteration: 0,
+            cumulative_logs: [0.0; 3],
+        }
+    }
+
+    fn advance(&mut self, iteration: u64) {
+        assert_eq!(iteration, self.iteration + 1);
+        let time = iteration as f64;
+        let positive_power = time.powf(self.parameters.positive_regret_exponent);
+        let negative_power = time.powf(self.parameters.negative_regret_exponent);
+        let factors = [
+            positive_power / (positive_power + 1.0),
+            negative_power / (negative_power + 1.0),
+            (time / (time + 1.0)).powf(self.parameters.strategy_exponent),
+        ];
+        for (cumulative, factor) in self.cumulative_logs.iter_mut().zip(factors) {
+            *cumulative += factor.ln();
+        }
+        self.iteration = iteration;
+    }
+}
+
+struct PreflopDcfrSolver<'a> {
+    cache: &'a ContinuationCache,
+    nodes: BTreeMap<String, SolverNode>,
+    rng: SplitMix64,
+    iterations: u64,
+    discounts: DiscountAccumulator,
+}
+
+impl<'a> PreflopDcfrSolver<'a> {
+    fn new(cache: &'a ContinuationCache, seed: u64) -> Self {
+        Self {
+            cache,
+            nodes: BTreeMap::new(),
+            rng: SplitMix64::new(seed),
+            iterations: 0,
+            discounts: DiscountAccumulator::new(cache.game.dcfr.clone()),
+        }
+    }
+
+    fn train(&mut self, iterations: u64) {
+        while self.iterations < iterations {
+            self.discounts.advance(self.iterations + 1);
+            let traverser = self.iterations as usize % 2;
+            let deal_index = self.rng.index(self.cache.deals.len());
+            let deal = self.cache.deal(deal_index);
+            self.external_sampling(
+                GameState::initial(&self.cache.game),
+                &deal,
+                deal_index,
+                traverser,
+                1.0,
+            );
+            self.iterations += 1;
+        }
+    }
+
+    fn external_sampling(
+        &mut self,
+        state: GameState,
+        deal: &Deal,
+        deal_index: usize,
+        traverser: usize,
+        sampled_opponent_reach_ratio: f64,
+    ) -> f64 {
+        if state.terminal.is_some() {
+            let utility = realized_utility_p0(&state, deal);
+            return if traverser == 0 { utility } else { -utility };
+        }
+        if state.street != Street::Preflop {
+            let utility = self.cache.continuation_value(deal_index, &state);
+            return if traverser == 0 { utility } else { -utility };
+        }
+
+        let actions = state.legal_actions(&self.cache.game);
+        let key = information_key(&state, deal);
+        let strategy = {
+            let node = self
+                .nodes
+                .entry(key.clone())
+                .or_insert_with(|| SolverNode::new(&state, deal, &actions));
+            assert_eq!(
+                node.action_labels,
+                actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+            );
+            node.apply_dcfr_discount(self.iterations + 1, &self.discounts);
+            node.current_strategy()
+        };
+
+        if state.actor == traverser {
+            let values = actions
+                .iter()
+                .map(|action| {
+                    self.external_sampling(
+                        state.apply(action, &self.cache.game),
+                        deal,
+                        deal_index,
+                        traverser,
+                        sampled_opponent_reach_ratio,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let node_value = strategy
+                .iter()
+                .zip(&values)
+                .map(|(probability, value)| probability * value)
+                .sum::<f64>();
+            let node = self.nodes.get_mut(&key).expect("preflop node inserted");
+            for (regret, value) in node.regrets.iter_mut().zip(values) {
+                *regret += sampled_opponent_reach_ratio * (value - node_value);
+            }
+            node.regret_updates += 1;
+            node_value
+        } else {
+            let node = self.nodes.get_mut(&key).expect("preflop node inserted");
+            for (sum, probability) in node.strategy_sum.iter_mut().zip(&strategy) {
+                // The opponent's earlier actions were drawn from the exploratory
+                // behavior policy. Correct their sampled reach back to the target
+                // policy before accumulating the average strategy.
+                *sum += sampled_opponent_reach_ratio * probability;
+            }
+            node.average_visits += 1;
+            let behavior = strategy
+                .iter()
+                .map(|probability| {
+                    (1.0 - EXTERNAL_SAMPLING_EXPLORATION) * probability
+                        + EXTERNAL_SAMPLING_EXPLORATION / strategy.len() as f64
+                })
+                .collect::<Vec<_>>();
+            let selected = sample_index(&behavior, &mut self.rng);
+            let importance_ratio = strategy[selected] / behavior[selected];
+            importance_ratio
+                * self.external_sampling(
+                    state.apply(&actions[selected], &self.cache.game),
+                    deal,
+                    deal_index,
+                    traverser,
+                    sampled_opponent_reach_ratio * importance_ratio,
+                )
+        }
+    }
+
+    fn artifact(
+        self,
+        model_version: String,
+        seed: u64,
+        cache_sha256: String,
+    ) -> PreflopPolicyArtifact {
+        let strategies = self
+            .nodes
+            .into_iter()
+            .map(|(key, node)| {
+                let probabilities = node.average_strategy();
+                let positive_regret_sum_bb = node.regrets.iter().map(|value| value.max(0.0)).sum();
+                let average_reach_weight = node.strategy_sum.iter().sum();
+                PreflopPolicyEntry {
+                    key,
+                    actor: node.actor,
+                    hand_class: node.hand_class,
+                    public_history: node.public_history,
+                    action_labels: node.action_labels,
+                    probabilities,
+                    positive_regret_sum_bb,
+                    regret_updates: node.regret_updates,
+                    average_visits: node.average_visits,
+                    average_reach_weight,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut artifact = PreflopPolicyArtifact {
+            schema: POLICY_SCHEMA.to_owned(),
+            model_version,
+            depth_bb: self.cache.depth_bb,
+            seed,
+            iterations: self.iterations,
+            sampling_exploration_probability: EXTERNAL_SAMPLING_EXPLORATION,
+            continuation_cache_sha256: cache_sha256,
+            game: self.cache.game.clone(),
+            strategies,
+            training_evaluation: empty_evaluation(self.cache.deals.len()),
+        };
+        artifact.training_evaluation = evaluate_policy(self.cache, &artifact);
+        artifact
+    }
+}
+
+trait Policy {
+    fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        counters: &mut LookupCounters,
+    ) -> Vec<f64>;
+}
+
+struct ArtifactPolicy {
+    entries: BTreeMap<String, (Vec<String>, Vec<f64>)>,
+}
+
+impl ArtifactPolicy {
+    fn new(artifact: &PreflopPolicyArtifact) -> Self {
+        Self {
+            entries: artifact
+                .strategies
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.key.clone(),
+                        (entry.action_labels.clone(), entry.probabilities.clone()),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Policy for ArtifactPolicy {
+    fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        counters: &mut LookupCounters,
+    ) -> Vec<f64> {
+        counters.queries += 1;
+        let key = information_key(state, deal);
+        let Some((labels, probabilities)) = self.entries.get(&key) else {
+            counters.misses += 1;
+            return vec![1.0 / actions.len() as f64; actions.len()];
+        };
+        assert_eq!(
+            labels,
+            &actions
+                .iter()
+                .map(|action| action.label.clone())
+                .collect::<Vec<_>>()
+        );
+        probabilities.clone()
+    }
+}
+
+struct NeuralPolicy<'a> {
+    frozen: FrozenPolicy,
+    config: &'a BlueprintConfig,
+    strategies: RefCell<StrategyCache>,
+}
+
+type StrategyCache = BTreeMap<String, (Vec<String>, Vec<f64>)>;
+
+impl Policy for NeuralPolicy<'_> {
+    fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        counters: &mut LookupCounters,
+    ) -> Vec<f64> {
+        counters.queries += 1;
+        let key = information_key(state, deal);
+        if let Some((labels, probabilities)) = self.strategies.borrow().get(&key) {
+            assert_eq!(
+                labels,
+                &actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+            );
+            return probabilities.clone();
+        }
+        let probabilities = self.frozen.strategy(state, deal, actions, self.config);
+        self.strategies.borrow_mut().insert(
+            key,
+            (
+                actions.iter().map(|action| action.label.clone()).collect(),
+                probabilities.clone(),
+            ),
+        );
+        probabilities
+    }
+}
+
+#[derive(Default)]
+struct LookupCounters {
+    queries: usize,
+    misses: usize,
+}
+
+#[derive(Clone)]
+struct WeightedWorld {
+    state: GameState,
+    deal_index: usize,
+    weight: f64,
+}
+
+#[derive(Default)]
+struct ResponseStats {
+    information_sets: usize,
+}
+
+pub fn build_continuation_cache(
+    config: ContinuationCacheConfig,
+) -> Result<ContinuationCache, Box<dyn Error>> {
+    config.game.validate()?;
+    if config.deals < 2 || config.rollouts_per_leaf < 2 {
+        return Err("continuation cache requires at least two deals and rollouts".into());
+    }
+    if config.network_paths.is_empty()
+        || config.rollouts_per_leaf < config.network_paths.len() as u32
+        || !config
+            .rollouts_per_leaf
+            .is_multiple_of(config.network_paths.len() as u32)
+    {
+        return Err(
+            "continuation cache requires an equal positive rollout count per frozen policy".into(),
+        );
+    }
+    let policies = config
+        .network_paths
+        .iter()
+        .map(|path| FrozenPolicy::load(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let leaves = enumerate_flop_leaves(&config.game);
+    if leaves.is_empty() {
+        return Err("preflop abstraction reaches no flop leaves".into());
+    }
+    let public_histories = leaves
+        .iter()
+        .map(|(key, state)| (*key, state.public_history.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut chance = SplitMix64::new(config.seed);
+    let combos = all_combos();
+    let complete_exact_combo_cycles = config.deals / (2 * combos.len());
+    let balanced_exact_combo_marginals = config.deals.is_multiple_of(2 * combos.len());
+    let mut deals = Vec::with_capacity(config.deals);
+    let mut accepted_standard_errors = 0usize;
+    let mut maximum_standard_error = 0.0f64;
+    for deal_index in 0..config.deals {
+        let deal = stratified_deal(&mut chance, deal_index, &combos);
+        let mut continuations = BTreeMap::new();
+        for (history, state) in &leaves {
+            let values = (0..config.rollouts_per_leaf)
+                .map(|rollout| {
+                    let mut rng = SplitMix64::new(continuation_seed(
+                        config.seed,
+                        deal_index,
+                        *history,
+                        rollout,
+                    ));
+                    let policy = &policies[rollout as usize % policies.len()];
+                    rollout_policy_value(policy, state.clone(), &deal, &config.game, &mut rng)
+                })
+                .collect::<Vec<_>>();
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            let squared = values
+                .iter()
+                .map(|value| (value - mean).powi(2))
+                .sum::<f64>();
+            let standard_error = (squared / ((values.len() - 1) * values.len()) as f64).sqrt();
+            maximum_standard_error = maximum_standard_error.max(standard_error);
+            accepted_standard_errors += usize::from(standard_error <= 0.02);
+            continuations.insert(
+                *history,
+                ContinuationEstimate {
+                    mean_utility_p0_bb: mean,
+                    action_standard_error_bb: standard_error,
+                },
+            );
+        }
+        deals.push(CachedDeal {
+            holes: deal.holes,
+            board: deal.board,
+            continuations,
+        });
+    }
+    let leaf_values = deals.len() * leaves.len();
+    let history_standard_errors = leaves
+        .keys()
+        .map(|history| {
+            let values = deals
+                .iter()
+                .map(|deal| deal.continuations[history].mean_utility_p0_bb)
+                .collect::<Vec<_>>();
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            let squared = values
+                .iter()
+                .map(|value| (value - mean).powi(2))
+                .sum::<f64>();
+            (squared / ((values.len() - 1) * values.len()) as f64).sqrt()
+        })
+        .collect::<Vec<_>>();
+    let information_group_standard_errors = information_group_standard_errors(&deals);
+    let cache = ContinuationCache {
+        schema: CONTINUATION_SCHEMA.to_owned(),
+        depth_bb: config.game.effective_stack_bb,
+        seed: config.seed,
+        rollouts_per_leaf: config.rollouts_per_leaf,
+        chance_sampling:
+            "alternating_seat_exact_combo_stratified_with_uniform_compatible_opponent_and_board"
+                .to_owned(),
+        complete_exact_combo_cycles,
+        balanced_exact_combo_marginals,
+        network_sha256: combined_file_sha256(&config.network_paths)?,
+        network_sha256s: config
+            .network_paths
+            .iter()
+            .map(|path| sha256_file(path))
+            .collect::<Result<Vec<_>, _>>()?,
+        policy_mixture: "frozen_v26_model_selected_round_robin_per_rollout".to_owned(),
+        game: config.game,
+        public_histories,
+        deals,
+        validation: ContinuationValidation {
+            complete: true,
+            probability_values_finite: true,
+            utilities_within_stack: true,
+            leaf_values,
+            fraction_action_se_at_most_0_02bb: accepted_standard_errors as f64 / leaf_values as f64,
+            maximum_action_standard_error_bb: maximum_standard_error,
+            fraction_history_mean_se_at_most_0_02bb: history_standard_errors
+                .iter()
+                .filter(|standard_error| **standard_error <= 0.02)
+                .count() as f64
+                / history_standard_errors.len() as f64,
+            maximum_history_mean_standard_error_bb: history_standard_errors
+                .into_iter()
+                .fold(0.0, f64::max),
+            fraction_information_group_mean_se_at_most_0_25bb: information_group_standard_errors
+                .iter()
+                .filter(|standard_error| **standard_error <= 0.25)
+                .count() as f64
+                / information_group_standard_errors.len().max(1) as f64,
+            maximum_information_group_mean_standard_error_bb: information_group_standard_errors
+                .into_iter()
+                .fold(0.0, f64::max),
+        },
+    };
+    cache.validate()?;
+    Ok(cache)
+}
+
+pub fn solve_preflop(
+    cache: &ContinuationCache,
+    iterations: u64,
+    seed: u64,
+    model_version: String,
+    cache_path: &Path,
+) -> Result<PreflopPolicyArtifact, Box<dyn Error>> {
+    if iterations == 0 {
+        return Err("preflop DCFR iterations must be positive".into());
+    }
+    let mut solver = PreflopDcfrSolver::new(cache, seed);
+    solver.train(iterations);
+    let artifact = solver.artifact(model_version, seed, sha256_file(cache_path)?);
+    artifact.validate()?;
+    Ok(artifact)
+}
+
+pub fn compare_continuation_caches(
+    first: &ContinuationCache,
+    second: &ContinuationCache,
+) -> Result<ContinuationCacheComparison, Box<dyn Error>> {
+    if first.game != second.game || first.public_histories != second.public_histories {
+        return Err("continuation caches use different abstract games".into());
+    }
+    let players = [0usize, 1usize].map(|player| {
+        let first_groups = continuation_groups(first, player);
+        let second_groups = continuation_groups(second, player);
+        let union = first_groups
+            .keys()
+            .chain(second_groups.keys())
+            .collect::<BTreeSet<_>>();
+        let common = first_groups
+            .keys()
+            .filter(|key| second_groups.contains_key(*key))
+            .collect::<Vec<_>>();
+        let mut total_weight = 0.0;
+        let mut absolute = 0.0;
+        let mut squared = 0.0;
+        let mut maximum = 0.0f64;
+        for key in &common {
+            let (first_sum, first_count) = first_groups[*key];
+            let (second_sum, second_count) = second_groups[*key];
+            let delta = (first_sum / first_count as f64 - second_sum / second_count as f64).abs();
+            let weight = first_count.min(second_count) as f64;
+            total_weight += weight;
+            absolute += weight * delta;
+            squared += weight * delta * delta;
+            maximum = maximum.max(delta);
+        }
+        ContinuationPlayerComparison {
+            player,
+            common_groups: common.len(),
+            union_groups: union.len(),
+            group_coverage: common.len() as f64 / union.len().max(1) as f64,
+            sample_weighted_mean_absolute_delta_bb: absolute / total_weight.max(1.0),
+            sample_weighted_root_mean_squared_delta_bb: (squared / total_weight.max(1.0)).sqrt(),
+            maximum_group_delta_bb: maximum,
+        }
+    });
+    let first_group_standard_errors = information_group_standard_errors(&first.deals);
+    let second_group_standard_errors = information_group_standard_errors(&second.deals);
+    let group_fraction = |values: &[f64]| {
+        values.iter().filter(|value| **value <= 0.25).count() as f64 / values.len().max(1) as f64
+    };
+    Ok(ContinuationCacheComparison {
+        schema: "hu-preflop-continuation-cache-comparison-v1".to_owned(),
+        depth_bb: first.depth_bb,
+        cache_seeds: [first.seed, second.seed],
+        deal_counts: [first.deals.len(), second.deals.len()],
+        complete_exact_combo_cycles: [
+            first.complete_exact_combo_cycles,
+            second.complete_exact_combo_cycles,
+        ],
+        network_mixtures_match: first.network_sha256 == second.network_sha256,
+        fraction_information_group_mean_se_at_most_0_25bb: [
+            group_fraction(&first_group_standard_errors),
+            group_fraction(&second_group_standard_errors),
+        ],
+        maximum_information_group_mean_standard_error_bb: [
+            first_group_standard_errors
+                .into_iter()
+                .fold(0.0, f64::max),
+            second_group_standard_errors
+                .into_iter()
+                .fold(0.0, f64::max),
+        ],
+        players,
+        interpretation: "independent-chance agreement of frozen continuation utility means grouped by observable preflop hand class and public leaf and weighted by group sample count, not strategic reach; this measures oracle stability, not equilibrium exploitability"
+            .to_owned(),
+    })
+}
+
+pub fn merge_continuation_caches(
+    first: &ContinuationCache,
+    second: &ContinuationCache,
+) -> Result<ContinuationCache, Box<dyn Error>> {
+    if first.game != second.game
+        || first.public_histories != second.public_histories
+        || first.rollouts_per_leaf != second.rollouts_per_leaf
+        || first.network_sha256 != second.network_sha256
+    {
+        return Err(
+            "only compatible continuation caches with the same frozen policy mixture can be merged"
+                .into(),
+        );
+    }
+    let mut deals = first.deals.clone();
+    deals.extend(second.deals.clone());
+    let validation = continuation_validation(&deals, &first.public_histories);
+    let mut cache = ContinuationCache {
+        schema: CONTINUATION_SCHEMA.to_owned(),
+        depth_bb: first.depth_bb,
+        seed: first.seed ^ second.seed.rotate_left(1),
+        rollouts_per_leaf: first.rollouts_per_leaf,
+        chance_sampling: "concatenated_independent_balanced_exact_combo_cycles".to_owned(),
+        complete_exact_combo_cycles: first.complete_exact_combo_cycles
+            + second.complete_exact_combo_cycles,
+        balanced_exact_combo_marginals: first.balanced_exact_combo_marginals
+            && second.balanced_exact_combo_marginals,
+        network_sha256: first.network_sha256.clone(),
+        network_sha256s: first.network_sha256s.clone(),
+        policy_mixture: first.policy_mixture.clone(),
+        game: first.game.clone(),
+        public_histories: first.public_histories.clone(),
+        deals,
+        validation,
+    };
+    // Preserve the exact derived cycle count rather than trusting source metadata.
+    cache.complete_exact_combo_cycles = cache.deals.len() / (2 * all_combos().len());
+    cache.validate()?;
+    Ok(cache)
+}
+
+pub fn refresh_continuation_cache_validation(
+    mut cache: ContinuationCache,
+) -> Result<ContinuationCache, Box<dyn Error>> {
+    cache.validation = continuation_validation(&cache.deals, &cache.public_histories);
+    cache.validate()?;
+    Ok(cache)
+}
+
+fn continuation_validation(
+    deals: &[CachedDeal],
+    public_histories: &BTreeMap<u64, Vec<String>>,
+) -> ContinuationValidation {
+    let estimates = deals
+        .iter()
+        .flat_map(|deal| deal.continuations.values())
+        .collect::<Vec<_>>();
+    let history_standard_errors = public_histories
+        .keys()
+        .map(|history| {
+            let values = deals
+                .iter()
+                .map(|deal| deal.continuations[history].mean_utility_p0_bb)
+                .collect::<Vec<_>>();
+            sample_standard_error(&values)
+        })
+        .collect::<Vec<_>>();
+    let information_group_standard_errors = information_group_standard_errors(deals);
+    ContinuationValidation {
+        complete: true,
+        probability_values_finite: true,
+        utilities_within_stack: true,
+        leaf_values: estimates.len(),
+        fraction_action_se_at_most_0_02bb: estimates
+            .iter()
+            .filter(|estimate| estimate.action_standard_error_bb <= 0.02)
+            .count() as f64
+            / estimates.len().max(1) as f64,
+        maximum_action_standard_error_bb: estimates
+            .iter()
+            .map(|estimate| estimate.action_standard_error_bb)
+            .fold(0.0, f64::max),
+        fraction_history_mean_se_at_most_0_02bb: history_standard_errors
+            .iter()
+            .filter(|standard_error| **standard_error <= 0.02)
+            .count() as f64
+            / history_standard_errors.len().max(1) as f64,
+        maximum_history_mean_standard_error_bb: history_standard_errors
+            .into_iter()
+            .fold(0.0, f64::max),
+        fraction_information_group_mean_se_at_most_0_25bb: information_group_standard_errors
+            .iter()
+            .filter(|standard_error| **standard_error <= 0.25)
+            .count() as f64
+            / information_group_standard_errors.len().max(1) as f64,
+        maximum_information_group_mean_standard_error_bb: information_group_standard_errors
+            .into_iter()
+            .fold(0.0, f64::max),
+    }
+}
+
+fn information_group_standard_errors(deals: &[CachedDeal]) -> Vec<f64> {
+    let mut groups = BTreeMap::<(usize, String, u64), (usize, f64, f64)>::new();
+    for cached in deals {
+        let deal = Deal::from_sampled_cards(cached.holes, cached.board);
+        for player in 0..2 {
+            let class = hand_class(&deal, player);
+            for (history, estimate) in &cached.continuations {
+                let utility = if player == 0 {
+                    estimate.mean_utility_p0_bb
+                } else {
+                    -estimate.mean_utility_p0_bb
+                };
+                let group = groups
+                    .entry((player, class.clone(), *history))
+                    .or_insert((0, 0.0, 0.0));
+                group.0 += 1;
+                group.1 += utility;
+                group.2 += utility * utility;
+            }
+        }
+    }
+    groups
+        .into_values()
+        .map(|(count, sum, squared_sum)| {
+            if count < 2 {
+                return 0.0;
+            }
+            let count = count as f64;
+            let variance = ((squared_sum - sum * sum / count) / (count - 1.0)).max(0.0);
+            (variance / count).sqrt()
+        })
+        .collect()
+}
+
+fn sample_standard_error(values: &[f64]) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let squared = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>();
+    (squared / ((values.len() - 1) * values.len()) as f64).sqrt()
+}
+
+fn continuation_groups(
+    cache: &ContinuationCache,
+    player: usize,
+) -> BTreeMap<(String, u64), (f64, usize)> {
+    let mut groups = BTreeMap::<(String, u64), (f64, usize)>::new();
+    for (deal_index, cached) in cache.deals.iter().enumerate() {
+        let deal = cache.deal(deal_index);
+        let class = hand_class(&deal, player);
+        for (history, estimate) in &cached.continuations {
+            let utility = if player == 0 {
+                estimate.mean_utility_p0_bb
+            } else {
+                -estimate.mean_utility_p0_bb
+            };
+            let group = groups.entry((class.clone(), *history)).or_insert((0.0, 0));
+            group.0 += utility;
+            group.1 += 1;
+        }
+    }
+    groups
+}
+
+pub fn evaluate_policy(
+    cache: &ContinuationCache,
+    artifact: &PreflopPolicyArtifact,
+) -> PreflopEvaluation {
+    let policy = ArtifactPolicy::new(artifact);
+    let worlds = root_worlds(cache);
+    let mut counters = LookupCounters::default();
+    let policy_value = policy_value_worlds(cache, &policy, worlds.clone(), &mut counters);
+    let mut first_stats = ResponseStats::default();
+    let first = best_response_worlds(
+        cache,
+        &policy,
+        worlds.clone(),
+        0,
+        &mut first_stats,
+        &mut counters,
+    );
+    let mut second_stats = ResponseStats::default();
+    let second = best_response_worlds(cache, &policy, worlds, 1, &mut second_stats, &mut counters);
+    let nash_conv = (first + second).max(0.0);
+    PreflopEvaluation {
+        schema: EVALUATION_SCHEMA.to_owned(),
+        corpus_deals: cache.deals.len(),
+        policy_value_p0_bb: policy_value,
+        player_zero_best_response_bb: first,
+        player_one_best_response_bb: second,
+        nash_conv_bb: nash_conv,
+        exploitability_bb_per_hand: nash_conv / 2.0,
+        responder_information_sets: [first_stats.information_sets, second_stats.information_sets],
+        policy_lookup_coverage: if counters.queries == 0 {
+            0.0
+        } else {
+            1.0 - counters.misses as f64 / counters.queries as f64
+        },
+        interpretation: "exact information-set best response in the sampled preflop game with frozen cached postflop continuation values; not full-game exploitability".to_owned(),
+    }
+}
+
+pub fn evaluate_neural_policy(
+    cache: &ContinuationCache,
+    network_path: &Path,
+) -> Result<PreflopEvaluation, Box<dyn Error>> {
+    let policy = NeuralPolicy {
+        frozen: FrozenPolicy::load(network_path)?,
+        config: &cache.game,
+        strategies: RefCell::new(BTreeMap::new()),
+    };
+    let worlds = root_worlds(cache);
+    let mut counters = LookupCounters::default();
+    let policy_value = policy_value_worlds(cache, &policy, worlds.clone(), &mut counters);
+    let mut first_stats = ResponseStats::default();
+    let first = best_response_worlds(
+        cache,
+        &policy,
+        worlds.clone(),
+        0,
+        &mut first_stats,
+        &mut counters,
+    );
+    let mut second_stats = ResponseStats::default();
+    let second = best_response_worlds(cache, &policy, worlds, 1, &mut second_stats, &mut counters);
+    let nash_conv = (first + second).max(0.0);
+    Ok(PreflopEvaluation {
+        schema: EVALUATION_SCHEMA.to_owned(),
+        corpus_deals: cache.deals.len(),
+        policy_value_p0_bb: policy_value,
+        player_zero_best_response_bb: first,
+        player_one_best_response_bb: second,
+        nash_conv_bb: nash_conv,
+        exploitability_bb_per_hand: nash_conv / 2.0,
+        responder_information_sets: [first_stats.information_sets, second_stats.information_sets],
+        policy_lookup_coverage: 1.0,
+        interpretation: "exact information-set best response to a neural preflop policy in the sampled preflop game with frozen cached postflop continuation values; not full-game exploitability".to_owned(),
+    })
+}
+
+pub fn export_distillation_dataset(
+    cache: &ContinuationCache,
+    artifact: &PreflopPolicyArtifact,
+    output: &Path,
+) -> Result<DistillationDatasetSummary, Box<dyn Error>> {
+    if cache.game != artifact.game {
+        return Err("preflop policy and continuation cache use different games".into());
+    }
+    let entries = artifact
+        .strategies
+        .iter()
+        .map(|entry| (entry.key.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut records = BTreeMap::<String, serde_json::Value>::new();
+    let mut covered_information_sets = BTreeSet::new();
+    for deal_index in 0..cache.deals.len() {
+        let deal = cache.deal(deal_index);
+        collect_distillation_records(
+            GameState::initial(&cache.game),
+            &deal,
+            &cache.game,
+            &entries,
+            &mut records,
+            &mut covered_information_sets,
+        );
+        if covered_information_sets.len() == entries.len()
+            && cache.balanced_exact_combo_marginals
+            && deal_index + 1 >= 2 * all_combos().len()
+        {
+            break;
+        }
+    }
+    if records.is_empty() {
+        return Err("preflop policy produced no distillation records".into());
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = output.with_extension("tmp");
+    let writer = BufWriter::new(fs::File::create(&temporary)?);
+    let mut gzip = GzEncoder::new(writer, Compression::fast());
+    let metadata = serde_json::json!({
+        "record_type": "metadata",
+        "schema": "hu-neural-traversal-jsonl-v7",
+        "state_feature_schema": "hu-cash-trajectory-poker-aware-v4",
+        "state_feature_count": super::neural::STATE_FEATURE_COUNT,
+        "action_feature_schema": "hu-cash-legal-action-v1",
+        "action_feature_count": super::neural::ACTION_FEATURE_COUNT,
+        "depth_bb": cache.depth_bb,
+        "seed": artifact.seed,
+        "start_iteration": 0,
+        "traversals": 0,
+        "records": records.len(),
+        "truncated": covered_information_sets.len() != entries.len(),
+        "sampling_mode": "external_sampling",
+        "distillation_sampling_mode": "enumerated_preflop_tree_with_exact_private_combo_expansion",
+        "value_rollouts_per_action": 1,
+        "evaluates_trajectory_action_values": false,
+        "action_abstraction": cache.game.action_abstraction,
+        "teacher": artifact.model_version,
+    });
+    serde_json::to_writer(&mut gzip, &metadata)?;
+    gzip.write_all(b"\n")?;
+    for record in records.values() {
+        serde_json::to_writer(&mut gzip, record)?;
+        gzip.write_all(b"\n")?;
+    }
+    gzip.finish()?.flush()?;
+    fs::rename(temporary, output)?;
+    Ok(DistillationDatasetSummary {
+        schema: "hu-preflop-distillation-dataset-summary-v1",
+        records: records.len(),
+        policy_information_sets: entries.len(),
+        covered_policy_information_sets: covered_information_sets.len(),
+        coverage: covered_information_sets.len() as f64 / entries.len() as f64,
+        output: output.display().to_string(),
+    })
+}
+
+fn empty_evaluation(deals: usize) -> PreflopEvaluation {
+    PreflopEvaluation {
+        schema: EVALUATION_SCHEMA.to_owned(),
+        corpus_deals: deals,
+        policy_value_p0_bb: 0.0,
+        player_zero_best_response_bb: 0.0,
+        player_one_best_response_bb: 0.0,
+        nash_conv_bb: 0.0,
+        exploitability_bb_per_hand: 0.0,
+        responder_information_sets: [0, 0],
+        policy_lookup_coverage: 0.0,
+        interpretation: "not evaluated".to_owned(),
+    }
+}
+
+fn collect_distillation_records(
+    state: GameState,
+    deal: &Deal,
+    config: &BlueprintConfig,
+    entries: &BTreeMap<String, &PreflopPolicyEntry>,
+    records: &mut BTreeMap<String, serde_json::Value>,
+    covered_information_sets: &mut BTreeSet<String>,
+) {
+    if state.terminal.is_some() || state.street != Street::Preflop {
+        return;
+    }
+    let actions = state.legal_actions(config);
+    let key = information_key(&state, deal);
+    if let Some(entry) = entries.get(&key) {
+        covered_information_sets.insert(key.clone());
+        let mut private_cards = deal.holes[state.actor];
+        private_cards.sort_unstable();
+        let record_key = format!("{key}|{:02}:{:02}", private_cards[0], private_cards[1]);
+        if let Entry::Vacant(slot) = records.entry(record_key) {
+            assert_eq!(
+                entry.action_labels,
+                actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+            );
+            let weight = (entry.average_reach_weight.max(1e-6)
+                / exact_combo_count(&entry.hand_class) as f64) as f32;
+            slot.insert(average_strategy_record_json(
+                &state,
+                deal,
+                &actions,
+                entry.probabilities.clone(),
+                weight,
+                config,
+            ));
+        }
+    }
+    for action in &actions {
+        collect_distillation_records(
+            state.apply(action, config),
+            deal,
+            config,
+            entries,
+            records,
+            covered_information_sets,
+        );
+    }
+}
+
+fn exact_combo_count(hand_class: &str) -> usize {
+    if hand_class.len() == 2 {
+        6
+    } else if hand_class.ends_with('s') {
+        4
+    } else {
+        12
+    }
+}
+
+fn in_unit_interval(value: f64) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
+}
+
+fn root_worlds(cache: &ContinuationCache) -> Vec<WeightedWorld> {
+    let weight = 1.0 / cache.deals.len() as f64;
+    cache
+        .deals
+        .iter()
+        .enumerate()
+        .map(|(deal_index, _)| WeightedWorld {
+            state: GameState::initial(&cache.game),
+            deal_index,
+            weight,
+        })
+        .collect()
+}
+
+fn best_response_worlds<P: Policy>(
+    cache: &ContinuationCache,
+    policy: &P,
+    worlds: Vec<WeightedWorld>,
+    responder: usize,
+    stats: &mut ResponseStats,
+    counters: &mut LookupCounters,
+) -> f64 {
+    if worlds.is_empty() {
+        return 0.0;
+    }
+    if worlds[0].state.terminal.is_some() || worlds[0].state.street != Street::Preflop {
+        return worlds
+            .iter()
+            .map(|world| {
+                let utility = world_utility_p0(cache, world);
+                world.weight * if responder == 0 { utility } else { -utility }
+            })
+            .sum();
+    }
+    let actor = worlds[0].state.actor;
+    debug_assert!(worlds.iter().all(|world| world.state.actor == actor));
+    if actor == responder {
+        let mut information_sets = BTreeMap::<String, Vec<WeightedWorld>>::new();
+        for world in worlds {
+            let deal = cache.deal(world.deal_index);
+            information_sets
+                .entry(information_key(&world.state, &deal))
+                .or_default()
+                .push(world);
+        }
+        stats.information_sets += information_sets.len();
+        information_sets
+            .into_values()
+            .map(|group| {
+                let actions = group[0].state.legal_actions(&cache.game);
+                actions
+                    .iter()
+                    .map(|action| {
+                        best_response_worlds(
+                            cache,
+                            policy,
+                            group
+                                .iter()
+                                .map(|world| WeightedWorld {
+                                    state: world.state.apply(action, &cache.game),
+                                    deal_index: world.deal_index,
+                                    weight: world.weight,
+                                })
+                                .collect(),
+                            responder,
+                            stats,
+                            counters,
+                        )
+                    })
+                    .max_by(f64::total_cmp)
+                    .expect("preflop responder has a legal action")
+            })
+            .sum()
+    } else {
+        let actions = worlds[0].state.legal_actions(&cache.game);
+        actions
+            .iter()
+            .enumerate()
+            .map(|(action_index, action)| {
+                let branch = worlds
+                    .iter()
+                    .filter_map(|world| {
+                        let deal = cache.deal(world.deal_index);
+                        let strategy = policy.strategy(&world.state, &deal, &actions, counters);
+                        let probability = strategy[action_index];
+                        (probability > 0.0).then(|| WeightedWorld {
+                            state: world.state.apply(action, &cache.game),
+                            deal_index: world.deal_index,
+                            weight: world.weight * probability,
+                        })
+                    })
+                    .collect();
+                best_response_worlds(cache, policy, branch, responder, stats, counters)
+            })
+            .sum()
+    }
+}
+
+fn policy_value_worlds<P: Policy>(
+    cache: &ContinuationCache,
+    policy: &P,
+    worlds: Vec<WeightedWorld>,
+    counters: &mut LookupCounters,
+) -> f64 {
+    if worlds.is_empty() {
+        return 0.0;
+    }
+    if worlds[0].state.terminal.is_some() || worlds[0].state.street != Street::Preflop {
+        return worlds
+            .iter()
+            .map(|world| world.weight * world_utility_p0(cache, world))
+            .sum();
+    }
+    let actions = worlds[0].state.legal_actions(&cache.game);
+    actions
+        .iter()
+        .enumerate()
+        .map(|(action_index, action)| {
+            let branch = worlds
+                .iter()
+                .filter_map(|world| {
+                    let deal = cache.deal(world.deal_index);
+                    let strategy = policy.strategy(&world.state, &deal, &actions, counters);
+                    let probability = strategy[action_index];
+                    (probability > 0.0).then(|| WeightedWorld {
+                        state: world.state.apply(action, &cache.game),
+                        deal_index: world.deal_index,
+                        weight: world.weight * probability,
+                    })
+                })
+                .collect();
+            policy_value_worlds(cache, policy, branch, counters)
+        })
+        .sum()
+}
+
+fn world_utility_p0(cache: &ContinuationCache, world: &WeightedWorld) -> f64 {
+    let deal = cache.deal(world.deal_index);
+    if world.state.terminal.is_some() {
+        realized_utility_p0(&world.state, &deal)
+    } else {
+        cache.continuation_value(world.deal_index, &world.state)
+    }
+}
+
+fn enumerate_flop_leaves(config: &BlueprintConfig) -> BTreeMap<u64, GameState> {
+    fn visit(state: GameState, config: &BlueprintConfig, leaves: &mut BTreeMap<u64, GameState>) {
+        if state.terminal.is_some() {
+            return;
+        }
+        if state.street != Street::Preflop {
+            let key = history_key(&state);
+            match leaves.get(&key) {
+                Some(existing) => assert_eq!(existing.public_history, state.public_history),
+                None => {
+                    leaves.insert(key, state);
+                }
+            }
+            return;
+        }
+        for action in state.legal_actions(config) {
+            visit(state.apply(&action, config), config, leaves);
+        }
+    }
+    let mut leaves = BTreeMap::new();
+    visit(GameState::initial(config), config, &mut leaves);
+    leaves
+}
+
+fn rollout_policy_value(
+    policy: &FrozenPolicy,
+    state: GameState,
+    deal: &Deal,
+    config: &BlueprintConfig,
+    rng: &mut SplitMix64,
+) -> f64 {
+    if state.terminal.is_some() {
+        return realized_utility_p0(&state, deal);
+    }
+    let actions = state.legal_actions(config);
+    let strategy = policy.strategy(&state, deal, &actions, config);
+    let selected = sample_index(&strategy, rng);
+    rollout_policy_value(
+        policy,
+        state.apply(&actions[selected], config),
+        deal,
+        config,
+        rng,
+    )
+}
+
+fn realized_utility_p0(state: &GameState, deal: &Deal) -> f64 {
+    match state.terminal.as_ref().expect("realized terminal utility") {
+        Terminal::Fold { winner } => {
+            if *winner == 0 {
+                state.invested[1]
+            } else {
+                -state.invested[0]
+            }
+        }
+        Terminal::Showdown => {
+            let equity = showdown_result(&deal.holes, &deal.board);
+            equity * state.invested[1] - (1.0 - equity) * state.invested[0]
+        }
+    }
+}
+
+fn information_key(state: &GameState, deal: &Deal) -> String {
+    format!(
+        "p{}|{}|{}",
+        state.actor,
+        hand_class(deal, state.actor),
+        state.public_history.join("/")
+    )
+}
+
+fn hand_class(deal: &Deal, player: usize) -> String {
+    Combo::new(deal.holes[player][0], deal.holes[player][1]).label()
+}
+
+fn history_key(state: &GameState) -> u64 {
+    stable_hash(state.public_history.join("/").as_bytes())
+}
+
+fn continuation_seed(seed: u64, deal: usize, history: u64, rollout: u32) -> u64 {
+    let mut digest = Sha256::new();
+    digest.update(b"hu-v26-preflop-continuation-v1");
+    digest.update(seed.to_le_bytes());
+    digest.update((deal as u64).to_le_bytes());
+    digest.update(history.to_le_bytes());
+    digest.update(rollout.to_le_bytes());
+    let bytes = digest.finalize();
+    u64::from_le_bytes(bytes[..8].try_into().expect("SHA-256 prefix"))
+}
+
+fn stratified_deal(rng: &mut SplitMix64, index: usize, combos: &[Combo]) -> Deal {
+    let block = index / combos.len();
+    let fixed_player = block % 2;
+    let fixed = combos[index % combos.len()];
+    let compatible = combos
+        .iter()
+        .copied()
+        .filter(|candidate| !fixed.overlaps(*candidate))
+        .collect::<Vec<_>>();
+    let opponent = compatible[rng.index(compatible.len())];
+    let mut holes = [[0u8; 2]; 2];
+    holes[fixed_player] = fixed.cards();
+    holes[1 - fixed_player] = opponent.cards();
+    let mut available = (0..52u8)
+        .filter(|card| !holes.iter().flatten().any(|known| known == card))
+        .collect::<Vec<_>>();
+    for board_index in 0..5 {
+        let swap = board_index + rng.index(available.len() - board_index);
+        available.swap(board_index, swap);
+    }
+    Deal::from_sampled_cards(
+        holes,
+        [
+            available[0],
+            available[1],
+            available[2],
+            available[3],
+            available[4],
+        ],
+    )
+}
+
+fn sha256_file(path: &Path) -> Result<String, Box<dyn Error>> {
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn combined_file_sha256(paths: &[PathBuf]) -> Result<String, Box<dyn Error>> {
+    let mut digest = Sha256::new();
+    digest.update(b"hu-frozen-policy-mixture-v1");
+    for path in paths {
+        digest.update(sha256_file(path)?.as_bytes());
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synthetic_cache(seed: u64) -> ContinuationCache {
+        let game = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            ..BlueprintConfig::default()
+        };
+        let leaves = enumerate_flop_leaves(&game);
+        let raw_deals = [
+            ([[51, 50], [47, 46]], [0, 5, 10, 15, 20]),
+            ([[49, 48], [45, 44]], [1, 6, 11, 16, 21]),
+            ([[47, 43], [39, 35]], [2, 7, 12, 17, 22]),
+            ([[46, 42], [38, 34]], [3, 8, 13, 18, 23]),
+        ];
+        let deals = raw_deals
+            .into_iter()
+            .enumerate()
+            .map(|(deal_index, (holes, board))| CachedDeal {
+                holes,
+                board,
+                continuations: leaves
+                    .keys()
+                    .map(|history| {
+                        (
+                            *history,
+                            ContinuationEstimate {
+                                mean_utility_p0_bb: if deal_index < 2 { 0.25 } else { -0.25 },
+                                action_standard_error_bb: 0.0,
+                            },
+                        )
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let leaf_values = deals.len() * leaves.len();
+        ContinuationCache {
+            schema: CONTINUATION_SCHEMA.to_owned(),
+            depth_bb: 20.0,
+            seed,
+            rollouts_per_leaf: 2,
+            chance_sampling: "synthetic_test".to_owned(),
+            complete_exact_combo_cycles: 0,
+            balanced_exact_combo_marginals: false,
+            network_sha256: "0".repeat(64),
+            network_sha256s: vec!["0".repeat(64)],
+            policy_mixture: "synthetic_test".to_owned(),
+            game,
+            public_histories: leaves
+                .into_iter()
+                .map(|(key, state)| (key, state.public_history))
+                .collect(),
+            deals,
+            validation: ContinuationValidation {
+                complete: true,
+                probability_values_finite: true,
+                utilities_within_stack: true,
+                leaf_values,
+                fraction_action_se_at_most_0_02bb: 1.0,
+                maximum_action_standard_error_bb: 0.0,
+                fraction_history_mean_se_at_most_0_02bb: 0.0,
+                maximum_history_mean_standard_error_bb: 0.25,
+                fraction_information_group_mean_se_at_most_0_25bb: 0.0,
+                maximum_information_group_mean_standard_error_bb: 0.25,
+            },
+        }
+    }
+
+    #[test]
+    fn preflop_information_key_hides_opponent_cards_and_future_board() {
+        let game = BlueprintConfig::default();
+        let state = GameState::initial(&game);
+        let first = Deal::from_cards([[51, 47], [50, 46]], [0, 1, 2, 3, 4]);
+        let second = Deal::from_cards([[50, 46], [45, 41]], [5, 6, 7, 8, 9]);
+        assert_eq!(hand_class(&first, 0), "AKs");
+        assert_eq!(
+            information_key(&state, &first),
+            information_key(&state, &second)
+        );
+    }
+
+    #[test]
+    fn flop_leaf_enumeration_is_public_and_deterministic() {
+        let game = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            ..BlueprintConfig::default()
+        };
+        let first = enumerate_flop_leaves(&game);
+        let second = enumerate_flop_leaves(&game);
+        assert!(!first.is_empty());
+        assert_eq!(
+            first.keys().collect::<Vec<_>>(),
+            second.keys().collect::<Vec<_>>()
+        );
+        assert!(first.values().all(|state| state.street == Street::Flop));
+    }
+
+    #[test]
+    fn complete_stratified_cycle_covers_every_exact_combo_for_both_seats() {
+        let mut rng = SplitMix64::new(17);
+        let combos = all_combos();
+        let count = combos.len();
+        let deals = (0..2 * count)
+            .map(|index| stratified_deal(&mut rng, index, &combos))
+            .collect::<Vec<_>>();
+        for player in 0..2 {
+            let observed = deals
+                .iter()
+                .map(|deal| Combo::new(deal.holes[player][0], deal.holes[player][1]).key())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(observed.len(), count);
+        }
+        assert_eq!(exact_combo_count("AA"), 6);
+        assert_eq!(exact_combo_count("AKs"), 4);
+        assert_eq!(exact_combo_count("AKo"), 12);
+    }
+
+    #[test]
+    fn lazy_dcfr_discount_matches_every_iteration_discounting() {
+        let parameters = DcfrParameters::default();
+        let mut lazy_discounts = DiscountAccumulator::new(parameters.clone());
+        let mut eager_discounts = DiscountAccumulator::new(parameters);
+        let mut lazy = SolverNode {
+            actor: 0,
+            hand_class: "AKs".to_owned(),
+            public_history: Vec::new(),
+            action_labels: vec!["fold".to_owned(), "call".to_owned()],
+            regrets: vec![3.0, -2.0],
+            strategy_sum: vec![4.0, 1.0],
+            regret_updates: 0,
+            average_visits: 0,
+            last_discount_iteration: 0,
+            last_discount_cumulative_logs: [0.0; 3],
+        };
+        let mut eager = lazy.clone();
+        for iteration in 1..=12 {
+            lazy_discounts.advance(iteration);
+            eager_discounts.advance(iteration);
+            eager.apply_dcfr_discount(iteration, &eager_discounts);
+        }
+        lazy.apply_dcfr_discount(12, &lazy_discounts);
+        for (actual, expected) in lazy
+            .regrets
+            .iter()
+            .chain(&lazy.strategy_sum)
+            .zip(eager.regrets.iter().chain(&eager.strategy_sum))
+        {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn distillation_expands_teacher_information_sets_across_exact_private_combos() {
+        let cache = synthetic_cache(7);
+        let mut solver = PreflopDcfrSolver::new(&cache, 11);
+        solver.train(500);
+        let artifact = solver.artifact("test-v27".to_owned(), 11, "a".repeat(64));
+        let entries = artifact
+            .strategies
+            .iter()
+            .map(|entry| (entry.key.clone(), entry))
+            .collect::<BTreeMap<_, _>>();
+        let mut records = BTreeMap::new();
+        let mut covered = BTreeSet::new();
+        collect_distillation_records(
+            GameState::initial(&cache.game),
+            &cache.deal(0),
+            &cache.game,
+            &entries,
+            &mut records,
+            &mut covered,
+        );
+        let first_record_count = records.len();
+        collect_distillation_records(
+            GameState::initial(&cache.game),
+            &cache.deal(1),
+            &cache.game,
+            &entries,
+            &mut records,
+            &mut covered,
+        );
+        assert!(records.len() > first_record_count);
+    }
+
+    #[test]
+    fn short_tabular_solve_is_deterministic_and_normalized() {
+        let cache = synthetic_cache(7);
+        cache.validate().unwrap();
+        let mut first = PreflopDcfrSolver::new(&cache, 11);
+        first.train(200);
+        let first = first.artifact("test-v27".to_owned(), 11, "a".repeat(64));
+        let mut second = PreflopDcfrSolver::new(&cache, 11);
+        second.train(200);
+        let second = second.artifact("test-v27".to_owned(), 11, "a".repeat(64));
+        assert_eq!(
+            serde_json::to_vec(&first).unwrap(),
+            serde_json::to_vec(&second).unwrap()
+        );
+        first.validate().unwrap();
+        assert!(first.training_evaluation.policy_lookup_coverage > 0.5);
+        assert!(first
+            .strategies
+            .iter()
+            .all(|entry| (entry.probabilities.iter().sum::<f64>() - 1.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn identical_continuation_caches_have_zero_group_delta() {
+        let cache = synthetic_cache(7);
+        let comparison = compare_continuation_caches(&cache, &cache).unwrap();
+        assert!(comparison
+            .players
+            .iter()
+            .all(|player| player.group_coverage == 1.0
+                && player.sample_weighted_mean_absolute_delta_bb == 0.0));
+        let merged = merge_continuation_caches(&cache, &cache).unwrap();
+        assert_eq!(merged.deals.len(), 2 * cache.deals.len());
+        assert_eq!(
+            merged.validation.leaf_values,
+            2 * cache.validation.leaf_values
+        );
+        let refreshed = refresh_continuation_cache_validation(cache).unwrap();
+        assert!(refreshed
+            .validation
+            .maximum_information_group_mean_standard_error_bb
+            .is_finite());
+    }
+}

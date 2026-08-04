@@ -15,12 +15,248 @@ fn main() -> Result<(), Box<dyn Error>> {
         "blueprint" => run_blueprint(&args[1..]),
         "neural-samples" => run_neural_samples(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
+        "preflop-cache" => run_preflop_cache(&args[1..]),
+        "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
+        "preflop-cache-merge" => run_preflop_cache_merge(&args[1..]),
+        "preflop-cache-refresh" => run_preflop_cache_refresh(&args[1..]),
+        "preflop-dcfr" => run_preflop_dcfr(&args[1..]),
+        "preflop-evaluate" => run_preflop_evaluate(&args[1..]),
+        "preflop-distill-samples" => run_preflop_distill_samples(&args[1..]),
+        "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
+        "full-game-lbr" => run_full_game_lbr(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
         }
         unknown => Err(format!("unknown command: {unknown}").into()),
     }
+}
+
+fn run_preflop_cache_refresh(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for continuation validation refresh")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-continuation-refreshed.json.gz"));
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let refreshed = blueprint::preflop::refresh_continuation_cache_validation(cache)?;
+    refreshed.write(&output)?;
+    println!("{}", serde_json::to_string_pretty(&refreshed.validation)?);
+    eprintln!("wrote refreshed continuation cache {}", output.display());
+    Ok(())
+}
+
+fn run_preflop_cache_merge(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let first_path = value(args, "--cache-a")
+        .map(PathBuf::from)
+        .ok_or("--cache-a is required for continuation merge")?;
+    let second_path = value(args, "--cache-b")
+        .map(PathBuf::from)
+        .ok_or("--cache-b is required for continuation merge")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-continuation-merged.json.gz"));
+    let first = blueprint::preflop::ContinuationCache::read(&first_path)?;
+    let second = blueprint::preflop::ContinuationCache::read(&second_path)?;
+    let merged = blueprint::preflop::merge_continuation_caches(&first, &second)?;
+    merged.write(&output)?;
+    println!("{}", serde_json::to_string_pretty(&merged.validation)?);
+    eprintln!("wrote merged continuation cache {}", output.display());
+    Ok(())
+}
+
+fn run_preflop_cache_compare(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let first_path = value(args, "--cache-a")
+        .map(PathBuf::from)
+        .ok_or("--cache-a is required for continuation comparison")?;
+    let second_path = value(args, "--cache-b")
+        .map(PathBuf::from)
+        .ok_or("--cache-b is required for continuation comparison")?;
+    let first = blueprint::preflop::ContinuationCache::read(&first_path)?;
+    let second = blueprint::preflop::ContinuationCache::read(&second_path)?;
+    let comparison = blueprint::preflop::compare_continuation_caches(&first, &second)?;
+    let output = serde_json::to_string_pretty(&comparison)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+    }
+    println!("{output}");
+    Ok(())
+}
+
+fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for full-game LBR")?;
+    let evaluation = blueprint::response::evaluate_full_game_response(
+        blueprint::response::ResponseEvaluationConfig {
+            game,
+            training_deals: parse_or(args, "--training-deals", 10_000u64)?,
+            evaluation_deals: parse_or(args, "--evaluation-deals", 10_000u64)?,
+            rollouts_per_action: parse_or(args, "--rollouts-per-action", 8u32)?,
+            minimum_range_particles: parse_or(args, "--minimum-range-particles", 4u64)?,
+            seed: parse_or(args, "--seed", 0x1B12_E5A1u64)?,
+            network_path,
+        },
+    )?;
+    let output = serde_json::to_string_pretty(&evaluation)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": evaluation.schema,
+                "approximateExploitabilityLowerBoundBbPerHand": evaluation.approximate_exploitability_lower_bound_bb_per_hand,
+                "approximateExploitabilityLowerConfidenceBound99PercentBbPerHand": evaluation.approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand,
+                "players": evaluation.players,
+                "preflopDecisionCounts": evaluation.preflop_responses.iter().map(Vec::len).collect::<Vec<_>>(),
+                "resolverDecisionCounts": evaluation.resolvers.iter().map(|resolver| resolver.decisions.len()).collect::<Vec<_>>(),
+            }))?
+        );
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn run_preflop_evaluate_neural(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for neural preflop evaluation")?;
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for neural preflop evaluation")?;
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let evaluation = blueprint::preflop::evaluate_neural_policy(&cache, &network_path)?;
+    let output = serde_json::to_string_pretty(&evaluation)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+    }
+    println!("{output}");
+    Ok(())
+}
+
+fn run_preflop_distill_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for preflop distillation samples")?;
+    let policy_path = value(args, "--policy")
+        .map(PathBuf::from)
+        .ok_or("--policy is required for preflop distillation samples")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-distillation.jsonl.gz"));
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
+    let summary = blueprint::preflop::export_distillation_dataset(&cache, &policy, &output)?;
+    println!("{}", serde_json::to_string_pretty(&summary)?);
+    Ok(())
+}
+
+fn run_preflop_cache(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for the continuation cache")?;
+    let mut network_paths = vec![network_path];
+    if let Some(second) = value(args, "--networks-b") {
+        network_paths.push(PathBuf::from(second));
+    }
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-continuation-cache.json.gz"));
+    let cache = blueprint::preflop::build_continuation_cache(
+        blueprint::preflop::ContinuationCacheConfig {
+            game,
+            deals: parse_or(args, "--deals", 2_652usize)?,
+            seed: parse_or(args, "--seed", 0xC01A_71A7u64)?,
+            rollouts_per_leaf: parse_or(args, "--rollouts-per-leaf", 8u32)?,
+            network_paths,
+        },
+    )?;
+    cache.write(&output)?;
+    println!("{}", serde_json::to_string_pretty(&cache.validation)?);
+    eprintln!(
+        "wrote deterministic continuation cache {}",
+        output.display()
+    );
+    Ok(())
+}
+
+fn run_preflop_dcfr(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for preflop DCFR")?;
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let seed = parse_or(args, "--seed", 1u64)?;
+    let iterations = parse_or(args, "--iterations", 100_000u64)?;
+    let model_version = value(args, "--model-version")
+        .unwrap_or_else(|| format!("hu-{}bb-tabular-preflop-v1", cache.depth_bb));
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-policy.json"));
+    let artifact =
+        blueprint::preflop::solve_preflop(&cache, iterations, seed, model_version, &cache_path)?;
+    artifact.write(&output)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&artifact.training_evaluation)?
+    );
+    eprintln!("wrote tabular preflop policy {}", output.display());
+    Ok(())
+}
+
+fn run_preflop_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for preflop evaluation")?;
+    let policy_path = value(args, "--policy")
+        .map(PathBuf::from)
+        .ok_or("--policy is required for preflop evaluation")?;
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
+    let evaluation = blueprint::preflop::evaluate_policy(&cache, &policy);
+    let output = serde_json::to_string_pretty(&evaluation)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+    }
+    println!("{output}");
+    Ok(())
 }
 
 fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -365,6 +601,15 @@ Usage:
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
   preflop-solver neural-certificate [options]
+  preflop-solver preflop-cache [options]
+  preflop-solver preflop-cache-compare [options]
+  preflop-solver preflop-cache-merge [options]
+  preflop-solver preflop-cache-refresh [options]
+  preflop-solver preflop-dcfr [options]
+  preflop-solver preflop-evaluate [options]
+  preflop-solver preflop-distill-samples [options]
+  preflop-solver preflop-evaluate-neural [options]
+  preflop-solver full-game-lbr [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5
@@ -439,6 +684,26 @@ Neural certificate options:
   --confidence <number>           Default: 0.99 one-sided bound
   --threads <integer>             Default: available logical CPUs
   --compact-serving-grid          Match an opt-in reduced-open model
-  --output <path>                 Optional JSON certificate file"
+  --output <path>                 Optional JSON certificate file
+
+Preflop continuation/solve options:
+  preflop-cache --networks <json> [--networks-b <json>] [--deals 2652] [--rollouts-per-leaf 8]
+  preflop-cache-compare --cache-a <json.gz> --cache-b <json.gz> [--output <json>]
+  preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
+  preflop-cache-refresh --cache <json.gz> --output <json.gz>
+  preflop-dcfr --cache <json.gz> [--iterations 100000] [--seed 1]
+  preflop-evaluate --cache <json.gz> --policy <json> [--output <json>]
+  preflop-distill-samples --cache <json.gz> --policy <json> --output <jsonl.gz>
+  preflop-evaluate-neural --cache <json.gz> --networks <json> [--output <json>]
+
+Full-game learned-response options:
+  --effective-stack-bb <number>   Default: 20
+  --networks <path>               Required frozen routed policy JSON
+  --training-deals <integer>      Default: 10000 response-training deals
+  --evaluation-deals <integer>    Default: 10000 independent paired deals
+  --rollouts-per-action <integer> Default: 8 common-random action rollouts
+  --minimum-range-particles <N>   Default: 4; minimum: 2
+  --seed <integer>                Deterministic training/evaluation root seed
+  --output <path>                 Optional full resolver/evaluation JSON"
     );
 }
