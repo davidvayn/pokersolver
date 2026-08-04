@@ -2,7 +2,7 @@
   "schema": "hu-v28-overnight-sequence-v1",
   "modelVersion": "hu-20bb-v28-tabular-preflop-research",
   "depthBb": 20,
-  "status": "running_not_activated",
+  "status": "completed_rejected_not_activated",
   "continuationCaches": {
     "dealsPerCache": 26520,
     "completeExactComboCyclesPerCache": 10,
@@ -61,5 +61,22 @@
     "minimumActionEvSeCoverage": 0.95,
     "actionEvStandardErrorThresholdBb": 0.02
   },
-  "failureMode": "remain_rejected_and_begin_range_conditioned_postflop_value_oracle_pilot"
+  "observedResult": {
+    "selectedIterations": 100000000,
+    "validationExploitabilityBbPerHand": [
+      0.2957732699704045,
+      0.2962944097821721
+    ],
+    "holdoutExploitabilityBbPerHand": [
+      0.32457854182489476,
+      0.32774429485387135
+    ],
+    "reachWeightedCrossSeedMae": 0.023409245056224284,
+    "primaryActionAgreement": 0.9261567448370283,
+    "maximumAggregateActionDelta": 0.002097805576063261,
+    "lookupCoverage": 1.0,
+    "projectedStorageBytes": 5147292,
+    "allReleaseGatesPassed": false
+  },
+  "failureMode": "remained_rejected_and_completed_range_conditioned_postflop_value_oracle_pilot"
 }

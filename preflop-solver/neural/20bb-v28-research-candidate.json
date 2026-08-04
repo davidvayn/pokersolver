@@ -1,0 +1,152 @@
+{
+  "schema": "hu-neural-research-candidate-v3",
+  "modelVersion": "hu-20bb-v28-tabular-and-range-oracle-research",
+  "depthBb": 20,
+  "status": "rejected_not_activated",
+  "releaseEligible": false,
+  "preflop": {
+    "source": "paired_100m_iteration_tabular_dcfr_average_policies",
+    "trainingSeeds": [8801, 8802],
+    "trainingDeals": 53040,
+    "trainingExactComboCycles": 20,
+    "trainingLeafValues": 2598960,
+    "rolloutsPerLeaf": 16,
+    "informationSets": [16900, 16900],
+    "trainingExploitabilityBbPerHand": [
+      0.0347298893503072,
+      0.03467597173117499
+    ],
+    "validationExploitabilityBbPerHand": [
+      0.2957732699704045,
+      0.2962944097821721
+    ],
+    "sealedHoldoutExploitabilityBbPerHand": [
+      0.32457854182489476,
+      0.32774429485387135
+    ],
+    "lookupCoverage": [1.0, 1.0],
+    "crossSeed": {
+      "reachWeightedActionFrequencyMae": 0.023409245056224284,
+      "primaryActionAgreement": 0.9261567448370283,
+      "tieAwarePrimaryActionAgreementAt0_01": 0.9330377608101819,
+      "maximumAggregateActionDelta": 0.002097805576063261,
+      "lookupIntersectionCoverage": 1.0
+    },
+    "compactArtifacts": [
+      {
+        "seed": 8801,
+        "bytes": 2573646,
+        "sha256": "c8045556fbd9940aa09ccdd5d45192abab706950b545150662cda0c845b65af8"
+      },
+      {
+        "seed": 8802,
+        "bytes": 2573646,
+        "sha256": "a3ef857754392c3da44e4a497ec9644c8863ab55f2cb1d3526b0e1a7d4b3c10b"
+      }
+    ],
+    "interpretation": "exact information-set response inside independent sampled preflop games with frozen v26 postflop continuation values; not full-game exploitability"
+  },
+  "continuationCaches": {
+    "policyMixture": "frozen_v26_models_selected_round_robin_per_rollout",
+    "publicHistories": 49,
+    "trainingSeeds": [8309, 8317],
+    "validationSeed": 8329,
+    "sealedHoldoutSeed": 8353,
+    "trainingActionValueSeCoverageAt0_02Bb": 0.35879621079200913,
+    "validationActionValueSeCoverageAt0_02Bb": 0.3585434173669468,
+    "holdoutActionValueSeCoverageAt0_02Bb": 0.36045264259549975,
+    "maximumMergedInformationGroupMeanSeBb": 1.677514099463891,
+    "completeAndFinite": true
+  },
+  "rangeConditionedPostflopValueOracle": {
+    "status": "promising_representation_pilot",
+    "releaseEligible": false,
+    "target": "flop continuation value from frozen v26 rollout corpus",
+    "architecture": "bounded_range_tower_128_64",
+    "trainingSeeds": [9901, 9902],
+    "trainingSteps": 2000,
+    "targetMode": "texture_group_mean",
+    "targetBucketing": "texture",
+    "observableInputs": [
+      "hero exact hole cards",
+      "flop",
+      "public preflop line and state",
+      "hero exact 169-class hand",
+      "64 board-texture features",
+      "card-removed 169-class Bayesian ranges"
+    ],
+    "hiddenInputs": [
+      "opponent exact hole cards",
+      "turn",
+      "river"
+    ],
+    "validation": {
+      "rangeGroupedRmseBb": 0.8026528193901911,
+      "rangeGroupedPearsonCorrelation": 0.8755562741072053,
+      "rangeCrossSeedPredictionCorrelation": 0.9706695601945438,
+      "noRangeGroupedRmseBb": 0.7749545549661997,
+      "rangeRelativeImprovement": -0.03574179188507312,
+      "targetStandardErrorMeanBb": 1.5087876319885254,
+      "fractionTargetSeAtMost0_02Bb": 0.00161
+    },
+    "sealedHoldout": {
+      "rangeRmseBb": 2.5035102898234673,
+      "rangeGroupedRmseBb": 0.6972396347733845,
+      "rangeGroupedPearsonCorrelation": 0.9049779570907179,
+      "rangeCrossSeedPredictionMaeBb": 0.526799998071295,
+      "rangeCrossSeedPredictionCorrelation": 0.9703021096983921,
+      "noRangeRmseBb": 2.5078680785307568,
+      "noRangeGroupedRmseBb": 0.6924835893209202,
+      "rangeRelativeImprovement": -0.006868098429781139,
+      "targetStandardErrorMeanBb": 1.516066551208496,
+      "fractionTargetSeAtMost0_02Bb": 0.00141
+    },
+    "weights": [
+      {
+        "kind": "range",
+        "seed": 9901,
+        "sha256": "15b5bc459b701da6c44801008f5d59eaab31ebe5555749caa53aec9be991f73f"
+      },
+      {
+        "kind": "range",
+        "seed": 9902,
+        "sha256": "261c6cb0fb8f404ba2d09c6fa4f5e0a7fb3070e623e92a342e585889a3afaffc"
+      },
+      {
+        "kind": "noRange",
+        "seed": 9901,
+        "sha256": "2e0fe4c3ddfd94ccbc2319cb6cb2e6d46b73e6a6144047306e9886670bbd5278"
+      },
+      {
+        "kind": "noRange",
+        "seed": 9902,
+        "sha256": "38d7c299d04f7da0719ba80861ce3306c14d40e67f08de663fac4c92eadbd7d9"
+      }
+    ],
+    "interpretation": "explicit ranges are deterministic from the pinned public line and visible blockers and were statistically redundant in this pilot; the oracle is a value representation, not a postflop action resolver"
+  },
+  "gates": {
+    "exploitabilityEstimate": false,
+    "exploitabilityUpperBound99": false,
+    "crossSeedActionFrequencyMae": true,
+    "crossSeedPrimaryAgreement": true,
+    "aggregateActionDelta": true,
+    "lookupCoverage": true,
+    "probabilitySums": true,
+    "actionEvStandardErrorCoverage": false,
+    "projectedStorage": true
+  },
+  "servingBoundary": {
+    "activated": false,
+    "preflopPoliciesShipped": false,
+    "continuationCachesShipped": false,
+    "valueOracleWeightsShipped": false,
+    "runtimeDatabaseRequired": false
+  },
+  "rejectionReasons": [
+    "Sealed-holdout preflop exploitability is 0.325-0.328bb/hand, above the 0.05bb/hand gate.",
+    "No qualifying one-sided 99% exploitability upper bound is available.",
+    "Only about 36% of cached continuation action values meet the 0.02bb standard-error threshold, below the required 95%.",
+    "The value-oracle pilot inherits high target uncertainty and does not resolve postflop actions."
+  ]
+}

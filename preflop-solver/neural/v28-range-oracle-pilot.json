@@ -1,0 +1,71 @@
+{
+  "schema": "hu-range-conditioned-flop-value-oracle-plan-v2",
+  "depthBb": 20,
+  "status": "promising_research_pilot_not_release_eligible",
+  "trainingCaches": [
+    "neural/runs/v28-overnight/cache-t1.json.gz",
+    "neural/runs/v28-overnight/cache-t2.json.gz"
+  ],
+  "selectionCache": "neural/runs/v28-overnight/cache-v.json.gz",
+  "sealedConfirmationCache": "neural/runs/v28-overnight/cache-h.json.gz",
+  "inputs": {
+    "observable": [
+      "hero exact hole cards",
+      "exact flop",
+      "public preflop history",
+      "public pot and remaining stacks",
+      "hero exact 169-class hand",
+      "production 64-feature board texture",
+      "hero public 169-class range",
+      "opponent hero-blocked 169-class range"
+    ],
+    "targetOnly": [
+      "opponent exact hole cards",
+      "turn",
+      "river"
+    ],
+    "rangeTransform": "square_root_of_normalized_probability",
+    "exactCardRemoval": true
+  },
+  "sampling": {
+    "authenticReachFraction": 0.8,
+    "uniformMeaningfulFlopLeafFraction": 0.2,
+    "excludePreflopAllInRunouts": true,
+    "targetMode": "texture_group_mean",
+    "targetBucketing": "texture"
+  },
+  "pairedAblation": {
+    "control": "identical architecture, seeds, samples, and optimizer with both range channels zeroed",
+    "seeds": [9901, 9902]
+  },
+  "network": {
+    "hiddenSizes": [128, 64],
+    "architecture": "range_tower",
+    "activation": "relu",
+    "optimizer": "adamw",
+    "learningRate": 0.0003,
+    "weightDecay": 0.001,
+    "steps": 2000,
+    "batchSize": 2048,
+    "loss": "mse",
+    "boundedOutput": true
+  },
+  "freezeBeforeHoldout": {
+    "minimumGroupedRmseRelativeImprovement": -0.05,
+    "interpretation": "range representation must be within five percent of the otherwise identical no-range control",
+    "rangeMustWinBothSeeds": false,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "maximumGroupedRmseBb": 1.0
+  },
+  "observedResult": {
+    "validationGroupedRmseBb": 0.8026528193901911,
+    "validationCrossSeedPredictionCorrelation": 0.9706695601945438,
+    "validationRelativeImprovementOverNoRange": -0.03574179188507312,
+    "holdoutGroupedRmseBb": 0.6972396347733845,
+    "holdoutGroupedPearsonCorrelation": 0.9049779570907179,
+    "holdoutCrossSeedPredictionCorrelation": 0.9703021096983921,
+    "holdoutRelativeImprovementOverNoRange": -0.006868098429781139
+  },
+  "releaseEligible": false,
+  "interpretation": "representation and continuation-value pilot against frozen v26 rollouts only; not a postflop resolver, exploitability certificate, or GTO policy"
+}
