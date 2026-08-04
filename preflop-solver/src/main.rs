@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
         "preflop-cache-merge" => run_preflop_cache_merge(&args[1..]),
         "preflop-cache-refresh" => run_preflop_cache_refresh(&args[1..]),
+        "preflop-cache-inspect" => run_preflop_cache_inspect(&args[1..]),
         "preflop-dcfr" => run_preflop_dcfr(&args[1..]),
         "preflop-evaluate" => run_preflop_evaluate(&args[1..]),
         "preflop-attribution" => run_preflop_attribution(&args[1..]),
@@ -46,6 +47,30 @@ fn run_preflop_cache_refresh(args: &[String]) -> Result<(), Box<dyn Error>> {
     refreshed.write(&output)?;
     println!("{}", serde_json::to_string_pretty(&refreshed.validation)?);
     eprintln!("wrote refreshed continuation cache {}", output.display());
+    Ok(())
+}
+
+fn run_preflop_cache_inspect(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for continuation inspection")?;
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": "hu-preflop-continuation-cache-summary-v1",
+            "path": cache_path.display().to_string(),
+            "depthBb": cache.depth_bb,
+            "seed": cache.seed,
+            "deals": cache.deals.len(),
+            "completeExactComboCycles": cache.complete_exact_combo_cycles,
+            "rolloutsPerLeaf": cache.rollouts_per_leaf,
+            "networkSha256s": cache.network_sha256s,
+            "policyMixture": cache.policy_mixture,
+            "publicHistories": cache.public_histories.len(),
+            "validation": cache.validation,
+        }))?
+    );
     Ok(())
 }
 
@@ -761,6 +786,7 @@ Preflop continuation/solve options:
   preflop-cache-compare --cache-a <json.gz> --cache-b <json.gz> [--output <json>]
   preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
   preflop-cache-refresh --cache <json.gz> --output <json.gz>
+  preflop-cache-inspect --cache <json.gz>
   preflop-dcfr --cache <json.gz> [--iterations 100000] [--seed 1]
     [--solver dcfr|mccfr-plus] [--dcfr-alpha 1.5] [--dcfr-beta 0]
     [--dcfr-gamma 2] [--exploration 0.05]
