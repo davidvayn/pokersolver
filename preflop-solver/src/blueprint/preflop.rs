@@ -55,6 +55,16 @@ pub struct ContinuationCacheConfig {
     pub network_paths: Vec<PathBuf>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ResolverContinuationCacheConfig {
+    pub deals: usize,
+    pub resolver_iterations: u64,
+    pub resolver_averaging_delay: u64,
+    pub value_uncertainty_bb: f64,
+    pub value_network_path: PathBuf,
+    pub threads: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ContinuationEstimate {
     pub mean_utility_p0_bb: f64,
@@ -993,6 +1003,151 @@ pub fn build_continuation_cache(
                 .into_iter()
                 .fold(0.0, f64::max),
         },
+    };
+    cache.validate()?;
+    Ok(cache)
+}
+
+/// Revalues an existing exact-deal design with the depth-limited public-belief
+/// flop resolver. The per-world scalar is reconstructed from both players'
+/// conditional CFVs, preserving zero-sum utility for the downstream preflop
+/// solve. This is a research bridge; model uncertainty remains attached to
+/// every leaf and therefore fails the precision release gate.
+pub fn build_resolver_continuation_cache(
+    base: &ContinuationCache,
+    config: ResolverContinuationCacheConfig,
+) -> Result<ContinuationCache, Box<dyn Error>> {
+    if config.deals < 2
+        || config.deals > base.deals.len()
+        || config.resolver_iterations < 2
+        || config.resolver_averaging_delay >= config.resolver_iterations
+        || !config.value_uncertainty_bb.is_finite()
+        || config.value_uncertainty_bb < 0.0
+        || config.threads == 0
+    {
+        return Err("resolver continuation configuration is invalid".into());
+    }
+    let network = super::public_belief::PublicValueNetwork::read(&config.value_network_path)?;
+    let leaves = enumerate_flop_leaves(&base.game);
+    let public_histories = leaves
+        .iter()
+        .map(|(key, state)| (*key, state.public_history.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if public_histories != base.public_histories {
+        return Err("base cache public leaves do not match the current game".into());
+    }
+    let source_deals = base
+        .deals
+        .iter()
+        .take(config.deals)
+        .cloned()
+        .collect::<Vec<_>>();
+    let jobs = source_deals
+        .iter()
+        .enumerate()
+        .flat_map(|(deal_index, cached)| {
+            leaves
+                .iter()
+                .map(move |(history, leaf)| (deal_index, *history, cached.clone(), leaf.clone()))
+        })
+        .collect::<Vec<_>>();
+    let worker_count = config.threads.min(jobs.len()).max(1);
+    let solved = std::thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for worker in 0..worker_count {
+            let assigned = jobs
+                .iter()
+                .skip(worker)
+                .step_by(worker_count)
+                .cloned()
+                .collect::<Vec<_>>();
+            let network = network.clone();
+            let game = base.game.clone();
+            workers.push(scope.spawn(move || {
+                assigned
+                    .into_iter()
+                    .map(|(deal_index, history, cached, leaf)| {
+                        let flop = [cached.board[0], cached.board[1], cached.board[2]];
+                        let ranges =
+                            std::array::from_fn(|_| super::public_belief::uniform_range(&flop));
+                        let mut resolver_game = game.clone();
+                        resolver_game.action_abstraction.include_all_in = false;
+                        let solution = super::public_belief::solve_flop(
+                            super::public_belief::FlopResolveConfig {
+                                game: resolver_game,
+                                state: super::public_belief::PublicBeliefState::flop_start(
+                                    flop,
+                                    leaf.actor,
+                                    leaf.invested,
+                                    ranges,
+                                ),
+                                iterations: config.resolver_iterations,
+                                averaging_delay: config.resolver_averaging_delay,
+                                value_network: network.clone(),
+                            },
+                        )?;
+                        let first = Combo::new(cached.holes[0][0], cached.holes[0][1]).key();
+                        let second = Combo::new(cached.holes[1][0], cached.holes[1][1]).key();
+                        let reconstructed = (solution.counterfactual_values_bb[0][first] as f64
+                            - solution.counterfactual_values_bb[1][second] as f64)
+                            / 2.0;
+                        Ok::<_, String>((
+                            deal_index,
+                            history,
+                            ContinuationEstimate {
+                                mean_utility_p0_bb: reconstructed
+                                    .clamp(-game.effective_stack_bb, game.effective_stack_bb),
+                                action_standard_error_bb: config.value_uncertainty_bb,
+                            },
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            }));
+        }
+        let mut values = Vec::with_capacity(jobs.len());
+        for worker in workers {
+            values.extend(
+                worker
+                    .join()
+                    .map_err(|_| "resolver continuation worker panicked".to_owned())??,
+            );
+        }
+        Ok::<_, String>(values)
+    })?;
+    let mut deals = source_deals
+        .into_iter()
+        .map(|cached| CachedDeal {
+            holes: cached.holes,
+            board: cached.board,
+            continuations: BTreeMap::new(),
+        })
+        .collect::<Vec<_>>();
+    for (deal_index, history, estimate) in solved {
+        deals[deal_index].continuations.insert(history, estimate);
+    }
+    let validation = continuation_validation(&deals, &public_histories);
+    let network_sha256 = sha256_file(&config.value_network_path)?;
+    let cache = ContinuationCache {
+        schema: CONTINUATION_SCHEMA.to_owned(),
+        depth_bb: base.depth_bb,
+        seed: base.seed ^ 0xF10F_C0F5,
+        rollouts_per_leaf: 2,
+        chance_sampling: format!(
+            "{}_revalued_by_depth_limited_flop_public_belief_resolver",
+            base.chance_sampling
+        ),
+        complete_exact_combo_cycles: deals.len() / (2 * all_combos().len()),
+        balanced_exact_combo_marginals: deals.len().is_multiple_of(2 * all_combos().len()),
+        network_sha256: network_sha256.clone(),
+        network_sha256s: vec![network_sha256],
+        policy_mixture: format!(
+            "turn_cfv_network_plus_{}_iteration_flop_dcfr_no_all_in_research_bridge",
+            config.resolver_iterations
+        ),
+        game: base.game.clone(),
+        public_histories,
+        deals,
+        validation,
     };
     cache.validate()?;
     Ok(cache)

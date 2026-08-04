@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "neural-samples" => run_neural_samples(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
         "preflop-cache" => run_preflop_cache(&args[1..]),
+        "preflop-cache-resolver" => run_preflop_cache_resolver(&args[1..]),
         "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
         "preflop-cache-merge" => run_preflop_cache_merge(&args[1..]),
         "preflop-cache-refresh" => run_preflop_cache_refresh(&args[1..]),
@@ -27,12 +28,294 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-distill-samples" => run_preflop_distill_samples(&args[1..]),
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
         "full-game-lbr" => run_full_game_lbr(&args[1..]),
+        "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
+        "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
+        "flop-pbs-resolve" => run_flop_pbs_resolve(&args[1..]),
+        "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
         }
         unknown => Err(format!("unknown command: {unknown}").into()),
     }
+}
+
+fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let base_path = value(args, "--base-cache")
+        .map(PathBuf::from)
+        .ok_or("--base-cache is required")?;
+    let network_path = value(args, "--value-network")
+        .map(PathBuf::from)
+        .ok_or("--value-network is required")?;
+    let base = blueprint::preflop::ContinuationCache::read(&base_path)?;
+    let iterations = parse_or(args, "--resolver-iterations", 10u64)?;
+    let cache = blueprint::preflop::build_resolver_continuation_cache(
+        &base,
+        blueprint::preflop::ResolverContinuationCacheConfig {
+            deals: parse_or(args, "--deals", 2usize)?,
+            resolver_iterations: iterations,
+            resolver_averaging_delay: parse_or(
+                args,
+                "--resolver-averaging-delay",
+                iterations / 10,
+            )?,
+            value_uncertainty_bb: parse_or(args, "--value-uncertainty-bb", 1.0f64)?,
+            value_network_path: network_path,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+        },
+    )?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-continuation-resolver.json.gz"));
+    cache.write(&output)?;
+    println!("{}", serde_json::to_string_pretty(&cache.validation)?);
+    eprintln!(
+        "wrote resolver-derived continuation cache {}",
+        output.display()
+    );
+    Ok(())
+}
+
+fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for self-play public beliefs")?;
+    let river_iterations = parse_or(args, "--river-iterations", 200u64)?;
+    let dataset = blueprint::public_belief::generate_self_play_turn_targets(
+        blueprint::public_belief::SelfPlayTurnTargetConfig {
+            game,
+            states: parse_or(args, "--states", 4usize)?,
+            range_particles: parse_or(args, "--range-particles", 512u64)?,
+            river_iterations,
+            river_averaging_delay: parse_or(
+                args,
+                "--river-averaging-delay",
+                river_iterations / 10,
+            )?,
+            seed: parse_or(args, "--seed", 0x5E1F_91A7u64)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+            network_path,
+        },
+    )?;
+    let path = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("turn-pbs-self-play-targets.json"));
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&path, format!("{}\n", serde_json::to_string(&dataset)?))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": dataset.schema,
+            "stateDistribution": dataset.state_distribution,
+            "states": dataset.targets.len(),
+            "minimumRangeEffectiveSampleSize": dataset.targets.iter().filter_map(|target| target.range_effective_sample_size).fold(f64::INFINITY, f64::min),
+            "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "validation": dataset.validation,
+            "output": path,
+        }))?
+    );
+    Ok(())
+}
+
+fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    // The pilot is intentionally fail-closed until exact all-in flop runouts
+    // are vectorized in the public-belief solver.
+    game.action_abstraction.include_all_in = false;
+    let board = parse_board::<3>(
+        &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th")?,
+    )?;
+    let network_path = value(args, "--value-network")
+        .map(PathBuf::from)
+        .ok_or("--value-network is required")?;
+    let network = blueprint::public_belief::PublicValueNetwork::read(&network_path)?;
+    let ranges = std::array::from_fn(|_| blueprint::public_belief::uniform_range(&board));
+    let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
+    let iterations = parse_or(args, "--iterations", 20u64)?;
+    let solution =
+        blueprint::public_belief::solve_flop(blueprint::public_belief::FlopResolveConfig {
+            game,
+            state: blueprint::public_belief::PublicBeliefState::flop_start(
+                board,
+                parse_or(args, "--actor", 1usize)?,
+                [pot_bb / 2.0, pot_bb / 2.0],
+                ranges,
+            ),
+            iterations,
+            averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
+            value_network: network,
+        })?;
+    let output = serde_json::to_string_pretty(&solution)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{output}\n"))?;
+        println!("{}", serde_json::to_string_pretty(&solution.metrics)?);
+        eprintln!("wrote depth-limited flop pilot {}", path.display());
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let board = parse_board::<5>(
+        &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th,Js,Ac")?,
+    )?;
+    let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
+    let iterations = parse_or(args, "--iterations", 2_000u64)?;
+    let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
+    let solution =
+        blueprint::public_belief::solve_river(blueprint::public_belief::RiverSolveConfig {
+            game,
+            state: blueprint::public_belief::PublicBeliefState::uniform_river_start(
+                board,
+                parse_or(args, "--actor", 1usize)?,
+                [pot_bb / 2.0, pot_bb / 2.0],
+            ),
+            iterations,
+            averaging_delay,
+        })?;
+    let output = serde_json::to_string_pretty(&solution)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{output}\n"))?;
+        println!("{}", serde_json::to_string_pretty(&solution.metrics)?);
+        eprintln!("wrote exact-card-removal river solution {}", path.display());
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn run_turn_pbs_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let river_iterations = parse_or(args, "--river-iterations", 500u64)?;
+    let dataset = blueprint::public_belief::generate_turn_targets(
+        blueprint::public_belief::TurnTargetGenerationConfig {
+            game,
+            states: parse_or(args, "--states", 16usize)?,
+            river_iterations,
+            river_averaging_delay: parse_or(
+                args,
+                "--river-averaging-delay",
+                river_iterations / 10,
+            )?,
+            seed: parse_or(args, "--seed", 0xB311_EF5u64)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+        },
+    )?;
+    let path = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("turn-pbs-targets.json"));
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&path, format!("{}\n", serde_json::to_string(&dataset)?))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": dataset.schema,
+            "states": dataset.targets.len(),
+            "riverIterations": dataset.river_iterations,
+            "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "maximumZeroSumResidualBb": dataset.targets.iter().map(|target| target.zero_sum_residual_bb).fold(0.0f64, f64::max),
+            "validation": dataset.validation,
+            "output": path,
+        }))?
+    );
+    Ok(())
+}
+
+fn parse_board<const N: usize>(value: &str) -> Result<[u8; N], Box<dyn Error>> {
+    let cards = value
+        .split(',')
+        .map(|token| parse_card(token.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let board: [u8; N] = cards
+        .try_into()
+        .map_err(|cards: Vec<u8>| format!("expected {N} board cards, received {}", cards.len()))?;
+    let unique = board
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    if unique.len() != N {
+        return Err("board cards must be unique".into());
+    }
+    Ok(board)
+}
+
+fn parse_card(token: &str) -> Result<u8, Box<dyn Error>> {
+    let bytes = token.as_bytes();
+    if bytes.len() != 2 {
+        return Err(format!("invalid card {token:?}").into());
+    }
+    let rank = preflop_solver::cards::RANKS
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(&bytes[0]))
+        .ok_or_else(|| format!("invalid card rank in {token:?}"))?;
+    let suit = preflop_solver::cards::SUITS
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(&bytes[1]))
+        .ok_or_else(|| format!("invalid card suit in {token:?}"))?;
+    Ok((rank * 4 + suit) as u8)
 }
 
 fn run_preflop_cache_refresh(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -448,6 +731,9 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
         trajectory_sampling,
         evaluate_trajectory_values,
         value_rollouts_per_action,
+        enumerate_turn_river_chance: args
+            .iter()
+            .any(|argument| argument == "--enumerate-turn-river-chance"),
     })?;
     eprintln!("wrote compact neural traversal batch {}", output.display());
     Ok(())
@@ -697,6 +983,7 @@ Usage:
   preflop-solver neural-samples [options]
   preflop-solver neural-certificate [options]
   preflop-solver preflop-cache [options]
+  preflop-solver preflop-cache-resolver [options]
   preflop-solver preflop-cache-compare [options]
   preflop-solver preflop-cache-merge [options]
   preflop-solver preflop-cache-refresh [options]
@@ -705,6 +992,10 @@ Usage:
   preflop-solver preflop-distill-samples [options]
   preflop-solver preflop-evaluate-neural [options]
   preflop-solver full-game-lbr [options]
+  preflop-solver river-pbs-solve [options]
+  preflop-solver turn-pbs-targets [options]
+  preflop-solver turn-pbs-self-play-targets [options]
+  preflop-solver flop-pbs-resolve [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5
@@ -736,6 +1027,7 @@ Blueprint options:
   --preflop-runout-samples <int>  Default: 256
   --flop-runout-samples <int>     Default: 128
   --sample-turn-rivers            Sample instead of enumerating turn rivers
+  --enumerate-turn-river-chance   Enumerate 44 legal rivers in neural traversals
   --compact-serving-grid          Remove 4bb/5bb opens; retain other sizes
   --open-sizes-bb <csv>           Default: 2,2.5,3,4,5
   --limp-raise-sizes-bb <csv>     Default: 3,4,5

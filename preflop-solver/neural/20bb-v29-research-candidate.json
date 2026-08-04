@@ -1,0 +1,42 @@
+{
+  "schema": "hu-20bb-v29-public-belief-research-candidate-v1",
+  "status": "rejected",
+  "activationAllowed": false,
+  "activeManifestChanged": false,
+  "architecture": {
+    "river": "exact-card-removal alternating vectorized DCFR with exact abstract best response",
+    "turnTargets": "all public rivers enumerated from solved river subgames",
+    "turnNetwork": "paired exact-range/no-range full 2652-CFV vector MLX networks",
+    "flop": "exact turn chance, learned turn CFV leaves, depth-limited DCFR",
+    "preflop": "resolver-derived zero-sum continuation bridge plus paired tabular DCFR",
+    "evaluation": "independent H response and full-game learned-response lower bound"
+  },
+  "results": {
+    "river200ExploitabilityBbPerHand": 0.009319390933938632,
+    "riverDeterministicArtifactSha256": "280872edb7ec2be7c9662b4c1ad63aba80647b466107057f6621a422988cb008",
+    "turnTargetMaximumRiverExploitabilityBbPerHand": 0.029344537748285715,
+    "turnRangeRmseBb": 1.963927149772644,
+    "turnNoRangeRmseBb": 2.300256133079529,
+    "turnRangeRelativeImprovement": 0.14621371006045986,
+    "turnRangeCrossSeedCorrelation": 0.882133133708342,
+    "flopRangeExploitabilityBbPerHand": 0.014052135995069298,
+    "flopNoRangeExploitabilityBbPerHand": 0.25413627031792246,
+    "flopRangeResolverImprovement": 0.9882144553171237,
+    "preflopCrossSeedActionFrequencyMae": 0.012786412506574755,
+    "preflopCrossSeedPrimaryAgreement": 0.9999752477261535,
+    "preflopSeed9801HExploitabilityBbPerHand": 2.579658626820101,
+    "preflopSeed9802HExploitabilityBbPerHand": 2.579501586505703,
+    "fullGameLearnedResponseLowerBoundBbPerHand": 0.001,
+    "fullGameLearnedResponseLowerConfidenceBound99BbPerHand": 0.0
+  },
+  "failedGates": [
+    "authentic high-particle public-belief target corpus",
+    "turn value holdout RMSE",
+    "turn value cross-seed correlation",
+    "full flop action abstraction including all-in",
+    "balanced resolver-derived continuation coverage and precision",
+    "independent H exploitability and lookup coverage",
+    "full-game exploitability upper bound"
+  ],
+  "interpretation": "Exact ranges materially improve the value and resolver ablations, but the corpus is far too small. Cross-seed preflop stability on two deals is overfit and is contradicted by H. No policy is suitable for the web app."
+}

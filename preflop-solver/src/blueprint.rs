@@ -18,6 +18,7 @@ use std::path::Path;
 
 pub mod neural;
 pub mod preflop;
+pub mod public_belief;
 pub mod response;
 
 const EPSILON: f64 = 1e-9;

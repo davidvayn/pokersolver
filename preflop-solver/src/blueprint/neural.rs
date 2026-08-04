@@ -38,6 +38,7 @@ pub struct SampleGenerationConfig {
     pub trajectory_sampling: bool,
     pub evaluate_trajectory_values: bool,
     pub value_rollouts_per_action: u32,
+    pub enumerate_turn_river_chance: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -364,6 +365,7 @@ struct DatasetMetadata<'a> {
     sampling_mode: &'static str,
     value_rollouts_per_action: u32,
     evaluates_trajectory_action_values: bool,
+    enumerates_turn_river_chance: bool,
     action_abstraction: &'a ActionAbstraction,
 }
 
@@ -512,23 +514,14 @@ impl SampleGenerator {
                 .enumerate()
                 .map(|(index, action)| {
                     strategy[index]
-                        * self.value_only_external_sampling(
-                            state.apply(action, &self.config.game),
-                            deal,
-                            traverser,
-                            rng,
-                        )
+                        * self.value_only_after_action(&state, action, deal, traverser, rng)
                 })
                 .sum()
         } else {
             let selected = sample_index(&strategy, rng);
             let baselines = self.sampled_value_baseline(&state, deal, &actions, traverser);
-            let sampled_value = self.value_only_external_sampling(
-                state.apply(&actions[selected], &self.config.game),
-                deal,
-                traverser,
-                rng,
-            );
+            let sampled_value =
+                self.value_only_after_action(&state, &actions[selected], deal, traverser, rng);
             match baselines {
                 Some(values) => {
                     baseline_corrected_sample(&strategy, &values, selected, sampled_value)
@@ -536,6 +529,32 @@ impl SampleGenerator {
                 None => sampled_value,
             }
         }
+    }
+
+    fn value_only_after_action(
+        &self,
+        state: &GameState,
+        action: &LegalAction,
+        deal: &Deal,
+        traverser: usize,
+        rng: &mut SplitMix64,
+    ) -> f64 {
+        let next = state.apply(action, &self.config.game);
+        if self.config.enumerate_turn_river_chance
+            && state.street == Street::Turn
+            && next.street == Street::River
+            && next.terminal.is_none()
+        {
+            let rivers = exact_river_deals(deal);
+            return rivers
+                .iter()
+                .map(|river_deal| {
+                    self.value_only_external_sampling(next.clone(), river_deal, traverser, rng)
+                })
+                .sum::<f64>()
+                / rivers.len() as f64;
+        }
+        self.value_only_external_sampling(next, deal, traverser, rng)
     }
 
     fn action_value_estimates(
@@ -566,12 +585,9 @@ impl SampleGenerator {
                         iteration,
                         sample_index,
                     ));
-                    values.push(self.value_only_external_sampling(
-                        state.apply(action, &self.config.game),
-                        deal,
-                        traverser,
-                        &mut rng,
-                    ));
+                    values.push(
+                        self.value_only_after_action(state, action, deal, traverser, &mut rng),
+                    );
                 }
                 let mean = values.iter().sum::<f64>() / values.len() as f64;
                 let standard_error = if values.len() >= 2 {
@@ -660,8 +676,9 @@ impl SampleGenerator {
         if state.actor == traverser {
             let mut values = Vec::with_capacity(actions.len());
             for action in &actions {
-                values.push(self.external_sampling(
-                    state.apply(action, &self.config.game),
+                values.push(self.external_sampling_after_action(
+                    &state,
+                    action,
                     deal,
                     traverser,
                     iteration,
@@ -718,8 +735,9 @@ impl SampleGenerator {
             ));
             let selected = sample_index(&strategy, &mut self.rng);
             let baselines = self.sampled_value_baseline(&state, deal, &actions, traverser);
-            let sampled_value = self.external_sampling(
-                state.apply(&actions[selected], &self.config.game),
+            let sampled_value = self.external_sampling_after_action(
+                &state,
+                &actions[selected],
                 deal,
                 traverser,
                 iteration,
@@ -733,6 +751,56 @@ impl SampleGenerator {
             }
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn external_sampling_after_action(
+        &mut self,
+        state: &GameState,
+        action: &LegalAction,
+        deal: &Deal,
+        traverser: usize,
+        iteration: u64,
+        reach_probability: f64,
+    ) -> f64 {
+        let next = state.apply(action, &self.config.game);
+        if self.config.enumerate_turn_river_chance
+            && state.street == Street::Turn
+            && next.street == Street::River
+            && next.terminal.is_none()
+        {
+            let rivers = exact_river_deals(deal);
+            let chance_probability = 1.0 / rivers.len() as f64;
+            return rivers
+                .iter()
+                .map(|river_deal| {
+                    self.external_sampling(
+                        next.clone(),
+                        river_deal,
+                        traverser,
+                        iteration,
+                        reach_probability * chance_probability,
+                    )
+                })
+                .sum::<f64>()
+                * chance_probability;
+        }
+        self.external_sampling(next, deal, traverser, iteration, reach_probability)
+    }
+}
+
+fn exact_river_deals(deal: &Deal) -> Vec<Deal> {
+    let mut blocked = [false; 52];
+    for card in deal.holes.iter().flatten().chain(&deal.board[..4]) {
+        blocked[*card as usize] = true;
+    }
+    (0..52u8)
+        .filter(|river| !blocked[*river as usize])
+        .map(|river| {
+            let mut board = deal.board;
+            board[4] = river;
+            Deal::from_sampled_cards(deal.holes, board)
+        })
+        .collect()
 }
 
 fn baseline_corrected_sample(
@@ -1260,6 +1328,7 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
         },
         value_rollouts_per_action: config.value_rollouts_per_action,
         evaluates_trajectory_action_values: config.evaluate_trajectory_values,
+        enumerates_turn_river_chance: config.enumerate_turn_river_chance,
         action_abstraction: &config.game.action_abstraction,
     };
     serde_json::to_writer(&mut writer, &metadata)?;
@@ -1352,6 +1421,7 @@ pub fn certify_exploitability_upper_bound(
         trajectory_sampling: false,
         evaluate_trajectory_values: false,
         value_rollouts_per_action: 1,
+        enumerate_turn_river_chance: false,
     })?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
@@ -1540,6 +1610,22 @@ mod tests {
     }
 
     #[test]
+    fn exact_turn_river_chance_enumerates_every_unblocked_card() {
+        let deal = Deal::from_cards([[0, 1], [2, 3]], [4, 5, 6, 7, 51]);
+        let rivers = exact_river_deals(&deal);
+        assert_eq!(rivers.len(), 44);
+        let cards = rivers
+            .iter()
+            .map(|candidate| candidate.board[4])
+            .collect::<BTreeSet<_>>();
+        assert_eq!(cards.len(), 44);
+        assert!(cards
+            .iter()
+            .all(|card| ![0, 1, 2, 3, 4, 5, 6, 7].contains(card)));
+        assert!(cards.contains(&51));
+    }
+
+    #[test]
     fn shared_state_batch_scoring_matches_individual_dense_inference() {
         let first = DenseLayer {
             input_size: MODEL_INPUT_COUNT,
@@ -1691,6 +1777,7 @@ mod tests {
             trajectory_sampling: false,
             evaluate_trajectory_values: false,
             value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
         };
         let (_, first, attempted) = SampleGenerator::new(make()).unwrap().run().unwrap();
         let (_, second, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
@@ -1734,6 +1821,7 @@ mod tests {
             trajectory_sampling: false,
             evaluate_trajectory_values: false,
             value_rollouts_per_action,
+            enumerate_turn_river_chance: false,
         };
         let (_, primary, _) = SampleGenerator::new(make(1)).unwrap().run().unwrap();
         let (_, averaged, _) = SampleGenerator::new(make(4)).unwrap().run().unwrap();
@@ -1790,6 +1878,7 @@ mod tests {
             trajectory_sampling: true,
             evaluate_trajectory_values: false,
             value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
         };
         let (_, records, attempted) = SampleGenerator::new(config).unwrap().run().unwrap();
         assert_eq!(attempted, records.len());
@@ -1820,6 +1909,7 @@ mod tests {
             trajectory_sampling: true,
             evaluate_trajectory_values: true,
             value_rollouts_per_action: 3,
+            enumerate_turn_river_chance: false,
         };
         let (_, first, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
         let (_, second, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
