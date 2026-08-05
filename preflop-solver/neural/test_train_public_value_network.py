@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -135,6 +136,38 @@ class PublicValueNetworkTests(unittest.TestCase):
         parallel = module.feature_dataset(dataset, module.FEATURE_SCHEMA, 2)
         np.testing.assert_array_equal(parallel[0], serial[0])
         np.testing.assert_array_equal(parallel[1], serial[1])
+
+    def test_feature_cache_reuses_only_digest_verified_arrays(self) -> None:
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        contexts = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+        queries = np.arange(8, dtype=np.float32).reshape(1, 2, 2, 2)
+        with tempfile.TemporaryDirectory() as directory:
+            cache_dir = Path(directory)
+            with mock.patch.object(
+                module, "feature_dataset", return_value=(contexts, queries)
+            ) as builder:
+                first = module.feature_dataset_cached(
+                    dataset, module.FEATURE_SCHEMA, 1, cache_dir
+                )
+                second = module.feature_dataset_cached(
+                    dataset, module.FEATURE_SCHEMA, 1, cache_dir
+                )
+            builder.assert_called_once()
+            np.testing.assert_array_equal(first[0], contexts)
+            np.testing.assert_array_equal(first[1], queries)
+            np.testing.assert_array_equal(second[0], contexts)
+            np.testing.assert_array_equal(second[1], queries)
+            self.assertFalse(first[2]["hit"])
+            self.assertTrue(second[2]["hit"])
+
+            query_path = next(cache_dir.glob("*-queries.npy"))
+            with query_path.open("r+b") as stream:
+                stream.seek(-1, 2)
+                stream.write(b"x")
+            with self.assertRaisesRegex(RuntimeError, "digest mismatch"):
+                module.feature_dataset_cached(
+                    dataset, module.FEATURE_SCHEMA, 1, cache_dir
+                )
 
     def test_suit_permutations_are_combo_bijections(self) -> None:
         permutations = module.suit_permutations(24)

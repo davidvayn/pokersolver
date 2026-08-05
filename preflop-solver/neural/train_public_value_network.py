@@ -23,6 +23,7 @@ NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
 FEATURE_SCHEMA_BOARD_RELATIVE = "rank-suit-invariant-combo-query-v2"
 FEATURE_SCHEMA_EXACT_RUNOUT = "rank-suit-invariant-combo-query-v3"
+FEATURE_IMPLEMENTATION_VERSION = "public-value-features-v3-exact-runout-1"
 COMBO_COUNT = 1326
 DEPTH_BB = 20.0
 MINIMUM_VALUE_SCALE_BB = 1.0
@@ -525,6 +526,14 @@ def parse_args() -> argparse.Namespace:
         default=FEATURE_SCHEMA,
     )
     parser.add_argument("--feature-workers", type=int, default=1)
+    parser.add_argument(
+        "--feature-cache-dir",
+        type=Path,
+        help=(
+            "reuse content-addressed deterministic feature arrays; cache entries "
+            "are accepted only after their metadata and SHA-256 digests match"
+        ),
+    )
     parser.add_argument(
         "--value-normalization",
         choices=("pot", "payoff-exposure"),
@@ -1162,6 +1171,112 @@ def feature_dataset(
     return np.stack(contexts), np.stack(queries)
 
 
+def feature_cache_key(dataset: Dataset, feature_schema: str) -> str:
+    """Identify feature tensors without trusting a mutable path or timestamp."""
+    payload = {
+        "implementation": FEATURE_IMPLEMENTATION_VERSION,
+        "datasetSha256": dataset.source_sha256,
+        "featureSchema": feature_schema,
+        "rows": int(len(dataset.targets)),
+        "groups": int(len(np.unique(dataset.groups))),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def atomic_save_npy(path: Path, values: np.ndarray) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as stream:
+        np.save(stream, values, allow_pickle=False)
+    temporary.replace(path)
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary.replace(path)
+
+
+def feature_dataset_cached(
+    dataset: Dataset,
+    feature_schema: str = FEATURE_SCHEMA,
+    workers: int = 1,
+    cache_dir: Path | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Build features once and reuse only byte-verified content-addressed arrays."""
+    if cache_dir is None:
+        contexts, queries = feature_dataset(dataset, feature_schema, workers)
+        return contexts, queries, {"enabled": False, "hit": False}
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = feature_cache_key(dataset, feature_schema)
+    context_path = cache_dir / f"{key}-contexts.npy"
+    query_path = cache_dir / f"{key}-queries.npy"
+    metadata_path = cache_dir / f"{key}.json"
+    expected_header = {
+        "schema": "hu-public-value-feature-cache-v1",
+        "key": key,
+        "implementation": FEATURE_IMPLEMENTATION_VERSION,
+        "datasetSha256": dataset.source_sha256,
+        "featureSchema": feature_schema,
+        "rows": int(len(dataset.targets)),
+        "groups": int(len(np.unique(dataset.groups))),
+    }
+
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text())
+        for field, expected in expected_header.items():
+            if metadata.get(field) != expected:
+                raise RuntimeError(f"feature cache metadata mismatch for {field}")
+        for name, path in (("contexts", context_path), ("queries", query_path)):
+            entry = metadata.get(name, {})
+            if not path.is_file() or sha256_file(path) != entry.get("sha256"):
+                raise RuntimeError(f"feature cache {name} digest mismatch")
+        contexts = np.load(context_path, mmap_mode="r", allow_pickle=False)
+        queries = np.load(query_path, mmap_mode="r", allow_pickle=False)
+        for name, values in (("contexts", contexts), ("queries", queries)):
+            entry = metadata[name]
+            if list(values.shape) != entry.get("shape") or str(values.dtype) != entry.get(
+                "dtype"
+            ):
+                raise RuntimeError(f"feature cache {name} shape or dtype mismatch")
+        return contexts, queries, {
+            "enabled": True,
+            "hit": True,
+            "key": key,
+            "metadata": str(metadata_path),
+        }
+
+    contexts, queries = feature_dataset(dataset, feature_schema, workers)
+    atomic_save_npy(context_path, contexts)
+    atomic_save_npy(query_path, queries)
+    metadata = {
+        **expected_header,
+        "contexts": {
+            "path": context_path.name,
+            "shape": list(contexts.shape),
+            "dtype": str(contexts.dtype),
+            "sha256": sha256_file(context_path),
+        },
+        "queries": {
+            "path": query_path.name,
+            "shape": list(queries.shape),
+            "dtype": str(queries.dtype),
+            "sha256": sha256_file(query_path),
+        },
+    }
+    atomic_write_json(metadata_path, metadata)
+    # Return read-only memory maps as on a cache hit, both to keep behavior
+    # identical and to release the large construction buffers promptly.
+    del contexts, queries
+    return (
+        np.load(context_path, mmap_mode="r", allow_pickle=False),
+        np.load(query_path, mmap_mode="r", allow_pickle=False),
+        {"enabled": True, "hit": False, "key": key, "metadata": str(metadata_path)},
+    )
+
+
 def state_split(
     state_count: int, seed: int, validation_fraction: float
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -1745,8 +1860,11 @@ def main() -> None:
     source_release_status = (
         "accepted" if not source_release_reasons else "rejected"
     )
-    contexts, queries = feature_dataset(
-        dataset, args.feature_schema, args.feature_workers
+    contexts, queries, feature_cache = feature_dataset_cached(
+        dataset,
+        args.feature_schema,
+        args.feature_workers,
+        args.feature_cache_dir,
     )
     primary_state_bands = np.asarray(
         [
@@ -1953,6 +2071,7 @@ def main() -> None:
         "valueNormalization": args.value_normalization,
         "featureSchema": args.feature_schema,
         "featureWorkers": args.feature_workers,
+        "featureCache": feature_cache,
         "dataset": str(args.dataset),
         "supplementalDatasets": [str(path) for path in args.supplemental_dataset],
         "datasetSha256": dataset.source_sha256,
