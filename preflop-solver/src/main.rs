@@ -54,6 +54,7 @@ fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
     let cache = blueprint::preflop::build_resolver_continuation_cache(
         &base,
         blueprint::preflop::ResolverContinuationCacheConfig {
+            deal_offset: parse_or(args, "--deal-offset", 0usize)?,
             deals: parse_or(args, "--deals", 2usize)?,
             resolver_iterations: iterations,
             resolver_averaging_delay: parse_or(
@@ -64,6 +65,7 @@ fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
             value_uncertainty_bb: parse_or(args, "--value-uncertainty-bb", 1.0f64)?,
             value_network_path: network_path,
             range_policy_path: value(args, "--range-policy").map(PathBuf::from),
+            source_cache_path: base_path,
             threads: parse_or(
                 args,
                 "--threads",
@@ -1205,7 +1207,8 @@ Neural certificate options:
 Preflop continuation/solve options:
   preflop-cache --networks <json> [--networks-b <json>] [--deals 2652] [--rollouts-per-leaf 8]
   preflop-cache-resolver --base-cache <json.gz> --value-network <json>
-    [--range-policy <tabular-policy.json>] [--deals 2] [--resolver-iterations 10]
+    [--range-policy <tabular-policy.json>] [--deal-offset 0] [--deals 2]
+    [--resolver-iterations 10]
   preflop-cache-compare --cache-a <json.gz> --cache-b <json.gz> [--output <json>]
   preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
   preflop-cache-refresh --cache <json.gz> --output <json.gz>

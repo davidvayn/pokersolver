@@ -26,6 +26,7 @@ const SHARED_QUERY_COUNT: usize = 95;
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
+const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARDS * 49;
 
 type DenseAllInEquityCell = Arc<OnceLock<Arc<Vec<f32>>>>;
 
@@ -213,8 +214,15 @@ impl ValueNetworkLayer {
     }
 
     fn forward(&self, input: &[f32]) -> Vec<f32> {
+        let mut output = Vec::new();
+        self.forward_into(input, &mut output);
+        output
+    }
+
+    fn forward_into(&self, input: &[f32], output: &mut Vec<f32>) {
         debug_assert_eq!(input.len(), self.input_size);
-        let mut output = self.biases.clone();
+        output.clear();
+        output.extend_from_slice(&self.biases);
         for (out, row) in output
             .iter_mut()
             .zip(self.weights.chunks_exact(self.input_size))
@@ -224,15 +232,137 @@ impl ValueNetworkLayer {
                 .zip(input)
                 .map(|(weight, value)| weight * value)
                 .sum::<f32>();
-            *out = match self.activation.as_str() {
-                "relu" => out.max(0.0),
-                "tanh" => out.tanh(),
-                "gelu-fast" => *out / (1.0 + (-1.702 * *out).exp()),
-                _ => *out,
-            };
+            *out = self.activate(*out);
         }
-        output
     }
+
+    fn activate(&self, value: f32) -> f32 {
+        match self.activation.as_str() {
+            "relu" => value.max(0.0),
+            "tanh" => value.tanh(),
+            "gelu-fast" => value / (1.0 + (-1.702 * value).exp()),
+            _ => value,
+        }
+    }
+}
+
+fn forward_batch_layer_into(
+    layer: &ValueNetworkLayer,
+    input: &[f32],
+    samples: usize,
+    output: &mut Vec<f32>,
+) {
+    debug_assert_eq!(input.len(), samples * layer.input_size);
+    output.clear();
+    output.resize(samples * layer.output_size, 0.0);
+    if samples == 0 {
+        return;
+    }
+    // SAFETY: the validated dimensions and assertions above guarantee that
+    // all row-major matrix strides remain within the input, weight, and output
+    // allocations for the full multiplication.
+    unsafe {
+        matrixmultiply::sgemm(
+            samples,
+            layer.input_size,
+            layer.output_size,
+            1.0,
+            input.as_ptr(),
+            layer.input_size as isize,
+            1,
+            layer.weights.as_ptr(),
+            1,
+            layer.input_size as isize,
+            0.0,
+            output.as_mut_ptr(),
+            layer.output_size as isize,
+            1,
+        );
+    }
+    for row in output.chunks_exact_mut(layer.output_size) {
+        for (value, bias) in row.iter_mut().zip(&layer.biases) {
+            *value = layer.activate(*value + bias);
+        }
+    }
+}
+
+fn forward_batch_tower(layers: &[ValueNetworkLayer], input: &[f32], samples: usize) -> Vec<f32> {
+    debug_assert!(!layers.is_empty());
+    let mut scratch = [Vec::new(), Vec::new()];
+    forward_batch_layer_into(&layers[0], input, samples, &mut scratch[0]);
+    for (index, layer) in layers.iter().enumerate().skip(1) {
+        if index % 2 == 1 {
+            let (first, second) = scratch.split_at_mut(1);
+            forward_batch_layer_into(layer, &first[0], samples, &mut second[0]);
+        } else {
+            let (first, second) = scratch.split_at_mut(1);
+            forward_batch_layer_into(layer, &second[0], samples, &mut first[0]);
+        }
+    }
+    std::mem::take(&mut scratch[(layers.len() - 1) % 2])
+}
+
+fn forward_batch_head(
+    layers: &[ValueNetworkLayer],
+    context: &[f32],
+    query: &[f32],
+    samples: usize,
+) -> Vec<f32> {
+    debug_assert!(!layers.is_empty());
+    let first = &layers[0];
+    let query_size = first.input_size - context.len();
+    debug_assert_eq!(query.len(), samples * query_size);
+    let mut scratch = [vec![0.0; samples * first.output_size], Vec::new()];
+    if samples > 0 {
+        // SAFETY: the query portion of every validated head weight row starts
+        // at context.len(); the matrix dimensions and strides stay inside all
+        // three allocations.
+        unsafe {
+            matrixmultiply::sgemm(
+                samples,
+                query_size,
+                first.output_size,
+                1.0,
+                query.as_ptr(),
+                query_size as isize,
+                1,
+                first.weights.as_ptr().add(context.len()),
+                1,
+                first.input_size as isize,
+                0.0,
+                scratch[0].as_mut_ptr(),
+                first.output_size as isize,
+                1,
+            );
+        }
+        let context_offsets = first
+            .weights
+            .chunks_exact(first.input_size)
+            .zip(&first.biases)
+            .map(|(row, bias)| {
+                bias + row[..context.len()]
+                    .iter()
+                    .zip(context)
+                    .map(|(weight, value)| weight * value)
+                    .sum::<f32>()
+            })
+            .collect::<Vec<_>>();
+        for row in scratch[0].chunks_exact_mut(first.output_size) {
+            for (value, offset) in row.iter_mut().zip(&context_offsets) {
+                *value = first.activate(*value + offset);
+            }
+        }
+    }
+    for (index, layer) in layers.iter().enumerate().skip(1) {
+        if index % 2 == 1 {
+            let (first, second) = scratch.split_at_mut(1);
+            forward_batch_layer_into(layer, &first[0], samples, &mut second[0]);
+        } else {
+            let (first, second) = scratch.split_at_mut(1);
+            forward_batch_layer_into(layer, &second[0], samples, &mut first[0]);
+        }
+    }
+    std::mem::take(&mut scratch[(layers.len() - 1) % 2])
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -458,37 +588,42 @@ impl PublicValueNetwork {
                 .fold(contexts[player].clone(), |values, layer| {
                     layer.forward(&values)
                 });
-            queries[player]
+            let legal_combos = ranges[player]
                 .iter()
                 .enumerate()
-                .map(|(combo, query)| {
-                    if ranges[player][combo] <= 0.0 {
-                        return 0.0;
-                    }
-                    let query_embedding = self
-                        .query_tower
-                        .iter()
-                        .fold(query.clone(), |values, layer| layer.forward(&values));
-                    let mut combined = context_embedding.clone();
-                    combined.extend(query_embedding);
-                    let output = self
-                        .head
-                        .iter()
-                        .fold(combined, |values, layer| layer.forward(&values));
-                    let equity = if self.uses_exact_ranges {
-                        query[94] as f64
-                    } else {
-                        query[65] as f64
-                    };
-                    let opponent = 1 - player;
-                    let baseline = equity * invested[opponent] - (1.0 - equity) * invested[player];
-                    if self.schema == "hu-public-belief-combo-value-network-v4" {
-                        baseline + output[0] as f64 * self.state_value_scale_bb(invested)
-                    } else {
-                        baseline + output[0] as f64 * self.residual_scale_bb
-                    }
-                })
-                .collect()
+                .filter_map(|(combo, weight)| (*weight > 0.0).then_some(combo))
+                .collect::<Vec<_>>();
+            let mut query_batch = Vec::with_capacity(legal_combos.len() * self.query_size);
+            for combo in &legal_combos {
+                query_batch.extend_from_slice(&queries[player][*combo]);
+            }
+            let query_embeddings =
+                forward_batch_tower(&self.query_tower, &query_batch, legal_combos.len());
+            let output = forward_batch_head(
+                &self.head,
+                &context_embedding,
+                &query_embeddings,
+                legal_combos.len(),
+            );
+            let output_size = self.head.last().expect("validated shared head").output_size;
+            let mut values = vec![0.0; COMBO_COUNT];
+            for (row, combo) in legal_combos.into_iter().enumerate() {
+                let query = &queries[player][combo];
+                let equity = if self.uses_exact_ranges {
+                    query[94] as f64
+                } else {
+                    query[65] as f64
+                };
+                let opponent = 1 - player;
+                let baseline = equity * invested[opponent] - (1.0 - equity) * invested[player];
+                let residual = output[row * output_size] as f64;
+                values[combo] = if self.schema == "hu-public-belief-combo-value-network-v4" {
+                    baseline + residual * self.state_value_scale_bb(invested)
+                } else {
+                    baseline + residual * self.residual_scale_bb
+                };
+            }
+            values
         });
         let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
             (0..COMBO_COUNT)
@@ -659,7 +794,7 @@ fn board_query_features(board: &[u8]) -> Arc<BoardQueryFeatures> {
         queries,
     });
     let mut guard = cache.lock().expect("board feature cache");
-    if guard.len() >= 128 {
+    if guard.len() >= BOARD_QUERY_FEATURE_CACHE_ENTRIES {
         if let Some(oldest) = guard.keys().next().cloned() {
             guard.remove(&oldest);
         }
@@ -3772,6 +3907,61 @@ mod tests {
     }
 
     #[test]
+    fn batched_dense_towers_match_scalar_inference() {
+        let layer = |input_size: usize, output_size: usize, activation: &str, offset: usize| {
+            ValueNetworkLayer {
+                input_size,
+                output_size,
+                activation: activation.to_owned(),
+                weights: (0..input_size * output_size)
+                    .map(|index| ((index + offset) % 19) as f32 * 0.006 - 0.045)
+                    .collect(),
+                biases: (0..output_size)
+                    .map(|index| ((index + offset) % 5) as f32 * 0.009 - 0.017)
+                    .collect(),
+            }
+        };
+        let samples = 4;
+        let input_size = 11;
+        let input = (0..samples * input_size)
+            .map(|index| index as f32 * 0.013 - 0.21)
+            .collect::<Vec<_>>();
+        let tower = vec![
+            layer(input_size, 7, "relu", 6),
+            layer(7, 5, "gelu-fast", 7),
+            layer(5, 2, "tanh", 8),
+        ];
+        let scalar = input
+            .chunks_exact(input_size)
+            .flat_map(|sample| {
+                tower
+                    .iter()
+                    .fold(sample.to_vec(), |values, dense| dense.forward(&values))
+            })
+            .collect::<Vec<_>>();
+        let batched = forward_batch_tower(&tower, &input, samples);
+        for (left, right) in scalar.iter().zip(&batched) {
+            assert!((left - right).abs() < 1e-6, "{left} != {right}");
+        }
+
+        let context = vec![0.13, -0.27, 0.41];
+        let head = vec![layer(5, 4, "relu", 9), layer(4, 1, "linear", 10)];
+        let scalar = batched
+            .chunks_exact(2)
+            .flat_map(|query| {
+                head.iter().fold(
+                    context.iter().chain(query).copied().collect::<Vec<_>>(),
+                    |values, dense| dense.forward(&values),
+                )
+            })
+            .collect::<Vec<_>>();
+        let batched_head = forward_batch_head(&head, &context, &batched, samples);
+        for (left, right) in scalar.iter().zip(&batched_head) {
+            assert!((left - right).abs() < 1e-6, "{left} != {right}");
+        }
+    }
+
+    #[test]
     fn river_range_masks_board_cards_and_normalizes() {
         let board = [0, 5, 10, 15, 20];
         let state = PublicBeliefState::river_start(
@@ -3914,6 +4104,16 @@ mod tests {
             &conflicts,
             20.0,
         );
+        let board_queries = board_query_features(&board);
+        let permuted_board_queries = board_query_features(&permuted_board);
+        for combo in 0..COMBO_COUNT {
+            for (left, right) in board_queries.queries[combo]
+                .iter()
+                .zip(&permuted_board_queries.queries[mapping[combo]])
+            {
+                assert!((left - right).abs() < 1e-6);
+            }
+        }
         for player in 0..2 {
             for (left, right) in contexts[player].iter().zip(&permuted_contexts[player]) {
                 assert!((left - right).abs() < 1e-6);

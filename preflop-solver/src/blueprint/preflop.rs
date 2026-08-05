@@ -59,12 +59,14 @@ pub struct ContinuationCacheConfig {
 
 #[derive(Clone, Debug)]
 pub struct ResolverContinuationCacheConfig {
+    pub deal_offset: usize,
     pub deals: usize,
     pub resolver_iterations: u64,
     pub resolver_averaging_delay: u64,
     pub value_uncertainty_bb: f64,
     pub value_network_path: PathBuf,
     pub range_policy_path: Option<PathBuf>,
+    pub source_cache_path: PathBuf,
     pub threads: usize,
 }
 
@@ -116,10 +118,33 @@ pub struct ContinuationCache {
     pub network_sha256s: Vec<String>,
     #[serde(default)]
     pub policy_mixture: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_cache_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_deal_indices: Option<Vec<usize>>,
     pub game: BlueprintConfig,
     pub public_histories: BTreeMap<u64, Vec<String>>,
     pub deals: Vec<CachedDeal>,
     pub validation: ContinuationValidation,
+}
+
+fn complete_source_deal_cycles(indices: &[usize]) -> usize {
+    let cycle_size = 2 * all_combos().len();
+    let mut cycles = BTreeMap::<usize, BTreeSet<usize>>::new();
+    for index in indices {
+        cycles
+            .entry(index / cycle_size)
+            .or_default()
+            .insert(index % cycle_size);
+    }
+    cycles
+        .values()
+        .filter(|positions| positions.len() == cycle_size)
+        .count()
+}
+
+fn balanced_source_deal_indices(indices: &[usize]) -> bool {
+    complete_source_deal_cycles(indices) * 2 * all_combos().len() == indices.len()
 }
 
 impl ContinuationCache {
@@ -168,11 +193,30 @@ impl ContinuationCache {
         }
         self.game.validate()?;
         let expected = self.public_histories.len();
-        let expected_cycles = self.deals.len() / (2 * all_combos().len());
+        let provenance_is_valid = match (&self.source_cache_sha256, &self.source_deal_indices) {
+            (None, None) => true,
+            (Some(digest), Some(indices)) => {
+                digest.len() == 64
+                    && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && indices.len() == self.deals.len()
+                    && indices.iter().collect::<BTreeSet<_>>().len() == indices.len()
+            }
+            _ => false,
+        };
+        let expected_cycles = self
+            .source_deal_indices
+            .as_deref()
+            .map(complete_source_deal_cycles)
+            .unwrap_or_else(|| self.deals.len() / (2 * all_combos().len()));
+        let expected_balanced = self
+            .source_deal_indices
+            .as_deref()
+            .map(balanced_source_deal_indices)
+            .unwrap_or_else(|| self.deals.len().is_multiple_of(2 * all_combos().len()));
         if expected == 0
+            || !provenance_is_valid
             || self.complete_exact_combo_cycles != expected_cycles
-            || self.balanced_exact_combo_marginals
-                != self.deals.len().is_multiple_of(2 * all_combos().len())
+            || self.balanced_exact_combo_marginals != expected_balanced
             || self.network_sha256.len() != 64
             || !self
                 .network_sha256
@@ -1004,6 +1048,8 @@ pub fn build_continuation_cache(
             .map(|path| sha256_file(path))
             .collect::<Result<Vec<_>, _>>()?,
         policy_mixture: "frozen_v26_model_selected_round_robin_per_rollout".to_owned(),
+        source_cache_sha256: None,
+        source_deal_indices: None,
         game: config.game,
         public_histories,
         deals,
@@ -1046,7 +1092,10 @@ pub fn build_resolver_continuation_cache(
     config: ResolverContinuationCacheConfig,
 ) -> Result<ContinuationCache, Box<dyn Error>> {
     if config.deals < 2
-        || config.deals > base.deals.len()
+        || config
+            .deal_offset
+            .checked_add(config.deals)
+            .is_none_or(|end| end > base.deals.len())
         || config.resolver_iterations < 2
         || config.resolver_averaging_delay >= config.resolver_iterations
         || !config.value_uncertainty_bb.is_finite()
@@ -1088,9 +1137,12 @@ pub fn build_resolver_continuation_cache(
     let source_deals = base
         .deals
         .iter()
+        .skip(config.deal_offset)
         .take(config.deals)
         .cloned()
         .collect::<Vec<_>>();
+    let source_deal_indices =
+        (config.deal_offset..config.deal_offset + config.deals).collect::<Vec<_>>();
     let worker_count = config.threads.min(source_deals.len()).max(1);
     let resolver_threads = (config.threads / worker_count).max(1);
     let solved = std::thread::scope(|scope| {
@@ -1176,6 +1228,7 @@ pub fn build_resolver_continuation_cache(
     }
     let validation = continuation_validation(&deals, &public_histories);
     let network_sha256 = sha256_file(&config.value_network_path)?;
+    let source_cache_sha256 = sha256_file(&config.source_cache_path)?;
     let range_method = range_policy_sha256
         .as_deref()
         .map(|digest| format!("tabular_preflop_policy_{digest}"))
@@ -1189,14 +1242,16 @@ pub fn build_resolver_continuation_cache(
             "{}_revalued_by_depth_limited_flop_public_belief_resolver",
             base.chance_sampling
         ),
-        complete_exact_combo_cycles: deals.len() / (2 * all_combos().len()),
-        balanced_exact_combo_marginals: deals.len().is_multiple_of(2 * all_combos().len()),
+        complete_exact_combo_cycles: complete_source_deal_cycles(&source_deal_indices),
+        balanced_exact_combo_marginals: balanced_source_deal_indices(&source_deal_indices),
         network_sha256: network_sha256.clone(),
         network_sha256s: vec![network_sha256],
         policy_mixture: format!(
             "turn_cfv_network_plus_{}_iteration_exact_all_in_flop_dcfr_ranges_from_{}",
             config.resolver_iterations, range_method
         ),
+        source_cache_sha256: Some(source_cache_sha256),
+        source_deal_indices: Some(source_deal_indices),
         game: base.game.clone(),
         public_histories,
         deals,
@@ -1584,35 +1639,82 @@ pub fn merge_continuation_caches(
         || first.public_histories != second.public_histories
         || first.rollouts_per_leaf != second.rollouts_per_leaf
         || first.network_sha256 != second.network_sha256
+        || first.network_sha256s != second.network_sha256s
+        || first.policy_mixture != second.policy_mixture
+        || first.source_cache_sha256 != second.source_cache_sha256
+        || (first.source_cache_sha256.is_some() && first.seed != second.seed)
     {
         return Err(
             "only compatible continuation caches with the same frozen policy mixture can be merged"
                 .into(),
         );
     }
-    let mut deals = first.deals.clone();
-    deals.extend(second.deals.clone());
+    let (deals, source_deal_indices) =
+        match (&first.source_deal_indices, &second.source_deal_indices) {
+            (Some(first_indices), Some(second_indices)) => {
+                let mut indexed = first_indices
+                    .iter()
+                    .copied()
+                    .zip(first.deals.iter().cloned())
+                    .chain(
+                        second_indices
+                            .iter()
+                            .copied()
+                            .zip(second.deals.iter().cloned()),
+                    )
+                    .collect::<Vec<_>>();
+                indexed.sort_by_key(|(index, _)| *index);
+                if indexed.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                    return Err("continuation cache chunks overlap source deal indices".into());
+                }
+                let (indices, deals): (Vec<_>, Vec<_>) = indexed.into_iter().unzip();
+                (deals, Some(indices))
+            }
+            (None, None) => {
+                let mut deals = first.deals.clone();
+                deals.extend(second.deals.clone());
+                (deals, None)
+            }
+            _ => {
+                return Err("continuation cache provenance is incompatible".into());
+            }
+        };
     let validation = continuation_validation(&deals, &first.public_histories);
-    let mut cache = ContinuationCache {
+    let complete_exact_combo_cycles = source_deal_indices
+        .as_deref()
+        .map(complete_source_deal_cycles)
+        .unwrap_or_else(|| deals.len() / (2 * all_combos().len()));
+    let balanced_exact_combo_marginals = source_deal_indices
+        .as_deref()
+        .map(balanced_source_deal_indices)
+        .unwrap_or_else(|| deals.len().is_multiple_of(2 * all_combos().len()));
+    let provenance_merged = source_deal_indices.is_some();
+    let cache = ContinuationCache {
         schema: CONTINUATION_SCHEMA.to_owned(),
         depth_bb: first.depth_bb,
-        seed: first.seed ^ second.seed.rotate_left(1),
+        seed: if provenance_merged {
+            first.seed
+        } else {
+            first.seed ^ second.seed.rotate_left(1)
+        },
         rollouts_per_leaf: first.rollouts_per_leaf,
-        chance_sampling: "concatenated_independent_balanced_exact_combo_cycles".to_owned(),
-        complete_exact_combo_cycles: first.complete_exact_combo_cycles
-            + second.complete_exact_combo_cycles,
-        balanced_exact_combo_marginals: first.balanced_exact_combo_marginals
-            && second.balanced_exact_combo_marginals,
+        chance_sampling: if provenance_merged {
+            "concatenated_provenance_checked_continuation_chunks".to_owned()
+        } else {
+            "concatenated_independent_balanced_exact_combo_cycles".to_owned()
+        },
+        complete_exact_combo_cycles,
+        balanced_exact_combo_marginals,
         network_sha256: first.network_sha256.clone(),
         network_sha256s: first.network_sha256s.clone(),
         policy_mixture: first.policy_mixture.clone(),
+        source_cache_sha256: first.source_cache_sha256.clone(),
+        source_deal_indices,
         game: first.game.clone(),
         public_histories: first.public_histories.clone(),
         deals,
         validation,
     };
-    // Preserve the exact derived cycle count rather than trusting source metadata.
-    cache.complete_exact_combo_cycles = cache.deals.len() / (2 * all_combos().len());
     cache.validate()?;
     Ok(cache)
 }
@@ -2526,6 +2628,8 @@ mod tests {
             network_sha256: "0".repeat(64),
             network_sha256s: vec!["0".repeat(64)],
             policy_mixture: "synthetic_test".to_owned(),
+            source_cache_sha256: None,
+            source_deal_indices: None,
             game,
             public_histories: leaves
                 .into_iter()
@@ -2853,5 +2957,37 @@ mod tests {
             .validation
             .maximum_information_group_mean_standard_error_bb
             .is_finite());
+    }
+
+    #[test]
+    fn source_deal_cycles_require_every_unique_position() {
+        let cycle_size = 2 * all_combos().len();
+        let complete = (0..cycle_size).collect::<Vec<_>>();
+        assert_eq!(complete_source_deal_cycles(&complete), 1);
+        assert!(balanced_source_deal_indices(&complete));
+
+        let mut split_across_cycles = (0..cycle_size / 2).collect::<Vec<_>>();
+        split_across_cycles.extend(cycle_size..cycle_size + cycle_size / 2);
+        assert_eq!(complete_source_deal_cycles(&split_across_cycles), 0);
+        assert!(!balanced_source_deal_indices(&split_across_cycles));
+    }
+
+    #[test]
+    fn provenance_chunks_merge_in_source_order_and_reject_overlap() {
+        let mut first = synthetic_cache(7);
+        first.source_cache_sha256 = Some("1".repeat(64));
+        first.source_deal_indices = Some(vec![0, 1, 2, 3]);
+        first.validate().unwrap();
+        let mut second = synthetic_cache(7);
+        second.source_cache_sha256 = first.source_cache_sha256.clone();
+        second.source_deal_indices = Some(vec![4, 5, 6, 7]);
+        second.validate().unwrap();
+
+        let merged = merge_continuation_caches(&second, &first).unwrap();
+        assert_eq!(merged.source_deal_indices, Some((0..8).collect()));
+        assert_eq!(merged.deals.len(), 8);
+
+        second.source_deal_indices = Some(vec![3, 4, 5, 6]);
+        assert!(merge_continuation_caches(&first, &second).is_err());
     }
 }
