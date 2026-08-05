@@ -266,11 +266,19 @@ query tensor. Both arrays are SHA-256 verified before use and loaded as
 read-only memory maps. This cut repeat-run preprocessing from minutes to
 seconds without changing any feature, target, split, or strategy gate.
 
-An independent 512-state authentic corpus is being generated in eight
-resumable shards. Shards 6 and 7 (merged indices 384--511) are reserved in
-advance as the 128-state final holdout. Candidate hyperparameters will be
-frozen before that holdout is evaluated. Its target values have not been used
-for any model or hyperparameter choice.
+An independent 512-state authentic corpus was generated in eight resumable,
+64-state shards with source seeds `14701` through `14708`. Every component and
+the ordered merged corpus passed full schema-v2 revalidation. All 512 turn
+boards are distinct; maximum local turn/river exploitability is
+`0.016660bb/hand`, maximum probability-sum error is `4.44e-16`, maximum
+absolute zero-sum residual is `1.42e-14bb`, minimum belief ESS is `802.5`, and
+maximum replicate TV is `0.12810`. The merged bytes have SHA-256
+`f5e87c5587801d395040b33a0bb2244c7bed79cb6b5fd77f23e52173ea950f2e`.
+
+Shards 6 and 7 (merged indices 384--511) were reserved in advance as the
+128-state final holdout. Candidate hyperparameters were frozen and committed
+before that holdout was evaluated. No target CFV or model-error metric from
+those shards participated in model or hyperparameter selection.
 
 The remaining sequence is corrected value-network selection, disjoint leaf and
 matched-resolver selection, continuation-cache and preflop DCFR regeneration,
