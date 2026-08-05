@@ -33,6 +33,8 @@ def sha256_file(path: Path) -> str:
 
 
 def load_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ValueError(f"required JSON input is missing: {path}")
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
         raise ValueError(f"expected a JSON object: {path}")
@@ -267,7 +269,10 @@ def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
 
 def main() -> None:
     args = parse_args()
-    _, command = verify_config(args.config)
+    try:
+        _, command = verify_config(args.config)
+    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"error: {error}") from error
     print(json.dumps({"cwd": str(SOLVER_ROOT), "command": command}, indent=2))
     if not args.dry_run:
         subprocess.run(command, cwd=SOLVER_ROOT, check=True)

@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import run_frozen_public_value as module
 
@@ -78,6 +80,12 @@ class FrozenPublicValueRunTests(unittest.TestCase):
             module.validate_target_dataset(rejected, 2, "fixture")
         with self.assertRaisesRegex(ValueError, "count"):
             module.validate_target_dataset(valid, 3, "fixture")
+
+    def test_missing_json_input_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            with self.assertRaisesRegex(ValueError, "missing"):
+                module.load_json(missing)
 
 
 if __name__ == "__main__":
