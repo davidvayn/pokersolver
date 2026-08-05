@@ -99,10 +99,13 @@ def summarize_candidate(
         "identity": comparable_identity(report),
         "configuration": {
             "architecture": report.get("architecture"),
+            "variantSet": report.get("variantSet"),
             "featureSchema": report.get("featureSchema"),
+            "suitAugmentationsPerState": report.get("suitAugmentationsPerState"),
             "valueNormalization": report.get("valueNormalization"),
             "steps": report.get("steps"),
             "batchSize": report.get("batchSize"),
+            "evaluationInterval": report.get("evaluationInterval"),
             "learningRate": report.get("learningRate"),
             "learningRateFinal": report.get("learningRateFinal"),
             "learningRateSchedule": report.get("learningRateSchedule", "constant"),
