@@ -45,8 +45,8 @@ def training_report(rmse, bands, *, supplemental=False, seed_rmses=None):
     return report
 
 
-def leaf_report(rmse):
-    return {
+def leaf_report(rmse, seed=None):
+    report = {
         "sourceDatasetSha256": "3" * 64,
         "sourcePolicySha256": "a" * 64,
         "resolverReachEvaluation": {
@@ -55,6 +55,13 @@ def leaf_report(rmse):
             "sampledLeafReachMass": 0.1,
         },
     }
+    if seed is not None:
+        report["modelSeed"] = seed
+    return report
+
+
+def leaf_reports(rmse):
+    return [leaf_report(rmse, seed) for seed in (1, 2)]
 
 
 def parity():
@@ -94,7 +101,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
         )
         self.assertFalse(report["gates"]["resolverEvaluationCorpusUntouched"]["passed"])
@@ -114,7 +121,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
             candidate_resolvers,
             baseline_resolvers,
@@ -139,7 +146,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
             candidate_resolvers,
             baseline_resolvers,
@@ -166,7 +173,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
             candidate_resolvers,
             baseline_resolvers,
@@ -182,7 +189,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
             [
                 resolver(value, board, 1)
@@ -199,7 +206,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
         )
         self.assertTrue(
@@ -222,7 +229,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
             candidate_resolvers,
             baseline_resolvers,
@@ -247,7 +254,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity(),
             maximum_authentic_rmse_bb=0.25,
         )
@@ -260,10 +267,23 @@ class V33ResolverLeafTests(unittest.TestCase):
             self.baseline,
             self.candidate,
             leaf_report(1.0),
-            leaf_report(0.8),
+            leaf_reports(0.8),
             parity()[:1],
         )
         self.assertFalse(report["gates"]["pythonRustParity"]["passed"])
+        self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
+
+    def test_leaf_evaluation_must_cover_both_candidate_seeds(self):
+        report = module.compose(
+            self.baseline,
+            self.candidate,
+            leaf_report(1.0),
+            leaf_reports(0.8)[:1],
+            parity(),
+        )
+        self.assertFalse(
+            report["gates"]["resolverLeafReachWeightedImprovement"]["passed"]
+        )
         self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
 
     def test_checked_candidate_remains_fail_closed_and_evaluation_is_disjoint(self):

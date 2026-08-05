@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--baseline-leaf", type=Path, required=True)
-    parser.add_argument("--candidate-leaf", type=Path, required=True)
+    parser.add_argument("--candidate-leaf", type=Path, action="append", required=True)
     parser.add_argument("--parity", type=Path, action="append", required=True)
     parser.add_argument("--candidate-resolver", type=Path, action="append", default=[])
     parser.add_argument("--baseline-resolver", type=Path, action="append", default=[])
@@ -71,7 +71,7 @@ def compose(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
     baseline_leaf: dict[str, Any],
-    candidate_leaf: dict[str, Any],
+    candidate_leaf: dict[str, Any] | list[dict[str, Any]],
     parity: dict[str, Any] | list[dict[str, Any]],
     candidate_resolvers: list[dict[str, Any]] | None = None,
     baseline_resolvers: list[dict[str, Any]] | None = None,
@@ -94,13 +94,46 @@ def compose(
         band: relative_improvement(baseline_bands[band], candidate_bands[band])
         for band in POT_BANDS
     }
+    variants = range_variants(candidate)
+    candidate_seeds = {int(row["seed"]) for row in variants}
     baseline_leaf_rmse = float(
         baseline_leaf["resolverReachEvaluation"]["reachWeightedRmseBb"]
     )
-    candidate_leaf_rmse = float(
-        candidate_leaf["resolverReachEvaluation"]["reachWeightedRmseBb"]
+    candidate_leaf_reports = (
+        candidate_leaf if isinstance(candidate_leaf, list) else [candidate_leaf]
     )
-    leaf_improvement = relative_improvement(baseline_leaf_rmse, candidate_leaf_rmse)
+    leaf_reports_by_seed: dict[int, dict[str, Any]] = {}
+    leaf_reports_valid = len(candidate_leaf_reports) == len(candidate_seeds)
+    for leaf_report in candidate_leaf_reports:
+        seed = leaf_report.get("modelSeed")
+        if not isinstance(seed, int) or seed not in candidate_seeds or seed in leaf_reports_by_seed:
+            leaf_reports_valid = False
+            continue
+        evaluation = leaf_report.get("resolverReachEvaluation")
+        if not isinstance(evaluation, dict):
+            leaf_reports_valid = False
+            continue
+        leaf_reports_by_seed[seed] = leaf_report
+    leaf_reports_valid = leaf_reports_valid and set(leaf_reports_by_seed) == candidate_seeds
+    leaf_evidence = []
+    for seed in sorted(candidate_seeds):
+        leaf_report = leaf_reports_by_seed.get(seed)
+        rmse = (
+            float(leaf_report["resolverReachEvaluation"]["reachWeightedRmseBb"])
+            if leaf_report is not None
+            else None
+        )
+        leaf_evidence.append(
+            {
+                "seed": seed,
+                "reachWeightedRmseBb": rmse,
+                "relativeImprovement": (
+                    relative_improvement(baseline_leaf_rmse, rmse)
+                    if rmse is not None
+                    else None
+                ),
+            }
+        )
 
     primary_states = int(candidate.get("primaryStates", 0))
     supplemental = [
@@ -116,10 +149,13 @@ def compose(
         and value not in holdout
         for value in supplemental
     )
-    evaluation_hash = candidate_leaf.get("sourceDatasetSha256")
+    evaluation_hashes = {
+        report.get("sourceDatasetSha256") for report in candidate_leaf_reports
+    }
+    evaluation_hash = (
+        next(iter(evaluation_hashes)) if len(evaluation_hashes) == 1 else None
+    )
     component_hashes = candidate.get("componentDatasetSha256", [])
-    variants = range_variants(candidate)
-    candidate_seeds = {int(row["seed"]) for row in variants}
 
     gates: dict[str, dict[str, Any]] = {}
 
@@ -158,7 +194,11 @@ def compose(
         "sourcePolicyPinned",
         candidate.get("sourcePolicySha256")
         == baseline.get("sourcePolicySha256")
-        == candidate_leaf.get("sourcePolicySha256"),
+        == baseline_leaf.get("sourcePolicySha256")
+        and all(
+            report.get("sourcePolicySha256") == candidate.get("sourcePolicySha256")
+            for report in candidate_leaf_reports
+        ),
         candidate.get("sourcePolicySha256"),
         "same frozen source policy across training and evaluation",
     )
@@ -240,9 +280,14 @@ def compose(
         )
     gate(
         "resolverLeafReachWeightedImprovement",
-        leaf_improvement >= 0.10,
-        leaf_improvement,
-        ">=10% on untouched resolver-reach-weighted leaves",
+        leaf_reports_valid
+        and all(
+            row["relativeImprovement"] is not None
+            and float(row["relativeImprovement"]) >= 0.10
+            for row in leaf_evidence
+        ),
+        leaf_evidence,
+        "exactly one disjoint report per seed and every seed improves reach-weighted RMSE by >=10%",
     )
 
     resolver_pairs = []
@@ -424,7 +469,7 @@ def compose(
     )
     research_preferred = gates["modelSelectionEligible"]["passed"]
     return {
-        "schema": "hu-v33-resolver-leaf-conditioning-sequence-v2",
+        "schema": "hu-v33-resolver-leaf-conditioning-sequence-v3",
         "modelVersion": model_version,
         "status": "rejected",
         "activationAllowed": False,
@@ -459,11 +504,14 @@ def compose(
         "resolverLeafEvaluation": {
             "datasetSha256": evaluation_hash,
             "baselineReachWeightedRmseBb": baseline_leaf_rmse,
-            "candidateReachWeightedRmseBb": candidate_leaf_rmse,
-            "relativeImprovement": leaf_improvement,
-            "sampledLeafReachMass": candidate_leaf["resolverReachEvaluation"][
-                "sampledLeafReachMass"
-            ],
+            "seedEvaluations": leaf_evidence,
+            "sampledLeafReachMass": (
+                next(iter(leaf_reports_by_seed.values()))["resolverReachEvaluation"][
+                    "sampledLeafReachMass"
+                ]
+                if leaf_reports_by_seed
+                else None
+            ),
         },
         "resolverEvaluation": {
             "eligible": gates["modelSelectionEligible"]["passed"],
@@ -492,7 +540,7 @@ def main() -> None:
         load(args.baseline),
         load(args.candidate),
         load(args.baseline_leaf),
-        load(args.candidate_leaf),
+        [load(path) for path in args.candidate_leaf],
         [load(path) for path in args.parity],
         [load(path) for path in args.candidate_resolver],
         [load(path) for path in args.baseline_resolver],
