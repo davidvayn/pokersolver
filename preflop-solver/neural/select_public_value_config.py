@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 
 
-SCHEMA = "hu-public-value-tuning-selection-v1"
+SCHEMA = "hu-public-value-tuning-selection-v2"
 REPORT_SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 
 
@@ -151,29 +151,68 @@ def select_candidate(
     identity = candidates[0]["identity"]
     if any(candidate["identity"] != identity for candidate in candidates[1:]):
         raise ValueError("value candidates do not use identical data and split membership")
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for candidate in candidates:
+        key = canonical_sha256(candidate["configuration"])
+        grouped.setdefault(key, []).append(candidate)
+
+    configuration_groups = []
+    for configuration_sha256, members in grouped.items():
+        members = sorted(members, key=lambda candidate: candidate["reportSha256"])
+        training_seeds = sorted(
+            seed for candidate in members for seed in candidate["trainingSeeds"]
+        )
+        if len(training_seeds) != len(set(training_seeds)):
+            raise ValueError(
+                "replicated reports for one configuration reuse a training seed"
+            )
+        seed_tuning = [
+            value for candidate in members for value in candidate["seedTuningRmseBb"]
+        ]
+        ensemble_tuning = [
+            candidate["twoSeedOutputEnsembleTuningRmseBb"] for candidate in members
+        ]
+        configuration_groups.append(
+            {
+                "configurationSha256": configuration_sha256,
+                "configuration": members[0]["configuration"],
+                "reportCount": len(members),
+                "trainingSeeds": training_seeds,
+                "seedTuningRmseBb": seed_tuning,
+                "maximumSeedTuningRmseBb": max(seed_tuning),
+                "meanSeedTuningRmseBb": float(np.mean(seed_tuning)),
+                "maximumPairEnsembleTuningRmseBb": max(ensemble_tuning),
+                "reports": members,
+            }
+        )
+    configuration_groups.sort(key=lambda group: group["configurationSha256"])
     selected = min(
-        candidates,
-        key=lambda candidate: (
-            candidate["maximumSeedTuningRmseBb"],
-            candidate["meanSeedTuningRmseBb"],
-            candidate["twoSeedOutputEnsembleTuningRmseBb"],
-            candidate["selectionTieBreaker"],
+        configuration_groups,
+        key=lambda group: (
+            group["maximumSeedTuningRmseBb"],
+            group["meanSeedTuningRmseBb"],
+            group["maximumPairEnsembleTuningRmseBb"],
+            group["configurationSha256"],
         ),
     )
     return {
         "schema": SCHEMA,
         "status": "frozen-for-fresh-holdout",
         "selectionCriterion": (
-            "minimum maximum per-seed tuning RMSE, then mean per-seed tuning "
-            "RMSE, then diagnostic output-ensemble tuning RMSE"
+            "minimum maximum per-seed tuning RMSE across every independent "
+            "replication of a configuration, then mean per-seed tuning RMSE, "
+            "then maximum diagnostic pair-ensemble tuning RMSE"
         ),
         "holdoutMetricsConsulted": False,
         "minimumTuningCrossSeedPredictionCorrelation": (
             minimum_cross_seed_correlation
         ),
         "comparableIdentity": identity,
-        "selectedReportSha256": selected["reportSha256"],
+        "selectedConfigurationSha256": selected["configurationSha256"],
         "selectedConfiguration": selected["configuration"],
+        "selectedEvidence": selected["reports"],
+        "configurationGroups": configuration_groups,
         "candidates": candidates,
     }
 

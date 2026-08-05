@@ -487,7 +487,8 @@ impl PublicValueNetwork {
                 }
             }
             "hu-public-belief-combo-value-network-v3"
-            | "hu-public-belief-combo-value-network-v4" => {
+            | "hu-public-belief-combo-value-network-v4"
+            | "hu-public-belief-combo-value-network-v5" => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -519,13 +520,15 @@ impl PublicValueNetwork {
                 {
                     return Err("shared-combo v3 residual scale is invalid".to_owned());
                 }
-                if self.schema == "hu-public-belief-combo-value-network-v4"
-                    && !matches!(
-                        self.value_normalization.as_deref(),
-                        Some("pot" | "payoff-exposure")
-                    )
-                {
-                    return Err("shared-combo v4 value normalization is invalid".to_owned());
+                if matches!(
+                    self.schema.as_str(),
+                    "hu-public-belief-combo-value-network-v4"
+                        | "hu-public-belief-combo-value-network-v5"
+                ) && !matches!(
+                    self.value_normalization.as_deref(),
+                    Some("pot" | "payoff-exposure")
+                ) {
+                    return Err("shared-combo value normalization is invalid".to_owned());
                 }
                 let mut context_size = expected_context_size;
                 for layer in &self.context_tower {
@@ -535,7 +538,12 @@ impl PublicValueNetwork {
                 for layer in &self.query_tower {
                     query_size = layer.validate(query_size)?;
                 }
-                let mut head_size = context_size + query_size;
+                let mut head_size = context_size
+                    + if self.schema == "hu-public-belief-combo-value-network-v5" {
+                        query_size * 3
+                    } else {
+                        query_size
+                    };
                 for layer in &self.head {
                     head_size = layer.validate(head_size)?;
                 }
@@ -557,7 +565,9 @@ impl PublicValueNetwork {
     ) -> [Vec<f64>; 2] {
         if matches!(
             self.schema.as_str(),
-            "hu-public-belief-combo-value-network-v3" | "hu-public-belief-combo-value-network-v4"
+            "hu-public-belief-combo-value-network-v3"
+                | "hu-public-belief-combo-value-network-v4"
+                | "hu-public-belief-combo-value-network-v5"
         ) {
             return self.predict_shared_combo(board, actor, invested, ranges);
         }
@@ -639,33 +649,74 @@ impl PublicValueNetwork {
                 }
             }
         }
-        let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
-            let context_embedding = self
-                .context_tower
+        let context_embeddings: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            self.context_tower
                 .iter()
                 .fold(contexts[player].clone(), |values, layer| {
                     layer.forward(&values)
-                });
-            let legal_combos = ranges[player]
+                })
+        });
+        let legal_combos: [Vec<usize>; 2] = std::array::from_fn(|player| {
+            ranges[player]
                 .iter()
                 .enumerate()
                 .filter_map(|(combo, weight)| (*weight > 0.0).then_some(combo))
-                .collect::<Vec<_>>();
-            let mut query_batch = Vec::with_capacity(legal_combos.len() * self.query_size);
-            for combo in &legal_combos {
+                .collect()
+        });
+        let query_embeddings: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            let mut query_batch = Vec::with_capacity(legal_combos[player].len() * self.query_size);
+            for combo in &legal_combos[player] {
                 query_batch.extend_from_slice(&queries[player][*combo]);
             }
-            let query_embeddings =
-                forward_batch_tower(&self.query_tower, &query_batch, legal_combos.len());
+            forward_batch_tower(&self.query_tower, &query_batch, legal_combos[player].len())
+        });
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
+                .collect()
+        });
+        let query_embedding_size = self
+            .query_tower
+            .last()
+            .expect("validated shared query tower")
+            .output_size;
+        let pooled_queries: Option<[Vec<f32>; 2]> =
+            (self.schema == "hu-public-belief-combo-value-network-v5").then(|| {
+                std::array::from_fn(|player| {
+                    let denominator = legal_combos[player]
+                        .iter()
+                        .map(|combo| ranges[player][*combo] * masses[player][*combo])
+                        .sum::<f64>()
+                        .max(EPSILON);
+                    let mut pooled = vec![0.0f32; query_embedding_size];
+                    for (row, combo) in legal_combos[player].iter().enumerate() {
+                        let weight =
+                            (ranges[player][*combo] * masses[player][*combo] / denominator) as f32;
+                        for (value, embedding) in pooled.iter_mut().zip(
+                            &query_embeddings[player]
+                                [row * query_embedding_size..(row + 1) * query_embedding_size],
+                        ) {
+                            *value += weight * embedding;
+                        }
+                    }
+                    pooled
+                })
+            });
+        let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            let mut head_context = context_embeddings[player].clone();
+            if let Some(pooled) = &pooled_queries {
+                head_context.extend_from_slice(&pooled[player]);
+                head_context.extend_from_slice(&pooled[1 - player]);
+            }
             let output = forward_batch_head(
                 &self.head,
-                &context_embedding,
-                &query_embeddings,
-                legal_combos.len(),
+                &head_context,
+                &query_embeddings[player],
+                legal_combos[player].len(),
             );
             let output_size = self.head.last().expect("validated shared head").output_size;
             let mut values = vec![0.0; COMBO_COUNT];
-            for (row, combo) in legal_combos.into_iter().enumerate() {
+            for (row, combo) in legal_combos[player].iter().copied().enumerate() {
                 let query = &queries[player][combo];
                 let equity = if self.uses_exact_ranges {
                     query[94] as f64
@@ -675,18 +726,17 @@ impl PublicValueNetwork {
                 let opponent = 1 - player;
                 let baseline = equity * invested[opponent] - (1.0 - equity) * invested[player];
                 let residual = output[row * output_size] as f64;
-                values[combo] = if self.schema == "hu-public-belief-combo-value-network-v4" {
+                values[combo] = if matches!(
+                    self.schema.as_str(),
+                    "hu-public-belief-combo-value-network-v4"
+                        | "hu-public-belief-combo-value-network-v5"
+                ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
                     baseline + residual * self.residual_scale_bb
                 };
             }
             values
-        });
-        let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
-            (0..COMBO_COUNT)
-                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
-                .collect()
         });
         let joint_mass = ranges[0]
             .iter()
@@ -5666,6 +5716,24 @@ mod tests {
         network.value_normalization = Some("payoff-exposure".to_owned());
         assert_eq!(network.state_value_scale_bb([2.0, 2.0]), 20.0);
         assert_eq!(network.state_value_scale_bb([18.0, 18.0]), 20.0);
+    }
+
+    #[test]
+    fn v5_range_pooling_requires_three_query_embeddings_in_head_context() {
+        let layer = |input_size, output_size, activation: &str| ValueNetworkLayer {
+            input_size,
+            output_size,
+            activation: activation.to_owned(),
+            weights: vec![0.0; input_size * output_size],
+            biases: vec![0.0; output_size],
+        };
+        let mut network = zero_shared_value_network();
+        network.schema = "hu-public-belief-combo-value-network-v5".to_owned();
+        network.value_normalization = Some("pot".to_owned());
+        network.residual_scale_bb = 0.0;
+        assert!(network.validate().is_err());
+        network.head = vec![layer(4, 1, "linear")];
+        network.validate().unwrap();
     }
 
     #[test]

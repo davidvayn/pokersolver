@@ -379,6 +379,53 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertEqual([layer["outputSize"] for layer in head], [256, 128, 64, 1])
         self.assertEqual(head[-1]["activation"], "linear")
 
+    def test_pooled_xwide_uses_both_complete_range_embeddings(self) -> None:
+        model = module.SharedComboValueNetwork(
+            True, "xwide-gelu-pooled", "pot", module.FEATURE_SCHEMA_EXACT_RUNOUT
+        )
+        head = module.tower_payload(model.head, "gelu-fast", "linear")
+        self.assertTrue(model.pools_exact_ranges)
+        self.assertEqual(head[0]["inputSize"], 128 * 4)
+        self.assertEqual([layer["outputSize"] for layer in head], [256, 128, 64, 1])
+        prediction = model(
+            module.mx.zeros((1, 2, module.feature_sizes(module.FEATURE_SCHEMA_EXACT_RUNOUT)[0])),
+            module.mx.zeros(
+                (
+                    1,
+                    2,
+                    module.COMBO_COUNT,
+                    module.feature_sizes(module.FEATURE_SCHEMA_EXACT_RUNOUT)[1],
+                )
+            ),
+            module.mx.ones((1, 2, module.COMBO_COUNT)),
+            module.mx.array([4.0]),
+        )
+        module.mx.eval(prediction)
+        self.assertEqual(prediction.shape, (1, module.COMBO_COUNT * 2))
+
+    def test_pooled_export_uses_new_runtime_schema(self) -> None:
+        model = module.SharedComboValueNetwork(
+            True, "xwide-gelu-pooled", "pot", module.FEATURE_SCHEMA_EXACT_RUNOUT
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pooled.json"
+            module.export_model(
+                model,
+                path,
+                7,
+                "a" * 64,
+                module.COMPLETE_TURN_TARGET_SCHEMA,
+                "accepted",
+                "b" * 64,
+                "pot",
+            )
+            payload = json.loads(path.read_text())
+        self.assertEqual(payload["schema"], module.POOLED_NETWORK_SCHEMA)
+        self.assertEqual(
+            payload["rangeAggregation"],
+            "joint-reach-weighted-own-and-opponent-query-pooling",
+        )
+
     def test_supplemental_dataset_offsets_groups_and_preserves_component_hashes(
         self,
     ) -> None:

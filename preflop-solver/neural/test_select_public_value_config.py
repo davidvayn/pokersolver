@@ -60,6 +60,45 @@ class PublicValueConfigSelectionTests(unittest.TestCase):
                 result["selectedConfiguration"]["architecture"], "better-tuning"
             )
 
+    def test_replicated_configuration_is_ranked_across_every_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            stable = self.report(directory, "stable", [0.20, 0.21], 9.0)
+            first = self.report(directory, "replicated", [0.18, 0.19], 0.01)
+            first_payload = json.loads(first.read_text())
+            first_payload["architecture"] = "pooled"
+            first.write_text(json.dumps(first_payload))
+            second = self.report(directory, "replicated-confirm", [0.17, 0.24], 0.01)
+            second_payload = json.loads(second.read_text())
+            second_payload["architecture"] = "pooled"
+            for offset, variant in enumerate(second_payload["variants"]["range"]):
+                variant["seed"] = 11 + offset
+            second.write_text(json.dumps(second_payload))
+
+            result = module.select_candidate([stable, first, second])
+
+            self.assertEqual(result["selectedConfiguration"]["architecture"], "stable")
+            pooled = next(
+                group
+                for group in result["configurationGroups"]
+                if group["configuration"]["architecture"] == "pooled"
+            )
+            self.assertEqual(pooled["reportCount"], 2)
+            self.assertEqual(pooled["trainingSeeds"], [1, 2, 11, 12])
+            self.assertEqual(pooled["maximumSeedTuningRmseBb"], 0.24)
+
+    def test_replicated_configuration_rejects_reused_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            first = self.report(directory, "first", [0.20, 0.21], 0.3)
+            second = self.report(directory, "second", [0.19, 0.20], 0.3)
+            payload = json.loads(second.read_text())
+            payload["architecture"] = "first"
+            second.write_text(json.dumps(payload))
+
+            with self.assertRaisesRegex(ValueError, "reuse a training seed"):
+                module.select_candidate([first, second])
+
     def test_selection_rejects_mismatched_split_or_unrestored_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             directory = Path(raw_directory)

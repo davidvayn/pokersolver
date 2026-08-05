@@ -20,6 +20,7 @@ import numpy as np
 
 SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
+POOLED_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v5"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
 FEATURE_SCHEMA_BOARD_RELATIVE = "rank-suit-invariant-combo-query-v2"
 FEATURE_SCHEMA_EXACT_RUNOUT = "rank-suit-invariant-combo-query-v3"
@@ -50,6 +51,14 @@ def feature_sizes(feature_schema: str) -> tuple[int, int]:
             QUERY_COUNT + QUERY_BOARD_RELATIVE_COUNT,
         )
     raise ValueError(f"unknown value-network feature schema {feature_schema}")
+
+
+def network_schema_for_architecture(architecture: str) -> str:
+    return (
+        POOLED_NETWORK_SCHEMA
+        if architecture == "xwide-gelu-pooled"
+        else NETWORK_SCHEMA
+    )
 
 
 def combo_cards(key: int) -> tuple[int, int]:
@@ -315,6 +324,7 @@ class SharedComboValueNetwork(nn.Module):
         super().__init__()
         self.use_ranges = use_ranges
         self.architecture = architecture
+        self.pools_exact_ranges = architecture == "xwide-gelu-pooled"
         self.value_normalization = value_normalization
         self.feature_schema = feature_schema
         context_count, query_count = feature_sizes(feature_schema)
@@ -381,7 +391,7 @@ class SharedComboValueNetwork(nn.Module):
                 nn.GELU(approx="fast"),
                 nn.Linear(64, 1),
             )
-        elif architecture == "xwide-gelu":
+        elif architecture in ("xwide-gelu", "xwide-gelu-pooled"):
             embedding = 128
             self.context_tower = nn.Sequential(
                 nn.Linear(context_count, 256),
@@ -399,8 +409,9 @@ class SharedComboValueNetwork(nn.Module):
                 nn.Linear(192, embedding),
                 nn.GELU(approx="fast"),
             )
+            head_inputs = embedding * (4 if self.pools_exact_ranges else 2)
             self.head = nn.Sequential(
-                nn.Linear(embedding * 2, 256),
+                nn.Linear(head_inputs, 256),
                 nn.GELU(approx="fast"),
                 nn.Linear(256, 128),
                 nn.GELU(approx="fast"),
@@ -445,7 +456,21 @@ class SharedComboValueNetwork(nn.Module):
         expanded_context = mx.broadcast_to(
             context_embedding[:, :, None, :], query_embedding.shape
         )
-        combined = mx.concatenate((expanded_context, query_embedding), axis=-1)
+        if self.pools_exact_ranges:
+            reach = projection_weights / mx.maximum(
+                mx.sum(projection_weights, axis=2, keepdims=True), 1e-8
+            )
+            pooled = mx.sum(query_embedding * reach[:, :, :, None], axis=2)
+            own_pool = mx.broadcast_to(pooled[:, :, None, :], query_embedding.shape)
+            swapped_pool = mx.stack((pooled[:, 1], pooled[:, 0]), axis=1)
+            opponent_pool = mx.broadcast_to(
+                swapped_pool[:, :, None, :], query_embedding.shape
+            )
+            combined = mx.concatenate(
+                (expanded_context, own_pool, opponent_pool, query_embedding), axis=-1
+            )
+        else:
+            combined = mx.concatenate((expanded_context, query_embedding), axis=-1)
         residual = self.head(combined).reshape((combined.shape[0], 2, COMBO_COUNT))
         raw = baseline + residual
         joint_mass = mx.maximum(mx.sum(projection_weights[:, 0, :], axis=1), 1e-8)
@@ -515,7 +540,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--suit-augmentations", type=int, choices=(1, 24), default=1)
     parser.add_argument(
         "--architecture",
-        choices=("compact", "wide", "deep-gelu", "xwide-gelu"),
+        choices=(
+            "compact",
+            "wide",
+            "deep-gelu",
+            "xwide-gelu",
+            "xwide-gelu-pooled",
+        ),
         default="compact",
     )
     parser.add_argument(
@@ -1775,6 +1806,9 @@ def train_one(
         dataset.weights[tuning_rows],
         dataset.target_scales[tuning_rows],
     )
+    metrics["tuningPotBandMetrics"] = pot_band_metrics(
+        dataset, tuning_rows, final_tuning_prediction
+    )
     return model, prediction, final_tuning_prediction, metrics
 
 
@@ -1814,13 +1848,17 @@ def export_model(
 ) -> None:
     hidden_activation = (
         "gelu-fast"
-        if model.architecture in ("deep-gelu", "xwide-gelu")
+        if model.architecture in (
+            "deep-gelu",
+            "xwide-gelu",
+            "xwide-gelu-pooled",
+        )
         else "relu"
     )
     path.write_text(
         json.dumps(
             {
-                "schema": NETWORK_SCHEMA,
+                "schema": network_schema_for_architecture(model.architecture),
                 "architecture": model.architecture,
                 "featureSchema": model.feature_schema,
                 "seed": seed,
@@ -1829,6 +1867,11 @@ def export_model(
                 "valueNormalization": value_normalization,
                 "rangeScale": COMBO_COUNT,
                 "residualUnit": "normalized_state_value_scale",
+                "rangeAggregation": (
+                    "joint-reach-weighted-own-and-opponent-query-pooling"
+                    if model.pools_exact_ranges
+                    else "handcrafted-public-range-summaries"
+                ),
                 "baseline": (
                     "range_conditioned_exact_turn_runout_equity"
                     if model.use_ranges
@@ -1999,6 +2042,21 @@ def main() -> None:
             )
             predictions[variant].append(prediction)
             tuning_predictions[variant].append(tuning_prediction)
+            print(
+                json.dumps(
+                    {
+                        "event": "public-value-seed-complete",
+                        "variant": variant,
+                        "seed": seed,
+                        "bestStep": metrics["bestStep"],
+                        "bestTuningRmseBb": metrics["bestTuningRmseBb"],
+                        "diagnosticHoldoutRmseBb": metrics["weightedRmseBb"],
+                        "weights": str(model_path),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
     validation_weights = dataset.weights[validation_rows]
     validation_scales = dataset.target_scales[validation_rows]
     cross_seed = {
@@ -2083,7 +2141,7 @@ def main() -> None:
         )
     report = {
         "schema": SCHEMA,
-        "networkSchema": NETWORK_SCHEMA,
+        "networkSchema": network_schema_for_architecture(args.architecture),
         "architecture": args.architecture,
         "variantSet": args.variant_set,
         "splitSeed": split_seed,
@@ -2147,6 +2205,11 @@ def main() -> None:
             else "range_conditioned_current_showdown_equity_with_structural_percentile_ablation"
         ),
         "residualUnit": "normalized_state_value_scale",
+        "rangeAggregation": (
+            "joint-reach-weighted-own-and-opponent-query-pooling"
+            if args.architecture == "xwide-gelu-pooled"
+            else "handcrafted-public-range-summaries"
+        ),
         "loss": {
             "kind": (
                 "state-balanced reach-weighted Huber with depth-normalized "

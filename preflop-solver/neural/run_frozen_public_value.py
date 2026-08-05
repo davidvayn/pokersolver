@@ -15,6 +15,10 @@ from typing import Any
 SCHEMA = "hu-public-value-frozen-training-config-v1"
 TARGET_SCHEMA = "hu-turn-public-belief-cfv-dataset-v2"
 REPORT_SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
+SELECTOR_SCHEMA_V1 = "hu-public-value-tuning-selection-v1"
+SELECTOR_SCHEMA_V2 = "hu-public-value-tuning-selection-v2"
+SHARED_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
+POOLED_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v5"
 SOLVER_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -22,6 +26,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--selection-only",
+        action="store_true",
+        help="verify the pre-holdout freeze without requiring the future dataset",
+    )
     return parser.parse_args()
 
 
@@ -31,6 +40,13 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -44,6 +60,20 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def resolve(path: str) -> Path:
     return SOLVER_ROOT / path
+
+
+def expected_network_schema(architecture: str) -> str:
+    if architecture == "xwide-gelu-pooled":
+        return POOLED_NETWORK_SCHEMA
+    if architecture in {"compact", "wide", "deep-gelu", "xwide-gelu"}:
+        return SHARED_NETWORK_SCHEMA
+    raise ValueError(f"unknown frozen value architecture: {architecture}")
+
+
+def expected_range_aggregation(architecture: str) -> str | None:
+    if architecture == "xwide-gelu-pooled":
+        return "joint-reach-weighted-own-and-opponent-query-pooling"
+    return None
 
 
 def verify_digest(path: Path, expected: str) -> None:
@@ -78,22 +108,8 @@ def validate_target_dataset(
         raise ValueError(f"{label} target count differs from the frozen config")
 
 
-def verify_selection(config: dict[str, Any]) -> None:
-    evidence = config["selectionEvidence"]
-    selector_path = resolve(evidence["selectorArtifact"])
-    report_path = resolve(evidence["selectedReport"])
-    verify_digest(selector_path, evidence["selectorArtifactSha256"])
-    verify_digest(report_path, evidence["selectedReportSha256"])
-
-    selector = load_json(selector_path)
-    if selector.get("status") != "frozen-for-fresh-holdout":
-        raise ValueError("selector artifact is not frozen for a fresh holdout")
-    if selector.get("holdoutMetricsConsulted") is not False:
-        raise ValueError("selector artifact consulted holdout metrics")
-    if selector.get("selectedReportSha256") != evidence["selectedReportSha256"]:
-        raise ValueError("selector and frozen config disagree on the selected report")
-    trainer = config["trainer"]
-    frozen_training = {
+def frozen_training_controls(trainer: dict[str, Any]) -> dict[str, Any]:
+    return {
         "architecture": trainer["architecture"],
         "variantSet": trainer["variantSet"],
         "featureSchema": trainer["featureSchema"],
@@ -112,21 +128,86 @@ def verify_selection(config: dict[str, Any]) -> None:
         "minimumPrimaryBatchFraction": trainer["minimumPrimaryBatchFraction"],
         "supplementalSamplingWeight": trainer["supplementalSamplingWeight"],
     }
+
+
+def verify_selection(config: dict[str, Any]) -> set[int]:
+    evidence = config["selectionEvidence"]
+    selector_path = resolve(evidence["selectorArtifact"])
+    verify_digest(selector_path, evidence["selectorArtifactSha256"])
+
+    selector = load_json(selector_path)
+    if selector.get("status") != "frozen-for-fresh-holdout":
+        raise ValueError("selector artifact is not frozen for a fresh holdout")
+    if selector.get("holdoutMetricsConsulted") is not False:
+        raise ValueError("selector artifact consulted holdout metrics")
+    frozen_training = frozen_training_controls(config["trainer"])
     if selector.get("selectedConfiguration") != frozen_training:
         raise ValueError("trainer controls differ from the tuning-selected configuration")
 
-    report = load_json(report_path)
-    variants = report.get("variants", {}).get("range", [])
-    by_seed = {int(entry["seed"]): entry for entry in variants}
-    seeds = [int(seed) for seed in evidence["selectedTrainingSeeds"]]
-    expected_hashes = evidence["selectedWeightSha256"]
-    if len(seeds) != 2 or len(set(seeds)) != 2 or len(expected_hashes) != 2:
-        raise ValueError("frozen selection must contain two independent weights")
-    for seed, expected_hash in zip(seeds, expected_hashes):
-        entry = by_seed.get(seed)
-        if entry is None:
-            raise ValueError("selected report is missing a frozen training seed")
-        verify_digest(report_path.parent / entry["weights"], expected_hash)
+    if selector.get("schema") == SELECTOR_SCHEMA_V1:
+        report_path = resolve(evidence["selectedReport"])
+        verify_digest(report_path, evidence["selectedReportSha256"])
+        if selector.get("selectedReportSha256") != evidence["selectedReportSha256"]:
+            raise ValueError("selector and frozen config disagree on the selected report")
+        report = load_json(report_path)
+        variants = report.get("variants", {}).get("range", [])
+        by_seed = {int(entry["seed"]): entry for entry in variants}
+        seeds = [int(seed) for seed in evidence["selectedTrainingSeeds"]]
+        expected_hashes = evidence["selectedWeightSha256"]
+        if len(seeds) != 2 or len(set(seeds)) != 2 or len(expected_hashes) != 2:
+            raise ValueError("frozen selection must contain two independent weights")
+        for seed, expected_hash in zip(seeds, expected_hashes):
+            entry = by_seed.get(seed)
+            if entry is None:
+                raise ValueError("selected report is missing a frozen training seed")
+            verify_digest(report_path.parent / entry["weights"], expected_hash)
+        return set(seeds)
+
+    if selector.get("schema") != SELECTOR_SCHEMA_V2:
+        raise ValueError("selector artifact has an incompatible schema")
+    selected_sha = canonical_sha256(frozen_training)
+    if (
+        selector.get("selectedConfigurationSha256") != selected_sha
+        or evidence.get("selectedConfigurationSha256") != selected_sha
+    ):
+        raise ValueError("selector and frozen config disagree on the selected configuration")
+    selected_reports = selector.get("selectedEvidence")
+    if not isinstance(selected_reports, list) or not selected_reports:
+        raise ValueError("replicated selector has no selected evidence reports")
+    selected_seeds: list[int] = []
+    for selected in selected_reports:
+        if selected.get("configuration") != frozen_training:
+            raise ValueError("selected evidence uses different training controls")
+        report_path = resolve(selected["report"])
+        verify_digest(report_path, selected["reportSha256"])
+        report = load_json(report_path)
+        variants = report.get("variants", {}).get("range", [])
+        by_seed = {int(entry["seed"]): entry for entry in variants}
+        report_seeds = [int(seed) for seed in selected["trainingSeeds"]]
+        if len(report_seeds) != 2 or len(set(report_seeds)) != 2:
+            raise ValueError("each selected report must contain two independent seeds")
+        if sorted(by_seed) != sorted(report_seeds):
+            raise ValueError("selected evidence seeds differ from the report")
+        weights = selected.get("weights")
+        if not isinstance(weights, list) or len(weights) != 2:
+            raise ValueError("selected evidence must identify two weights")
+        for weight in weights:
+            seed = int(weight["seed"])
+            entry = by_seed.get(seed)
+            if entry is None:
+                raise ValueError("selected weight seed is absent from its report")
+            weight_path = resolve(weight["path"])
+            if weight_path != report_path.parent / entry["weights"]:
+                raise ValueError("selected weight path differs from its report")
+            verify_digest(weight_path, weight["sha256"])
+        selected_seeds.extend(report_seeds)
+    if len(selected_seeds) != len(set(selected_seeds)):
+        raise ValueError("replicated selected evidence reuses a training seed")
+    if sorted(int(seed) for seed in evidence["selectedTrainingSeeds"]) != sorted(
+        selected_seeds
+    ):
+        raise ValueError("frozen config omits selected tuning seeds")
+    return set(selected_seeds)
 
 
 def verify_datasets(config: dict[str, Any]) -> None:
@@ -270,6 +351,20 @@ def verify_output_report(config: dict[str, Any]) -> dict[str, Any]:
     report = load_json(report_path)
     if report.get("schema") != REPORT_SCHEMA:
         raise ValueError("frozen training report schema is incompatible")
+    network_schema = expected_network_schema(trainer["architecture"])
+    range_aggregation = expected_range_aggregation(trainer["architecture"])
+    if (
+        report.get("architecture") != trainer["architecture"]
+        or report.get("networkSchema") != network_schema
+        or report.get("featureSchema") != trainer["featureSchema"]
+        or report.get("valueNormalization") != trainer["valueNormalization"]
+        or report.get("variantSet") != trainer["variantSet"]
+        or (
+            range_aggregation is not None
+            and report.get("rangeAggregation") != range_aggregation
+        )
+    ):
+        raise ValueError("frozen training report used different model controls")
     expected_components = [
         sha256_file(resolve(primary["path"])),
         *(entry["sha256"] for entry in config["trainingOnlySupplements"]),
@@ -319,6 +414,21 @@ def verify_output_report(config: dict[str, Any]) -> dict[str, Any]:
     weights = []
     for entry in variants:
         path = output / entry["weights"]
+        model = load_json(path)
+        if (
+            model.get("schema") != network_schema
+            or model.get("architecture") != trainer["architecture"]
+            or model.get("featureSchema") != trainer["featureSchema"]
+            or model.get("valueNormalization") != trainer["valueNormalization"]
+            or model.get("seed") != entry["seed"]
+            or model.get("sourceDatasetSha256") != report.get("datasetSha256")
+            or model.get("sourceValidationStatus") != gates["sourceValidationStatus"]
+            or (
+                range_aggregation is not None
+                and model.get("rangeAggregation") != range_aggregation
+            )
+        ):
+            raise ValueError(f"frozen exported model metadata is incompatible: {path}")
         weights.append(
             {"seed": entry["seed"], "path": str(path), "sha256": sha256_file(path)}
         )
@@ -333,7 +443,7 @@ def verify_output_report(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
+def verify_frozen_selection(config_path: Path) -> tuple[dict[str, Any], set[int]]:
     config = load_json(config_path)
     if config.get("schema") != SCHEMA:
         raise ValueError("incompatible frozen public-value config")
@@ -344,9 +454,14 @@ def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
     seeds = config["trainer"]["trainingSeeds"]
     if len(seeds) != 2 or len(set(seeds)) != 2:
         raise ValueError("release training requires two independent seeds")
-    if set(seeds) & set(config["selectionEvidence"]["selectedTrainingSeeds"]):
+    selected_seeds = verify_selection(config)
+    if set(seeds) & selected_seeds:
         raise ValueError("release seeds must be independent of tuning seeds")
-    verify_selection(config)
+    return config, selected_seeds
+
+
+def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
+    config, _ = verify_frozen_selection(config_path)
     verify_datasets(config)
     output = resolve(config["trainer"]["outputDirectory"])
     if output.exists() and any(output.iterdir()):
@@ -357,6 +472,21 @@ def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
 def main() -> None:
     args = parse_args()
     try:
+        if args.selection_only:
+            config, selected_seeds = verify_frozen_selection(args.config)
+            print(
+                json.dumps(
+                    {
+                        "status": "frozen-for-fresh-holdout",
+                        "activationAllowed": config["activationAllowed"],
+                        "selectedTuningSeeds": sorted(selected_seeds),
+                        "releaseTrainingSeeds": config["trainer"]["trainingSeeds"],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         config, command = verify_config(args.config)
         print(json.dumps({"cwd": str(SOLVER_ROOT), "command": command}, indent=2))
         if not args.dry_run:

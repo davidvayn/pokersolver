@@ -1,0 +1,120 @@
+{
+  "schema": "hu-public-value-frozen-training-config-v1",
+  "modelVersion": "20bb-v48-pooled-authentic-candidate",
+  "status": "frozen-for-fresh-holdout",
+  "activationAllowed": false,
+  "selectionEvidence": {
+    "criterion": "minimum maximum per-seed tuning RMSE across every independent replication of a configuration, then mean per-seed tuning RMSE, then maximum diagnostic pair-ensemble tuning RMSE",
+    "holdoutMetricsConsulted": false,
+    "selectorArtifact": "neural/20bb-v48-tuning-selection.json",
+    "selectorArtifactSha256": "b240f573e664cb57193bdb724677f593309f54d250d1a527903a4c636059e34f",
+    "selectedConfigurationSha256": "842e3ca0340d700c31847b1e88c0f4f137144bd19cbd4612da948dfeb931b657",
+    "selectedTrainingSeeds": [
+      14811,
+      14812,
+      14821,
+      14822
+    ],
+    "independentPairCount": 2,
+    "seedTuningRmseBb": [
+      0.21815785765647888,
+      0.20867103338241577,
+      0.2083483785390854,
+      0.20701029896736145
+    ],
+    "maximumSeedTuningRmseBb": 0.21815785765647888,
+    "meanSeedTuningRmseBb": 0.21054689213633537
+  },
+  "primaryDataset": {
+    "path": "neural/runs/v48-pooled-release/turn-targets-authentic-merged-512.json",
+    "expectedSchema": "hu-turn-public-belief-cfv-dataset-v2",
+    "expectedStateCount": 512,
+    "expectedComponentSeeds": [
+      14701,
+      14702,
+      14703,
+      14704,
+      14705,
+      14706,
+      14901,
+      14902
+    ],
+    "reservedHoldoutComponentIndices": [
+      6,
+      7
+    ],
+    "holdoutStartIndex": 384,
+    "expectedHoldoutStateCount": 128
+  },
+  "trainingOnlySupplements": [
+    {
+      "path": "neural/runs/v45-complete-turn/turn-targets-complete-paired-200.json",
+      "sha256": "ba41e39d9d4811ef6496f31d817390d3bbe0e9b724d64b1f0660ebc7ad524c84",
+      "stateCount": 256
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-coverage-complete-paired-200.json",
+      "sha256": "49c434eea29c8ce41c91bbf6395200e657a110781f784eb1dbebc1f8e43b033c",
+      "stateCount": 12,
+      "allowedStandaloneValidationReasons": [
+        "authentic public-belief pilot has 12 states; release requires at least 64 before model gating"
+      ]
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/resolver-leaf-train-complete-paired-200.json",
+      "sha256": "ee72ee272d676d4e60d00f0c8f8c193d3bfcd345be342a3227efca71016a764a",
+      "stateCount": 18
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-large-complete-paired-200.json",
+      "sha256": "02e7694f87244814061f718bb59781ae99b098f4525352d673485ae052a6a188",
+      "stateCount": 64
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-large-only-complete-paired-200.json",
+      "sha256": "e3ac699980b0465d5ea53ff871a6ac448b6902460cc7350a2e5651eea30ec09c",
+      "stateCount": 64
+    }
+  ],
+  "trainer": {
+    "architecture": "xwide-gelu-pooled",
+    "featureSchema": "rank-suit-invariant-combo-query-v3",
+    "featureWorkers": 8,
+    "featureCacheDirectory": "neural/runs/feature-cache",
+    "valueNormalization": "pot",
+    "variantSet": "range-only",
+    "steps": 5000,
+    "batchSize": 24,
+    "evaluationInterval": 50,
+    "learningRate": 0.0003,
+    "learningRateFinal": null,
+    "learningRateSchedule": "constant",
+    "adamBiasCorrection": false,
+    "earlyStoppingPatience": 25,
+    "huberDelta": 0.05,
+    "rawBbAuxiliaryWeight": 0.25,
+    "minimumPrimaryBatchFraction": 0.5,
+    "supplementalSamplingWeight": 1.0,
+    "suitAugmentationsPerState": 1,
+    "trainingSeeds": [
+      14921,
+      14922
+    ],
+    "splitSeed": 10901,
+    "validationFraction": 0.25,
+    "tuningFraction": 0.15,
+    "outputDirectory": "neural/runs/v48-pooled-release/frozen-pooled-paired"
+  },
+  "freshHoldoutPolicy": {
+    "evaluateOnceAfterConfigurationFreeze": true,
+    "reuseForSubsequentModelSelection": false,
+    "failedCandidateRequiresNewIndependentHoldout": true
+  },
+  "valueReleaseGates": {
+    "sourceValidationStatus": "accepted",
+    "maximumPerSeedHoldoutRmseBb": 0.25,
+    "minimumTuningCrossSeedPredictionCorrelation": 0.95,
+    "minimumHoldoutCrossSeedPredictionCorrelation": 0.95,
+    "maximumRustPythonParityErrorBb": 0.0001
+  }
+}

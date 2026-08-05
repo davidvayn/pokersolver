@@ -32,6 +32,7 @@ class FrozenPublicValueRunTests(unittest.TestCase):
                 "batchSize": 24,
                 "learningRate": 0.0003,
                 "learningRateFinal": None,
+                "learningRateSchedule": "constant",
                 "adamBiasCorrection": False,
                 "trainingSeeds": [14721, 14722],
                 "splitSeed": 10901,
@@ -62,6 +63,23 @@ class FrozenPublicValueRunTests(unittest.TestCase):
         self.assertIn("--minimum-tuning-cross-seed-correlation 0.95", rendered)
         self.assertNotIn("--learning-rate-final", command)
         self.assertNotIn("--adam-bias-correction", command)
+
+    def test_pooled_architecture_requires_v5_runtime_schema(self) -> None:
+        self.assertEqual(
+            module.expected_network_schema("xwide-gelu-pooled"),
+            module.POOLED_NETWORK_SCHEMA,
+        )
+        self.assertEqual(
+            module.expected_network_schema("xwide-gelu"),
+            module.SHARED_NETWORK_SCHEMA,
+        )
+        self.assertEqual(
+            module.expected_range_aggregation("xwide-gelu-pooled"),
+            "joint-reach-weighted-own-and-opponent-query-pooling",
+        )
+        self.assertIsNone(module.expected_range_aggregation("xwide-gelu"))
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            module.expected_network_schema("typo")
 
     def test_optional_optimizer_controls_are_explicit(self) -> None:
         config = self.config()
@@ -102,6 +120,104 @@ class FrozenPublicValueRunTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing"):
                 module.load_json(missing)
 
+    def test_replicated_tuning_selection_verifies_every_report_and_weight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self.config()
+            controls = module.frozen_training_controls(config["trainer"])
+            selected = []
+            all_seeds = []
+            for pair, seeds in enumerate(((11, 12), (21, 22))):
+                pair_directory = root / f"pair-{pair}"
+                pair_directory.mkdir()
+                variants = []
+                weights = []
+                for seed in seeds:
+                    weight_path = pair_directory / f"seed-{seed}.json"
+                    weight_path.write_text(json.dumps({"seed": seed}))
+                    variants.append(
+                        {"seed": seed, "weights": weight_path.name}
+                    )
+                    weights.append(
+                        {
+                            "seed": seed,
+                            "path": str(weight_path),
+                            "sha256": module.sha256_file(weight_path),
+                        }
+                    )
+                report_path = pair_directory / "report.json"
+                report_path.write_text(
+                    json.dumps({"variants": {"range": variants}})
+                )
+                selected.append(
+                    {
+                        "report": str(report_path),
+                        "reportSha256": module.sha256_file(report_path),
+                        "configuration": controls,
+                        "trainingSeeds": list(seeds),
+                        "weights": weights,
+                    }
+                )
+                all_seeds.extend(seeds)
+            configuration_sha = module.canonical_sha256(controls)
+            selector_path = root / "selection.json"
+            selector_path.write_text(
+                json.dumps(
+                    {
+                        "schema": module.SELECTOR_SCHEMA_V2,
+                        "status": "frozen-for-fresh-holdout",
+                        "holdoutMetricsConsulted": False,
+                        "selectedConfiguration": controls,
+                        "selectedConfigurationSha256": configuration_sha,
+                        "selectedEvidence": selected,
+                    }
+                )
+            )
+            config["selectionEvidence"] = {
+                "selectorArtifact": str(selector_path),
+                "selectorArtifactSha256": module.sha256_file(selector_path),
+                "selectedConfigurationSha256": configuration_sha,
+                "selectedTrainingSeeds": all_seeds,
+            }
+            config.update(
+                {
+                    "schema": module.SCHEMA,
+                    "status": "frozen-for-fresh-holdout",
+                    "activationAllowed": False,
+                }
+            )
+            config_path = root / "frozen.json"
+            config_path.write_text(json.dumps(config))
+
+            with mock.patch.object(module, "SOLVER_ROOT", root):
+                self.assertEqual(module.verify_selection(config), set(all_seeds))
+                verified, verified_seeds = module.verify_frozen_selection(config_path)
+                self.assertFalse(verified["activationAllowed"])
+                self.assertEqual(verified_seeds, set(all_seeds))
+                config["trainer"]["trainingSeeds"] = [11, 14722]
+                config_path.write_text(json.dumps(config))
+                with self.assertRaisesRegex(ValueError, "independent"):
+                    module.verify_frozen_selection(config_path)
+                config["trainer"]["trainingSeeds"] = [14721, 14722]
+                selected[1]["weights"][1]["sha256"] = "0" * 64
+                selector_path.write_text(
+                    json.dumps(
+                        {
+                            "schema": module.SELECTOR_SCHEMA_V2,
+                            "status": "frozen-for-fresh-holdout",
+                            "holdoutMetricsConsulted": False,
+                            "selectedConfiguration": controls,
+                            "selectedConfigurationSha256": configuration_sha,
+                            "selectedEvidence": selected,
+                        }
+                    )
+                )
+                config["selectionEvidence"]["selectorArtifactSha256"] = (
+                    module.sha256_file(selector_path)
+                )
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    module.verify_selection(config)
+
     def test_output_report_requires_both_seed_gates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -118,9 +234,27 @@ class FrozenPublicValueRunTests(unittest.TestCase):
                 }
             ]
             for seed in (14721, 14722):
-                (root / "output" / f"seed-{seed}.json").write_text("{}")
+                (root / "output" / f"seed-{seed}.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": module.SHARED_NETWORK_SCHEMA,
+                            "architecture": "xwide-gelu",
+                            "featureSchema": "rank-suit-invariant-combo-query-v3",
+                            "valueNormalization": "pot",
+                            "seed": seed,
+                            "sourceDatasetSha256": "combined",
+                            "sourceValidationStatus": "accepted",
+                        }
+                    )
+                )
             report = {
                 "schema": module.REPORT_SCHEMA,
+                "networkSchema": module.SHARED_NETWORK_SCHEMA,
+                "architecture": "xwide-gelu",
+                "featureSchema": "rank-suit-invariant-combo-query-v3",
+                "valueNormalization": "pot",
+                "variantSet": "range-only",
+                "datasetSha256": "combined",
                 "componentDatasetSha256": [
                     module.sha256_file(root / "primary.json"),
                     module.sha256_file(root / "old.json"),
@@ -154,6 +288,13 @@ class FrozenPublicValueRunTests(unittest.TestCase):
                 ] = 0.251
                 report_path.write_text(json.dumps(report))
                 with self.assertRaisesRegex(ValueError, "RMSE"):
+                    module.verify_output_report(config)
+                report["variants"]["range"][1]["metrics"][
+                    "weightedRmseBb"
+                ] = 0.2
+                report["networkSchema"] = module.POOLED_NETWORK_SCHEMA
+                report_path.write_text(json.dumps(report))
+                with self.assertRaisesRegex(ValueError, "model controls"):
                     module.verify_output_report(config)
 
 

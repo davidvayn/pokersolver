@@ -88,10 +88,26 @@ def python_prediction(
     context_embedding = dense_forward(context, model["contextTower"])
     query_embedding = dense_forward(queries, model["queryTower"])
     expanded = np.broadcast_to(context_embedding[:, None, :], query_embedding.shape)
-    residual = dense_forward(
-        np.concatenate((expanded, query_embedding), axis=-1), model["head"]
-    ).reshape(2, training.COMBO_COUNT)
-    if model["schema"] == training.NETWORK_SCHEMA:
+    if model["schema"] == training.POOLED_NETWORK_SCHEMA:
+        projection_weights = dataset.projection_weights[state_index]
+        reach = projection_weights / np.maximum(
+            projection_weights.sum(axis=1, keepdims=True), 1e-8
+        )
+        pooled = (query_embedding * reach[:, :, None]).sum(axis=1)
+        own_pool = np.broadcast_to(pooled[:, None, :], query_embedding.shape)
+        opponent_pool = np.broadcast_to(pooled[::-1, None, :], query_embedding.shape)
+        head_input = np.concatenate(
+            (expanded, own_pool, opponent_pool, query_embedding), axis=-1
+        )
+    else:
+        head_input = np.concatenate((expanded, query_embedding), axis=-1)
+    residual = dense_forward(head_input, model["head"]).reshape(
+        2, training.COMBO_COUNT
+    )
+    if model["schema"] in {
+        training.NETWORK_SCHEMA,
+        training.POOLED_NETWORK_SCHEMA,
+    }:
         scale_bb = training.value_scale_bb(
             dataset.invested[state_index], model["valueNormalization"]
         )
@@ -136,9 +152,10 @@ def main() -> None:
     model = json.loads(args.model.read_text())
     if model.get("schema") not in {
         training.NETWORK_SCHEMA,
+        training.POOLED_NETWORK_SCHEMA,
         "hu-public-belief-combo-value-network-v3",
     }:
-        raise ValueError("parity validation requires a shared-combo v3 or v4 model")
+        raise ValueError("parity validation requires a shared-combo v3, v4, or v5 model")
     normalization = model.get("valueNormalization", "depth")
     dataset = training.load_dataset(args.dataset, 1, normalization)
     state_indices = selected_state_indices(args.state_indices, args.state_index)

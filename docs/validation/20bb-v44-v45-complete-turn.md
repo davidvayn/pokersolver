@@ -261,10 +261,14 @@ changing holdout metric values cannot change the selected configuration.
 
 Deterministic schema-v3 feature construction is now content-addressed by the
 combined corpus digest, feature schema, implementation version, row count, and
-group count. The 414-state cache contains a 1.3MB context tensor and a 519MB
-query tensor. Both arrays are SHA-256 verified before use and loaded as
-read-only memory maps. This cut repeat-run preprocessing from minutes to
-seconds without changing any feature, target, split, or strategy gate.
+group count. The final 926-state combined-corpus cache contains a 3.1MB context
+tensor and a 1.218GB query tensor. Its context and query SHA-256 values are
+`856bcf3cb49234091c924389a89aaeb2ae7be45b8c4bfce9c0c6ba4531e09251`
+and `29f24caf61a1a66eadaf492d4bec4358d41f3c7d34886e29b1e9157b3a286061`.
+Both arrays are verified before use and loaded as read-only memory maps. This
+cut repeat-run preprocessing from minutes to seconds without changing any
+feature, target, split, or strategy gate. These tensors are training-only and
+are not part of the browser serving payload.
 
 An independent 512-state authentic corpus was generated in eight resumable,
 64-state shards with source seeds `14701` through `14708`. Every component and
@@ -279,6 +283,82 @@ Shards 6 and 7 (merged indices 384--511) were reserved in advance as the
 128-state final holdout. Candidate hyperparameters were frozen and committed
 before that holdout was evaluated. No target CFV or model-error metric from
 those shards participated in model or hyperparameter selection.
+
+## V46 fresh-holdout result
+
+The frozen pair completed both 10,000-step runs and was rejected. Seed 14721
+measured `0.281479bb` holdout RMSE and seed 14722 measured `0.279646bb`, above
+the per-seed `0.25bb` ceiling. Their output correlation was `0.999571`, so the
+failure is stable rather than attributable to one unlucky initialization. The
+diagnostic two-output ensemble measured `0.275097bb` and does not replace the
+per-seed gate. The report SHA-256 is
+`9e06723ab8a89a15f2db31ba3c71c24fe7d608cc7f717301103316bd7a741708`.
+
+| Pot band | Seed 14721 RMSE | Seed 14722 RMSE |
+| --- | ---: | ---: |
+| Small | 0.138970bb | 0.142934bb |
+| Medium | 0.448149bb | 0.416931bb |
+| Large | 0.502267bb | 0.527444bb |
+
+Both seeds selected step 9,700 and missed the same medium/large-pot and
+paired/trips board regimes. More iterations of the unchanged network are
+therefore not justified by this result. The holdout is now opened and cannot
+be reused as untouched release evidence for a successor. `activationAllowed`
+remains false and the active manifest remains empty.
+
+## V47 exact-range pooling pilot
+
+V46 supplied every exact private-combo query to the shared network, but its
+head saw only the current combo and handcrafted public range summaries. That
+representation could not learn an arbitrary range-conditioned continuation
+function. V47 adds a permutation-invariant, joint-reach-weighted pooling pass
+over all exact combo query embeddings for each player. Every combo head now
+receives the public-state embedding, its own pooled range embedding, the
+opponent's pooled range embedding, and its exact private-combo embedding. Card
+removal remains exact, the same public state and combo features are retained,
+and suit equivariance is unchanged.
+
+The exported `hu-public-belief-combo-value-network-v5` artifact records this as
+`joint-reach-weighted-own-and-opponent-query-pooling`. Python and Rust evaluate
+the same pooling operation. A three-state smoke comparison spanning indices 0,
+398, and 479 measured maximum absolute disagreement of
+`0.0000026763bb`, below the frozen `0.0001bb` parity ceiling. The JSON payload
+is approximately 9.74MB; the 1.218GB feature cache remains training-only.
+
+The first independent 5,000-step pair improved tuning RMSE to `0.218158bb` and
+`0.208671bb`, versus `0.222285bb` and `0.221602bb` for frozen V46 despite using
+half as many steps. Its diagnostic opened-holdout results were `0.279023bb` and
+`0.246452bb`. Those holdout values cannot select V47 and do not constitute new
+release evidence. A second independent pair was predeclared to confirm the
+tuning improvement before freezing the architecture. That pair reproduced the
+gain at `0.208348bb` and `0.207010bb`; its tuning prediction correlation was
+`0.999643`. Across all four pooled seeds, the worst tuning RMSE is
+`0.218158bb` and the mean is `0.210547bb`, versus `0.222285bb` worst and
+`0.221943bb` mean for V46.
+
+The confirmation pair measured `0.254580bb` and `0.254240bb` on the already
+opened diagnostic holdout. Its report is consequently rejected under the old
+per-seed release gate, even though the diagnostic two-output ensemble is
+`0.244941bb`. Neither result was available to the selector and none may serve
+as fresh evidence. The confirmation report SHA-256 is
+`9edaa8e5280b84fe13656501c1877482b4f729f761cf06b68c836a41684210ec`.
+
+The tuning selector now groups identical configurations across every
+independent replication. It ranks the worst per-seed tuning RMSE over the
+entire group, then the all-seed mean, then the worst diagnostic pair-ensemble
+tuning RMSE. Repeated pairs therefore increase the evidence burden and cannot
+be cherry-picked as separate candidates. Opened-holdout metrics are not read
+by the selector.
+
+The resulting V48 freeze selects `xwide-gelu-pooled` at 5,000 steps using four
+independent tuning seeds. Selector artifact SHA-256
+`b240f573e664cb57193bdb724677f593309f54d250d1a527903a4c636059e34f`
+binds configuration SHA-256
+`842e3ca0340d700c31847b1e88c0f4f137144bd19cbd4612da948dfeb931b657`.
+Release training seeds 14921 and 14922 are disjoint from every selection seed.
+The future 128-state holdout is reserved for source seeds 14901 and 14902 and
+will be generated only after this freeze is committed. Activation remains
+false.
 
 The remaining sequence is corrected value-network selection, disjoint leaf and
 matched-resolver selection, continuation-cache and preflop DCFR regeneration,
