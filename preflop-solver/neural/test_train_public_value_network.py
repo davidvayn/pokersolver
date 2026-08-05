@@ -99,6 +99,22 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertTrue(np.all(holdout >= 64))
         self.assertEqual(len(set(train) | set(tuning) | set(holdout)), 128)
 
+    def test_three_way_split_stratifies_every_pot_band(self) -> None:
+        strata = np.asarray([0] * 203 + [1] * 31 + [2] * 22, dtype=np.int8)
+        first = module.three_way_state_split(
+            256, 10901, 0.25, 0.10, holdout_start_index=128, strata=strata
+        )
+        second = module.three_way_state_split(
+            256, 10901, 0.25, 0.10, holdout_start_index=128, strata=strata
+        )
+        for left, right in zip(first, second):
+            np.testing.assert_array_equal(left, right)
+            self.assertEqual(set(strata[left]), {0, 1, 2})
+        train, tuning, holdout = first
+        self.assertEqual((len(train), len(tuning), len(holdout)), (166, 26, 64))
+        self.assertTrue(np.all(holdout >= 128))
+        self.assertEqual(len(set(train) | set(tuning) | set(holdout)), 256)
+
     def test_suit_permutations_are_combo_bijections(self) -> None:
         permutations = module.suit_permutations(24)
         self.assertEqual(len(permutations), 24)

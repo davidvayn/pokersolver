@@ -110,7 +110,8 @@ The v36 fit is therefore stopped at the paired pilot. A 100-iteration audit
 would characterize a candidate that already fails two upstream gates and is
 not the highest-value use of compute. The next experiment expands the
 immutable, exact range-conditioned authentic corpus from 128 to 256 states,
-preserves a newly untouched 128-state half, and repeats paired training. It may
+preserves 64 validation states sampled only from the newly generated half, and
+repeats paired training. It may
 extend to 512 only if the new holdout and cross-seed resolver results show
 meaningful progress toward the absolute gate.
 

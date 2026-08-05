@@ -908,6 +908,7 @@ def three_way_state_split(
     validation_fraction: float,
     tuning_fraction: float,
     holdout_start_index: int | None = None,
+    strata: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if state_count < 3:
         raise ValueError("early-stopped evaluation requires at least three states")
@@ -918,20 +919,50 @@ def three_way_state_split(
         if holdout_start_index < 0 or holdout_start_index >= state_count:
             raise ValueError("holdout start index must select at least one state")
         validation_pool = np.arange(holdout_start_index, state_count)
+    if strata is not None:
+        strata = np.asarray(strata)
+        if strata.shape != (state_count,):
+            raise ValueError("split strata must have one label per state")
+
+    def select(pool: np.ndarray, count: int) -> np.ndarray:
+        if strata is None:
+            return np.sort(rng.permutation(pool)[:count])
+        labels, sizes = np.unique(strata[pool], return_counts=True)
+        ideal = count * sizes.astype(np.float64) / len(pool)
+        quotas = np.minimum(np.floor(ideal).astype(np.int64), sizes)
+        if count >= len(labels):
+            for offset in np.flatnonzero(quotas == 0):
+                donors = np.flatnonzero(quotas > 1)
+                if not len(donors):
+                    break
+                donor = donors[np.argmax(quotas[donors] - ideal[donors])]
+                quotas[donor] -= 1
+                quotas[offset] = 1
+        while int(quotas.sum()) < count:
+            available = np.flatnonzero(quotas < sizes)
+            priority = ideal[available] - quotas[available]
+            chosen = available[np.argmax(priority)]
+            quotas[chosen] += 1
+        selected = [
+            rng.permutation(pool[strata[pool] == label])[:quota]
+            for label, quota in zip(labels, quotas)
+            if quota
+        ]
+        return np.sort(np.concatenate(selected))
+
     validation_count = min(
         len(validation_pool),
         state_count - 2,
         max(1, int(round(state_count * validation_fraction))),
     )
-    validation = np.sort(rng.permutation(validation_pool)[:validation_count])
+    validation = select(validation_pool, validation_count)
     remaining_pool = np.setdiff1d(
         np.arange(state_count), validation, assume_unique=True
     )
     remaining = len(remaining_pool)
     tuning_count = min(remaining - 1, max(1, int(round(state_count * tuning_fraction))))
-    remaining_order = rng.permutation(remaining_pool)
-    tuning = np.sort(remaining_order[:tuning_count])
-    train = np.sort(remaining_order[tuning_count:])
+    tuning = select(remaining_pool, tuning_count)
+    train = np.setdiff1d(remaining_pool, tuning, assume_unique=True)
     return train, tuning, validation
 
 
@@ -1391,6 +1422,13 @@ def main() -> None:
     ]
     dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
     contexts, queries = feature_dataset(dataset)
+    primary_state_bands = np.asarray(
+        [
+            pot_band(target["invested_bb"])
+            for target in primary_dataset.source["targets"]
+        ],
+        dtype=np.int8,
+    )
     seeds = [int(seed) for seed in args.seeds.split(",")]
     if len(seeds) != 2:
         raise ValueError("paired training requires exactly two independent seeds")
@@ -1401,6 +1439,7 @@ def main() -> None:
         args.validation_fraction,
         args.tuning_fraction,
         args.holdout_start_index,
+        primary_state_bands,
     )
     primary_train_states = train_states.copy()
     supplemental_states = np.arange(primary_state_count, len(dataset.source["targets"]))
@@ -1520,6 +1559,36 @@ def main() -> None:
         "architecture": args.architecture,
         "variantSet": args.variant_set,
         "splitSeed": split_seed,
+        "potStratifiedSplit": True,
+        "splitPotBandStates": {
+            name: {
+                "train": int(
+                    np.sum(
+                        [
+                            primary_state_bands[state] == band
+                            for state in primary_train_states
+                        ]
+                    )
+                ),
+                "tuning": int(
+                    np.sum(
+                        [
+                            primary_state_bands[state] == band
+                            for state in tuning_states
+                        ]
+                    )
+                ),
+                "validation": int(
+                    np.sum(
+                        [
+                            primary_state_bands[state] == band
+                            for state in validation_states
+                        ]
+                    )
+                ),
+            }
+            for band, name in enumerate(POT_BAND_NAMES)
+        },
         "valueNormalization": args.value_normalization,
         "featureSchema": FEATURE_SCHEMA,
         "dataset": str(args.dataset),
