@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import itertools
 import json
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ import numpy as np
 SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
+FEATURE_SCHEMA_BOARD_RELATIVE = "rank-suit-invariant-combo-query-v2"
+FEATURE_SCHEMA_EXACT_RUNOUT = "rank-suit-invariant-combo-query-v3"
 COMBO_COUNT = 1326
 DEPTH_BB = 20.0
 MINIMUM_VALUE_SCALE_BB = 1.0
@@ -30,7 +33,20 @@ CONTEXT_COUNT = CONTEXT_PUBLIC_COUNT + CONTEXT_RANGE_COUNT
 QUERY_STRUCTURAL_COUNT = 76
 QUERY_RANGE_COUNT = 19
 QUERY_COUNT = QUERY_STRUCTURAL_COUNT + QUERY_RANGE_COUNT
+CONTEXT_BOARD_RELATIVE_COUNT = 58
+QUERY_BOARD_RELATIVE_COUNT = 29
 HAND_CLASS_COUNT = 169
+
+
+def feature_sizes(feature_schema: str) -> tuple[int, int]:
+    if feature_schema == FEATURE_SCHEMA:
+        return CONTEXT_COUNT, QUERY_COUNT
+    if feature_schema in (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT):
+        return (
+            CONTEXT_COUNT + CONTEXT_BOARD_RELATIVE_COUNT,
+            QUERY_COUNT + QUERY_BOARD_RELATIVE_COUNT,
+        )
+    raise ValueError(f"unknown value-network feature schema {feature_schema}")
 
 
 def combo_cards(key: int) -> tuple[int, int]:
@@ -214,6 +230,59 @@ def immediate_range_equity(
     return result
 
 
+def exact_turn_range_equities(
+    board: np.ndarray, ranges: np.ndarray, compatible_masses: np.ndarray
+) -> np.ndarray:
+    """Return exact river-runout showdown equity for every player/combo."""
+    if np.asarray(board).shape != (4,):
+        raise ValueError("exact turn equity requires a four-card public board")
+    numerators = np.zeros((2, COMBO_COUNT), dtype=np.float64)
+    board_set = set(int(card) for card in board)
+    for river in range(52):
+        if river in board_set:
+            continue
+        strengths = np.zeros(COMBO_COUNT, dtype=np.int64)
+        for combo, (first_raw, second_raw) in enumerate(COMBO_CARDS):
+            first, second = int(first_raw), int(second_raw)
+            if (
+                first in board_set
+                or second in board_set
+                or first == river
+                or second == river
+            ):
+                continue
+            strengths[combo] = evaluate_cards(
+                [*(int(card) for card in board), river, first, second]
+            )
+        river_blocked = (COMBO_CARDS[:, 0] == river) | (
+            COMBO_CARDS[:, 1] == river
+        )
+        for player in range(2):
+            opponent_range = ranges[1 - player].copy()
+            opponent_range[river_blocked] = 0.0
+            river_masses = np.maximum(
+                opponent_range.sum()
+                - opponent_range[COMBO_CONFLICTS].sum(axis=1),
+                0.0,
+            )
+            numerators[player] += (
+                immediate_range_equity(strengths, opponent_range, river_masses)
+                * river_masses
+            )
+    # Every compatible pair of private hands leaves exactly 44 possible rivers.
+    denominators = compatible_masses.astype(np.float64) * 44.0
+    return np.clip(
+        np.divide(
+            numerators,
+            denominators,
+            out=np.zeros_like(numerators),
+            where=denominators > 1e-8,
+        ),
+        0.0,
+        1.0,
+    ).astype(np.float32)
+
+
 @dataclass
 class Dataset:
     boards: np.ndarray
@@ -238,21 +307,24 @@ class SharedComboValueNetwork(nn.Module):
         use_ranges: bool,
         architecture: str = "compact",
         value_normalization: str = "pot",
+        feature_schema: str = FEATURE_SCHEMA,
     ):
         super().__init__()
         self.use_ranges = use_ranges
         self.architecture = architecture
         self.value_normalization = value_normalization
+        self.feature_schema = feature_schema
+        context_count, query_count = feature_sizes(feature_schema)
         if architecture == "compact":
             context_hidden, embedding, query_hidden, head_hidden = 64, 32, 48, 32
             self.context_tower = nn.Sequential(
-                nn.Linear(CONTEXT_COUNT, context_hidden),
+                nn.Linear(context_count, context_hidden),
                 nn.ReLU(),
                 nn.Linear(context_hidden, embedding),
                 nn.ReLU(),
             )
             self.query_tower = nn.Sequential(
-                nn.Linear(QUERY_COUNT, query_hidden),
+                nn.Linear(query_count, query_hidden),
                 nn.ReLU(),
                 nn.Linear(query_hidden, embedding),
                 nn.ReLU(),
@@ -265,13 +337,13 @@ class SharedComboValueNetwork(nn.Module):
         elif architecture == "wide":
             context_hidden, embedding, query_hidden, head_hidden = 128, 64, 96, 64
             self.context_tower = nn.Sequential(
-                nn.Linear(CONTEXT_COUNT, context_hidden),
+                nn.Linear(context_count, context_hidden),
                 nn.ReLU(),
                 nn.Linear(context_hidden, embedding),
                 nn.ReLU(),
             )
             self.query_tower = nn.Sequential(
-                nn.Linear(QUERY_COUNT, query_hidden),
+                nn.Linear(query_count, query_hidden),
                 nn.ReLU(),
                 nn.Linear(query_hidden, embedding),
                 nn.ReLU(),
@@ -284,7 +356,7 @@ class SharedComboValueNetwork(nn.Module):
         elif architecture == "deep-gelu":
             embedding = 64
             self.context_tower = nn.Sequential(
-                nn.Linear(CONTEXT_COUNT, 128),
+                nn.Linear(context_count, 128),
                 nn.GELU(approx="fast"),
                 nn.Linear(128, 128),
                 nn.GELU(approx="fast"),
@@ -292,7 +364,7 @@ class SharedComboValueNetwork(nn.Module):
                 nn.GELU(approx="fast"),
             )
             self.query_tower = nn.Sequential(
-                nn.Linear(QUERY_COUNT, 128),
+                nn.Linear(query_count, 128),
                 nn.GELU(approx="fast"),
                 nn.Linear(128, 128),
                 nn.GELU(approx="fast"),
@@ -412,6 +484,16 @@ def parse_args() -> argparse.Namespace:
         default="both",
         help="range-only is for architecture pilots after the range ablation is established",
     )
+    parser.add_argument(
+        "--feature-schema",
+        choices=(
+            FEATURE_SCHEMA,
+            FEATURE_SCHEMA_BOARD_RELATIVE,
+            FEATURE_SCHEMA_EXACT_RUNOUT,
+        ),
+        default=FEATURE_SCHEMA,
+    )
+    parser.add_argument("--feature-workers", type=int, default=1)
     parser.add_argument(
         "--value-normalization",
         choices=("pot", "payoff-exposure"),
@@ -775,6 +857,7 @@ def build_features(
     invested: np.ndarray,
     ranges: np.ndarray,
     masses: np.ndarray,
+    feature_schema: str = FEATURE_SCHEMA,
 ) -> tuple[np.ndarray, np.ndarray]:
     card_mass, rank_mass, suit_mass, class_mass = range_statistics(ranges)
     strengths, category, percentile, river_potential = poker_query_features(board)
@@ -788,8 +871,23 @@ def build_features(
     board_suit = (
         np.sort(np.bincount(board & 3, minlength=4).astype(np.float32))[::-1] / 4.0
     )
-    context = np.zeros((2, CONTEXT_COUNT), dtype=np.float32)
-    queries = np.zeros((2, COMBO_COUNT, QUERY_COUNT), dtype=np.float32)
+    context_count, query_count = feature_sizes(feature_schema)
+    context = np.zeros((2, context_count), dtype=np.float32)
+    queries = np.zeros((2, COMBO_COUNT, query_count), dtype=np.float32)
+    strength_bins = np.minimum((percentile * 10).astype(np.int16), 9)
+    board_relative = np.concatenate(
+        (
+            category,
+            river_potential,
+            np.eye(10, dtype=np.float32)[strength_bins],
+        ),
+        axis=1,
+    )
+    exact_runout_equities = (
+        exact_turn_range_equities(board, ranges, masses)
+        if feature_schema == FEATURE_SCHEMA_EXACT_RUNOUT
+        else None
+    )
     for player in range(2):
         opponent = 1 - player
         context[player, :17] = np.concatenate((board_rank, board_suit))
@@ -799,7 +897,51 @@ def build_features(
             invested[opponent] / DEPTH_BB,
         ]
         context[player, 21:190] = scaled_log(class_mass[player], HAND_CLASS_COUNT)
-        context[player, 190:] = scaled_log(class_mass[opponent], HAND_CLASS_COUNT)
+        context[player, 190:CONTEXT_COUNT] = scaled_log(
+            class_mass[opponent], HAND_CLASS_COUNT
+        )
+        if feature_schema in (
+            FEATURE_SCHEMA_BOARD_RELATIVE,
+            FEATURE_SCHEMA_EXACT_RUNOUT,
+        ):
+            own_mass = max(float(ranges[player].sum()), 1e-8)
+            opponent_mass = max(float(ranges[opponent].sum()), 1e-8)
+            context[player, CONTEXT_COUNT:] = np.concatenate(
+                (
+                    (ranges[player, :, None] * category).sum(axis=0) / own_mass,
+                    (ranges[opponent, :, None] * category).sum(axis=0)
+                    / opponent_mass,
+                    np.bincount(
+                        strength_bins,
+                        weights=ranges[player],
+                        minlength=10,
+                    )
+                    / own_mass,
+                    np.bincount(
+                        strength_bins,
+                        weights=ranges[opponent],
+                        minlength=10,
+                    )
+                    / opponent_mass,
+                    (ranges[player, :, None] * river_potential).sum(axis=0)
+                    / own_mass,
+                    (ranges[opponent, :, None] * river_potential).sum(axis=0)
+                    / opponent_mass,
+                )
+            )
+            weighted_opponent_features = ranges[opponent, :, None] * board_relative
+            compatible_opponent_features = weighted_opponent_features.sum(
+                axis=0, keepdims=True
+            ) - weighted_opponent_features[COMBO_CONFLICTS].sum(axis=1)
+            compatible_opponent_features = np.divide(
+                compatible_opponent_features,
+                masses[player, :, None],
+                out=np.zeros_like(compatible_opponent_features),
+                where=masses[player, :, None] > 1e-8,
+            )
+            compatible_opponent_features = np.clip(
+                compatible_opponent_features, 0.0, 1.0
+            )
         for combo, (first_raw, second_raw) in enumerate(COMBO_CARDS):
             first, second = int(first_raw), int(second_raw)
             high, low, high_suit_board, low_suit_board = canonical_combo_parts(
@@ -871,22 +1013,50 @@ def build_features(
                 float(ranges[opponent].sum()),
             ]
             query[offset + 18] = immediate_equities[player, combo]
+            if exact_runout_equities is not None:
+                query[offset + 18] = exact_runout_equities[player, combo]
+            if feature_schema in (
+                FEATURE_SCHEMA_BOARD_RELATIVE,
+                FEATURE_SCHEMA_EXACT_RUNOUT,
+            ):
+                query[QUERY_COUNT:] = compatible_opponent_features[combo]
     return context, queries
 
 
-def feature_dataset(dataset: Dataset) -> tuple[np.ndarray, np.ndarray]:
-    contexts: list[np.ndarray] = []
-    queries: list[np.ndarray] = []
-    for board, actor, invested, ranges, masses in zip(
-        dataset.boards,
-        dataset.actors,
-        dataset.invested,
-        dataset.ranges,
-        dataset.masses,
-    ):
-        context, query = build_features(board, int(actor), invested, ranges, masses)
-        contexts.append(context)
-        queries.append(query)
+def build_feature_task(
+    task: tuple[np.ndarray, int, np.ndarray, np.ndarray, np.ndarray, str],
+) -> tuple[np.ndarray, np.ndarray]:
+    return build_features(*task)
+
+
+def feature_dataset(
+    dataset: Dataset, feature_schema: str = FEATURE_SCHEMA, workers: int = 1
+) -> tuple[np.ndarray, np.ndarray]:
+    if workers <= 0:
+        raise ValueError("feature workers must be positive")
+    tasks = [
+        (board, int(actor), invested, ranges, masses, feature_schema)
+        for board, actor, invested, ranges, masses in zip(
+            dataset.boards,
+            dataset.actors,
+            dataset.invested,
+            dataset.ranges,
+            dataset.masses,
+        )
+    ]
+    if workers == 1:
+        built = map(build_feature_task, tasks)
+        executor = None
+    else:
+        executor = ProcessPoolExecutor(max_workers=workers)
+        built = executor.map(build_feature_task, tasks, chunksize=1)
+    try:
+        features = list(built)
+    finally:
+        if executor is not None:
+            executor.shutdown()
+    contexts = [context for context, _ in features]
+    queries = [query for _, query in features]
     return np.stack(contexts), np.stack(queries)
 
 
@@ -1211,10 +1381,13 @@ def train_one(
     raw_bb_auxiliary_weight: float,
     row_sampling_weights: np.ndarray,
     minimum_primary_batch_fraction: float,
+    feature_schema: str,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
-    model = SharedComboValueNetwork(use_ranges, architecture, value_normalization)
+    model = SharedComboValueNetwork(
+        use_ranges, architecture, value_normalization, feature_schema
+    )
     mx.eval(model.parameters())
     optimizer = optim.AdamW(learning_rate=learning_rate, weight_decay=1e-5)
 
@@ -1367,7 +1540,7 @@ def export_model(
             {
                 "schema": NETWORK_SCHEMA,
                 "architecture": model.architecture,
-                "featureSchema": FEATURE_SCHEMA,
+                "featureSchema": model.feature_schema,
                 "seed": seed,
                 "usesExactRanges": model.use_ranges,
                 "targetScaleBb": DEPTH_BB,
@@ -1375,17 +1548,22 @@ def export_model(
                 "rangeScale": COMBO_COUNT,
                 "residualUnit": "normalized_state_value_scale",
                 "baseline": (
-                    "range_conditioned_current_showdown_equity"
+                    "range_conditioned_exact_turn_runout_equity"
                     if model.use_ranges
-                    else "structural_hand_strength_percentile"
+                    and model.feature_schema == FEATURE_SCHEMA_EXACT_RUNOUT
+                    else (
+                        "range_conditioned_current_showdown_equity"
+                        if model.use_ranges
+                        else "structural_hand_strength_percentile"
+                    )
                 ),
                 "sourceDatasetSha256": source_dataset_sha256,
                 "sourcePolicySha256": source_policy_sha256,
                 "sourceValidationStatus": source_validation_status,
                 "contextPublicCount": CONTEXT_PUBLIC_COUNT,
-                "contextSize": CONTEXT_COUNT,
+                "contextSize": feature_sizes(model.feature_schema)[0],
                 "queryStructuralCount": QUERY_STRUCTURAL_COUNT,
-                "querySize": QUERY_COUNT,
+                "querySize": feature_sizes(model.feature_schema)[1],
                 "contextTower": tower_payload(
                     model.context_tower, hidden_activation, hidden_activation
                 ),
@@ -1407,6 +1585,7 @@ def main() -> None:
         or args.early_stopping_patience <= 0
         or args.huber_delta <= 0
         or args.raw_bb_auxiliary_weight < 0
+        or args.feature_workers <= 0
         or not 0.0 < args.supplemental_sampling_weight <= 1.0
         or not 0.0 <= args.minimum_primary_batch_fraction <= 1.0
     ):
@@ -1421,7 +1600,9 @@ def main() -> None:
         for path in args.supplemental_dataset
     ]
     dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
-    contexts, queries = feature_dataset(dataset)
+    contexts, queries = feature_dataset(
+        dataset, args.feature_schema, args.feature_workers
+    )
     primary_state_bands = np.asarray(
         [
             pot_band(target["invested_bb"])
@@ -1492,6 +1673,7 @@ def main() -> None:
                 args.raw_bb_auxiliary_weight,
                 row_sampling_weights,
                 args.minimum_primary_batch_fraction,
+                args.feature_schema,
             )
             model_path = args.output_dir / f"turn-value-{variant}-seed{seed}.json"
             export_model(
@@ -1590,7 +1772,8 @@ def main() -> None:
             for band, name in enumerate(POT_BAND_NAMES)
         },
         "valueNormalization": args.value_normalization,
-        "featureSchema": FEATURE_SCHEMA,
+        "featureSchema": args.feature_schema,
+        "featureWorkers": args.feature_workers,
         "dataset": str(args.dataset),
         "supplementalDatasets": [str(path) for path in args.supplemental_dataset],
         "datasetSha256": dataset.source_sha256,
@@ -1610,7 +1793,11 @@ def main() -> None:
         "suitAugmentationsPerState": args.suit_augmentations,
         "structurallySuitEquivariant": True,
         "structurallyZeroSumProjected": True,
-        "baseline": "range_conditioned_current_showdown_equity_with_structural_percentile_ablation",
+        "baseline": (
+            "range_conditioned_exact_turn_runout_equity_with_structural_percentile_ablation"
+            if args.feature_schema == FEATURE_SCHEMA_EXACT_RUNOUT
+            else "range_conditioned_current_showdown_equity_with_structural_percentile_ablation"
+        ),
         "residualUnit": "normalized_state_value_scale",
         "loss": {
             "kind": (

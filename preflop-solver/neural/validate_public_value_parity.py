@@ -71,6 +71,7 @@ def python_prediction(
         dataset.invested[state_index],
         dataset.ranges[state_index],
         dataset.masses[state_index],
+        model.get("featureSchema", training.FEATURE_SCHEMA),
     )
     equity = (
         queries[:, :, 94].copy()

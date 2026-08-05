@@ -115,6 +115,13 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertTrue(np.all(holdout >= 128))
         self.assertEqual(len(set(train) | set(tuning) | set(holdout)), 256)
 
+    def test_parallel_feature_construction_matches_single_worker(self) -> None:
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        serial = module.feature_dataset(dataset, module.FEATURE_SCHEMA, 1)
+        parallel = module.feature_dataset(dataset, module.FEATURE_SCHEMA, 2)
+        np.testing.assert_array_equal(parallel[0], serial[0])
+        np.testing.assert_array_equal(parallel[1], serial[1])
+
     def test_suit_permutations_are_combo_bijections(self) -> None:
         permutations = module.suit_permutations(24)
         self.assertEqual(len(permutations), 24)
@@ -155,6 +162,40 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertEqual(module.value_scale_bb([2.0, 2.0], "payoff-exposure"), 20.0)
         self.assertEqual(module.value_scale_bb([18.0, 18.0], "pot"), 36.0)
         self.assertEqual(module.value_scale_bb([18.0, 18.0], "payoff-exposure"), 20.0)
+
+    def test_exact_turn_range_equity_matches_direct_runout(self) -> None:
+        board = np.asarray([0, 5, 10, 15], dtype=np.int16)
+        hero = 24 * 23 // 2 + 20
+        opponent = 33 * 32 // 2 + 29
+        ranges = np.zeros((2, module.COMBO_COUNT), dtype=np.float32)
+        ranges[0, hero] = 1.0
+        ranges[1, opponent] = 1.0
+        masses = np.zeros_like(ranges)
+        masses[0, hero] = 1.0
+        masses[1, opponent] = 1.0
+        result = module.exact_turn_range_equities(board, ranges, masses)
+        hero_cards = [int(card) for card in module.COMBO_CARDS[hero]]
+        opponent_cards = [int(card) for card in module.COMBO_CARDS[opponent]]
+        wins = 0.0
+        rivers = 0
+        blocked = set(map(int, board)) | set(hero_cards) | set(opponent_cards)
+        for river in range(52):
+            if river in blocked:
+                continue
+            hero_strength = module.evaluate_cards(
+                [*map(int, board), river, *hero_cards]
+            )
+            opponent_strength = module.evaluate_cards(
+                [*map(int, board), river, *opponent_cards]
+            )
+            wins += float(hero_strength > opponent_strength)
+            wins += 0.5 * float(hero_strength == opponent_strength)
+            rivers += 1
+        self.assertEqual(rivers, 44)
+        self.assertAlmostEqual(float(result[0, hero]), wins / rivers, places=6)
+        self.assertAlmostEqual(
+            float(result[1, opponent]), 1.0 - wins / rivers, places=6
+        )
 
     def test_stratified_batch_draws_every_available_pot_band(self) -> None:
         invested = np.asarray(
@@ -327,9 +368,6 @@ class PublicValueNetworkTests(unittest.TestCase):
             return result
 
         masses = compatible_masses(ranges)
-        context, queries = module.build_features(
-            board, 1, np.asarray([3.0, 4.0], dtype=np.float32), ranges, masses
-        )
         permutation = (2, 0, 3, 1)
         mapping = module.combo_permutation(permutation)
         permuted_ranges = np.zeros_like(ranges)
@@ -340,15 +378,51 @@ class PublicValueNetworkTests(unittest.TestCase):
             [module.permute_card(int(card), permutation) for card in board],
             dtype=np.int16,
         )
-        permuted_context, permuted_queries = module.build_features(
-            permuted_board,
-            1,
-            np.asarray([3.0, 4.0], dtype=np.float32),
-            permuted_ranges,
-            permuted_masses,
+        for schema in (
+            module.FEATURE_SCHEMA,
+            module.FEATURE_SCHEMA_BOARD_RELATIVE,
+            module.FEATURE_SCHEMA_EXACT_RUNOUT,
+        ):
+            context, queries = module.build_features(
+                board,
+                1,
+                np.asarray([3.0, 4.0], dtype=np.float32),
+                ranges,
+                masses,
+                schema,
+            )
+            permuted_context, permuted_queries = module.build_features(
+                permuted_board,
+                1,
+                np.asarray([3.0, 4.0], dtype=np.float32),
+                permuted_ranges,
+                permuted_masses,
+                schema,
+            )
+            np.testing.assert_allclose(permuted_context, context, atol=1e-6)
+            np.testing.assert_allclose(
+                permuted_queries[:, mapping], queries, atol=1e-6
+            )
+        self.assertEqual(
+            context.shape,
+            (2, module.CONTEXT_COUNT + module.CONTEXT_BOARD_RELATIVE_COUNT),
         )
-        np.testing.assert_allclose(permuted_context, context, atol=1e-6)
-        np.testing.assert_allclose(permuted_queries[:, mapping], queries, atol=1e-6)
+        self.assertEqual(
+            queries.shape,
+            (
+                2,
+                module.COMBO_COUNT,
+                module.QUERY_COUNT + module.QUERY_BOARD_RELATIVE_COUNT,
+            ),
+        )
+        legal = masses[0] > 1e-8
+        np.testing.assert_allclose(
+            queries[0, legal, module.QUERY_COUNT : module.QUERY_COUNT + 9].sum(
+                axis=1
+            ),
+            1.0,
+            atol=1e-5,
+        )
 
 
 if __name__ == "__main__":
