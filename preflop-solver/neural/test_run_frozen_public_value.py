@@ -81,6 +81,18 @@ class FrozenPublicValueRunTests(unittest.TestCase):
         rejected = dict(valid, validation={"status": "rejected"})
         with self.assertRaisesRegex(ValueError, "rejected"):
             module.validate_target_dataset(rejected, 2, "fixture")
+        standalone_reason = "too small to stand alone"
+        standalone = dict(
+            valid,
+            validation={"status": "rejected", "reasons": [standalone_reason]},
+        )
+        module.validate_target_dataset(
+            standalone, 2, "fixture", [standalone_reason]
+        )
+        with self.assertRaisesRegex(ValueError, "rejected"):
+            module.validate_target_dataset(
+                standalone, 2, "fixture", ["different reason"]
+            )
         with self.assertRaisesRegex(ValueError, "count"):
             module.validate_target_dataset(valid, 3, "fixture")
 

@@ -55,7 +55,10 @@
     {
       "path": "neural/runs/v45-complete-turn/off-policy-coverage-complete-paired-200.json",
       "sha256": "49c434eea29c8ce41c91bbf6395200e657a110781f784eb1dbebc1f8e43b033c",
-      "stateCount": 12
+      "stateCount": 12,
+      "allowedStandaloneValidationReasons": [
+        "authentic public-belief pilot has 12 states; release requires at least 64 before model gating"
+      ]
     },
     {
       "path": "neural/runs/v45-complete-turn/resolver-leaf-train-complete-paired-200.json",

@@ -57,12 +57,23 @@ def verify_digest(path: Path, expected: str) -> None:
 
 
 def validate_target_dataset(
-    dataset: dict[str, Any], expected_count: int, label: str
+    dataset: dict[str, Any],
+    expected_count: int,
+    label: str,
+    allowed_standalone_reasons: list[str] | None = None,
 ) -> None:
     if dataset.get("schema") != TARGET_SCHEMA:
         raise ValueError(f"{label} has an incompatible target schema")
-    if dataset.get("validation", {}).get("status") != "accepted":
-        raise ValueError(f"{label} source labels are rejected")
+    validation = dataset.get("validation", {})
+    allowed = allowed_standalone_reasons or []
+    if validation.get("status") == "accepted":
+        if validation.get("reasons", []):
+            raise ValueError(f"{label} has inconsistent accepted validation")
+    elif validation.get("status") == "rejected":
+        if validation.get("reasons") != allowed or not allowed:
+            raise ValueError(f"{label} source labels are rejected")
+    else:
+        raise ValueError(f"{label} has an invalid validation status")
     if len(dataset.get("targets", [])) != expected_count:
         raise ValueError(f"{label} target count differs from the frozen config")
 
@@ -163,7 +174,10 @@ def verify_datasets(config: dict[str, Any]) -> None:
         path = resolve(supplement["path"])
         verify_digest(path, supplement["sha256"])
         validate_target_dataset(
-            load_json(path), int(supplement["stateCount"]), f"supplement {path}"
+            load_json(path),
+            int(supplement["stateCount"]),
+            f"supplement {path}",
+            supplement.get("allowedStandaloneValidationReasons"),
         )
 
 
