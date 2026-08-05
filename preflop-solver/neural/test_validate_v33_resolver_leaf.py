@@ -5,7 +5,8 @@ from pathlib import Path
 import validate_v33_resolver_leaf as module
 
 
-def training_report(rmse, bands, *, supplemental=False):
+def training_report(rmse, bands, *, supplemental=False, seed_rmses=None):
+    seed_rmses = seed_rmses or (rmse, rmse)
     report = {
         "sourcePolicySha256": "a" * 64,
         "sourceValidation": {"status": "accepted", "reasons": []},
@@ -24,13 +25,16 @@ def training_report(rmse, bands, *, supplemental=False):
                     "weights": f"seed-{seed}.json",
                     "metrics": {
                         "bestTuningRmseBb": tuning,
+                        "weightedRmseBb": seed_rmse,
                         "potBandMetrics": {
                             band: {"weightedRmseBb": value}
                             for band, value in bands.items()
                         },
                     },
                 }
-                for seed, tuning in ((1, 0.2), (2, 0.3))
+                for (seed, tuning), seed_rmse in zip(
+                    ((1, 0.2), (2, 0.3)), seed_rmses, strict=True
+                )
             ]
         },
     }
@@ -224,6 +228,25 @@ class V33ResolverLeafTests(unittest.TestCase):
         self.assertFalse(report["gates"]["absoluteAuthenticHoldoutRmse"]["passed"])
         self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
         self.assertEqual(report["researchSelection"], "v31")
+
+    def test_absolute_authentic_gate_requires_every_seed(self):
+        candidate = training_report(
+            0.24,
+            {"small": 0.20, "medium": 0.24, "large": 0.30},
+            supplemental=True,
+            seed_rmses=(0.20, 0.28),
+        )
+        report = module.compose(
+            self.baseline,
+            candidate,
+            leaf_report(1.0),
+            leaf_report(0.8),
+            parity(),
+            maximum_authentic_rmse_bb=0.25,
+        )
+        gate = report["gates"]["absoluteAuthenticHoldoutRmse"]
+        self.assertFalse(gate["passed"])
+        self.assertEqual(gate["measured"]["maximumSeedRmseBb"], 0.28)
 
     def test_checked_candidate_remains_fail_closed_and_evaluation_is_disjoint(self):
         candidate = json.loads(

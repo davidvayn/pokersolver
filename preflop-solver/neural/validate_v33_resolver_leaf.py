@@ -180,11 +180,19 @@ def compose(
         ">=-5% matched authentic RMSE improvement",
     )
     if maximum_authentic_rmse_bb is not None:
+        seed_rmses = {
+            str(row["seed"]): float(row["metrics"]["weightedRmseBb"])
+            for row in range_variants(candidate)
+        }
+        maximum_seed_rmse = max(seed_rmses.values())
         gate(
             "absoluteAuthenticHoldoutRmse",
-            float(candidate["meanRangeRmseBb"]) <= maximum_authentic_rmse_bb,
-            candidate["meanRangeRmseBb"],
-            f"<={maximum_authentic_rmse_bb:.6f}bb paired mean RMSE",
+            maximum_seed_rmse <= maximum_authentic_rmse_bb,
+            {
+                "maximumSeedRmseBb": maximum_seed_rmse,
+                "seedRmseBb": seed_rmses,
+            },
+            f"every seed <={maximum_authentic_rmse_bb:.6f}bb RMSE",
         )
     for band in POT_BANDS:
         threshold = -0.10 if band == "small" else -0.05
