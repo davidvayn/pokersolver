@@ -1493,7 +1493,7 @@ def train_one(
     row_sampling_weights: np.ndarray,
     minimum_primary_batch_fraction: float,
     feature_schema: str,
-) -> tuple[SharedComboValueNetwork, np.ndarray, dict[str, Any]]:
+) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
     model = SharedComboValueNetwork(
@@ -1609,7 +1609,21 @@ def train_one(
     metrics["completedSteps"] = completed_steps
     metrics["tuningHistory"] = tuning_history
     metrics["potBandMetrics"] = pot_band_metrics(dataset, validation_rows, prediction)
-    return model, prediction, metrics
+    final_tuning_prediction = np.asarray(
+        model(
+            mx.array(contexts[tuning_rows]),
+            mx.array(queries[tuning_rows]),
+            mx.array(dataset.projection_weights[tuning_rows]),
+            mx.array(dataset.target_scales[tuning_rows]),
+        )
+    )
+    metrics["finalTuningMetrics"] = weighted_metrics(
+        dataset.targets[tuning_rows],
+        final_tuning_prediction,
+        dataset.weights[tuning_rows],
+        dataset.target_scales[tuning_rows],
+    )
+    return model, prediction, final_tuning_prediction, metrics
 
 
 def layer_payload(layer: nn.Linear, activation: str) -> dict[str, Any]:
@@ -1780,9 +1794,12 @@ def main() -> None:
     predictions: dict[str, list[np.ndarray]] = {
         variant: [] for variant, _ in variant_specs
     }
+    tuning_predictions: dict[str, list[np.ndarray]] = {
+        variant: [] for variant, _ in variant_specs
+    }
     for variant, use_ranges in variant_specs:
         for seed in seeds:
-            model, prediction, metrics = train_one(
+            model, prediction, tuning_prediction, metrics = train_one(
                 dataset,
                 contexts,
                 queries,
@@ -1822,6 +1839,7 @@ def main() -> None:
                 {"seed": seed, "metrics": metrics, "weights": model_path.name}
             )
             predictions[variant].append(prediction)
+            tuning_predictions[variant].append(tuning_prediction)
     validation_weights = dataset.weights[validation_rows]
     validation_scales = dataset.target_scales[validation_rows]
     cross_seed = {
@@ -1829,6 +1847,32 @@ def main() -> None:
             values[0], values[1], validation_weights, validation_scales
         )
         for variant, values in predictions.items()
+    }
+    tuning_cross_seed = {
+        variant: weighted_prediction_correlation(
+            values[0],
+            values[1],
+            dataset.weights[tuning_rows],
+            dataset.target_scales[tuning_rows],
+        )
+        for variant, values in tuning_predictions.items()
+    }
+    ensemble_metrics = {
+        variant: {
+            "tuning": weighted_metrics(
+                dataset.targets[tuning_rows],
+                np.mean(values, axis=0),
+                dataset.weights[tuning_rows],
+                dataset.target_scales[tuning_rows],
+            ),
+            "validation": weighted_metrics(
+                dataset.targets[validation_rows],
+                np.mean(predictions[variant], axis=0),
+                dataset.weights[validation_rows],
+                dataset.target_scales[validation_rows],
+            ),
+        }
+        for variant, values in tuning_predictions.items()
     }
     range_rmse = float(
         np.mean([entry["metrics"]["weightedRmseBb"] for entry in variants["range"]])
@@ -1956,6 +2000,8 @@ def main() -> None:
         "earlyStoppingPatience": args.early_stopping_patience,
         "variants": variants,
         "crossSeedPredictionCorrelation": cross_seed,
+        "tuningCrossSeedPredictionCorrelation": tuning_cross_seed,
+        "twoSeedOutputEnsembleMetrics": ensemble_metrics,
         "meanRangeRmseBb": range_rmse,
         "meanNoRangeRmseBb": no_range_rmse,
         "rangeRelativeImprovement": relative_improvement,
