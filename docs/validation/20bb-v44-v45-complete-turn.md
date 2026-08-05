@@ -150,8 +150,10 @@ alternating round. Player zero updates first, player one updates against that
 new strategy, and the average profile is accumulated between the updates with
 one DCFR discount clock per round. Both training and exact profile/best-response
 evaluation discard a river child for any private hand containing that observed
-river. A regression test constructs a fixed compatible private-hand pair and
-verifies exactly 44 contributed river outcomes.
+river. This follows the paired update/profile indexing formalized in
+[Burch, Moravčík, and Schmid (2019)](https://arxiv.org/abs/1810.11542). A
+regression test constructs a fixed compatible private-hand pair and verifies
+exactly 44 contributed river outcomes.
 
 A profiler also found that terminal folds and showdowns repeatedly enumerated
 every conflicting hand. Exact per-card range marginals and per-card strength

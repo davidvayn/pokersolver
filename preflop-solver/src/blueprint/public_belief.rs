@@ -3635,7 +3635,7 @@ impl TurnRiverSolver {
             method.push_str("_frozen_average_turn_river_refinement");
         }
         TurnRiverContinuationValues {
-            schema: "hu-turn-river-public-belief-continuation-values-v1".to_owned(),
+            schema: "hu-turn-river-public-belief-continuation-values-v2".to_owned(),
             method,
             joint_iterations: self.config.iterations,
             river_refinement_iterations: self.config.river_refinement_iterations,
@@ -3846,7 +3846,7 @@ impl TurnRiverSolver {
             method.push_str("_frozen_average_turn_river_refinement");
         }
         TurnRiverSolution {
-            schema: "hu-turn-river-public-belief-solution-v1".to_owned(),
+            schema: "hu-turn-river-public-belief-solution-v2".to_owned(),
             method,
             approximate: true,
             game: self.config.game,
@@ -5456,6 +5456,40 @@ mod tests {
     }
 
     #[test]
+    fn observed_turn_leaf_values_exclude_holdings_containing_the_turn() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut network = zero_value_network();
+        network.head[0].biases[..COMBO_COUNT].fill(0.1);
+        network.head[0].biases[COMBO_COUNT..].fill(-0.1);
+        let turn = 15;
+        let conflicts = combo_conflicts();
+        let (values, residual) = turn_leaf_card_values(
+            &network,
+            &conflicts,
+            &board,
+            0,
+            [1.0, 1.0],
+            &ranges,
+            turn,
+        )
+        .expect("turn is reachable");
+
+        for player_values in &values {
+            for combo in all_combos()
+                .into_iter()
+                .filter(|combo| combo.cards().contains(&turn))
+            {
+                assert_eq!(player_values[combo.key()], 0.0);
+            }
+        }
+        let compatible = Combo::new(1, 2).key();
+        assert!(values[0][compatible] > 0.0);
+        assert!(values[1][compatible] < 0.0);
+        assert!(residual < 1e-10, "zero-sum residual was {residual}");
+    }
+
+    #[test]
     fn epsilon_sampling_strategy_explores_without_changing_probability_mass() {
         let mixed = epsilon_sampling_strategy(&[1.0, 0.0, 0.0, 0.0], 0.2);
         for (measured, expected) in mixed.iter().zip([0.85, 0.05, 0.05, 0.05]) {
@@ -5672,6 +5706,11 @@ mod tests {
             solution.opponent_compatible_mass
         );
         assert_eq!(values.metrics, solution.metrics);
+        assert_eq!(
+            values.schema,
+            "hu-turn-river-public-belief-continuation-values-v2"
+        );
+        assert_eq!(solution.schema, "hu-turn-river-public-belief-solution-v2");
         assert_eq!(solution.metrics.exact_river_cards, 48);
         assert!(solution.metrics.turn_information_sets > 0);
         assert!(solution.metrics.river_information_sets > 0);
