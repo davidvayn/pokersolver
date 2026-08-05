@@ -572,6 +572,10 @@ fn run_turn_pbs_upgrade_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
                 serde_json::from_slice(&fs::read(&path)?)?;
             if cached.input_sha256.as_deref() != Some(fingerprint.as_str())
                 || cached.state_id != source.state_id
+                || cached.board != source.board
+                || cached.actor != source.actor
+                || cached.invested_bb != source.invested_bb
+                || cached.ranges != source.ranges
                 || cached.turn_river_exploitability_bb_per_hand.is_none()
                 || cached
                     .current_turn_river_exploitability_bb_per_hand
@@ -644,6 +648,18 @@ fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
             || target.board != source.board
             || target.actor != source.actor
             || target.invested_bb != source.invested_bb
+            || target.ranges != source.ranges
+            || target.range_particles != source.range_particles
+            || target.range_replicates != source.range_replicates
+            || target.range_effective_sample_size != source.range_effective_sample_size
+            || target.belief_method != source.belief_method
+            || target.range_maximum_total_variation != source.range_maximum_total_variation
+            || target.off_policy_explorer != source.off_policy_explorer
+            || target.sampling_exploration_probability != source.sampling_exploration_probability
+            || target.public_action_line != source.public_action_line
+            || target.resolver_root_board != source.resolver_root_board
+            || target.resolver_public_history != source.resolver_public_history
+            || target.resolver_leaf_reach_probability != source.resolver_leaf_reach_probability
             || target.turn_river_exploitability_bb_per_hand.is_none()
             || target
                 .current_turn_river_exploitability_bb_per_hand
