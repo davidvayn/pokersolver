@@ -514,6 +514,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def verify_source_hashes(inputs: list[tuple[Path, str]]) -> None:
+    """Fail closed if a target corpus changes while a long training job runs."""
+    changed = [str(path) for path, expected in inputs if sha256_file(path) != expected]
+    if changed:
+        raise RuntimeError(
+            "training source changed after it was loaded: " + ", ".join(changed)
+        )
+
+
 def suit_permutations(count: int) -> list[tuple[int, int, int, int]]:
     permutations = list(itertools.permutations(range(4)))
     return permutations if count == 24 else [permutations[0]]
@@ -623,7 +632,12 @@ def load_dataset(
     suit_augmentation_count: int = 1,
     value_normalization: str = "depth",
 ) -> Dataset:
-    raw = json.loads(path.read_text())
+    # Hash and parse the same immutable byte snapshot. Hashing the path after
+    # parsing would permit a rewrite between the two reads and could stamp a
+    # model with the digest of labels it did not train on.
+    payload = path.read_bytes()
+    raw = json.loads(payload)
+    source_sha256 = hashlib.sha256(payload).hexdigest()
     if raw.get("schema") not in {
         LEGACY_TARGET_SCHEMA,
         COMPLETE_TURN_TARGET_SCHEMA,
@@ -697,7 +711,7 @@ def load_dataset(
         projection_weights=projection_weights,
         groups=np.asarray(groups, dtype=np.int32),
         source=raw,
-        source_sha256=sha256_file(path),
+        source_sha256=source_sha256,
     )
 
 
@@ -1669,6 +1683,15 @@ def main() -> None:
         load_dataset(path, args.suit_augmentations, args.value_normalization)
         for path in args.supplemental_dataset
     ]
+    source_inputs = list(
+        zip(
+            [args.dataset, *args.supplemental_dataset],
+            [
+                primary_dataset.source_sha256,
+                *(dataset.source_sha256 for dataset in supplemental_datasets),
+            ],
+        )
+    )
     dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
     source_dataset_schema = str(dataset.source.get("schema", ""))
     source_release_reasons = complete_turn_release_reasons(dataset.source)
@@ -1751,6 +1774,7 @@ def main() -> None:
                 args.feature_schema,
             )
             model_path = args.output_dir / f"turn-value-{variant}-seed{seed}.json"
+            verify_source_hashes(source_inputs)
             export_model(
                 model,
                 model_path,
@@ -1909,6 +1933,7 @@ def main() -> None:
             "reasons": reasons,
         },
     }
+    verify_source_hashes(source_inputs)
     report_path = args.output_dir / "turn-value-paired-report.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report, indent=2, sort_keys=True))

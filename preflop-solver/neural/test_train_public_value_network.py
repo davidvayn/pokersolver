@@ -170,6 +170,16 @@ class PublicValueNetworkTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "board-blocked"):
                     module.load_dataset(path)
 
+    def test_source_hash_verification_rejects_rewritten_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "targets.json"
+            path.write_text('{"version":1}')
+            expected = module.sha256_file(path)
+            module.verify_source_hashes([(path, expected)])
+            path.write_text('{"version":2}')
+            with self.assertRaisesRegex(RuntimeError, "source changed"):
+                module.verify_source_hashes([(path, expected)])
+
     def test_hand_class_encoding_has_exactly_169_classes(self) -> None:
         self.assertEqual(set(module.HAND_CLASS_IDS), set(range(169)))
 
