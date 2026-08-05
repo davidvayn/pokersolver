@@ -67,6 +67,14 @@ processes. This changes feature-construction throughput only; state order,
 features, targets, and model seeds remain pinned. Serial/parallel equality is
 covered by a regression test.
 
+Rust serving now accepts feature schemas v2 and v3. It computes v3 runout
+equity from a blocker-exact, board-keyed `u8` equity-unit matrix, so repeated
+range queries reuse the expensive public-card calculation without storing a
+full floating-point matrix. Three matched authentic states, including two
+large-pot states, had maximum Python/Rust prediction error
+`0.00000449328bb`, below the `0.0001bb` parity gate. A cold one-state CLI
+prediction took 0.12 seconds; resolver calls reuse the cached matrix.
+
 ## Decision
 
 Both pilots are rejected by the `0.25bb` paired authentic holdout ceiling.
@@ -75,3 +83,5 @@ the dominant blocker. The next experiment adds an independent 64-state
 large-pot off-policy training corpus while preserving the v39 validation set.
 No resolver audit or model activation is permitted before the upstream gate
 passes for both seeds.
+
+All 100 Python tests, 72 Rust release tests, and three Rust CLI tests passed.

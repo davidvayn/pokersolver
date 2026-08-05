@@ -21,17 +21,37 @@ pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
 const SHARED_CONTEXT_PUBLIC_COUNT: usize = 21;
 const SHARED_CONTEXT_COUNT: usize = 359;
+const SHARED_CONTEXT_BOARD_RELATIVE_COUNT: usize = 417;
 const SHARED_QUERY_STRUCTURAL_COUNT: usize = 76;
 const SHARED_QUERY_COUNT: usize = 95;
+const SHARED_QUERY_BOARD_RELATIVE_COUNT: usize = 124;
+const SHARED_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-query-v1";
+const SHARED_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-query-v2";
+const SHARED_FEATURE_SCHEMA_V3: &str = "rank-suit-invariant-combo-query-v3";
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
+const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
 const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARDS * 49;
 
 type DenseAllInEquityCell = Arc<OnceLock<Arc<Vec<f32>>>>;
+type DenseTurnEquityCell = Arc<OnceLock<Arc<Vec<u8>>>>;
 
 static DENSE_ALL_IN_EQUITY_CACHE: LazyLock<Mutex<BTreeMap<[u8; 3], DenseAllInEquityCell>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static DENSE_TURN_EQUITY_CACHE: LazyLock<Mutex<BTreeMap<[u8; 4], DenseTurnEquityCell>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+fn shared_feature_sizes(schema: &str) -> Option<(usize, usize)> {
+    match schema {
+        SHARED_FEATURE_SCHEMA_V1 => Some((SHARED_CONTEXT_COUNT, SHARED_QUERY_COUNT)),
+        SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3 => Some((
+            SHARED_CONTEXT_BOARD_RELATIVE_COUNT,
+            SHARED_QUERY_BOARD_RELATIVE_COUNT,
+        )),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PublicBeliefState {
@@ -447,11 +467,25 @@ impl PublicValueNetwork {
             }
             "hu-public-belief-combo-value-network-v3"
             | "hu-public-belief-combo-value-network-v4" => {
-                if self.feature_schema.as_deref() != Some("rank-suit-invariant-combo-query-v1")
-                    || self.context_public_count != SHARED_CONTEXT_PUBLIC_COUNT
-                    || self.context_size != SHARED_CONTEXT_COUNT
+                let Some((expected_context_size, expected_query_size)) = self
+                    .feature_schema
+                    .as_deref()
+                    .and_then(shared_feature_sizes)
+                else {
+                    return Err(
+                        "shared-combo public value network feature schema is incompatible"
+                            .to_owned(),
+                    );
+                };
+                if self.schema == "hu-public-belief-combo-value-network-v3"
+                    && self.feature_schema.as_deref() != Some(SHARED_FEATURE_SCHEMA_V1)
+                {
+                    return Err("legacy shared-combo v3 requires feature schema v1".to_owned());
+                }
+                if self.context_public_count != SHARED_CONTEXT_PUBLIC_COUNT
+                    || self.context_size != expected_context_size
                     || self.query_structural_count != SHARED_QUERY_STRUCTURAL_COUNT
-                    || self.query_size != SHARED_QUERY_COUNT
+                    || self.query_size != expected_query_size
                     || self.context_tower.is_empty()
                     || self.query_tower.is_empty()
                 {
@@ -472,11 +506,11 @@ impl PublicValueNetwork {
                 {
                     return Err("shared-combo v4 value normalization is invalid".to_owned());
                 }
-                let mut context_size = SHARED_CONTEXT_COUNT;
+                let mut context_size = expected_context_size;
                 for layer in &self.context_tower {
                     context_size = layer.validate(context_size)?;
                 }
-                let mut query_size = SHARED_QUERY_COUNT;
+                let mut query_size = expected_query_size;
                 for layer in &self.query_tower {
                     query_size = layer.validate(query_size)?;
                 }
@@ -570,6 +604,9 @@ impl PublicValueNetwork {
             ranges,
             &conflicts,
             self.target_scale_bb,
+            self.feature_schema
+                .as_deref()
+                .expect("validated shared feature schema"),
         );
         if !self.uses_exact_ranges {
             for context in &mut contexts {
@@ -811,6 +848,7 @@ fn shared_combo_features(
     ranges: &[Vec<f64>; 2],
     conflicts: &[Vec<usize>],
     depth_bb: f64,
+    feature_schema: &str,
 ) -> (SharedContexts, SharedQueries) {
     let combos = all_combos();
     let board_features = board_query_features(board);
@@ -842,10 +880,40 @@ fn shared_combo_features(
             class_mass[player][hand_class_index(first, second)] += weight;
         }
     }
+    let uses_board_relative = matches!(
+        feature_schema,
+        SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3
+    );
+    let mut board_relative_features = vec![[0.0f64; 29]; COMBO_COUNT];
+    let mut board_relative_totals = [[0.0f64; 29]; 2];
+    if uses_board_relative {
+        for combo in &combos {
+            let key = combo.key();
+            let source = &board_features.queries[key];
+            for feature in 0..9 {
+                board_relative_features[key][feature] = source[56 + feature] as f64;
+            }
+            for feature in 0..10 {
+                board_relative_features[key][9 + feature] = source[66 + feature] as f64;
+            }
+            let strength_bin = ((source[65] * 10.0) as usize).min(9);
+            board_relative_features[key][19 + strength_bin] = 1.0;
+            for player in 0..2 {
+                for feature in 0..29 {
+                    board_relative_totals[player][feature] +=
+                        ranges[player][key] * board_relative_features[key][feature];
+                }
+            }
+        }
+    }
     let immediate_equity = [
         current_range_equity(&board_features.strengths, &ranges[1], conflicts),
         current_range_equity(&board_features.strengths, &ranges[0], conflicts),
     ];
+    let exact_runout_equity = (feature_schema == SHARED_FEATURE_SCHEMA_V3)
+        .then(|| exact_turn_range_equities(board, ranges, conflicts));
+    let (context_count, query_count) =
+        shared_feature_sizes(feature_schema).expect("validated shared feature schema");
     let mut contexts: SharedContexts = std::array::from_fn(|_| Vec::new());
     let mut queries: SharedQueries = std::array::from_fn(|_| Vec::with_capacity(COMBO_COUNT));
     let range_totals = [ranges[0].iter().sum::<f64>(), ranges[1].iter().sum::<f64>()];
@@ -869,7 +937,41 @@ fn shared_combo_features(
                 .iter()
                 .map(|value| scaled_log_feature(*value, HAND_CLASS_COUNT as f64)),
         );
-        debug_assert_eq!(context.len(), SHARED_CONTEXT_COUNT);
+        if uses_board_relative {
+            let own_total = range_totals[player].max(EPSILON);
+            let opponent_total = range_totals[opponent].max(EPSILON);
+            context.extend(
+                board_relative_totals[player][..9]
+                    .iter()
+                    .map(|value| (value / own_total) as f32),
+            );
+            context.extend(
+                board_relative_totals[opponent][..9]
+                    .iter()
+                    .map(|value| (value / opponent_total) as f32),
+            );
+            context.extend(
+                board_relative_totals[player][19..]
+                    .iter()
+                    .map(|value| (value / own_total) as f32),
+            );
+            context.extend(
+                board_relative_totals[opponent][19..]
+                    .iter()
+                    .map(|value| (value / opponent_total) as f32),
+            );
+            context.extend(
+                board_relative_totals[player][9..19]
+                    .iter()
+                    .map(|value| (value / own_total) as f32),
+            );
+            context.extend(
+                board_relative_totals[opponent][9..19]
+                    .iter()
+                    .map(|value| (value / opponent_total) as f32),
+            );
+        }
+        debug_assert_eq!(context.len(), context_count);
         for combo in &combos {
             let [first, second] = combo.cards();
             let first_rank = first >> 2;
@@ -883,7 +985,7 @@ fn shared_combo_features(
             let high_rank = (high >> 2) as usize;
             let low_rank = (low >> 2) as usize;
             let mut query = board_features.queries[combo.key()].clone();
-            query.resize(SHARED_QUERY_COUNT, 0.0);
+            query.resize(query_count, 0.0);
             let key = combo.key();
             query[76] = scaled_log_feature(ranges[player][key], COMBO_COUNT as f64);
             query[77] = scaled_log_feature(ranges[opponent][key], COMBO_COUNT as f64);
@@ -954,7 +1056,26 @@ fn shared_combo_features(
             }
             query[92] = range_totals[player] as f32;
             query[93] = range_totals[opponent] as f32;
-            query[94] = immediate_equity[player][key];
+            query[94] = exact_runout_equity
+                .as_ref()
+                .map_or(immediate_equity[player][key], |values| values[player][key]);
+            if uses_board_relative {
+                let compatible = compatible_mass_from_conflicts(&ranges[opponent], conflicts, key);
+                for feature in 0..29 {
+                    let blocked = conflicts[key]
+                        .iter()
+                        .map(|other| {
+                            ranges[opponent][*other] * board_relative_features[*other][feature]
+                        })
+                        .sum::<f64>();
+                    query[SHARED_QUERY_COUNT + feature] = if compatible > EPSILON {
+                        ((board_relative_totals[opponent][feature] - blocked) / compatible)
+                            .clamp(0.0, 1.0) as f32
+                    } else {
+                        0.0
+                    };
+                }
+            }
             queries[player].push(query);
         }
     }
@@ -1012,6 +1133,95 @@ fn current_range_equity(
             }
         })
         .collect()
+}
+
+fn exact_turn_range_equities(
+    board: &[u8],
+    ranges: &[Vec<f64>; 2],
+    conflicts: &[Vec<usize>],
+) -> [Vec<f32>; 2] {
+    assert_eq!(
+        board.len(),
+        4,
+        "exact turn equity requires four board cards"
+    );
+    let mut key: [u8; 4] = board.try_into().expect("validated turn board");
+    key.sort_unstable();
+    let cell = {
+        let mut cache = DENSE_TURN_EQUITY_CACHE
+            .lock()
+            .expect("dense turn equity cache poisoned");
+        if !cache.contains_key(&key) && cache.len() >= DENSE_TURN_EQUITY_CACHE_BOARDS {
+            let oldest = *cache.keys().next().expect("non-empty turn equity cache");
+            cache.remove(&oldest);
+        }
+        cache
+            .entry(key)
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone()
+    };
+    let matrix = cell
+        .get_or_init(|| compute_exact_turn_equity_units(key))
+        .clone();
+    std::array::from_fn(|player| {
+        (0..COMBO_COUNT)
+            .map(|own| {
+                let compatible =
+                    compatible_mass_from_conflicts(&ranges[1 - player], conflicts, own);
+                if compatible > EPSILON {
+                    let row = own * COMBO_COUNT;
+                    let numerator = ranges[1 - player]
+                        .iter()
+                        .enumerate()
+                        .map(|(opponent, weight)| weight * f64::from(matrix[row + opponent]) / 88.0)
+                        .sum::<f64>();
+                    (numerator / compatible).clamp(0.0, 1.0) as f32
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    })
+}
+
+fn compute_exact_turn_equity_units(board: [u8; 4]) -> Arc<Vec<u8>> {
+    let combos = all_combos();
+    let legal = combos
+        .iter()
+        .map(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+        .collect::<Vec<_>>();
+    let mut counts = vec![0u8; COMBO_COUNT * COMBO_COUNT];
+    for river in 0..52u8 {
+        if board.contains(&river) {
+            continue;
+        }
+        let ranked = combos
+            .iter()
+            .enumerate()
+            .filter_map(|(key, combo)| {
+                let cards = combo.cards();
+                (legal[key] && !cards.contains(&river)).then_some((
+                    key,
+                    *combo,
+                    evaluate(&[
+                        board[0], board[1], board[2], board[3], river, cards[0], cards[1],
+                    ]),
+                ))
+            })
+            .collect::<Vec<_>>();
+        for left_index in 0..ranked.len() {
+            let (left_key, left_combo, left_score) = ranked[left_index];
+            for &(right_key, right_combo, right_score) in &ranked[left_index + 1..] {
+                if left_combo.overlaps(right_combo) {
+                    continue;
+                }
+                let units = equity_units(left_score, right_score) as u8;
+                counts[left_key * COMBO_COUNT + right_key] += units;
+                counts[right_key * COMBO_COUNT + left_key] += 2 - units;
+            }
+        }
+    }
+    Arc::new(counts)
 }
 
 fn hand_class_index(first: u8, second: u8) -> usize {
@@ -4094,16 +4304,6 @@ mod tests {
             }
         }
         let conflicts = combo_conflicts();
-        let (contexts, queries) =
-            shared_combo_features(&board, 1, [3.0, 4.0], &ranges, &conflicts, 20.0);
-        let (permuted_contexts, permuted_queries) = shared_combo_features(
-            &permuted_board,
-            1,
-            [3.0, 4.0],
-            &permuted_ranges,
-            &conflicts,
-            20.0,
-        );
         let board_queries = board_query_features(&board);
         let permuted_board_queries = board_query_features(&permuted_board);
         for combo in 0..COMBO_COUNT {
@@ -4114,16 +4314,39 @@ mod tests {
                 assert!((left - right).abs() < 1e-6);
             }
         }
-        for player in 0..2 {
-            for (left, right) in contexts[player].iter().zip(&permuted_contexts[player]) {
-                assert!((left - right).abs() < 1e-6);
-            }
-            for combo in 0..COMBO_COUNT {
-                for (left, right) in queries[player][combo]
-                    .iter()
-                    .zip(&permuted_queries[player][mapping[combo]])
-                {
+        for schema in [
+            SHARED_FEATURE_SCHEMA_V1,
+            SHARED_FEATURE_SCHEMA_V2,
+            SHARED_FEATURE_SCHEMA_V3,
+        ] {
+            let (contexts, queries) =
+                shared_combo_features(&board, 1, [3.0, 4.0], &ranges, &conflicts, 20.0, schema);
+            let (permuted_contexts, permuted_queries) = shared_combo_features(
+                &permuted_board,
+                1,
+                [3.0, 4.0],
+                &permuted_ranges,
+                &conflicts,
+                20.0,
+                schema,
+            );
+            let (context_size, query_size) = shared_feature_sizes(schema).unwrap();
+            assert!(contexts.iter().all(|context| context.len() == context_size));
+            assert!(queries
+                .iter()
+                .flatten()
+                .all(|query| query.len() == query_size));
+            for player in 0..2 {
+                for (left, right) in contexts[player].iter().zip(&permuted_contexts[player]) {
                     assert!((left - right).abs() < 1e-6);
+                }
+                for combo in 0..COMBO_COUNT {
+                    for (left, right) in queries[player][combo]
+                        .iter()
+                        .zip(&permuted_queries[player][mapping[combo]])
+                    {
+                        assert!((left - right).abs() < 1e-6);
+                    }
                 }
             }
         }
