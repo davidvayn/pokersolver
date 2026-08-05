@@ -212,6 +212,66 @@ function approximation/coverage, not seed instability or serialization drift.
 Additional corrected coverage and resolver-leaf training supplements are being
 evaluated without adding the disjoint resolver-leaf evaluation set to training.
 
+## Tuning-only optimization controls
+
+The original 64-state validation partition has now been viewed across several
+research configurations. It remains useful as a regression diagnostic, but it
+is no longer valid untouched evidence for choosing hyperparameters. Every
+subsequent configuration comparison therefore uses only the identical
+39-state, pot-stratified tuning partition. A separate selector rejects
+mismatched data or split membership, requires two restored best checkpoints
+and tuning cross-seed correlation of at least `0.95`, and ranks candidates by
+worst-seed then mean-seed tuning RMSE. It never reads validation RMSE.
+
+| Controlled configuration | Seed tuning RMSE | Worst seed | Mean |
+| --- | ---: | ---: | ---: |
+| Deep GELU, 7k, 50% primary, raw weight 0.25 | 0.282668 / 0.283618 | 0.283618 | 0.283143 |
+| Deep GELU, raw weight 1.0 | 0.278360 / 0.292688 | 0.292688 | 0.285524 |
+| Deep GELU, 25% primary replay | 0.314755 / 0.317268 | 0.317268 | 0.316012 |
+| Xwide GELU, 7k | 0.282224 / 0.281680 | **0.282224** | 0.281952 |
+| Deep GELU, constant-rate 14k | 0.302379 / 0.253680 | 0.302379 | **0.278030** |
+| Deep GELU, cosine 14k | 0.303846 / 0.283181 | 0.303846 | 0.293514 |
+| Deep GELU, cosine 14k, Adam bias correction | 0.316540 / 0.310415 | 0.316540 | 0.313477 |
+| Xwide GELU, 7k, batch 24 | 0.256185 / 0.256307 | **0.256307** | **0.256246** |
+| Xwide GELU, 10k, batch 24 | 0.251365 / 0.237825 | **0.251365** | **0.244595** |
+
+The 14k constant-rate result proves that additional optimization can help one
+seed, but its large cross-seed spread makes it unsafe. Cosine decay did not
+stabilize the result. Standard Adam moment bias correction made the two seeds
+more alike while making both worse, so it is not the retained optimizer.
+Increasing xwide's pot-balanced batch from 12 to 24 reduced worst-seed tuning
+RMSE by `0.025917bb` and produced nearly identical paired results. Its
+two-output ensemble measured `0.249346bb` tuning RMSE, but this is a variance
+diagnostic only; it does not replace the requirement that both independent
+release seeds pass. Because both individual checkpoints selected the end of
+the 7k budget, the exact winning configuration received one predeclared 10k
+continuation check. Its `0.251365bb` worst-seed tuning RMSE beat the 7k result
+by `0.004942bb`; tuning cross-seed correlation was `0.999538`, and its
+diagnostic ensemble tuning RMSE was `0.239032bb`. The selector therefore froze
+xwide GELU, 10k steps, batch 24, constant `0.0003` learning rate, no Adam bias
+correction, and 50% authentic-primary replay. The old viewed holdout remained
+rejected at a maximum `0.302288bb` and did not participate in that choice.
+
+The frozen configuration is tracked in
+`preflop-solver/neural/20bb-v46-value-config.json`. It pins the selector and
+report hashes, every training-only supplement hash, the untouched shard
+boundary, split parameters, and new release seeds `14721` and `14722`. Exact
+tuning ties are resolved from configuration and training-seed data only;
+changing holdout metric values cannot change the selected configuration.
+
+Deterministic schema-v3 feature construction is now content-addressed by the
+combined corpus digest, feature schema, implementation version, row count, and
+group count. The 414-state cache contains a 1.3MB context tensor and a 519MB
+query tensor. Both arrays are SHA-256 verified before use and loaded as
+read-only memory maps. This cut repeat-run preprocessing from minutes to
+seconds without changing any feature, target, split, or strategy gate.
+
+An independent 512-state authentic corpus is being generated in eight
+resumable shards. Shards 6 and 7 (merged indices 384--511) are reserved in
+advance as the 128-state final holdout. Candidate hyperparameters will be
+frozen before that holdout is evaluated. Its target values have not been used
+for any model or hyperparameter choice.
+
 The remaining sequence is corrected value-network selection, disjoint leaf and
 matched-resolver selection, continuation-cache and preflop DCFR regeneration,
 action-EV uncertainty measurement, learned-response red teaming, and an

@@ -509,6 +509,9 @@ def parse_args() -> argparse.Namespace:
         "--minimum-range-relative-improvement", type=float, default=0.02
     )
     parser.add_argument("--minimum-cross-seed-correlation", type=float, default=0.95)
+    parser.add_argument(
+        "--minimum-tuning-cross-seed-correlation", type=float, default=0.95
+    )
     parser.add_argument("--suit-augmentations", type=int, choices=(1, 24), default=1)
     parser.add_argument(
         "--architecture",
@@ -1868,6 +1871,8 @@ def main() -> None:
         or args.feature_workers <= 0
         or not 0.0 < args.supplemental_sampling_weight <= 1.0
         or not 0.0 <= args.minimum_primary_batch_fraction <= 1.0
+        or not -1.0 <= args.minimum_cross_seed_correlation <= 1.0
+        or not -1.0 <= args.minimum_tuning_cross_seed_correlation <= 1.0
     ):
         raise ValueError("early-stopping and robust-loss settings are invalid")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -2068,6 +2073,14 @@ def main() -> None:
         reasons.append(
             f"range-network cross-seed prediction correlation {cross_seed['range']:.6f} is below {args.minimum_cross_seed_correlation:.6f}"
         )
+    if (
+        not np.isfinite(tuning_cross_seed["range"])
+        or tuning_cross_seed["range"]
+        < args.minimum_tuning_cross_seed_correlation
+    ):
+        reasons.append(
+            f"range-network tuning cross-seed prediction correlation {tuning_cross_seed['range']:.6f} is below {args.minimum_tuning_cross_seed_correlation:.6f}"
+        )
     report = {
         "schema": SCHEMA,
         "networkSchema": NETWORK_SCHEMA,
@@ -2161,6 +2174,10 @@ def main() -> None:
         "variants": variants,
         "crossSeedPredictionCorrelation": cross_seed,
         "tuningCrossSeedPredictionCorrelation": tuning_cross_seed,
+        "minimumCrossSeedPredictionCorrelation": args.minimum_cross_seed_correlation,
+        "minimumTuningCrossSeedPredictionCorrelation": (
+            args.minimum_tuning_cross_seed_correlation
+        ),
         "twoSeedOutputEnsembleMetrics": ensemble_metrics,
         "meanRangeRmseBb": range_rmse,
         "meanNoRangeRmseBb": no_range_rmse,
