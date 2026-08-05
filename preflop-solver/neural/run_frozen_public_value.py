@@ -14,6 +14,7 @@ from typing import Any
 
 SCHEMA = "hu-public-value-frozen-training-config-v1"
 TARGET_SCHEMA = "hu-turn-public-belief-cfv-dataset-v2"
+REPORT_SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 SOLVER_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -246,6 +247,78 @@ def trainer_command(config: dict[str, Any]) -> list[str]:
     return command
 
 
+def verify_output_report(config: dict[str, Any]) -> dict[str, Any]:
+    primary = config["primaryDataset"]
+    trainer = config["trainer"]
+    gates = config["valueReleaseGates"]
+    output = resolve(trainer["outputDirectory"])
+    report_path = output / "turn-value-paired-report.json"
+    report = load_json(report_path)
+    if report.get("schema") != REPORT_SCHEMA:
+        raise ValueError("frozen training report schema is incompatible")
+    expected_components = [
+        sha256_file(resolve(primary["path"])),
+        *(entry["sha256"] for entry in config["trainingOnlySupplements"]),
+    ]
+    if report.get("componentDatasetSha256") != expected_components:
+        raise ValueError("frozen training report used different corpus bytes")
+    if report.get("sourceValidation", {}).get("status") != gates["sourceValidationStatus"]:
+        raise ValueError("frozen training report source labels are rejected")
+    if report.get("primaryStates") != primary["expectedStateCount"]:
+        raise ValueError("frozen training report has the wrong primary state count")
+    if report.get("holdoutStartIndex") != primary["holdoutStartIndex"]:
+        raise ValueError("frozen training report has the wrong holdout boundary")
+    expected_holdout = list(
+        range(primary["holdoutStartIndex"], primary["expectedStateCount"])
+    )
+    if report.get("validationStates") != expected_holdout:
+        raise ValueError("frozen training report did not evaluate the reserved holdout")
+    if report.get("splitSeed") != trainer["splitSeed"]:
+        raise ValueError("frozen training report used the wrong split seed")
+    variants = report.get("variants", {}).get("range", [])
+    if [entry.get("seed") for entry in variants] != trainer["trainingSeeds"]:
+        raise ValueError("frozen training report used different release seeds")
+    holdout_rmse = [
+        float(entry.get("metrics", {}).get("weightedRmseBb", float("nan")))
+        for entry in variants
+    ]
+    if (
+        len(holdout_rmse) != 2
+        or any(not value <= gates["maximumPerSeedHoldoutRmseBb"] for value in holdout_rmse)
+    ):
+        raise ValueError("frozen training report failed the per-seed holdout RMSE gate")
+    holdout_correlation = float(
+        report.get("crossSeedPredictionCorrelation", {}).get("range", float("nan"))
+    )
+    tuning_correlation = float(
+        report.get("tuningCrossSeedPredictionCorrelation", {}).get(
+            "range", float("nan")
+        )
+    )
+    if not holdout_correlation >= gates["minimumHoldoutCrossSeedPredictionCorrelation"]:
+        raise ValueError("frozen training report failed holdout cross-seed agreement")
+    if not tuning_correlation >= gates["minimumTuningCrossSeedPredictionCorrelation"]:
+        raise ValueError("frozen training report failed tuning cross-seed agreement")
+    if report.get("validation", {}).get("status") != "accepted":
+        raise ValueError("frozen training report is rejected")
+
+    weights = []
+    for entry in variants:
+        path = output / entry["weights"]
+        weights.append(
+            {"seed": entry["seed"], "path": str(path), "sha256": sha256_file(path)}
+        )
+    return {
+        "status": "accepted",
+        "report": str(report_path),
+        "reportSha256": sha256_file(report_path),
+        "holdoutRmseBb": holdout_rmse,
+        "holdoutCrossSeedPredictionCorrelation": holdout_correlation,
+        "tuningCrossSeedPredictionCorrelation": tuning_correlation,
+        "weights": weights,
+    }
+
+
 def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
     config = load_json(config_path)
     if config.get("schema") != SCHEMA:
@@ -270,12 +343,20 @@ def verify_config(config_path: Path) -> tuple[dict[str, Any], list[str]]:
 def main() -> None:
     args = parse_args()
     try:
-        _, command = verify_config(args.config)
-    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as error:
+        config, command = verify_config(args.config)
+        print(json.dumps({"cwd": str(SOLVER_ROOT), "command": command}, indent=2))
+        if not args.dry_run:
+            subprocess.run(command, cwd=SOLVER_ROOT, check=True)
+            print(json.dumps(verify_output_report(config), indent=2, sort_keys=True))
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as error:
         raise SystemExit(f"error: {error}") from error
-    print(json.dumps({"cwd": str(SOLVER_ROOT), "command": command}, indent=2))
-    if not args.dry_run:
-        subprocess.run(command, cwd=SOLVER_ROOT, check=True)
 
 
 if __name__ == "__main__":

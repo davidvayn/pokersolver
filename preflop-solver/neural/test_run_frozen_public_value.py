@@ -1,6 +1,8 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import run_frozen_public_value as module
 
@@ -42,6 +44,7 @@ class FrozenPublicValueRunTests(unittest.TestCase):
                 "rawBbAuxiliaryWeight": 0.25,
             },
             "valueReleaseGates": {
+                "sourceValidationStatus": "accepted",
                 "maximumPerSeedHoldoutRmseBb": 0.25,
                 "minimumHoldoutCrossSeedPredictionCorrelation": 0.95,
                 "minimumTuningCrossSeedPredictionCorrelation": 0.95,
@@ -86,6 +89,60 @@ class FrozenPublicValueRunTests(unittest.TestCase):
             missing = Path(directory) / "missing.json"
             with self.assertRaisesRegex(ValueError, "missing"):
                 module.load_json(missing)
+
+    def test_output_report_requires_both_seed_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "output").mkdir()
+            (root / "primary.json").write_text("{}")
+            (root / "old.json").write_text("{}")
+            config = self.config()
+            config["primaryDataset"]["expectedStateCount"] = 4
+            config["primaryDataset"]["holdoutStartIndex"] = 2
+            config["trainingOnlySupplements"] = [
+                {
+                    "path": "old.json",
+                    "sha256": module.sha256_file(root / "old.json"),
+                }
+            ]
+            for seed in (14721, 14722):
+                (root / "output" / f"seed-{seed}.json").write_text("{}")
+            report = {
+                "schema": module.REPORT_SCHEMA,
+                "componentDatasetSha256": [
+                    module.sha256_file(root / "primary.json"),
+                    module.sha256_file(root / "old.json"),
+                ],
+                "sourceValidation": {"status": "accepted"},
+                "primaryStates": 4,
+                "holdoutStartIndex": 2,
+                "validationStates": [2, 3],
+                "splitSeed": 10901,
+                "variants": {
+                    "range": [
+                        {
+                            "seed": seed,
+                            "weights": f"seed-{seed}.json",
+                            "metrics": {"weightedRmseBb": 0.2},
+                        }
+                        for seed in (14721, 14722)
+                    ]
+                },
+                "crossSeedPredictionCorrelation": {"range": 0.99},
+                "tuningCrossSeedPredictionCorrelation": {"range": 0.98},
+                "validation": {"status": "accepted"},
+            }
+            report_path = root / "output" / "turn-value-paired-report.json"
+            report_path.write_text(json.dumps(report))
+            with mock.patch.object(module, "SOLVER_ROOT", root):
+                result = module.verify_output_report(config)
+                self.assertEqual(result["status"], "accepted")
+                report["variants"]["range"][1]["metrics"][
+                    "weightedRmseBb"
+                ] = 0.251
+                report_path.write_text(json.dumps(report))
+                with self.assertRaisesRegex(ValueError, "RMSE"):
+                    module.verify_output_report(config)
 
 
 if __name__ == "__main__":
