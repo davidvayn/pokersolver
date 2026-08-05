@@ -94,10 +94,22 @@ are clamped to zero only when composing the exploitability lower-bound point
 estimate; they are retained verbatim in the report and are never treated as
 GTO evidence.
 
-The next learned-response design must add a calibration corpus between response
-training and final evaluation. It should either validate a whole frozen
-response hierarchy or confirm individual candidate deviations with
-multiple-selection control. Until then:
+The evaluator now adds a third, disjoint calibration phase between response
+training and final evaluation. A player's whole frozen response is deployed
+only when its calibration gain has a strictly positive finite one-sided 99.5%
+lower bound. Otherwise final evaluation uses the frozen baseline policy, keeps
+the failed calibration evidence, and claims exactly zero gain.
+
+A fresh 2,000-training/2,000-calibration/2,000-evaluation exact-only smoke on
+root seed 992704 rejected both responders. Calibration gains were
+`-0.002750bb` and `-0.061167bb`, with lower bounds `-0.054540bb` and
+`-0.153001bb`. Final evaluation deployed neither response and reproduced
+exactly zero gain and standard error for both players. This validates the
+fail-closed split; it does not make the attack strong enough.
+
+The next learned-response design should confirm individual candidate
+deviations with multiple-selection control before composing a whole response.
+Until then:
 
 - learned-response coverage/confidence remains a blocker;
 - the lower-bound audit has not found a validated exploit;

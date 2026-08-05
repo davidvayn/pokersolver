@@ -17,8 +17,8 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const RESPONSE_SCHEMA: &str = "hu-full-game-information-set-lbr-v4";
-const RESOLVER_SCHEMA: &str = "hu-range-conditioned-postflop-resolver-v4";
+const RESPONSE_SCHEMA: &str = "hu-full-game-information-set-lbr-v5";
+const RESOLVER_SCHEMA: &str = "hu-range-conditioned-postflop-resolver-v5";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +42,7 @@ fn granularity_rank(granularity: ResolverGranularity) -> u8 {
 pub struct ResponseEvaluationConfig {
     pub game: BlueprintConfig,
     pub training_deals: u64,
+    pub calibration_deals: u64,
     pub evaluation_deals: u64,
     pub rollouts_per_action: u32,
     pub minimum_range_particles: u64,
@@ -82,6 +83,7 @@ pub struct RangeConditionedResolver {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ResponsePlayerEvaluation {
     pub responder: usize,
+    pub response_deployed: bool,
     pub baseline_utility_bb: f64,
     pub response_utility_bb: f64,
     pub estimated_gain_bb: f64,
@@ -110,11 +112,14 @@ pub struct FullGameResponseEvaluation {
     pub network_sha256: String,
     pub seed: u64,
     pub training_deals: u64,
+    pub calibration_deals: u64,
     pub evaluation_deals: u64,
     pub rollouts_per_action: u32,
     pub minimum_range_particles: u64,
     pub maximum_granularity: ResolverGranularity,
     pub players: [ResponsePlayerEvaluation; 2],
+    pub calibration_players: [ResponsePlayerEvaluation; 2],
+    pub response_deployed: [bool; 2],
     pub approximate_exploitability_lower_bound_bb_per_hand: f64,
     pub approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand: f64,
     pub interpretation: String,
@@ -247,12 +252,13 @@ pub fn evaluate_full_game_response(
 ) -> Result<FullGameResponseEvaluation, Box<dyn Error>> {
     config.game.validate()?;
     if config.training_deals == 0
+        || config.calibration_deals < 2
         || config.evaluation_deals < 2
         || config.rollouts_per_action < 2
         || config.minimum_range_particles < 2
     {
         return Err(
-            "response evaluation requires training deals and at least two evaluation deals, rollouts, and range particles"
+            "response evaluation requires training deals and at least two calibration deals, evaluation deals, rollouts, and range particles"
                 .into(),
         );
     }
@@ -264,9 +270,57 @@ pub fn evaluate_full_game_response(
     ];
     let preflop_responses = [first.0, second.0];
     let resolvers = [first.1, second.1];
+    let calibration_players = [
+        evaluate_resolver(
+            &policy,
+            &preflop_responses[0],
+            &resolvers[0],
+            &config,
+            0,
+            config.calibration_deals,
+            u64::MAX - 1,
+            true,
+        ),
+        evaluate_resolver(
+            &policy,
+            &preflop_responses[1],
+            &resolvers[1],
+            &config,
+            1,
+            config.calibration_deals,
+            u64::MAX - 1,
+            true,
+        ),
+    ];
+    let response_deployed = [
+        response_lower_bound_passes_calibration(
+            calibration_players[0].approximate_one_sided_99_5_percent_gain_lower_bound_bb,
+        ),
+        response_lower_bound_passes_calibration(
+            calibration_players[1].approximate_one_sided_99_5_percent_gain_lower_bound_bb,
+        ),
+    ];
     let players = [
-        evaluate_resolver(&policy, &preflop_responses[0], &resolvers[0], &config, 0),
-        evaluate_resolver(&policy, &preflop_responses[1], &resolvers[1], &config, 1),
+        evaluate_resolver(
+            &policy,
+            &preflop_responses[0],
+            &resolvers[0],
+            &config,
+            0,
+            config.evaluation_deals,
+            u64::MAX,
+            response_deployed[0],
+        ),
+        evaluate_resolver(
+            &policy,
+            &preflop_responses[1],
+            &resolvers[1],
+            &config,
+            1,
+            config.evaluation_deals,
+            u64::MAX,
+            response_deployed[1],
+        ),
     ];
     let lower_bound =
         (players[0].estimated_gain_bb.max(0.0) + players[1].estimated_gain_bb.max(0.0)) / 2.0;
@@ -279,25 +333,32 @@ pub fn evaluate_full_game_response(
         / 2.0;
     Ok(FullGameResponseEvaluation {
         schema: RESPONSE_SCHEMA.to_owned(),
-        method: "one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets"
+        method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets"
             .to_owned(),
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
         seed: config.seed,
         training_deals: config.training_deals,
+        calibration_deals: config.calibration_deals,
         evaluation_deals: config.evaluation_deals,
         rollouts_per_action: config.rollouts_per_action,
         minimum_range_particles: config.minimum_range_particles,
         maximum_granularity: config.maximum_granularity,
         players,
+        calibration_players,
+        response_deployed,
         approximate_exploitability_lower_bound_bb_per_hand: lower_bound,
         approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand:
             confidence_lower_bound,
-        interpretation: "an independently evaluated fixed legal imperfect-information learned response; fine, coarse, and strategic observable backoffs deliberately forget public information but never add hidden information; expected gain is a lower bound on exploitability, while the normal-approximation confidence bound is not a release upper-bound certificate"
+        interpretation: "a fixed legal imperfect-information learned response is trained, accepted only when a disjoint calibration corpus has a positive one-sided 99.5% gain lower bound, and measured on a third independent corpus; rejected players deploy the frozen baseline with zero claimed gain; expected gain remains a lower bound on exploitability, never a release upper-bound certificate"
             .to_owned(),
         preflop_responses,
         resolvers,
     })
+}
+
+fn response_lower_bound_passes_calibration(lower_bound_bb: f64) -> bool {
+    lower_bound_bb.is_finite() && lower_bound_bb > 0.0
 }
 
 fn train_learned_response(
@@ -726,12 +787,16 @@ fn evaluate_resolver(
     resolver: &RangeConditionedResolver,
     config: &ResponseEvaluationConfig,
     responder: usize,
+    deals: u64,
+    seed_domain: u64,
+    deploy_response: bool,
 ) -> ResponsePlayerEvaluation {
     let confident = preflop
         .iter()
         .chain(&resolver.decisions)
         .filter(|decision| {
-            !decision.low_confidence
+            deploy_response
+                && !decision.low_confidence
                 && granularity_rank(decision.granularity)
                     <= granularity_rank(config.maximum_granularity)
         });
@@ -753,22 +818,25 @@ fn evaluate_resolver(
         .iter()
         .chain(&resolver.decisions)
         .filter(|decision| {
-            !decision.low_confidence
+            deploy_response
+                && !decision.low_confidence
                 && decision.granularity == ResolverGranularity::StrategicObservableBackoff
                 && granularity_rank(decision.granularity)
                     <= granularity_rank(config.maximum_granularity)
         })
         .map(|decision| (decision.information_set, decision))
         .collect::<BTreeMap<_, _>>();
-    let mut chance = SplitMix64::new(derived_seed(config.seed, responder as u64, u64::MAX));
-    let mut differences = Vec::with_capacity(config.evaluation_deals as usize);
+    let phase_seed = derived_seed(config.seed, responder as u64, seed_domain);
+    let mut chance = SplitMix64::new(phase_seed);
+    let mut differences = Vec::with_capacity(deals as usize);
     let mut baseline_total = 0.0;
     let mut response_total = 0.0;
     let mut lookup = ResolverLookup::default();
-    for deal_index in 0..config.evaluation_deals {
+    for deal_index in 0..deals {
         let deal = Deal::sample(&mut chance);
-        let mut baseline_rng = SplitMix64::new(derived_seed(config.seed, deal_index, 11));
-        let mut response_rng = SplitMix64::new(derived_seed(config.seed, deal_index, 11));
+        let rollout_seed = derived_seed(phase_seed, deal_index, 11);
+        let mut baseline_rng = SplitMix64::new(rollout_seed);
+        let mut response_rng = SplitMix64::new(rollout_seed);
         let baseline_p0 = baseline_rollout(
             policy,
             GameState::initial(&config.game),
@@ -812,6 +880,7 @@ fn evaluate_resolver(
         .sum::<f64>();
     ResponsePlayerEvaluation {
         responder,
+        response_deployed: deploy_response,
         baseline_utility_bb: baseline_total / count,
         response_utility_bb: response_total / count,
         estimated_gain_bb: mean,
@@ -1084,6 +1153,14 @@ mod tests {
     fn derived_response_seeds_are_deterministic_and_separated() {
         assert_eq!(derived_seed(1, 2, 3), derived_seed(1, 2, 3));
         assert_ne!(derived_seed(1, 2, 3), derived_seed(1, 2, 4));
+    }
+
+    #[test]
+    fn response_deployment_requires_a_strict_finite_calibration_bound() {
+        assert!(response_lower_bound_passes_calibration(1e-9));
+        assert!(!response_lower_bound_passes_calibration(0.0));
+        assert!(!response_lower_bound_passes_calibration(-1e-9));
+        assert!(!response_lower_bound_passes_calibration(f64::NAN));
     }
 
     #[test]

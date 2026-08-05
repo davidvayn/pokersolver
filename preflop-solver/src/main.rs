@@ -559,6 +559,7 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
         blueprint::response::ResponseEvaluationConfig {
             game,
             training_deals: parse_or(args, "--training-deals", 10_000u64)?,
+            calibration_deals: parse_or(args, "--calibration-deals", 2_000u64)?,
             evaluation_deals: parse_or(args, "--evaluation-deals", 10_000u64)?,
             rollouts_per_action: parse_or(args, "--rollouts-per-action", 8u32)?,
             minimum_range_particles: parse_or(args, "--minimum-range-particles", 4u64)?,
@@ -581,6 +582,8 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
                 "schema": evaluation.schema,
                 "approximateExploitabilityLowerBoundBbPerHand": evaluation.approximate_exploitability_lower_bound_bb_per_hand,
                 "approximateExploitabilityLowerConfidenceBound99PercentBbPerHand": evaluation.approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand,
+                "calibrationPlayers": evaluation.calibration_players,
+                "responseDeployed": evaluation.response_deployed,
                 "players": evaluation.players,
                 "preflopDecisionCounts": evaluation.preflop_responses.iter().map(Vec::len).collect::<Vec<_>>(),
                 "resolverDecisionCounts": evaluation.resolvers.iter().map(|resolver| resolver.decisions.len()).collect::<Vec<_>>(),
@@ -1242,6 +1245,7 @@ Full-game learned-response options:
   --effective-stack-bb <number>   Default: 20
   --networks <path>               Required frozen routed policy JSON
   --training-deals <integer>      Default: 10000 response-training deals
+  --calibration-deals <integer>   Default: 2000 disjoint response-selection deals
   --evaluation-deals <integer>    Default: 10000 independent paired deals
   --rollouts-per-action <integer> Default: 8 common-random action rollouts
   --minimum-range-particles <N>   Default: 4; minimum: 2
