@@ -404,8 +404,37 @@ fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let mut game = BlueprintConfig::default();
-    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    let dataset_and_state = if let Some(path) = value(args, "--dataset").map(PathBuf::from) {
+        let dataset: blueprint::public_belief::TurnTargetDataset =
+            serde_json::from_slice(&fs::read(path)?)?;
+        let state_index = parse_or(args, "--state-index", 0usize)?;
+        let target = dataset
+            .targets
+            .get(state_index)
+            .ok_or("--state-index is outside the target dataset")?;
+        let ranges = std::array::from_fn(|player| {
+            target.ranges[player]
+                .iter()
+                .map(|value| *value as f64)
+                .collect::<Vec<_>>()
+        });
+        Some((
+            dataset.game,
+            blueprint::public_belief::PublicBeliefState::turn_start(
+                target.board,
+                target.actor,
+                target.invested_bb,
+                ranges,
+            ),
+        ))
+    } else {
+        None
+    };
+    let mut game = dataset_and_state
+        .as_ref()
+        .map(|(game, _)| game.clone())
+        .unwrap_or_default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", game.effective_stack_bb)?;
     game.iterations = 2;
     game.averaging_delay = 0;
     apply_dcfr_args(&mut game, args)?;
@@ -415,23 +444,28 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
-    let board = parse_board::<4>(
-        &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th,Js")?,
-    )?;
-    let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
     let iterations = parse_or(args, "--iterations", 500u64)?;
     let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
-    let ranges = std::array::from_fn(|_| blueprint::public_belief::uniform_range(&board));
-    let config = blueprint::public_belief::TurnRiverSolveConfig {
-        game,
-        state: blueprint::public_belief::PublicBeliefState::turn_start(
+    let state = if let Some((_, state)) = dataset_and_state {
+        state
+    } else {
+        let board =
+            parse_board::<4>(&value(args, "--board").ok_or("--board or --dataset is required")?)?;
+        let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
+        let ranges = std::array::from_fn(|_| blueprint::public_belief::uniform_range(&board));
+        blueprint::public_belief::PublicBeliefState::turn_start(
             board,
             parse_or(args, "--actor", 1usize)?,
             [pot_bb / 2.0, pot_bb / 2.0],
             ranges,
-        ),
+        )
+    };
+    let config = blueprint::public_belief::TurnRiverSolveConfig {
+        game,
+        state,
         iterations,
         averaging_delay,
+        river_refinement_iterations: parse_or(args, "--river-refinement-iterations", 0u64)?,
         regret_matching_plus: args
             .iter()
             .any(|argument| argument == "--regret-matching-plus"),
@@ -1631,7 +1665,9 @@ Full-game learned-response options:
 
 Complete turn/river label options:
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
+    [--dataset <targets.json> --state-index 0]
     [--iterations 500] [--averaging-delay 50] [--export-strategies]
+    [--river-refinement-iterations 0]
     [--regret-matching-plus] [--dcfr-alpha 1.5] [--dcfr-beta 0]
     [--dcfr-gamma 2] [--output <json>]
   turn-pbs-upgrade-targets --dataset <legacy-v1.json>

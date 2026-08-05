@@ -26,7 +26,7 @@ class PublicValueNetworkTests(unittest.TestCase):
             "turn_only_best_response_gain_bb_per_hand": 0.02,
             "river_only_best_response_gain_bb_per_hand": 0.03,
             "turn_river_solver_method": (
-                "value_only_alternating_vectorized_dcfr_exact_private_cards_"
+                "value_only_paired_alternating_vectorized_dcfr_exact_private_cards_"
                 "observed_river_chance_and_complete_turn_river_betting"
             ),
             "turn_river_information_sets": 100,

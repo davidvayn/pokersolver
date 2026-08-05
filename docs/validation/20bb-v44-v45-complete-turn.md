@@ -1,6 +1,7 @@
 # 20bb v44 rejection and v45 complete-turn correction
 
-Status: rejected; no active manifest was modified.
+Status: v44 rejected; corrected v45 local solver pilots accepted; no active
+manifest was modified.
 
 ## Frozen v44 downstream result
 
@@ -41,6 +42,16 @@ V45 replaces that path with one exact-card public-belief game containing:
 Schema v2, its method identifier, and its checkpoint fingerprint explicitly
 encode the corrected continuation semantics. Schema-v1 corpora remain readable
 as legacy research inputs but are not valid activation evidence.
+
+## Superseded pre-fix measurements
+
+The measurements below are retained as an investigation audit trail, but they
+are not valid exploitability estimates. The original best-response chance
+aggregation masked each player's reach for a dealt river while still adding
+that child's counterfactual value for private hands containing the river. It
+therefore charged the profile for impossible chance branches. The training
+loop also used one global discount/averaging clock per single-player traversal
+instead of one logical P0-then-P1 alternating round.
 
 ## Structural verification
 
@@ -110,7 +121,7 @@ LCFR failed the first authentic control at 100 iterations:
 `0.249362bb/hand` versus default DCFR's `0.210020bb/hand` (18.7% worse). The
 remaining dense and authentic LCFR jobs were stopped without artifacts.
 
-## Street attribution
+## Superseded street attribution
 
 The v4 evaluator restricts an otherwise exact best response to one street at a
 time. On authentic state 0 after 100 default iterations it measured:
@@ -132,10 +143,48 @@ response to reject any unsafe cross-street result.
 The dense uniform 4bb control corroborates the split: `0.040796bb/hand`
 turn-only, `0.128512bb/hand` river-only, and `0.187062bb/hand` unrestricted.
 
+## Corrected paired solver
+
+The corrected solver now treats one configured iteration as a complete
+alternating round. Player zero updates first, player one updates against that
+new strategy, and the average profile is accumulated between the updates with
+one DCFR discount clock per round. Both training and exact profile/best-response
+evaluation discard a river child for any private hand containing that observed
+river. A regression test constructs a fixed compatible private-hand pair and
+verifies exactly 44 contributed river outcomes.
+
+A profiler also found that terminal folds and showdowns repeatedly enumerated
+every conflicting hand. Exact per-card range marginals and per-card strength
+prefixes reproduce the enumerated values within `1e-10` while reducing the
+authentic state-0 100-pass legacy control from roughly 271 seconds to 6.5
+seconds. The corrected paired 100-round solve takes roughly 12 seconds because
+each round intentionally performs both player updates.
+
+Corrected authentic results are:
+
+| State | Pot | Paired rounds | Averaging delay | Exact local exploitability | Current-policy exploitability |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 7bb | 100 | 20 | 0.025287bb/hand | 0.046524bb/hand |
+| 0 | 7bb | 200 | 20 | 0.007241bb/hand | 0.010135bb/hand |
+| 0 | 7bb | 400 | 80 | 0.002359bb/hand | 0.006435bb/hand |
+| 1 | 5bb | 100 | 20 | 0.017113bb/hand | 0.031341bb/hand |
+| 1 | 5bb | 200 | 20 | 0.005286bb/hand | 0.005932bb/hand |
+| 2 | 2bb | 100 | 20 | 0.025820bb/hand | 0.086813bb/hand |
+| 2 | 2bb | 200 | 20 | 0.007246bb/hand | 0.012202bb/hand |
+
+All three authentic states pass the `0.05bb/hand` exact local gate at 100
+paired rounds and improve substantially at 200. Probability sums remain within
+`4.5e-16` and zero-sum residuals within `2.2e-15`. The dense uniform 4bb stress
+control is harder: it measures `0.170260bb/hand` at 100 rounds but passes at
+`0.013427bb/hand` after 400. It is not a served target, but confirms convergence
+away from the authentic state distribution.
+
 ## Remaining boundary
 
 Passing the exact local turn/river gate is necessary label-quality evidence,
-not full-game equilibrium certification. After an accepted v2 corpus exists,
+not full-game equilibrium certification. The next step is upgrading every
+authentic target at 200 paired rounds and rejecting the composed corpus if even
+one target exceeds the gate. After an accepted v2 corpus exists,
 the remaining sequence is paired value-network training, exact parity,
 disjoint leaf and matched-resolver selection, continuation-cache and preflop
 DCFR regeneration, action-EV uncertainty measurement, learned-response red

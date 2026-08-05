@@ -287,13 +287,31 @@ traverser alternates each iteration.
 ### Exact-card turn/river continuation labels
 
 Public-belief target schema v2 solves the complete turn and river continuation
-in one alternating DCFR game. It retains one range weight for every exact hole-
+in one paired-alternating DCFR game. One configured solver iteration is a full
+round: player zero updates first, player one updates against that new strategy,
+and the average profile is accumulated between those updates with one DCFR
+discount clock per round. It retains one range weight for every exact hole-
 card combination, includes every legal turn action, observes each of the 48
 public river cards, includes every legal river action, and settles folds,
 all-ins, and showdowns exactly. Counterfactual chance values use the 44 river
 cards compatible with each exact pair of private hands. The exported value-only
 target contains CFVs and validation metrics, not the much larger regret or
 strategy tables.
+
+Fold and showdown leaves compute exact blocker-adjusted values from card
+marginals and per-card strength prefixes. This is algebraically identical to
+enumerating every conflicting private hand, but avoids the quadratic hot path.
+Regression tests compare both formulations and verify that observed-river
+chance contributes exactly 44 outcomes for each compatible private-hand pair.
+
+For bounded research, `turn-river-pbs-solve` accepts
+`--river-refinement-iterations N`. After the configured joint solve it freezes
+the exported average turn policy and spends `N` additional paired river rounds
+only on river information sets reached through that frozen turn profile. The
+output records the refinement count and is still scored by the unrestricted
+exact best response; refinement is not enabled by the corpus upgrader unless a
+separate validation sequence first shows that it improves full exploitability,
+not merely the river-only attribution.
 
 Schema v1 remains readable as legacy research input, but its label generator
 averaged directly into solved river games and therefore omitted turn betting.

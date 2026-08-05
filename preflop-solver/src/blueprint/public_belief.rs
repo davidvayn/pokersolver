@@ -1383,12 +1383,9 @@ impl FlopSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
-            self.walk(
-                root.clone(),
-                reaches.clone(),
-                offset as usize % 2,
-                offset + 1,
-            );
+            let round = offset + 1;
+            self.walk(root.clone(), reaches.clone(), 0, round, false);
+            self.walk(root.clone(), reaches.clone(), 1, round, true);
         }
     }
 
@@ -1421,7 +1418,8 @@ impl FlopSolver {
                     .iter()
                     .map(|value| *value as f64)
                     .collect(),
-                last_discount_iteration: 0,
+                last_regret_discount_round: 0,
+                last_strategy_discount_round: 0,
             };
             if self
                 .nodes
@@ -1470,7 +1468,8 @@ impl FlopSolver {
         state: GameState,
         reaches: [Vec<f64>; 2],
         traverser: usize,
-        iteration: u64,
+        round: u64,
+        accumulate_average: bool,
     ) -> [Vec<f64>; 2] {
         if state.street == Street::Turn && state.terminal.is_none() {
             return self.turn_leaf_values(&state, &reaches);
@@ -1486,7 +1485,12 @@ impl FlopSolver {
                 .nodes
                 .entry(key.clone())
                 .or_insert_with(|| RangeNode::new(actor, &actions));
-            node.discount(iteration, &self.config.game.dcfr);
+            if actor == traverser {
+                node.discount_regrets(round, &self.config.game.dcfr);
+            }
+            if accumulate_average {
+                node.discount_strategy_sum(round, &self.config.game.dcfr);
+            }
             node.strategy(&self.legal[actor])
         };
         let action_count = actions.len();
@@ -1500,7 +1504,8 @@ impl FlopSolver {
                 state.apply(action, &self.config.game),
                 child_reaches,
                 traverser,
-                iteration,
+                round,
+                accumulate_average,
             ));
         }
         let opponent = 1 - actor;
@@ -1525,7 +1530,7 @@ impl FlopSolver {
                 }
             }
         }
-        if iteration > self.config.averaging_delay {
+        if accumulate_average && round > self.config.averaging_delay {
             for combo in 0..COMBO_COUNT {
                 let offset = combo * action_count;
                 for action in 0..action_count {
@@ -1981,7 +1986,7 @@ impl FlopSolver {
         }
         FlopSolution {
             schema: "hu-depth-limited-flop-public-belief-solution-v2".to_owned(),
-            method: "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_alternating_dcfr"
+            method: "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_paired_alternating_dcfr"
                 .to_owned(),
             approximate: true,
             value_network_seed: self.config.value_network.seed,
@@ -2360,7 +2365,8 @@ struct RangeNode {
     action_labels: Vec<String>,
     regrets: Vec<f64>,
     strategy_sum: Vec<f64>,
-    last_discount_iteration: u64,
+    last_regret_discount_round: u64,
+    last_strategy_discount_round: u64,
 }
 
 impl RangeNode {
@@ -2371,7 +2377,8 @@ impl RangeNode {
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             regrets: vec![0.0; COMBO_COUNT * action_count],
             strategy_sum: vec![0.0; COMBO_COUNT * action_count],
-            last_discount_iteration: 0,
+            last_regret_discount_round: 0,
+            last_strategy_discount_round: 0,
         }
     }
 
@@ -2420,16 +2427,15 @@ impl RangeNode {
         result
     }
 
-    fn discount(&mut self, iteration: u64, parameters: &DcfrParameters) {
-        if iteration == 0 || self.last_discount_iteration == iteration {
+    fn discount_regrets(&mut self, round: u64, parameters: &DcfrParameters) {
+        if round == 0 || self.last_regret_discount_round == round {
             return;
         }
-        let time = iteration as f64;
+        let time = round as f64;
         let positive_power = time.powf(parameters.positive_regret_exponent);
         let negative_power = time.powf(parameters.negative_regret_exponent);
         let positive_factor = positive_power / (positive_power + 1.0);
         let negative_factor = negative_power / (negative_power + 1.0);
-        let strategy_factor = (time / (time + 1.0)).powf(parameters.strategy_exponent);
         for regret in &mut self.regrets {
             *regret *= if *regret >= 0.0 {
                 positive_factor
@@ -2437,20 +2443,120 @@ impl RangeNode {
                 negative_factor
             };
         }
+        self.last_regret_discount_round = round;
+    }
+
+    fn discount_strategy_sum(&mut self, round: u64, parameters: &DcfrParameters) {
+        if round == 0 || self.last_strategy_discount_round == round {
+            return;
+        }
+        let time = round as f64;
+        let strategy_factor = (time / (time + 1.0)).powf(parameters.strategy_exponent);
         for weight in &mut self.strategy_sum {
             *weight *= strategy_factor;
         }
-        self.last_discount_iteration = iteration;
+        self.last_strategy_discount_round = round;
     }
+}
+
+fn compatible_masses_from_card_marginals(combos: &[Combo], range: &[f64]) -> Vec<f64> {
+    debug_assert_eq!(combos.len(), COMBO_COUNT);
+    debug_assert_eq!(range.len(), COMBO_COUNT);
+    let total = range.iter().sum::<f64>();
+    let mut by_card = [0.0f64; 52];
+    for (combo, weight) in combos.iter().zip(range) {
+        let [first, second] = combo.cards();
+        by_card[first as usize] += *weight;
+        by_card[second as usize] += *weight;
+    }
+    combos
+        .iter()
+        .enumerate()
+        .map(|(index, combo)| {
+            let [first, second] = combo.cards();
+            // The identical two-card holding occurs in both card marginals, so
+            // add it back once after subtracting both blocked-card totals.
+            (total - by_card[first as usize] - by_card[second as usize] + range[index]).max(0.0)
+        })
+        .collect()
+}
+
+fn showdown_values_from_card_strength_marginals(
+    combos: &[Combo],
+    strength_ranks: &[usize],
+    strength_group_count: usize,
+    opponent_reach: &[f64],
+    win: f64,
+    loss: f64,
+    tie: f64,
+) -> Vec<f64> {
+    debug_assert_eq!(combos.len(), COMBO_COUNT);
+    debug_assert_eq!(strength_ranks.len(), COMBO_COUNT);
+    debug_assert_eq!(opponent_reach.len(), COMBO_COUNT);
+    let mut by_strength = vec![0.0; strength_group_count];
+    let mut by_card_strength = vec![0.0; 52 * strength_group_count];
+    let mut by_card = [0.0f64; 52];
+    for (index, (combo, weight)) in combos.iter().zip(opponent_reach).enumerate() {
+        if *weight == 0.0 {
+            continue;
+        }
+        let rank = strength_ranks[index];
+        let [first, second] = combo.cards();
+        by_strength[rank] += *weight;
+        by_card[first as usize] += *weight;
+        by_card[second as usize] += *weight;
+        by_card_strength[first as usize * strength_group_count + rank] += *weight;
+        by_card_strength[second as usize * strength_group_count + rank] += *weight;
+    }
+
+    let mut lower_by_strength = vec![0.0; strength_group_count];
+    let mut total = 0.0;
+    for (rank, weight) in by_strength.iter().enumerate() {
+        lower_by_strength[rank] = total;
+        total += *weight;
+    }
+    let mut lower_by_card_strength = vec![0.0; 52 * strength_group_count];
+    for card in 0..52 {
+        let mut running = 0.0;
+        for rank in 0..strength_group_count {
+            let offset = card * strength_group_count + rank;
+            lower_by_card_strength[offset] = running;
+            running += by_card_strength[offset];
+        }
+    }
+
+    combos
+        .iter()
+        .enumerate()
+        .map(|(own, combo)| {
+            let rank = strength_ranks[own];
+            let [first, second] = combo.cards();
+            let first_offset = first as usize * strength_group_count + rank;
+            let second_offset = second as usize * strength_group_count + rank;
+            let lower = (lower_by_strength[rank]
+                - lower_by_card_strength[first_offset]
+                - lower_by_card_strength[second_offset])
+                .max(0.0);
+            let equal = (by_strength[rank]
+                - by_card_strength[first_offset]
+                - by_card_strength[second_offset]
+                + opponent_reach[own])
+                .max(0.0);
+            let compatible = (total - by_card[first as usize] - by_card[second as usize]
+                + opponent_reach[own])
+                .max(0.0);
+            let higher = (compatible - lower - equal).max(0.0);
+            lower * win + equal * tie + higher * loss
+        })
+        .collect()
 }
 
 struct RiverSolver {
     config: RiverSolveConfig,
+    combos: Vec<Combo>,
     legal: [Vec<bool>; 2],
-    strengths: Vec<u32>,
     strength_ranks: Vec<usize>,
     strength_group_count: usize,
-    conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
 }
 
@@ -2491,14 +2597,12 @@ impl RiverSolver {
             .map(|strength| strength_to_rank[strength])
             .collect();
         let strength_group_count = strength_groups.len();
-        let conflicts = combo_conflicts();
         Ok(Self {
             config: RiverSolveConfig { state, ..config },
+            combos,
             legal,
-            strengths,
             strength_ranks,
             strength_group_count,
-            conflicts,
             nodes: BTreeMap::new(),
         })
     }
@@ -2507,9 +2611,9 @@ impl RiverSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
-            let traverser = offset as usize % 2;
-            let iteration = offset + 1;
-            self.walk(root.clone(), reaches.clone(), traverser, iteration);
+            let round = offset + 1;
+            self.walk(root.clone(), reaches.clone(), 0, round, false);
+            self.walk(root.clone(), reaches.clone(), 1, round, true);
         }
     }
 
@@ -2518,7 +2622,8 @@ impl RiverSolver {
         state: GameState,
         reaches: [Vec<f64>; 2],
         traverser: usize,
-        iteration: u64,
+        round: u64,
+        accumulate_average: bool,
     ) -> [Vec<f64>; 2] {
         if state.terminal.is_some() {
             return self.terminal_values(&state, &reaches);
@@ -2539,7 +2644,12 @@ impl RiverSolver {
                     .map(|action| action.label.clone())
                     .collect::<Vec<_>>()
             );
-            node.discount(iteration, &self.config.game.dcfr);
+            if actor == traverser {
+                node.discount_regrets(round, &self.config.game.dcfr);
+            }
+            if accumulate_average {
+                node.discount_strategy_sum(round, &self.config.game.dcfr);
+            }
             node.strategy(&self.legal[actor])
         };
         let action_count = actions.len();
@@ -2553,7 +2663,8 @@ impl RiverSolver {
                 state.apply(action, &self.config.game),
                 child_reaches,
                 traverser,
-                iteration,
+                round,
+                accumulate_average,
             ));
         }
         let opponent = 1 - actor;
@@ -2578,7 +2689,7 @@ impl RiverSolver {
                 }
             }
         }
-        if iteration > self.config.averaging_delay {
+        if accumulate_average && round > self.config.averaging_delay {
             for combo in 0..COMBO_COUNT {
                 if !self.legal[actor][combo] {
                     continue;
@@ -2626,8 +2737,9 @@ impl RiverSolver {
     }
 
     fn constant_terminal_values(&self, opponent_reach: &[f64], utility: f64) -> Vec<f64> {
-        (0..COMBO_COUNT)
-            .map(|combo| utility * self.compatible_mass(opponent_reach, combo))
+        compatible_masses_from_card_marginals(&self.combos, opponent_reach)
+            .into_iter()
+            .map(|mass| utility * mass)
             .collect()
     }
 
@@ -2639,44 +2751,15 @@ impl RiverSolver {
         loss: f64,
         tie: f64,
     ) -> Vec<f64> {
-        let mut by_strength = vec![0.0; self.strength_group_count];
-        for (rank, weight) in self.strength_ranks.iter().zip(opponent_reach) {
-            by_strength[*rank] += *weight;
-        }
-        let mut lower_by_strength = vec![0.0; self.strength_group_count];
-        let mut running = 0.0;
-        for (rank, weight) in by_strength.iter().enumerate() {
-            lower_by_strength[rank] = running;
-            running += *weight;
-        }
-        let total = running;
-        let mut values = vec![0.0; COMBO_COUNT];
-        for own in 0..COMBO_COUNT {
-            let strength = self.strengths[own];
-            let rank = self.strength_ranks[own];
-            let mut lower = lower_by_strength[rank];
-            let mut equal = by_strength[rank];
-            let mut higher = total - lower - equal;
-            for opponent in &self.conflicts[own] {
-                let weight = opponent_reach[*opponent];
-                match self.strengths[*opponent].cmp(&strength) {
-                    std::cmp::Ordering::Less => lower -= weight,
-                    std::cmp::Ordering::Equal => equal -= weight,
-                    std::cmp::Ordering::Greater => higher -= weight,
-                }
-            }
-            values[own] = lower.max(0.0) * win + equal.max(0.0) * tie + higher.max(0.0) * loss;
-        }
-        values
-    }
-
-    fn compatible_mass(&self, range: &[f64], own: usize) -> f64 {
-        let total = range.iter().sum::<f64>();
-        let blocked = self.conflicts[own]
-            .iter()
-            .map(|index| range[*index])
-            .sum::<f64>();
-        (total - blocked).max(0.0)
+        showdown_values_from_card_strength_marginals(
+            &self.combos,
+            &self.strength_ranks,
+            self.strength_group_count,
+            opponent_reach,
+            win,
+            loss,
+            tie,
+        )
     }
 
     fn profile_walk(
@@ -2752,8 +2835,9 @@ impl RiverSolver {
         let best_p1 = aggregate(&br1[1], 1);
         let exploitability = ((best_p0 - profile_p0) + (best_p1 - profile_p1)) / 2.0;
         let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
-            (0..COMBO_COUNT)
-                .map(|combo| self.compatible_mass(&reaches[1 - player], combo) as f32)
+            compatible_masses_from_card_marginals(&self.combos, &reaches[1 - player])
+                .into_iter()
+                .map(|mass| mass as f32)
                 .collect()
         });
         let counterfactual_values_bb = std::array::from_fn(|player| {
@@ -2832,8 +2916,9 @@ impl RiverSolver {
         }
         RiverSolution {
             schema: RIVER_SCHEMA.to_owned(),
-            method: "alternating_vectorized_dcfr_exact_private-card_and_river_chance_enumeration"
-                .to_owned(),
+            method:
+                "paired_alternating_vectorized_dcfr_exact_private-card_and_river_chance_enumeration"
+                    .to_owned(),
             approximate: true,
             game: self.config.game,
             state: self.config.state,
@@ -2868,6 +2953,7 @@ pub struct TurnRiverSolveConfig {
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub averaging_delay: u64,
+    pub river_refinement_iterations: u64,
     pub regret_matching_plus: bool,
 }
 
@@ -2898,6 +2984,7 @@ pub struct TurnRiverSolution {
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub averaging_delay: u64,
+    pub river_refinement_iterations: u64,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub opponent_compatible_mass: [Vec<f32>; 2],
     pub strategies: Vec<PublicBeliefStrategy>,
@@ -2909,13 +2996,14 @@ pub struct TurnRiverSolution {
 pub struct TurnRiverContinuationValues {
     pub schema: String,
     pub method: String,
+    pub joint_iterations: u64,
+    pub river_refinement_iterations: u64,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub opponent_compatible_mass: [Vec<f32>; 2],
     pub metrics: TurnRiverSolveMetrics,
 }
 
 struct RiverBoardData {
-    strengths: Vec<u32>,
     strength_ranks: Vec<usize>,
     strength_group_count: usize,
     legal: [Vec<bool>; 2],
@@ -2927,12 +3015,18 @@ struct RiverBoardData {
 /// prevents a turn value target from accidentally skipping turn betting.
 struct TurnRiverSolver {
     config: TurnRiverSolveConfig,
+    combos: Vec<Combo>,
     legal: [Vec<bool>; 2],
-    conflicts: Arc<Vec<Vec<usize>>>,
     river_cards: Vec<u8>,
     river_blocked_combos: Vec<Vec<usize>>,
     river_data: Vec<Option<RiverBoardData>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TurnRiverTrainingMode {
+    Joint,
+    FrozenAverageTurnRiverRefinement,
 }
 
 impl TurnRiverSolver {
@@ -3001,7 +3095,6 @@ impl TurnRiverSolver {
                     .collect()
             });
             river_data[*river as usize] = Some(RiverBoardData {
-                strengths,
                 strength_ranks,
                 strength_group_count: groups.len(),
                 legal: river_legal,
@@ -3009,8 +3102,8 @@ impl TurnRiverSolver {
         }
         Ok(Self {
             config,
+            combos,
             legal,
-            conflicts: combo_conflicts(),
             river_cards,
             river_blocked_combos,
             river_data,
@@ -3022,12 +3115,45 @@ impl TurnRiverSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
+            let round = offset + 1;
             self.walk(
                 root.clone(),
                 reaches.clone(),
                 None,
-                offset as usize % 2,
-                offset + 1,
+                0,
+                round,
+                false,
+                TurnRiverTrainingMode::Joint,
+            );
+            self.walk(
+                root.clone(),
+                reaches.clone(),
+                None,
+                1,
+                round,
+                true,
+                TurnRiverTrainingMode::Joint,
+            );
+        }
+        for offset in 0..self.config.river_refinement_iterations {
+            let round = self.config.iterations + offset + 1;
+            self.walk(
+                root.clone(),
+                reaches.clone(),
+                None,
+                0,
+                round,
+                false,
+                TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement,
+            );
+            self.walk(
+                root.clone(),
+                reaches.clone(),
+                None,
+                1,
+                round,
+                true,
+                TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement,
             );
         }
     }
@@ -3058,19 +3184,39 @@ impl TurnRiverSolver {
         }
     }
 
+    fn accumulate_compatible_river_child(
+        &self,
+        values: &mut [Vec<f64>; 2],
+        child: &[Vec<f64>; 2],
+        river: u8,
+    ) {
+        let data = self.river_data[river as usize]
+            .as_ref()
+            .expect("known river card");
+        for player in 0..2 {
+            for combo in 0..COMBO_COUNT {
+                if data.legal[player][combo] {
+                    values[player][combo] += child[player][combo] / 44.0;
+                }
+            }
+        }
+    }
+
     fn walk(
         &mut self,
         state: GameState,
         reaches: [Vec<f64>; 2],
         river: Option<u8>,
         traverser: usize,
-        iteration: u64,
+        round: u64,
+        accumulate_average: bool,
+        mode: TurnRiverTrainingMode,
     ) -> [Vec<f64>; 2] {
         if state.terminal.is_some() {
             return self.terminal_values(&state, &reaches, river);
         }
         if state.street == Street::River && river.is_none() {
-            return self.chance_walk(state, reaches, traverser, iteration);
+            return self.chance_walk(state, reaches, traverser, round, accumulate_average, mode);
         }
         let actions = state.legal_actions(&self.config.game);
         let key = Self::node_key(&state, river);
@@ -3081,8 +3227,19 @@ impl TurnRiverSolver {
                 .nodes
                 .entry(key.clone())
                 .or_insert_with(|| RangeNode::new(actor, &actions));
-            node.discount(iteration, &self.config.game.dcfr);
-            node.strategy(&legal)
+            if mode == TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement
+                && state.street == Street::Turn
+            {
+                node.average_strategy(&legal)
+            } else {
+                if actor == traverser {
+                    node.discount_regrets(round, &self.config.game.dcfr);
+                }
+                if accumulate_average {
+                    node.discount_strategy_sum(round, &self.config.game.dcfr);
+                }
+                node.strategy(&legal)
+            }
         };
         let action_count = actions.len();
         let mut children = Vec::with_capacity(action_count);
@@ -3096,7 +3253,9 @@ impl TurnRiverSolver {
                 child_reaches,
                 river,
                 traverser,
-                iteration,
+                round,
+                accumulate_average,
+                mode,
             ));
         }
         let opponent = 1 - actor;
@@ -3109,7 +3268,8 @@ impl TurnRiverSolver {
             }
         }
         let node = self.nodes.get_mut(&key).expect("turn-river node inserted");
-        if actor == traverser {
+        let update_node = mode == TurnRiverTrainingMode::Joint || state.street == Street::River;
+        if update_node && actor == traverser {
             for combo in 0..COMBO_COUNT {
                 if !legal[combo] {
                     continue;
@@ -3124,7 +3284,7 @@ impl TurnRiverSolver {
                 }
             }
         }
-        if iteration > self.config.averaging_delay {
+        if update_node && accumulate_average && round > self.config.averaging_delay {
             for combo in 0..COMBO_COUNT {
                 if !legal[combo] {
                     continue;
@@ -3144,7 +3304,9 @@ impl TurnRiverSolver {
         state: GameState,
         reaches: [Vec<f64>; 2],
         traverser: usize,
-        iteration: u64,
+        round: u64,
+        accumulate_average: bool,
+        mode: TurnRiverTrainingMode,
     ) -> [Vec<f64>; 2] {
         let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         let cards = self.river_cards.clone();
@@ -3155,12 +3317,16 @@ impl TurnRiverSolver {
                     masked[player][*combo] = 0.0;
                 }
             }
-            let child = self.walk(state.clone(), masked, Some(river), traverser, iteration);
-            for player in 0..2 {
-                for combo in 0..COMBO_COUNT {
-                    values[player][combo] += child[player][combo] / 44.0;
-                }
-            }
+            let child = self.walk(
+                state.clone(),
+                masked,
+                Some(river),
+                traverser,
+                round,
+                accumulate_average,
+                mode,
+            );
+            self.accumulate_compatible_river_child(&mut values, &child, river);
         }
         values
     }
@@ -3191,10 +3357,9 @@ impl TurnRiverSolver {
     }
 
     fn constant_terminal_values(&self, opponent_reach: &[f64], utility: f64) -> Vec<f64> {
-        (0..COMBO_COUNT)
-            .map(|combo| {
-                utility * compatible_mass_from_conflicts(opponent_reach, &self.conflicts, combo)
-            })
+        compatible_masses_from_card_marginals(&self.combos, opponent_reach)
+            .into_iter()
+            .map(|mass| utility * mass)
             .collect()
     }
 
@@ -3233,38 +3398,19 @@ impl TurnRiverSolver {
         let data = self.river_data[river as usize]
             .as_ref()
             .expect("known river card");
-        let mut by_strength = vec![0.0; data.strength_group_count];
-        for (combo, weight) in opponent_reach.iter().enumerate() {
-            if data.legal[0][combo] || data.legal[1][combo] {
-                by_strength[data.strength_ranks[combo]] += *weight;
-            }
-        }
-        let mut lower_by_strength = vec![0.0; data.strength_group_count];
-        let mut running = 0.0;
-        for (rank, weight) in by_strength.iter().enumerate() {
-            lower_by_strength[rank] = running;
-            running += *weight;
-        }
-        let total = running;
-        let mut values = vec![0.0; COMBO_COUNT];
-        for own in 0..COMBO_COUNT {
+        let mut values = showdown_values_from_card_strength_marginals(
+            &self.combos,
+            &data.strength_ranks,
+            data.strength_group_count,
+            opponent_reach,
+            win,
+            loss,
+            tie,
+        );
+        for (own, value) in values.iter_mut().enumerate() {
             if !(data.legal[0][own] || data.legal[1][own]) {
-                continue;
+                *value = 0.0;
             }
-            let strength = data.strengths[own];
-            let rank = data.strength_ranks[own];
-            let mut lower = lower_by_strength[rank];
-            let mut equal = by_strength[rank];
-            let mut higher = total - lower - equal;
-            for opponent in &self.conflicts[own] {
-                let weight = opponent_reach[*opponent];
-                match data.strengths[*opponent].cmp(&strength) {
-                    std::cmp::Ordering::Less => lower -= weight,
-                    std::cmp::Ordering::Equal => equal -= weight,
-                    std::cmp::Ordering::Greater => higher -= weight,
-                }
-            }
-            values[own] = lower.max(0.0) * win + equal.max(0.0) * tie + higher.max(0.0) * loss;
         }
         values
     }
@@ -3317,11 +3463,7 @@ impl TurnRiverSolver {
                     best_response_street,
                     average_strategy,
                 );
-                for player in 0..2 {
-                    for combo in 0..COMBO_COUNT {
-                        values[player][combo] += child[player][combo] / 44.0;
-                    }
-                }
+                self.accumulate_compatible_river_child(&mut values, &child, *card);
             }
             return values;
         }
@@ -3444,11 +3586,9 @@ impl TurnRiverSolver {
         let current_best_p0 = aggregate(&current_br0[0], 0);
         let current_best_p1 = aggregate(&current_br1[1], 1);
         let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
-            (0..COMBO_COUNT)
-                .map(|combo| {
-                    compatible_mass_from_conflicts(&reaches[1 - player], &self.conflicts, combo)
-                        as f32
-                })
+            compatible_masses_from_card_marginals(&self.combos, &reaches[1 - player])
+                .into_iter()
+                .map(|mass| mass as f32)
                 .collect()
         });
         let counterfactual_values_bb = std::array::from_fn(|player| {
@@ -3487,15 +3627,18 @@ impl TurnRiverSolver {
                 }
             }
         }
+        let mut method = "value_only_paired_alternating_vectorized_dcfr_exact_private_cards_observed_river_chance_and_complete_turn_river_betting".to_owned();
+        if self.config.regret_matching_plus {
+            method.push_str("_regret_matching_plus");
+        }
+        if self.config.river_refinement_iterations > 0 {
+            method.push_str("_frozen_average_turn_river_refinement");
+        }
         TurnRiverContinuationValues {
             schema: "hu-turn-river-public-belief-continuation-values-v1".to_owned(),
-            method: "value_only_alternating_vectorized_dcfr_exact_private_cards_observed_river_chance_and_complete_turn_river_betting"
-                .to_owned()
-                + if self.config.regret_matching_plus {
-                    "_regret_matching_plus"
-                } else {
-                    ""
-                },
+            method,
+            joint_iterations: self.config.iterations,
+            river_refinement_iterations: self.config.river_refinement_iterations,
             counterfactual_values_bb,
             opponent_compatible_mass: compatible_mass,
             metrics: TurnRiverSolveMetrics {
@@ -3596,11 +3739,9 @@ impl TurnRiverSolver {
         let current_best_p1 = aggregate(&current_br1[1], 1);
         let exploitability = ((best_p0 - profile_p0) + (best_p1 - profile_p1)) / 2.0;
         let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
-            (0..COMBO_COUNT)
-                .map(|combo| {
-                    compatible_mass_from_conflicts(&reaches[1 - player], &self.conflicts, combo)
-                        as f32
-                })
+            compatible_masses_from_card_marginals(&self.combos, &reaches[1 - player])
+                .into_iter()
+                .map(|mass| mass as f32)
                 .collect()
         });
         let counterfactual_values_bb = std::array::from_fn(|player| {
@@ -3697,20 +3838,22 @@ impl TurnRiverSolver {
                 metrics.exact_abstract_exploitability_bb_per_hand
             ));
         }
+        let mut method = "paired_alternating_vectorized_dcfr_exact_private_cards_observed_river_chance_and_complete_turn_river_betting".to_owned();
+        if self.config.regret_matching_plus {
+            method.push_str("_regret_matching_plus");
+        }
+        if self.config.river_refinement_iterations > 0 {
+            method.push_str("_frozen_average_turn_river_refinement");
+        }
         TurnRiverSolution {
             schema: "hu-turn-river-public-belief-solution-v1".to_owned(),
-            method: "alternating_vectorized_dcfr_exact_private_cards_observed_river_chance_and_complete_turn_river_betting"
-                .to_owned()
-                + if self.config.regret_matching_plus {
-                    "_regret_matching_plus"
-                } else {
-                    ""
-                },
+            method,
             approximate: true,
             game: self.config.game,
             state: self.config.state,
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
+            river_refinement_iterations: self.config.river_refinement_iterations,
             counterfactual_values_bb,
             opponent_compatible_mass: compatible_mass,
             strategies,
@@ -3908,7 +4051,7 @@ pub fn generate_turn_targets(
     }
     Ok(TurnTargetDataset {
         schema: "hu-turn-public-belief-cfv-dataset-v2".to_owned(),
-        method: "complete_turn_river_public_belief_dcfr_with_exact_private_cards_observed_river_chance_and_exact_showdown"
+        method: "complete_turn_river_public_belief_paired_alternating_dcfr_with_exact_private_cards_observed_river_chance_and_exact_showdown"
             .to_owned(),
         approximate: true,
         game: config.game,
@@ -3952,6 +4095,7 @@ fn turn_target_from_complete_continuation(
         state: state.clone(),
         iterations: river_iterations,
         averaging_delay: river_averaging_delay,
+        river_refinement_iterations: 0,
         regret_matching_plus: false,
     })?;
     Ok(TurnValueTarget {
@@ -5062,7 +5206,7 @@ pub fn turn_target_input_sha256(
     river_averaging_delay: u64,
 ) -> Result<String, serde_json::Error> {
     let bytes = serde_json::to_vec(&serde_json::json!({
-        "continuationSemantics": "complete_turn_river_public_belief_v4_with_street_attribution_solver_provenance_current_policy_and_probability_diagnostics",
+        "continuationSemantics": "complete_turn_river_public_belief_v5_with_paired_alternating_updates_street_attribution_solver_provenance_current_policy_and_probability_diagnostics",
         "game": game,
         "board": board,
         "actor": actor,
@@ -5399,6 +5543,78 @@ mod tests {
     }
 
     #[test]
+    fn card_marginal_terminal_values_match_conflict_enumeration() {
+        let board = [0, 5, 10, 15, 20];
+        let combos = all_combos();
+        let range = combos
+            .iter()
+            .enumerate()
+            .map(|(index, combo)| {
+                if combo.cards().iter().any(|card| board.contains(card)) {
+                    0.0
+                } else {
+                    (index % 23 + 1) as f64 / 10_000.0
+                }
+            })
+            .collect::<Vec<_>>();
+        let conflicts = combo_conflicts();
+        let fast_masses = compatible_masses_from_card_marginals(&combos, &range);
+        for own in 0..COMBO_COUNT {
+            let reference = compatible_mass_from_conflicts(&range, &conflicts, own);
+            assert!((fast_masses[own] - reference).abs() < 1e-11);
+        }
+
+        let strengths = combos
+            .iter()
+            .map(|combo| {
+                let mut cards = board.to_vec();
+                cards.extend(combo.cards());
+                evaluate(&cards)
+            })
+            .collect::<Vec<_>>();
+        let groups = strengths.iter().copied().collect::<BTreeSet<_>>();
+        let rank_by_strength = groups
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(rank, strength)| (strength, rank))
+            .collect::<BTreeMap<_, _>>();
+        let ranks = strengths
+            .iter()
+            .map(|strength| rank_by_strength[strength])
+            .collect::<Vec<_>>();
+        let fast = showdown_values_from_card_strength_marginals(
+            &combos,
+            &ranks,
+            groups.len(),
+            &range,
+            3.0,
+            -2.0,
+            0.5,
+        );
+        for (own, combo) in combos.iter().enumerate() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                continue;
+            }
+            let mut lower = 0.0;
+            let mut equal = 0.0;
+            let mut higher = 0.0;
+            for opponent in 0..COMBO_COUNT {
+                if combos[own].overlaps(combos[opponent]) {
+                    continue;
+                }
+                match strengths[opponent].cmp(&strengths[own]) {
+                    std::cmp::Ordering::Less => lower += range[opponent],
+                    std::cmp::Ordering::Equal => equal += range[opponent],
+                    std::cmp::Ordering::Greater => higher += range[opponent],
+                }
+            }
+            let reference = lower * 3.0 + equal * 0.5 + higher * -2.0;
+            assert!((fast[own] - reference).abs() < 1e-10);
+        }
+    }
+
+    #[test]
     fn exact_showdown_values_respect_blockers_and_zero_sum() {
         let board = [0, 5, 10, 15, 20];
         let solution = solve_river(RiverSolveConfig {
@@ -5409,7 +5625,11 @@ mod tests {
         })
         .unwrap();
         assert!(solution.metrics.joint_compatibility_mass > 0.9);
-        assert!(solution.metrics.zero_sum_residual_bb < 1e-8);
+        assert!(
+            solution.metrics.zero_sum_residual_bb < 1e-8,
+            "zero-sum residual was {}",
+            solution.metrics.zero_sum_residual_bb
+        );
         assert!(solution.metrics.maximum_probability_sum_error < 1e-6);
         assert!(solution
             .counterfactual_values_bb
@@ -5438,6 +5658,7 @@ mod tests {
             state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges),
             iterations: 2,
             averaging_delay: 0,
+            river_refinement_iterations: 0,
             regret_matching_plus: false,
         };
         let solution = solve_turn_river(config.clone()).unwrap();
@@ -5470,7 +5691,11 @@ mod tests {
             .public_history
             .iter()
             .any(|part| part.starts_with("chance:river:"))));
-        assert!(solution.metrics.zero_sum_residual_bb < 1e-8);
+        assert!(
+            solution.metrics.zero_sum_residual_bb < 1e-8,
+            "zero-sum residual was {}",
+            solution.metrics.zero_sum_residual_bb
+        );
         assert!(solution.metrics.maximum_probability_sum_error < 1e-6);
         assert!(solution
             .metrics
@@ -5490,6 +5715,88 @@ mod tests {
             .iter()
             .flatten()
             .all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn turn_all_in_card_marginal_values_are_zero_sum() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let config = TurnRiverSolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges.clone()),
+            iterations: 2,
+            averaging_delay: 0,
+            river_refinement_iterations: 0,
+            regret_matching_plus: false,
+        };
+        let solver = TurnRiverSolver::new(config).unwrap();
+        let mut state = solver.config.state.game_state();
+        state.terminal = Some(Terminal::Showdown);
+        for river in &solver.river_cards {
+            let mut masked = ranges.clone();
+            for player in 0..2 {
+                for combo in &solver.river_blocked_combos[*river as usize] {
+                    masked[player][*combo] = 0.0;
+                }
+            }
+            let river_values = solver.river_showdown_values(&state, &masked, *river);
+            let river_total = masked[0]
+                .iter()
+                .zip(&river_values[0])
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>()
+                + masked[1]
+                    .iter()
+                    .zip(&river_values[1])
+                    .map(|(reach, value)| reach * value)
+                    .sum::<f64>();
+            assert!(
+                river_total.abs() < 1e-8,
+                "river {river} zero-sum total was {river_total}"
+            );
+        }
+        let values = solver.turn_all_in_values(&state, &ranges);
+        let total = ranges[0]
+            .iter()
+            .zip(&values[0])
+            .map(|(reach, value)| reach * value)
+            .sum::<f64>()
+            + ranges[1]
+                .iter()
+                .zip(&values[1])
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>();
+        assert!(total.abs() < 1e-8, "zero-sum total was {total}");
+    }
+
+    #[test]
+    fn observed_river_chance_counts_exactly_44_cards_per_private_pair() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let solver = TurnRiverSolver::new(TurnRiverSolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 2,
+            averaging_delay: 0,
+            river_refinement_iterations: 0,
+            regret_matching_plus: false,
+        })
+        .unwrap();
+        let player_zero = Combo::new(1, 2);
+        let player_one = Combo::new(3, 4);
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for river in &solver.river_cards {
+            let mut child = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+            if !player_one.cards().contains(river) {
+                child[0][player_zero.key()] = 1.0;
+            }
+            if !player_zero.cards().contains(river) {
+                child[1][player_one.key()] = 1.0;
+            }
+            solver.accumulate_compatible_river_child(&mut values, &child, *river);
+        }
+        assert!((values[0][player_zero.key()] - 1.0).abs() < 1e-12);
+        assert!((values[1][player_one.key()] - 1.0).abs() < 1e-12);
     }
 
     #[test]
@@ -5517,6 +5824,7 @@ mod tests {
             state: PublicBeliefState::turn_start(board, 1, invested, ranges),
             iterations: 4,
             averaging_delay: 0,
+            river_refinement_iterations: 0,
             regret_matching_plus: false,
         })
         .unwrap();
@@ -5528,6 +5836,49 @@ mod tests {
                 assert!((left - right).abs() < 1e-5, "{left} != {right}");
             }
         }
+    }
+
+    #[test]
+    fn river_refinement_freezes_the_exported_average_turn_policy() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let base = TurnRiverSolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 2,
+            averaging_delay: 0,
+            river_refinement_iterations: 0,
+            regret_matching_plus: false,
+        };
+        let joint = solve_turn_river(base.clone()).unwrap();
+        let refined = solve_turn_river(TurnRiverSolveConfig {
+            river_refinement_iterations: 2,
+            ..base
+        })
+        .unwrap();
+        let turn_strategies = |solution: &TurnRiverSolution| {
+            solution
+                .strategies
+                .iter()
+                .filter(|strategy| {
+                    !strategy
+                        .public_history
+                        .iter()
+                        .any(|part| part.starts_with("chance:river:"))
+                })
+                .map(|strategy| {
+                    (
+                        strategy.public_history.clone(),
+                        strategy.probabilities.clone(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(turn_strategies(&joint), turn_strategies(&refined));
+        assert_eq!(refined.river_refinement_iterations, 2);
+        assert!(refined
+            .method
+            .contains("frozen_average_turn_river_refinement"));
     }
 
     #[test]
