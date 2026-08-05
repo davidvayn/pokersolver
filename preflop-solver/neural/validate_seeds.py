@@ -266,6 +266,8 @@ def exploitability_certificate(
     policy_model: ActionScorer,
     postflop_policy_model: ActionScorer | None = None,
     opponent_samples_per_deal: int = 0,
+    opponent_samples_per_runout: int = 0,
+    public_branches_per_street: int = 0,
 ) -> dict[str, Any]:
     subprocess.run(
         ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
@@ -315,14 +317,32 @@ def exploitability_certificate(
                     str(opponent_samples_per_deal),
                 )
             )
+        if opponent_samples_per_runout > 0:
+            command.extend(
+                (
+                    "--opponent-samples-per-runout",
+                    str(opponent_samples_per_runout),
+                )
+            )
+        if public_branches_per_street > 0:
+            command.extend(
+                (
+                    "--public-branches-per-street",
+                    str(public_branches_per_street),
+                )
+            )
         result = subprocess.run(
             command, cwd=root, check=True, capture_output=True, text=True
         )
     certificate = json.loads(result.stdout)
     expected_schema = (
-        "hu-neural-opponent-hidden-upper-bound-v1"
-        if opponent_samples_per_deal > 0
-        else "hu-neural-clairvoyant-upper-bound-v1"
+        "hu-neural-causal-sample-game-upper-bound-v1"
+        if public_branches_per_street > 0
+        else (
+            "hu-neural-opponent-hidden-upper-bound-v1"
+            if opponent_samples_per_deal > 0
+            else "hu-neural-clairvoyant-upper-bound-v1"
+        )
     )
     if (
         certificate.get("schema") != expected_schema
@@ -342,6 +362,19 @@ def exploitability_certificate(
             or not np.isfinite(margin)
         ):
             raise RuntimeError("opponent-hidden exploitability certificate is invalid")
+    if public_branches_per_street > 0:
+        expected_scenarios = (
+            public_branches_per_street**3 * opponent_samples_per_runout
+        )
+        if (
+            certificate.get("opponent_samples_per_runout")
+            != opponent_samples_per_runout
+            or certificate.get("opponent_samples_per_deal") is not None
+            or certificate.get("public_branches_per_street")
+            != public_branches_per_street
+            or certificate.get("scenarios_per_deal") != expected_scenarios
+        ):
+            raise RuntimeError("causal exploitability certificate is invalid")
     return certificate
 
 
@@ -510,6 +543,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
     )
+    parser.add_argument(
+        "--exploitability-certificate-opponent-samples-per-runout",
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        "--exploitability-certificate-public-branches-per-street",
+        type=int,
+        default=0,
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -544,6 +587,25 @@ def main() -> None:
         raise ValueError("certificate threads must be positive")
     if args.exploitability_certificate_opponent_samples_per_deal < 0:
         raise ValueError("certificate opponent samples cannot be negative")
+    if args.exploitability_certificate_opponent_samples_per_runout < 0:
+        raise ValueError("certificate runout opponent samples cannot be negative")
+    if args.exploitability_certificate_public_branches_per_street < 0:
+        raise ValueError("certificate public branches cannot be negative")
+    if (
+        args.exploitability_certificate_public_branches_per_street > 0
+        and args.exploitability_certificate_opponent_samples_per_runout == 0
+    ):
+        raise ValueError("certificate public branches require runout opponent samples")
+    if (
+        args.exploitability_certificate_public_branches_per_street > 0
+        and args.exploitability_certificate_opponent_samples_per_deal > 0
+    ):
+        raise ValueError("causal certificate does not use per-deal opponent samples")
+    if (
+        args.exploitability_certificate_opponent_samples_per_runout > 0
+        and args.exploitability_certificate_public_branches_per_street == 0
+    ):
+        raise ValueError("runout opponent samples require public branches")
     root = Path(__file__).resolve().parents[2]
     first_state, first_model = load_run(args.run_a.resolve(), args.round_number)
     second_state, second_model = load_run(args.run_b.resolve(), args.round_number)
@@ -661,6 +723,8 @@ def main() -> None:
                 if postflop_models
                 else None,
                 opponent_samples_per_deal=args.exploitability_certificate_opponent_samples_per_deal,
+                opponent_samples_per_runout=args.exploitability_certificate_opponent_samples_per_runout,
+                public_branches_per_street=args.exploitability_certificate_public_branches_per_street,
             )
             for index, model in enumerate((first_model, second_model))
         ]
@@ -698,7 +762,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v9",
+        "schema": "hu-neural-cross-seed-validation-v10",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [

@@ -63,6 +63,12 @@ pub struct ExploitabilityCertificate {
     pub threads: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opponent_samples_per_deal: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opponent_samples_per_runout: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_branches_per_street: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenarios_per_deal: Option<u64>,
     pub exact_betting_tree_nodes: u64,
     pub sample_mean_exploitability_bb: f64,
     pub sample_standard_error_bb: f64,
@@ -1513,6 +1519,157 @@ fn opponent_hidden_future_board_response_value(
         .sum()
 }
 
+fn sample_without_replacement(
+    available: &[u8],
+    count: usize,
+    rng: &mut SplitMix64,
+) -> (Vec<u8>, Vec<u8>) {
+    debug_assert!(count <= available.len());
+    let mut deck = available.to_vec();
+    for index in 0..count {
+        let swap = index + rng.index(deck.len() - index);
+        deck.swap(index, swap);
+    }
+    (deck[..count].to_vec(), deck[count..].to_vec())
+}
+
+/// Draw a nested empirical public chance tree conditional only on the
+/// responder's private hand.
+///
+/// Every sampled terminal deal has the exact conditional card distribution.
+/// Reusing each sampled flop for several turns, each turn for several rivers,
+/// and each river for several hidden hands gives the empirical responder real
+/// information sets instead of revealing a complete runout at the root.
+fn sample_causal_scenarios(
+    responder_holes: [u8; 2],
+    responder: usize,
+    public_branches_per_street: u32,
+    opponent_samples_per_runout: u32,
+    rng: &mut SplitMix64,
+) -> Vec<Deal> {
+    let available = (0..52u8)
+        .filter(|card| !responder_holes.contains(card))
+        .collect::<Vec<_>>();
+    let scenario_count = (public_branches_per_street as usize)
+        .checked_pow(3)
+        .and_then(|count| count.checked_mul(opponent_samples_per_runout as usize))
+        .expect("validated causal scenario count");
+    let mut scenarios = Vec::with_capacity(scenario_count);
+    for _ in 0..public_branches_per_street {
+        let (flop, after_flop) = sample_without_replacement(&available, 3, rng);
+        for _ in 0..public_branches_per_street {
+            let (turn, after_turn) = sample_without_replacement(&after_flop, 1, rng);
+            for _ in 0..public_branches_per_street {
+                let (river, after_river) = sample_without_replacement(&after_turn, 1, rng);
+                for _ in 0..opponent_samples_per_runout {
+                    let (opponent_holes, _) = sample_without_replacement(&after_river, 2, rng);
+                    let mut holes = [[0u8; 2]; 2];
+                    holes[responder] = responder_holes;
+                    holes[1 - responder] = [opponent_holes[0], opponent_holes[1]];
+                    scenarios.push(Deal::from_sampled_cards(
+                        holes,
+                        [flop[0], flop[1], flop[2], turn[0], river[0]],
+                    ));
+                }
+            }
+        }
+    }
+    scenarios
+}
+
+fn observed_public_board(deal: &Deal, street: Street) -> Vec<u8> {
+    let board_len = street.board_len();
+    let mut key = deal.board[..board_len].to_vec();
+    // A flop is an unordered public set. Turn and river remain chronological.
+    key[..board_len.min(3)].sort_unstable();
+    key
+}
+
+fn causal_sample_game_response_value(
+    generator: &SampleGenerator,
+    state: GameState,
+    scenarios: &[Deal],
+    weights: &[f64],
+    responder: usize,
+    visited_nodes: &mut u64,
+) -> f64 {
+    *visited_nodes += 1;
+    debug_assert_eq!(scenarios.len(), weights.len());
+    if weights.iter().all(|weight| *weight <= 0.0) {
+        return 0.0;
+    }
+    if state.terminal.is_some() {
+        return scenarios
+            .iter()
+            .zip(weights)
+            .map(|(deal, weight)| {
+                let utility_p0 = complete_runout_utility_p0(&state, deal);
+                weight
+                    * if responder == 0 {
+                        utility_p0
+                    } else {
+                        -utility_p0
+                    }
+            })
+            .sum();
+    }
+    let actions = state.legal_actions(&generator.config.game);
+    if state.actor == responder {
+        let mut information_sets: BTreeMap<Vec<u8>, Vec<f64>> = BTreeMap::new();
+        for (index, (scenario, reach)) in scenarios.iter().zip(weights).enumerate() {
+            if *reach <= 0.0 {
+                continue;
+            }
+            information_sets
+                .entry(observed_public_board(scenario, state.street))
+                .or_insert_with(|| vec![0.0; scenarios.len()])[index] = *reach;
+        }
+        return information_sets
+            .into_values()
+            .map(|information_set_weights| {
+                actions
+                    .iter()
+                    .map(|action| {
+                        causal_sample_game_response_value(
+                            generator,
+                            state.apply(action, &generator.config.game),
+                            scenarios,
+                            &information_set_weights,
+                            responder,
+                            visited_nodes,
+                        )
+                    })
+                    .fold(f64::NEG_INFINITY, f64::max)
+            })
+            .sum();
+    }
+
+    let mut branch_weights = vec![vec![0.0; scenarios.len()]; actions.len()];
+    for (scenario_index, (deal, reach)) in scenarios.iter().zip(weights).enumerate() {
+        if *reach <= 0.0 {
+            continue;
+        }
+        let strategy = generator.current_strategy(&state, deal, &actions);
+        for (action_index, probability) in strategy.into_iter().enumerate() {
+            branch_weights[action_index][scenario_index] = reach * probability;
+        }
+    }
+    actions
+        .iter()
+        .zip(branch_weights)
+        .map(|(action, child_weights)| {
+            causal_sample_game_response_value(
+                generator,
+                state.apply(action, &generator.config.game),
+                scenarios,
+                &child_weights,
+                responder,
+                visited_nodes,
+            )
+        })
+        .sum()
+}
+
 fn one_sided_empirical_bernstein_margin(
     sample_variance: f64,
     range: f64,
@@ -1638,6 +1795,9 @@ pub fn certify_exploitability_upper_bound(
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: None,
+        opponent_samples_per_runout: None,
+        public_branches_per_street: None,
+        scenarios_per_deal: None,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
@@ -1789,6 +1949,9 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: Some(opponent_samples_per_deal),
+        opponent_samples_per_runout: None,
+        public_branches_per_street: None,
+        scenarios_per_deal: Some(opponent_samples_per_deal as u64),
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
@@ -1802,6 +1965,170 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         assumptions: vec![
             "outer responder-card and board samples are independent and exact under card removal",
             "conditional opponent particles are independent uniform samples with replacement and shared across every candidate response in an outer game",
+            "the frozen opponent network is evaluated exactly on every reached betting action",
+            "complete sampled runouts settle every showdown exactly",
+            "utilities are zero-sum and bounded to the effective stack in absolute value",
+        ],
+    })
+}
+
+/// Compute a conservative sample-game upper bound with causal public chance.
+///
+/// An outer sample fixes only the responder's private cards. Each nested
+/// empirical game samples flop, turn, and river branches, then hidden opponent
+/// hands. The responder may condition on its private cards, the betting history,
+/// and only the public cards revealed on the current street. For every fixed
+/// legal response the nested estimator is unbiased; maximizing the empirical
+/// game has non-negative sample-optimization bias, so its expectation remains
+/// an upper bound on the true best response.
+pub fn certify_causal_sample_game_exploitability_upper_bound(
+    config: ExploitabilityCertificateConfig,
+    public_branches_per_street: u32,
+    opponent_samples_per_runout: u32,
+) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
+    if config.deals < 2 {
+        return Err("exploitability certification requires at least two deals".into());
+    }
+    if public_branches_per_street == 0 {
+        return Err("causal certification requires public chance branches".into());
+    }
+    if opponent_samples_per_runout == 0 {
+        return Err("causal certification requires hidden-hand samples".into());
+    }
+    if !config.confidence.is_finite() || !(0.0..1.0).contains(&config.confidence) {
+        return Err("certificate confidence must be strictly between zero and one".into());
+    }
+    if config.threads == 0 {
+        return Err("certificate thread count must be positive".into());
+    }
+    let scenarios_per_deal = u64::from(public_branches_per_street)
+        .checked_pow(3)
+        .and_then(|count| count.checked_mul(u64::from(opponent_samples_per_runout)))
+        .ok_or("causal certificate scenario count overflows")?;
+    if scenarios_per_deal > 1_000_000 {
+        return Err("causal certificate exceeds one million scenarios per deal".into());
+    }
+    let network_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
+    let generator = SampleGenerator::new(SampleGenerationConfig {
+        game: config.game.clone(),
+        traversals: 1,
+        start_iteration: 0,
+        seed: config.seed,
+        max_records: 1,
+        output: PathBuf::from("unused-causal-certificate.jsonl.gz"),
+        network_path: Some(config.network_path),
+        trajectory_sampling: false,
+        evaluate_trajectory_values: false,
+        value_rollouts_per_action: 1,
+        enumerate_turn_river_chance: false,
+    })?;
+    if generator.networks.is_none() {
+        return Err("exploitability certification requires a frozen policy".into());
+    }
+    let mut rng = SplitMix64::new(config.seed);
+    let responder_holes = (0..config.deals)
+        .map(|index| (index, Deal::sample(&mut rng).holes))
+        .collect::<Vec<_>>();
+    let worker_count = config.threads.min(responder_holes.len());
+    let chunk_size = responder_holes.len().div_ceil(worker_count);
+    let chunks = responder_holes
+        .chunks(chunk_size)
+        .map(<[(u64, [[u8; 2]; 2])]>::to_vec)
+        .collect::<Vec<_>>();
+    let evaluated = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for chunk in chunks {
+            let generator = &generator;
+            let game = &config.game;
+            handles.push(scope.spawn(move || {
+                chunk
+                    .into_iter()
+                    .map(|(index, sampled_holes)| {
+                        let mut visited_nodes = 0u64;
+                        let responses: [f64; 2] = std::array::from_fn(|responder| {
+                            let seed = config.seed
+                                ^ index.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                                ^ (responder as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                            let mut scenario_rng = SplitMix64::new(seed);
+                            let scenarios = sample_causal_scenarios(
+                                sampled_holes[responder],
+                                responder,
+                                public_branches_per_street,
+                                opponent_samples_per_runout,
+                                &mut scenario_rng,
+                            );
+                            let weights = vec![1.0 / scenarios.len() as f64; scenarios.len()];
+                            causal_sample_game_response_value(
+                                generator,
+                                GameState::initial(game),
+                                &scenarios,
+                                &weights,
+                                responder,
+                                &mut visited_nodes,
+                            )
+                        });
+                        (
+                            ((responses[0] + responses[1]) / 2.0)
+                                .clamp(0.0, game.effective_stack_bb),
+                            visited_nodes,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("certificate worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut visited_nodes = 0u64;
+    let mut mean = 0.0;
+    let mut squared_deviation_sum = 0.0;
+    let depth = config.game.effective_stack_bb;
+    for (index, (exploitability, nodes)) in evaluated.into_iter().enumerate() {
+        visited_nodes += nodes;
+        let sample_index = index + 1;
+        let delta = exploitability - mean;
+        mean += delta / sample_index as f64;
+        squared_deviation_sum += delta * (exploitability - mean);
+    }
+    let sample_variance = squared_deviation_sum / (config.deals - 1) as f64;
+    let sample_standard_error = (sample_variance.max(0.0) / config.deals as f64).sqrt();
+    let alpha = 1.0 - config.confidence;
+    let hoeffding_margin = depth * ((1.0 / alpha).ln() / (2.0 * config.deals as f64)).sqrt();
+    let empirical_bernstein_margin = one_sided_empirical_bernstein_margin(
+        sample_variance,
+        depth,
+        config.deals,
+        config.confidence,
+    );
+    Ok(ExploitabilityCertificate {
+        schema: "hu-neural-causal-sample-game-upper-bound-v1",
+        method: "nested_public_chance_and_hidden_hand_sample_game_best_response_with_empirical_bernstein_ucb",
+        depth_bb: depth,
+        deals: config.deals,
+        seed: config.seed,
+        network_sha256,
+        confidence: config.confidence,
+        threads: worker_count,
+        opponent_samples_per_deal: None,
+        opponent_samples_per_runout: Some(opponent_samples_per_runout),
+        public_branches_per_street: Some(public_branches_per_street),
+        scenarios_per_deal: Some(scenarios_per_deal),
+        exact_betting_tree_nodes: visited_nodes,
+        sample_mean_exploitability_bb: mean,
+        sample_standard_error_bb: sample_standard_error,
+        hoeffding_margin_bb: hoeffding_margin,
+        empirical_bernstein_margin_bb: Some(empirical_bernstein_margin),
+        confidence_bound_method: "maurer_pontil_2009_theorem_4_one_sided_empirical_bernstein",
+        confidence_bound_reference: "https://arxiv.org/abs/0907.3740",
+        exploitability_upper_bound_bb: (mean + empirical_bernstein_margin).min(depth),
+        relaxation: "each responder observes its own cards, betting history, and only the currently revealed public board in a nested public-chance and hidden-hand sample game",
+        guarantee: "every fixed legal response has an unbiased nested sample-game value; the expected empirical optimum upper-bounds the legal best response by convexity, and the one-sided empirical Bernstein bound covers the independent outer games",
+        assumptions: vec![
+            "outer responder-card samples are independent and exact under card removal",
+            "nested flop, turn, river, and hidden-hand branches have the exact conditional card distribution",
+            "identical observed public boards share one responder action within each sampled betting history",
             "the frozen opponent network is evaluated exactly on every reached betting action",
             "complete sampled runouts settle every showdown exactly",
             "utilities are zero-sum and bounded to the effective stack in absolute value",
@@ -2046,6 +2373,10 @@ mod tests {
         let second = certify_exploitability_upper_bound(make()).unwrap();
         let hidden_first = certify_opponent_hidden_exploitability_upper_bound(make(), 4).unwrap();
         let hidden_second = certify_opponent_hidden_exploitability_upper_bound(make(), 4).unwrap();
+        let causal_first =
+            certify_causal_sample_game_exploitability_upper_bound(make(), 2, 2).unwrap();
+        let causal_second =
+            certify_causal_sample_game_exploitability_upper_bound(make(), 2, 2).unwrap();
         fs::remove_file(path).unwrap();
         assert_eq!(
             serde_json::to_vec(&first).unwrap(),
@@ -2073,6 +2404,58 @@ mod tests {
                 >= hidden_first.sample_mean_exploitability_bb
         );
         assert!(hidden_first.exploitability_upper_bound_bb <= 2.0);
+        assert_eq!(
+            serde_json::to_vec(&causal_first).unwrap(),
+            serde_json::to_vec(&causal_second).unwrap()
+        );
+        assert_eq!(
+            causal_first.schema,
+            "hu-neural-causal-sample-game-upper-bound-v1"
+        );
+        assert_eq!(causal_first.opponent_samples_per_runout, Some(2));
+        assert_eq!(causal_first.public_branches_per_street, Some(2));
+        assert_eq!(causal_first.scenarios_per_deal, Some(16));
+        assert!(causal_first.exact_betting_tree_nodes > 0);
+        assert!(causal_first.sample_mean_exploitability_bb >= 0.0);
+        assert!(
+            causal_first.exploitability_upper_bound_bb
+                >= causal_first.sample_mean_exploitability_bb
+        );
+        assert!(causal_first.exploitability_upper_bound_bb <= 2.0);
+    }
+
+    #[test]
+    fn causal_scenarios_preserve_cards_and_nested_public_information() {
+        let responder_holes = [48, 49];
+        let scenarios = sample_causal_scenarios(responder_holes, 0, 2, 3, &mut SplitMix64::new(91));
+        assert_eq!(scenarios.len(), 24);
+        for deal in &scenarios {
+            assert_eq!(deal.holes[0], responder_holes);
+            let cards = deal
+                .holes
+                .into_iter()
+                .flatten()
+                .chain(deal.board)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(cards.len(), 9);
+        }
+        let flop_groups = scenarios
+            .iter()
+            .map(|deal| observed_public_board(deal, Street::Flop))
+            .collect::<BTreeSet<_>>();
+        let turn_groups = scenarios
+            .iter()
+            .map(|deal| observed_public_board(deal, Street::Turn))
+            .collect::<BTreeSet<_>>();
+        let river_groups = scenarios
+            .iter()
+            .map(|deal| observed_public_board(deal, Street::River))
+            .collect::<BTreeSet<_>>();
+        assert!(flop_groups.len() <= 2);
+        assert!(turn_groups.len() <= 4);
+        assert!(river_groups.len() <= 8);
+        assert!(flop_groups.len() <= turn_groups.len());
+        assert!(turn_groups.len() <= river_groups.len());
     }
 
     #[test]

@@ -1330,13 +1330,39 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
         )?,
         network_path,
     };
-    let certificate = if let Some(samples) = value(args, "--opponent-samples-per-deal") {
-        blueprint::neural::certify_opponent_hidden_exploitability_upper_bound(
-            config,
-            samples.parse()?,
-        )?
-    } else {
-        blueprint::neural::certify_exploitability_upper_bound(config)?
+    let opponent_samples = value(args, "--opponent-samples-per-deal")
+        .map(|samples| samples.parse())
+        .transpose()?;
+    let opponent_samples_per_runout = value(args, "--opponent-samples-per-runout")
+        .map(|samples| samples.parse())
+        .transpose()?;
+    let public_branches = value(args, "--public-branches-per-street")
+        .map(|branches| branches.parse())
+        .transpose()?;
+    let certificate = match (
+        public_branches,
+        opponent_samples,
+        opponent_samples_per_runout,
+    ) {
+        (Some(branches), None, Some(samples)) => {
+            blueprint::neural::certify_causal_sample_game_exploitability_upper_bound(
+                config, branches, samples,
+            )?
+        }
+        (Some(_), _, _) => {
+            return Err(
+                "--public-branches-per-street requires only --opponent-samples-per-runout".into(),
+            )
+        }
+        (None, Some(samples), None) => {
+            blueprint::neural::certify_opponent_hidden_exploitability_upper_bound(config, samples)?
+        }
+        (None, None, None) => blueprint::neural::certify_exploitability_upper_bound(config)?,
+        (None, _, Some(_)) => {
+            return Err(
+                "--opponent-samples-per-runout requires --public-branches-per-street".into(),
+            )
+        }
     };
     let output = serde_json::to_string_pretty(&certificate)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
@@ -1785,6 +1811,11 @@ Full-game learned-response options:
 Neural exploitability-certificate options:
   --opponent-samples-per-deal <N> Hide opponent cards and use N common
                                   conditional particles per future-board game
+  --opponent-samples-per-runout <N>
+                                  Hide N opponent hands under each causal runout
+  --public-branches-per-street <N> With opponent samples, build N nested flop,
+                                  turn, and river branches and reveal cards only
+                                  when their street is reached
 
 Complete turn/river label options:
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]

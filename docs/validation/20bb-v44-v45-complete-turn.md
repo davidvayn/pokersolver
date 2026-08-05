@@ -1,7 +1,7 @@
 # 20bb v44 rejection and v45 complete-turn correction
 
-Status: v44 rejected; corrected v45 local solver pilots accepted; no active
-manifest was modified.
+Status: v44 rejected; corrected v45 corpora accepted; first corrected value
+students rejected; no active manifest was modified.
 
 ## Frozen v44 downstream result
 
@@ -184,14 +184,39 @@ away from the authentic state distribution.
 ## Remaining boundary
 
 Passing the exact local turn/river gate is necessary label-quality evidence,
-not full-game equilibrium certification. The next step is upgrading every
-authentic target at 200 paired rounds and rejecting the composed corpus if even
-one target exceeds the gate. After an accepted v2 corpus exists,
-the remaining sequence is paired value-network training, exact parity,
-disjoint leaf and matched-resolver selection, continuation-cache and preflop
-DCFR regeneration, action-EV uncertainty measurement, learned-response red
-teaming, and an independent one-sided 99% full-game exploitability upper bound.
-The public model stays unavailable until every declared activation gate passes.
+not full-game equilibrium certification. All 256 authentic targets have now
+been upgraded at 200 paired rounds. The composed schema-v2 corpus is accepted:
+
+- maximum exact local exploitability: `0.011078829bb/hand`;
+- maximum probability-sum error: `4.44e-16`;
+- maximum absolute zero-sum residual: `1.95e-14`;
+- exact public river branches per target: 48; and
+- source policy SHA-256:
+  `c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948`.
+
+The corrected labels differ materially from the legacy incomplete-turn labels.
+Across the same 256 states, their mean per-state reach-weighted RMSE is
+`0.670920bb` and MAE is `0.498743bb`; the global reach-weighted RMSE is
+`0.807219bb`. Mean state RMSE is `0.521040bb` for small pots, `1.338724bb`
+for medium pots, and `1.292437bb` for large pots. State 180 reaches
+`2.040773bb` RMSE. This confirms that v44's low error against schema-v1 labels
+did not measure the continuation function needed by the flop resolver.
+
+The first schema-v2 paired students preserve exact Python/Rust inference parity
+but do not pass value accuracy. The pure 256-state model measures
+`0.511606bb` and `0.519112bb` holdout RMSE. Adding 64 corrected large-pot
+training states improves those values to `0.396528bb` and `0.373431bb`, while
+cross-seed prediction correlation remains `0.998612` and maximum runtime parity
+error remains below `7.6e-6bb`. The remaining failure is therefore measured
+function approximation/coverage, not seed instability or serialization drift.
+Additional corrected coverage and resolver-leaf training supplements are being
+evaluated without adding the disjoint resolver-leaf evaluation set to training.
+
+The remaining sequence is corrected value-network selection, disjoint leaf and
+matched-resolver selection, continuation-cache and preflop DCFR regeneration,
+action-EV uncertainty measurement, learned-response red teaming, and an
+independent one-sided 99% full-game exploitability upper bound. The public
+model stays unavailable until every declared activation gate passes.
 
 ## Tighter full-game certificate pilot
 
@@ -224,3 +249,26 @@ outer and hidden-hand samples and, more importantly, that future-board
 revelation may remain too loose. Activation therefore remains blocked on the
 declared full-game bound even though the evaluator itself is now materially
 tighter and its chance settlement is exact.
+
+## Causal sample-game certificate pilot
+
+The next certificate removes future-board revelation as well. Each outer game
+fixes only the responder's private cards, then constructs nested empirical
+flop, turn, river, and hidden-opponent branches. At a responder node, scenarios
+with the same currently visible public board and betting history share one
+action. Later public cards therefore cannot influence an earlier decision.
+
+For any fixed legal response, the nested terminal-deal average is unbiased.
+The expectation of the empirical maximum is at least the maximum expected
+value, so sample optimization remains a conservative relaxation. Independent
+outer games retain the same one-sided empirical-Bernstein confidence bound.
+The artifact pins the policy bytes, branch counts, total scenarios per outer
+game, and exact tree-node count.
+
+On the rejected routed v26 seed 5101, a two-outer-game smoke with two public
+branches per street and four hidden hands per runout (32 terminal scenarios per
+outer game) measured `0.962029bb/hand`. An eight-game pilot measured
+`2.490222bb/hand` with `0.536798bb` standard error. Both 99% upper bounds
+correctly cap at 20bb because the sample counts are tiny. These are diagnostic
+only: the new evaluator closes the future-information defect, but v26 and the
+pilot sample size remain far from the release gate.
