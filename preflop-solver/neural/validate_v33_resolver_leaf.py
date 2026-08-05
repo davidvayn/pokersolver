@@ -297,16 +297,30 @@ def compose(
         candidate_seed = candidate_report.get("value_network_seed")
         if candidate_seed is not None:
             candidate_seed = int(candidate_seed)
-        matched = candidate_report.get("state", {}).get("board") == baseline_report.get(
-            "state", {}
-        ).get("board") and candidate_report.get("iterations") == baseline_report.get(
-            "iterations"
+        evaluation_seed = candidate_report.get("evaluation_value_network_seed")
+        evaluation_dataset = candidate_report.get(
+            "evaluation_value_network_source_dataset_sha256"
+        )
+        matched = (
+            candidate_report.get("state", {}).get("board")
+            == baseline_report.get("state", {}).get("board")
+            and candidate_report.get("iterations") == baseline_report.get("iterations")
+            and evaluation_seed is not None
+            and evaluation_seed
+            == baseline_report.get("evaluation_value_network_seed")
+            and evaluation_dataset is not None
+            and evaluation_dataset
+            == baseline_report.get(
+                "evaluation_value_network_source_dataset_sha256"
+            )
+            and int(evaluation_seed) != candidate_seed
         )
         candidate_value = resolver_exploitability(candidate_report)
         baseline_value = resolver_exploitability(baseline_report)
         resolver_pairs.append(
             {
                 "candidateSeed": candidate_seed,
+                "evaluationSeed": evaluation_seed,
                 "board": candidate_report.get("state", {}).get("board"),
                 "iterations": candidate_report.get("iterations"),
                 "matched": matched,
@@ -378,7 +392,7 @@ def compose(
         "matchedResolverCoverage",
         all_candidate_seeds_resolved,
         resolver_seed_evaluations,
-        "exactly three distinct matched boards for every candidate seed",
+        "exactly three distinct boards per seed, each scored by the same independent cross-fit evaluator as its baseline",
     )
     prediction_gate_names = [
         "matchedAuthenticHoldout",

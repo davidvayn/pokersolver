@@ -1276,6 +1276,12 @@ pub struct FlopSolution {
     pub value_network_source_dataset_sha256: Option<String>,
     #[serde(default)]
     pub value_network_source_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_value_network_seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_value_network_source_dataset_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_value_network_source_policy_sha256: Option<String>,
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub strategies: Vec<PublicBeliefStrategy>,
@@ -1894,6 +1900,9 @@ impl FlopSolver {
                 .config
                 .value_network
                 .source_policy_sha256,
+            evaluation_value_network_seed: None,
+            evaluation_value_network_source_dataset_sha256: None,
+            evaluation_value_network_source_policy_sha256: None,
             state: self.config.state,
             iterations: self.config.iterations,
             strategies,
@@ -2130,6 +2139,37 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
     let mut solver = FlopSolver::new(config)?;
     solver.train();
     Ok(solver.finish())
+}
+
+/// Train the resolver with one frozen leaf model and score its frozen average
+/// strategy with another. This prevents a candidate from serving as both the
+/// policy optimizer and the supposedly independent downstream evaluator.
+pub fn solve_flop_cross_evaluated(
+    config: FlopResolveConfig,
+    evaluation_value_network: PublicValueNetwork,
+) -> Result<FlopSolution, String> {
+    evaluation_value_network.validate()?;
+    let resolver_seed = config.value_network.seed;
+    let resolver_source_dataset = config.value_network.source_dataset_sha256.clone();
+    let resolver_source_policy = config.value_network.source_policy_sha256.clone();
+    let evaluation_seed = evaluation_value_network.seed;
+    let evaluation_source_dataset = evaluation_value_network.source_dataset_sha256.clone();
+    let evaluation_source_policy = evaluation_value_network.source_policy_sha256.clone();
+    let mut solver = FlopSolver::new(config)?;
+    solver.train();
+    solver.config.value_network = evaluation_value_network;
+    solver.turn_leaf_evaluations.set(0);
+    solver.exact_all_in_terminal_evaluations.set(0);
+    solver.maximum_leaf_zero_sum_residual.set(0.0);
+    let mut solution = solver.finish();
+    solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+    solution.value_network_seed = resolver_seed;
+    solution.value_network_source_dataset_sha256 = resolver_source_dataset;
+    solution.value_network_source_policy_sha256 = resolver_source_policy;
+    solution.evaluation_value_network_seed = Some(evaluation_seed);
+    solution.evaluation_value_network_source_dataset_sha256 = evaluation_source_dataset;
+    solution.evaluation_value_network_source_policy_sha256 = evaluation_source_policy;
+    Ok(solution)
 }
 
 pub fn solve_flop_continuation_values(
@@ -4389,6 +4429,46 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("all-in")));
+    }
+
+    #[test]
+    fn cross_evaluated_flop_resolver_freezes_strategy_and_records_both_models() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut resolver_network = zero_value_network();
+        resolver_network.seed = 41;
+        resolver_network.source_dataset_sha256 = Some("a".repeat(64));
+        let config = FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 2,
+            averaging_delay: 0,
+            value_network: resolver_network.clone(),
+            threads: 1,
+        };
+        let ordinary = solve_flop(config.clone()).unwrap();
+        let mut evaluation_network = resolver_network;
+        evaluation_network.seed = 42;
+        evaluation_network.source_dataset_sha256 = Some("b".repeat(64));
+        let cross = solve_flop_cross_evaluated(config, evaluation_network).unwrap();
+        assert_eq!(cross.strategies, ordinary.strategies);
+        assert_eq!(cross.value_network_seed, 41);
+        assert_eq!(
+            cross.value_network_source_dataset_sha256,
+            Some("a".repeat(64))
+        );
+        assert_eq!(cross.evaluation_value_network_seed, Some(42));
+        assert_eq!(
+            cross.evaluation_value_network_source_dataset_sha256,
+            Some("b".repeat(64))
+        );
+        assert!(cross.method.contains("scored_by_independent"));
+        assert!(
+            (cross.metrics.depth_limited_exploitability_bb_per_hand
+                - ordinary.metrics.depth_limited_exploitability_bb_per_hand)
+                .abs()
+                < 1e-10
+        );
     }
 
     #[test]

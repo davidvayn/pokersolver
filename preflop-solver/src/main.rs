@@ -4,7 +4,7 @@ use preflop_solver::push_fold::{self, PushFoldConfig};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -237,26 +237,32 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
     let ranges = std::array::from_fn(|_| blueprint::public_belief::uniform_range(&board));
     let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
     let iterations = parse_or(args, "--iterations", 20u64)?;
-    let solution =
-        blueprint::public_belief::solve_flop(blueprint::public_belief::FlopResolveConfig {
-            game,
-            state: blueprint::public_belief::PublicBeliefState::flop_start(
-                board,
-                parse_or(args, "--actor", 1usize)?,
-                [pot_bb / 2.0, pot_bb / 2.0],
-                ranges,
-            ),
-            iterations,
-            averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
-            value_network: network,
-            threads: parse_or(
-                args,
-                "--threads",
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(1),
-            )?,
-        })?;
+    let resolve_config = blueprint::public_belief::FlopResolveConfig {
+        game,
+        state: blueprint::public_belief::PublicBeliefState::flop_start(
+            board,
+            parse_or(args, "--actor", 1usize)?,
+            [pot_bb / 2.0, pot_bb / 2.0],
+            ranges,
+        ),
+        iterations,
+        averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
+        value_network: network,
+        threads: parse_or(
+            args,
+            "--threads",
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
+        )?,
+    };
+    let solution = if let Some(path) = value(args, "--evaluation-value-network") {
+        let evaluation_network =
+            blueprint::public_belief::PublicValueNetwork::read(Path::new(&path))?;
+        blueprint::public_belief::solve_flop_cross_evaluated(resolve_config, evaluation_network)?
+    } else {
+        blueprint::public_belief::solve_flop(resolve_config)?
+    };
     let output = serde_json::to_string_pretty(&solution)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
         if let Some(parent) = path.parent() {

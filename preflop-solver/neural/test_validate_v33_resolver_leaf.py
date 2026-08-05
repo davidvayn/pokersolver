@@ -75,9 +75,12 @@ def parity():
     ]
 
 
-def resolver(value, board=None, seed=1):
+def resolver(value, board=None, seed=1, evaluation_seed=None):
+    evaluation_seed = evaluation_seed or 10_000 + seed
     return {
         "value_network_seed": seed,
+        "evaluation_value_network_seed": evaluation_seed,
+        "evaluation_value_network_source_dataset_sha256": "e" * 64,
         "state": {"board": board or [0, 5, 10]},
         "iterations": 100,
         "metrics": {"depth_limited_exploitability_bb_per_hand": value},
@@ -200,6 +203,27 @@ class V33ResolverLeafTests(unittest.TestCase):
         self.assertFalse(report["gates"]["matchedResolverCoverage"]["passed"])
         self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
         self.assertEqual(report["researchSelection"], "v31")
+
+    def test_self_evaluated_resolver_is_not_matched_evidence(self):
+        boards = ([0, 5, 10], [1, 6, 11], [2, 7, 12])
+        candidates = [
+            resolver(value, board, 1, evaluation_seed=1)
+            for value, board in zip((0.4, 0.45, 0.48), boards, strict=True)
+        ]
+        baselines = [
+            resolver(0.5, board, 1, evaluation_seed=1) for board in boards
+        ]
+        report = module.compose(
+            self.baseline,
+            self.candidate,
+            leaf_report(1.0),
+            leaf_reports(0.8),
+            parity(),
+            candidates,
+            baselines,
+        )
+        self.assertFalse(report["gates"]["matchedResolverCoverage"]["passed"])
+        self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
 
     def test_leaf_improvement_cannot_replace_full_game_upper_bound(self):
         report = module.compose(
