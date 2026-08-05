@@ -29,7 +29,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
         "full-game-lbr" => run_full_game_lbr(&args[1..]),
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
+        "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
+        "turn-pbs-upgrade-targets" => run_turn_pbs_upgrade_targets(&args[1..]),
+        "turn-pbs-compose-upgrade" => run_turn_pbs_compose_upgrade(&args[1..]),
         "flop-pbs-resolve" => run_flop_pbs_resolve(&args[1..]),
         "flop-pbs-evaluate" => run_flop_pbs_evaluate(&args[1..]),
         "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
@@ -144,7 +147,7 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
             "minimumRangeEffectiveSampleSize": dataset.targets.iter().filter_map(|target| target.range_effective_sample_size).fold(f64::INFINITY, f64::min),
             "minimumRangeReplicates": dataset.targets.iter().filter_map(|target| target.range_replicates).min(),
             "maximumRangeTotalVariation": dataset.targets.iter().filter_map(|target| target.range_maximum_total_variation).fold(0.0f64, f64::max),
-            "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "maximumTurnRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
             "validation": dataset.validation,
             "output": path,
         }))?
@@ -214,7 +217,7 @@ fn run_flop_pbs_leaf_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
             "resolverIterations": dataset.resolver_iterations,
             "resolverLeafPopulation": dataset.resolver_leaf_population,
             "meanResolverLeafProbabilityMass": dataset.resolver_leaf_probability_mass,
-            "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "maximumTurnRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
             "maximumZeroSumResidualBb": dataset.targets.iter().map(|target| target.zero_sum_residual_bb.abs()).fold(0.0f64, f64::max),
             "validation": dataset.validation,
             "output": path,
@@ -400,11 +403,308 @@ fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    apply_dcfr_args(&mut game, args)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let board = parse_board::<4>(
+        &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th,Js")?,
+    )?;
+    let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
+    let iterations = parse_or(args, "--iterations", 500u64)?;
+    let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
+    let ranges = std::array::from_fn(|_| blueprint::public_belief::uniform_range(&board));
+    let config = blueprint::public_belief::TurnRiverSolveConfig {
+        game,
+        state: blueprint::public_belief::PublicBeliefState::turn_start(
+            board,
+            parse_or(args, "--actor", 1usize)?,
+            [pot_bb / 2.0, pot_bb / 2.0],
+            ranges,
+        ),
+        iterations,
+        averaging_delay,
+        regret_matching_plus: args
+            .iter()
+            .any(|argument| argument == "--regret-matching-plus"),
+    };
+    let export_strategies = args
+        .iter()
+        .any(|argument| argument == "--export-strategies");
+    let (output, metrics) = if export_strategies {
+        let solution = blueprint::public_belief::solve_turn_river(config)?;
+        (
+            serde_json::to_string_pretty(&solution)?,
+            serde_json::to_string_pretty(&solution.metrics)?,
+        )
+    } else {
+        let values = blueprint::public_belief::solve_turn_river_continuation_values(config)?;
+        (
+            serde_json::to_string_pretty(&values)?,
+            serde_json::to_string_pretty(&values.metrics)?,
+        )
+    };
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{output}\n"))?;
+        println!("{metrics}");
+        eprintln!(
+            "wrote exact-card-removal turn-river solution {}",
+            path.display()
+        );
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn turn_upgrade_checkpoint_path(directory: &Path, index: usize, fingerprint: &str) -> PathBuf {
+    directory.join(format!("turn-{index:06}-{fingerprint}.json"))
+}
+
+fn turn_upgrade_fingerprint(
+    game: &BlueprintConfig,
+    target: &blueprint::public_belief::TurnValueTarget,
+    iterations: u64,
+    averaging_delay: u64,
+) -> Result<String, Box<dyn Error>> {
+    let ranges = std::array::from_fn(|player| {
+        target.ranges[player]
+            .iter()
+            .map(|value| *value as f64)
+            .collect::<Vec<_>>()
+    });
+    Ok(blueprint::public_belief::turn_target_input_sha256(
+        game,
+        target.board,
+        target.actor,
+        target.invested_bb,
+        &ranges,
+        iterations,
+        averaging_delay,
+    )?)
+}
+
+fn run_turn_pbs_upgrade_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let dataset_path = value(args, "--dataset")
+        .map(PathBuf::from)
+        .ok_or("--dataset is required")?;
+    let checkpoint_dir = value(args, "--checkpoint-dir")
+        .map(PathBuf::from)
+        .ok_or("--checkpoint-dir is required")?;
+    let mut dataset: blueprint::public_belief::TurnTargetDataset =
+        serde_json::from_slice(&fs::read(&dataset_path)?)?;
+    apply_dcfr_args(&mut dataset.game, args)?;
+    let iterations = parse_or(
+        args,
+        "--iterations",
+        dataset
+            .turn_river_iterations
+            .unwrap_or(dataset.river_iterations),
+    )?;
+    let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
+    if iterations < 2 || averaging_delay >= iterations {
+        return Err("upgrade iterations and averaging delay are invalid".into());
+    }
+    let start = parse_or(args, "--start-index", 0usize)?;
+    let end = parse_or(args, "--end-index", dataset.targets.len())?;
+    if start >= end || end > dataset.targets.len() {
+        return Err(format!(
+            "upgrade range [{start}, {end}) is outside {} targets",
+            dataset.targets.len()
+        )
+        .into());
+    }
+    fs::create_dir_all(&checkpoint_dir)?;
+    for index in start..end {
+        let source = &dataset.targets[index];
+        let fingerprint =
+            turn_upgrade_fingerprint(&dataset.game, source, iterations, averaging_delay)?;
+        let path = turn_upgrade_checkpoint_path(&checkpoint_dir, index, &fingerprint);
+        if path.exists() {
+            let cached: blueprint::public_belief::TurnValueTarget =
+                serde_json::from_slice(&fs::read(&path)?)?;
+            if cached.input_sha256.as_deref() != Some(fingerprint.as_str())
+                || cached.state_id != source.state_id
+                || cached.turn_river_exploitability_bb_per_hand.is_none()
+                || cached
+                    .current_turn_river_exploitability_bb_per_hand
+                    .is_none()
+                || cached.turn_river_maximum_probability_sum_error.is_none()
+                || cached.turn_river_solver_method.is_none()
+                || cached.turn_river_information_sets.is_none()
+                || cached.turn_information_sets.is_none()
+                || cached.river_information_sets.is_none()
+            {
+                return Err(format!("invalid upgrade checkpoint {}", path.display()).into());
+            }
+            println!("cached {index} {}", path.display());
+            continue;
+        }
+        let upgraded = blueprint::public_belief::upgrade_turn_value_target(
+            &dataset.game,
+            source,
+            iterations,
+            averaging_delay,
+        )?;
+        let temporary = path.with_extension("json.tmp");
+        fs::write(&temporary, serde_json::to_vec(&upgraded)?)?;
+        fs::rename(&temporary, &path)?;
+        println!(
+            "solved {index} exploitability={:.9}bb/hand {}",
+            upgraded
+                .turn_river_exploitability_bb_per_hand
+                .expect("upgraded target records exploitability"),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let dataset_path = value(args, "--dataset")
+        .map(PathBuf::from)
+        .ok_or("--dataset is required")?;
+    let checkpoint_dir = value(args, "--checkpoint-dir")
+        .map(PathBuf::from)
+        .ok_or("--checkpoint-dir is required")?;
+    let output_path = value(args, "--output")
+        .map(PathBuf::from)
+        .ok_or("--output is required")?;
+    let mut dataset: blueprint::public_belief::TurnTargetDataset =
+        serde_json::from_slice(&fs::read(&dataset_path)?)?;
+    apply_dcfr_args(&mut dataset.game, args)?;
+    let iterations = parse_or(
+        args,
+        "--iterations",
+        dataset
+            .turn_river_iterations
+            .unwrap_or(dataset.river_iterations),
+    )?;
+    let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
+    let mut upgraded = Vec::with_capacity(dataset.targets.len());
+    for (index, source) in dataset.targets.iter().enumerate() {
+        let fingerprint =
+            turn_upgrade_fingerprint(&dataset.game, source, iterations, averaging_delay)?;
+        let path = turn_upgrade_checkpoint_path(&checkpoint_dir, index, &fingerprint);
+        let target: blueprint::public_belief::TurnValueTarget =
+            serde_json::from_slice(&fs::read(&path).map_err(|error| {
+                format!("missing upgrade checkpoint {}: {error}", path.display())
+            })?)?;
+        if target.input_sha256.as_deref() != Some(fingerprint.as_str())
+            || target.state_id != source.state_id
+            || target.board != source.board
+            || target.actor != source.actor
+            || target.invested_bb != source.invested_bb
+            || target.turn_river_exploitability_bb_per_hand.is_none()
+            || target
+                .current_turn_river_exploitability_bb_per_hand
+                .is_none()
+            || target.turn_river_maximum_probability_sum_error.is_none()
+            || target.turn_river_solver_method.is_none()
+            || target.turn_river_information_sets.is_none()
+            || target.turn_information_sets.is_none()
+            || target.river_information_sets.is_none()
+        {
+            return Err(format!(
+                "upgrade checkpoint {} does not match source",
+                path.display()
+            )
+            .into());
+        }
+        upgraded.push(target);
+    }
+    dataset.schema = "hu-turn-public-belief-cfv-dataset-v2".to_owned();
+    dataset.method = format!(
+        "complete_turn_river_public_belief_upgrade_of_{}",
+        dataset.method
+    );
+    dataset.river_iterations = iterations;
+    dataset.turn_river_iterations = Some(iterations);
+    dataset.turn_river_averaging_delay = Some(averaging_delay);
+    dataset.targets = upgraded;
+    let maximum_exploitability = dataset
+        .targets
+        .iter()
+        .filter_map(|target| target.turn_river_exploitability_bb_per_hand)
+        .fold(0.0f64, f64::max);
+    let maximum_zero_sum_residual = dataset
+        .targets
+        .iter()
+        .map(|target| target.zero_sum_residual_bb.abs())
+        .fold(0.0f64, f64::max);
+    let mut reasons = if dataset.validation.status == "accepted" {
+        Vec::new()
+    } else {
+        dataset
+            .validation
+            .reasons
+            .iter()
+            .filter(|reason| {
+                !reason.contains("river solve") && !reason.contains("zero-sum residual")
+            })
+            .cloned()
+            .collect()
+    };
+    if maximum_exploitability > 0.05 {
+        reasons.push(format!(
+            "maximum complete turn-river exploitability {maximum_exploitability:.6}bb/hand exceeds 0.05bb/hand"
+        ));
+    }
+    if maximum_zero_sum_residual > 1e-7 {
+        reasons.push(format!(
+            "maximum complete turn-river zero-sum residual {maximum_zero_sum_residual:.3e}bb exceeds 1e-7bb"
+        ));
+    }
+    dataset.validation = blueprint::BlueprintValidation {
+        status: if reasons.is_empty() {
+            "accepted"
+        } else {
+            "rejected"
+        }
+        .to_owned(),
+        reasons,
+    };
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&output_path, serde_json::to_vec(&dataset)?)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": dataset.schema,
+            "states": dataset.targets.len(),
+            "iterations": iterations,
+            "averagingDelay": averaging_delay,
+            "maximumTurnRiverExploitabilityBbPerHand": maximum_exploitability,
+            "maximumZeroSumResidualBb": maximum_zero_sum_residual,
+            "validation": dataset.validation,
+            "output": output_path,
+        }))?
+    );
+    Ok(())
+}
+
 fn run_turn_pbs_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     game.iterations = 2;
     game.averaging_delay = 0;
+    apply_dcfr_args(&mut game, args)?;
     if args
         .iter()
         .any(|argument| argument == "--compact-serving-grid")
@@ -447,12 +747,30 @@ fn run_turn_pbs_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
             "schema": dataset.schema,
             "states": dataset.targets.len(),
             "riverIterations": dataset.river_iterations,
-            "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "maximumTurnRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
             "maximumZeroSumResidualBb": dataset.targets.iter().map(|target| target.zero_sum_residual_bb).fold(0.0f64, f64::max),
             "validation": dataset.validation,
             "output": path,
         }))?
     );
+    Ok(())
+}
+
+fn apply_dcfr_args(game: &mut BlueprintConfig, args: &[String]) -> Result<(), Box<dyn Error>> {
+    game.dcfr.positive_regret_exponent =
+        parse_or(args, "--dcfr-alpha", game.dcfr.positive_regret_exponent)?;
+    game.dcfr.negative_regret_exponent =
+        parse_or(args, "--dcfr-beta", game.dcfr.negative_regret_exponent)?;
+    game.dcfr.strategy_exponent = parse_or(args, "--dcfr-gamma", game.dcfr.strategy_exponent)?;
+    if !game.dcfr.positive_regret_exponent.is_finite()
+        || !game.dcfr.negative_regret_exponent.is_finite()
+        || !game.dcfr.strategy_exponent.is_finite()
+        || game.dcfr.positive_regret_exponent < 0.0
+        || game.dcfr.negative_regret_exponent < 0.0
+        || game.dcfr.strategy_exponent < 0.0
+    {
+        return Err("DCFR exponents must be finite and non-negative".into());
+    }
     Ok(())
 }
 
@@ -1191,7 +1509,10 @@ Usage:
   preflop-solver preflop-evaluate-neural [options]
   preflop-solver full-game-lbr [options]
   preflop-solver river-pbs-solve [options]
+  preflop-solver turn-river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
+  preflop-solver turn-pbs-upgrade-targets [options]
+  preflop-solver turn-pbs-compose-upgrade [options]
   preflop-solver turn-pbs-self-play-targets [options]
   preflop-solver turn-pbs-value-predict [options]
   preflop-solver flop-pbs-resolve [options]
@@ -1302,6 +1623,20 @@ Full-game learned-response options:
   --maximum-response-granularity <exact|fine|coarse|strategic>
                                   Default: exact; broader layers require calibration
   --seed <integer>                Deterministic training/evaluation root seed
-  --output <path>                 Optional full resolver/evaluation JSON"
+  --output <path>                 Optional full resolver/evaluation JSON
+
+Complete turn/river label options:
+  turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
+    [--iterations 500] [--averaging-delay 50] [--export-strategies]
+    [--regret-matching-plus] [--dcfr-alpha 1.5] [--dcfr-beta 0]
+    [--dcfr-gamma 2] [--output <json>]
+  turn-pbs-upgrade-targets --dataset <legacy-v1.json>
+    --checkpoint-dir <directory> [--start-index 0] [--end-index N]
+    [--iterations N] [--averaging-delay N] [--dcfr-alpha 1.5]
+    [--dcfr-beta 0] [--dcfr-gamma 2]
+  turn-pbs-compose-upgrade --dataset <legacy-v1.json>
+    --checkpoint-dir <directory> --output <complete-v2.json>
+    [--iterations N] [--averaging-delay N] [--dcfr-alpha 1.5]
+    [--dcfr-beta 0] [--dcfr-gamma 2]"
     );
 }

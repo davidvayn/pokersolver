@@ -36,6 +36,8 @@ QUERY_COUNT = QUERY_STRUCTURAL_COUNT + QUERY_RANGE_COUNT
 CONTEXT_BOARD_RELATIVE_COUNT = 58
 QUERY_BOARD_RELATIVE_COUNT = 29
 HAND_CLASS_COUNT = 169
+LEGACY_TARGET_SCHEMA = "hu-turn-public-belief-cfv-dataset-v1"
+COMPLETE_TURN_TARGET_SCHEMA = "hu-turn-public-belief-cfv-dataset-v2"
 
 
 def feature_sizes(feature_schema: str) -> tuple[int, int]:
@@ -622,7 +624,10 @@ def load_dataset(
     value_normalization: str = "depth",
 ) -> Dataset:
     raw = json.loads(path.read_text())
-    if raw.get("schema") != "hu-turn-public-belief-cfv-dataset-v1":
+    if raw.get("schema") not in {
+        LEGACY_TARGET_SCHEMA,
+        COMPLETE_TURN_TARGET_SCHEMA,
+    }:
         raise ValueError("incompatible public-belief target dataset")
     boards: list[np.ndarray] = []
     actors: list[int] = []
@@ -696,6 +701,48 @@ def load_dataset(
     )
 
 
+def complete_turn_target_reasons(target: dict[str, Any], index: int) -> list[str]:
+    reasons: list[str] = []
+    exploitability = float(
+        target.get("turn_river_exploitability_bb_per_hand", float("inf"))
+    )
+    if not np.isfinite(exploitability) or exploitability > 0.05:
+        reasons.append(
+            f"target {index} exceeds the complete turn-river exploitability gate"
+        )
+    if target.get("current_turn_river_exploitability_bb_per_hand") is None:
+        reasons.append(f"target {index} lacks the current-policy diagnostic")
+    probability_error = float(
+        target.get("turn_river_maximum_probability_sum_error", float("inf"))
+    )
+    if not np.isfinite(probability_error) or probability_error > 1e-6:
+        reasons.append(f"target {index} exceeds the probability-sum gate")
+    method = str(target.get("turn_river_solver_method", ""))
+    if "complete_turn_river_betting" not in method:
+        reasons.append(f"target {index} lacks complete turn-river solver provenance")
+    if int(target.get("turn_information_sets", 0)) <= 0:
+        reasons.append(f"target {index} lacks turn information-set provenance")
+    if int(target.get("river_information_sets", 0)) <= 0:
+        reasons.append(f"target {index} lacks river information-set provenance")
+    if int(target.get("exact_river_cards", 0)) != 48:
+        reasons.append(f"target {index} does not enumerate 48 public river cards")
+    if abs(float(target.get("zero_sum_residual_bb", float("inf")))) > 1e-7:
+        reasons.append(f"target {index} exceeds the zero-sum residual gate")
+    return reasons
+
+
+def complete_turn_release_reasons(source: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if source.get("schema") != COMPLETE_TURN_TARGET_SCHEMA:
+        reasons.append("source target corpus omits complete turn betting")
+        return reasons
+    if source.get("validation", {}).get("status") != "accepted":
+        reasons.append("source target corpus is not release-accepted")
+    for index, target in enumerate(source.get("targets", [])):
+        reasons.extend(complete_turn_target_reasons(target, index))
+    return list(dict.fromkeys(reasons))
+
+
 def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> Dataset:
     if not supplements:
         return primary
@@ -712,7 +759,7 @@ def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> D
     ):
         raise ValueError("combined datasets must use the same target schema")
 
-    reasons: list[str] = []
+    reasons: list[str] = complete_turn_release_reasons(primary.source)
     # The primary corpus must independently pass every corpus-size/release gate.
     # A small research supplement may fail only its standalone minimum-size gate;
     # every one of its targets is revalidated below and the combined corpus is
@@ -723,13 +770,7 @@ def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> D
         target for component in components for target in component.source["targets"]
     ]
     for index, target in enumerate(all_targets):
-        if (
-            float(target.get("maximum_river_exploitability_bb_per_hand", float("inf")))
-            > 0.05
-        ):
-            reasons.append(f"target {index} exceeds the river exploitability gate")
-        if abs(float(target.get("zero_sum_residual_bb", float("inf")))) > 1e-7:
-            reasons.append(f"target {index} exceeds the zero-sum residual gate")
+        reasons.extend(complete_turn_target_reasons(target, index))
         belief_method = str(target.get("belief_method", ""))
         if belief_method == "exact_resolver_average_strategy_counterfactual_reach":
             reach = float(target.get("resolver_leaf_reach_probability", 0.0))
@@ -1539,6 +1580,7 @@ def export_model(
     path: Path,
     seed: int,
     source_dataset_sha256: str,
+    source_dataset_schema: str,
     source_validation_status: str,
     source_policy_sha256: str | None,
     value_normalization: str,
@@ -1567,6 +1609,7 @@ def export_model(
                     )
                 ),
                 "sourceDatasetSha256": source_dataset_sha256,
+                "sourceDatasetSchema": source_dataset_schema,
                 "sourcePolicySha256": source_policy_sha256,
                 "sourceValidationStatus": source_validation_status,
                 "contextPublicCount": CONTEXT_PUBLIC_COUNT,
@@ -1609,6 +1652,11 @@ def main() -> None:
         for path in args.supplemental_dataset
     ]
     dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
+    source_dataset_schema = str(dataset.source.get("schema", ""))
+    source_release_reasons = complete_turn_release_reasons(dataset.source)
+    source_release_status = (
+        "accepted" if not source_release_reasons else "rejected"
+    )
     contexts, queries = feature_dataset(
         dataset, args.feature_schema, args.feature_workers
     )
@@ -1690,7 +1738,8 @@ def main() -> None:
                 model_path,
                 seed,
                 dataset.source_sha256,
-                dataset.source["validation"]["status"],
+                source_dataset_schema,
+                source_release_status,
                 dataset.source.get("source_policy_sha256"),
                 args.value_normalization,
             )
@@ -1723,9 +1772,7 @@ def main() -> None:
         if no_range_rmse is not None
         else None
     )
-    reasons: list[str] = []
-    if dataset.source["validation"]["status"] != "accepted":
-        reasons.append("source target corpus is not release-accepted")
+    reasons: list[str] = list(source_release_reasons)
     if not every_seed_within_rmse(variants["range"], args.maximum_rmse_bb):
         maximum_seed_rmse = max(
             float(entry["metrics"]["weightedRmseBb"])
@@ -1790,6 +1837,7 @@ def main() -> None:
         "dataset": str(args.dataset),
         "supplementalDatasets": [str(path) for path in args.supplemental_dataset],
         "datasetSha256": dataset.source_sha256,
+        "sourceDatasetSchema": source_dataset_schema,
         "componentDatasetSha256": dataset.source.get(
             "component_dataset_sha256", [dataset.source_sha256]
         ),

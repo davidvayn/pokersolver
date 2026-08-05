@@ -284,6 +284,51 @@ serialized and can be varied with the `--dcfr-alpha`, `--dcfr-beta`, and
 `--dcfr-gamma` research flags. One seeded deal updates one traverser, and the
 traverser alternates each iteration.
 
+### Exact-card turn/river continuation labels
+
+Public-belief target schema v2 solves the complete turn and river continuation
+in one alternating DCFR game. It retains one range weight for every exact hole-
+card combination, includes every legal turn action, observes each of the 48
+public river cards, includes every legal river action, and settles folds,
+all-ins, and showdowns exactly. Counterfactual chance values use the 44 river
+cards compatible with each exact pair of private hands. The exported value-only
+target contains CFVs and validation metrics, not the much larger regret or
+strategy tables.
+
+Schema v1 remains readable as legacy research input, but its label generator
+averaged directly into solved river games and therefore omitted turn betting.
+It is not eligible for activation: the trainer marks v1-derived reports and
+weights rejected even when an old corpus declared itself accepted. V2 uses a
+distinct schema and checkpoint fingerprint so a legacy checkpoint cannot be
+reused as a corrected label.
+
+Inspect a single state with:
+
+```bash
+target/release/preflop-solver turn-river-pbs-solve \
+  --board 2c,7d,Th,Js --pot-bb 4 --actor 1 \
+  --iterations 400 --averaging-delay 40 \
+  --output /tmp/turn-river-values.json
+```
+
+The upgrader reuses the authentic public states and exact ranges in an existing
+corpus while replacing only their continuation values. Work is resumable and
+can be divided into disjoint state ranges across local workers:
+
+```bash
+target/release/preflop-solver turn-pbs-upgrade-targets \
+  --dataset /tmp/legacy-v1.json --checkpoint-dir /tmp/v2-checkpoints \
+  --start-index 0 --end-index 32 --iterations 400 --averaging-delay 40
+
+target/release/preflop-solver turn-pbs-compose-upgrade \
+  --dataset /tmp/legacy-v1.json --checkpoint-dir /tmp/v2-checkpoints \
+  --iterations 400 --averaging-delay 40 --output /tmp/complete-v2.json
+```
+
+Composition fails if any state checkpoint is absent or has mismatched inputs.
+The resulting dataset remains rejected if any complete turn/river solve exceeds
+`0.05bb/hand` abstract exploitability or `1e-7bb` zero-sum residual.
+
 When an all-in reaches showdown before the river, the trainer integrates over
 unseen runouts instead of using the single board sampled for that traversal.
 Preflop and flop use deterministic configurable Monte Carlo; turn enumerates

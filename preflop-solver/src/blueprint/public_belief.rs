@@ -90,6 +90,27 @@ impl PublicBeliefState {
         }
     }
 
+    pub fn turn_start(
+        board: [u8; 4],
+        actor: usize,
+        invested_bb: [f64; 2],
+        ranges: [Vec<f64>; 2],
+    ) -> Self {
+        Self {
+            street: Street::Turn,
+            board: board.to_vec(),
+            actor,
+            invested_bb,
+            street_invested_bb: [0.0, 0.0],
+            last_full_raise_bb: 1.0,
+            aggressions: 0,
+            checks: 0,
+            raise_reopened: true,
+            public_history: vec!["public_belief:turn_start".to_owned()],
+            ranges,
+        }
+    }
+
     pub fn river_start(
         board: [u8; 5],
         actor: usize,
@@ -2842,6 +2863,785 @@ pub fn solve_river(config: RiverSolveConfig) -> Result<RiverSolution, String> {
 }
 
 #[derive(Clone, Debug)]
+pub struct TurnRiverSolveConfig {
+    pub game: BlueprintConfig,
+    pub state: PublicBeliefState,
+    pub iterations: u64,
+    pub averaging_delay: u64,
+    pub regret_matching_plus: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TurnRiverSolveMetrics {
+    pub information_sets: usize,
+    pub turn_information_sets: usize,
+    pub river_information_sets: usize,
+    pub exact_river_cards: usize,
+    pub profile_value_p0_bb: f64,
+    pub profile_value_p1_bb: f64,
+    pub best_response_value_p0_bb: f64,
+    pub best_response_value_p1_bb: f64,
+    pub exact_abstract_exploitability_bb_per_hand: f64,
+    pub current_strategy_exploitability_bb_per_hand: f64,
+    pub zero_sum_residual_bb: f64,
+    pub maximum_probability_sum_error: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TurnRiverSolution {
+    pub schema: String,
+    pub method: String,
+    pub approximate: bool,
+    pub game: BlueprintConfig,
+    pub state: PublicBeliefState,
+    pub iterations: u64,
+    pub averaging_delay: u64,
+    pub counterfactual_values_bb: [Vec<f32>; 2],
+    pub opponent_compatible_mass: [Vec<f32>; 2],
+    pub strategies: Vec<PublicBeliefStrategy>,
+    pub metrics: TurnRiverSolveMetrics,
+    pub validation: BlueprintValidation,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TurnRiverContinuationValues {
+    pub schema: String,
+    pub method: String,
+    pub counterfactual_values_bb: [Vec<f32>; 2],
+    pub opponent_compatible_mass: [Vec<f32>; 2],
+    pub metrics: TurnRiverSolveMetrics,
+}
+
+struct RiverBoardData {
+    strengths: Vec<u32>,
+    strength_ranks: Vec<usize>,
+    strength_group_count: usize,
+    legal: [Vec<bool>; 2],
+}
+
+/// Solves the complete abstract turn and river continuation in one CFR game.
+/// The river card is public chance, but each exact private-card pair still has
+/// exactly 44 compatible river outcomes. Keeping chance inside the same game
+/// prevents a turn value target from accidentally skipping turn betting.
+struct TurnRiverSolver {
+    config: TurnRiverSolveConfig,
+    legal: [Vec<bool>; 2],
+    conflicts: Arc<Vec<Vec<usize>>>,
+    river_cards: Vec<u8>,
+    river_blocked_combos: Vec<Vec<usize>>,
+    river_data: Vec<Option<RiverBoardData>>,
+    nodes: BTreeMap<Vec<String>, RangeNode>,
+}
+
+impl TurnRiverSolver {
+    fn new(mut config: TurnRiverSolveConfig) -> Result<Self, String> {
+        config.game.validate()?;
+        if config.iterations < 2 || config.averaging_delay >= config.iterations {
+            return Err(
+                "turn-river solving requires alternating iterations and a valid averaging delay"
+                    .to_owned(),
+            );
+        }
+        config.state = config
+            .state
+            .validate_street_and_normalize(&config.game, Street::Turn, 4)?;
+        let legal: [Vec<bool>; 2] = std::array::from_fn(|player| {
+            config.state.ranges[player]
+                .iter()
+                .map(|weight| *weight > 0.0)
+                .collect()
+        });
+        let combos = all_combos();
+        let river_cards = (0..52u8)
+            .filter(|card| !config.state.board.contains(card))
+            .collect::<Vec<_>>();
+        let river_blocked_combos = (0..52u8)
+            .map(|card| {
+                combos
+                    .iter()
+                    .filter_map(|combo| combo.cards().contains(&card).then_some(combo.key()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut river_data = (0..52).map(|_| None).collect::<Vec<_>>();
+        for river in &river_cards {
+            let strengths = combos
+                .iter()
+                .map(|combo| {
+                    if combo.cards().contains(river) {
+                        return 0;
+                    }
+                    let mut cards = config.state.board.clone();
+                    cards.push(*river);
+                    cards.extend(combo.cards());
+                    evaluate(&cards)
+                })
+                .collect::<Vec<_>>();
+            let groups = strengths
+                .iter()
+                .copied()
+                .filter(|strength| *strength > 0)
+                .collect::<BTreeSet<_>>();
+            let ranks = groups
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(rank, strength)| (strength, rank))
+                .collect::<BTreeMap<_, _>>();
+            let strength_ranks = strengths
+                .iter()
+                .map(|strength| ranks.get(strength).copied().unwrap_or(0))
+                .collect();
+            let river_legal = std::array::from_fn(|player| {
+                combos
+                    .iter()
+                    .map(|combo| legal[player][combo.key()] && !combo.cards().contains(river))
+                    .collect()
+            });
+            river_data[*river as usize] = Some(RiverBoardData {
+                strengths,
+                strength_ranks,
+                strength_group_count: groups.len(),
+                legal: river_legal,
+            });
+        }
+        Ok(Self {
+            config,
+            legal,
+            conflicts: combo_conflicts(),
+            river_cards,
+            river_blocked_combos,
+            river_data,
+            nodes: BTreeMap::new(),
+        })
+    }
+
+    fn train(&mut self) {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        for offset in 0..self.config.iterations {
+            self.walk(
+                root.clone(),
+                reaches.clone(),
+                None,
+                offset as usize % 2,
+                offset + 1,
+            );
+        }
+    }
+
+    fn node_key(state: &GameState, river: Option<u8>) -> Vec<String> {
+        let mut key = state.public_history.clone();
+        if let Some(card) = river {
+            key.push(format!("chance:river:{card}"));
+        }
+        key
+    }
+
+    fn river_from_key(key: &[String]) -> Option<u8> {
+        key.last()
+            .and_then(|part| part.strip_prefix("chance:river:"))
+            .and_then(|value| value.parse().ok())
+    }
+
+    fn legal_for(&self, river: Option<u8>, player: usize) -> &[bool] {
+        match river {
+            Some(card) => {
+                &self.river_data[card as usize]
+                    .as_ref()
+                    .expect("known river card")
+                    .legal[player]
+            }
+            None => &self.legal[player],
+        }
+    }
+
+    fn walk(
+        &mut self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        river: Option<u8>,
+        traverser: usize,
+        iteration: u64,
+    ) -> [Vec<f64>; 2] {
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches, river);
+        }
+        if state.street == Street::River && river.is_none() {
+            return self.chance_walk(state, reaches, traverser, iteration);
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let key = Self::node_key(&state, river);
+        let actor = state.actor;
+        let legal = self.legal_for(river, actor).to_vec();
+        let strategy = {
+            let node = self
+                .nodes
+                .entry(key.clone())
+                .or_insert_with(|| RangeNode::new(actor, &actions));
+            node.discount(iteration, &self.config.game.dcfr);
+            node.strategy(&legal)
+        };
+        let action_count = actions.len();
+        let mut children = Vec::with_capacity(action_count);
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * action_count + action_index];
+            }
+            children.push(self.walk(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                river,
+                traverser,
+                iteration,
+            ));
+        }
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            for action in 0..action_count {
+                values[actor][combo] +=
+                    strategy[combo * action_count + action] * children[action][actor][combo];
+                values[opponent][combo] += children[action][opponent][combo];
+            }
+        }
+        let node = self.nodes.get_mut(&key).expect("turn-river node inserted");
+        if actor == traverser {
+            for combo in 0..COMBO_COUNT {
+                if !legal[combo] {
+                    continue;
+                }
+                let offset = combo * action_count;
+                for action in 0..action_count {
+                    node.regrets[offset + action] +=
+                        children[action][actor][combo] - values[actor][combo];
+                    if self.config.regret_matching_plus {
+                        node.regrets[offset + action] = node.regrets[offset + action].max(0.0);
+                    }
+                }
+            }
+        }
+        if iteration > self.config.averaging_delay {
+            for combo in 0..COMBO_COUNT {
+                if !legal[combo] {
+                    continue;
+                }
+                let offset = combo * action_count;
+                for action in 0..action_count {
+                    node.strategy_sum[offset + action] +=
+                        reaches[actor][combo] * strategy[offset + action];
+                }
+            }
+        }
+        values
+    }
+
+    fn chance_walk(
+        &mut self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        traverser: usize,
+        iteration: u64,
+    ) -> [Vec<f64>; 2] {
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        let cards = self.river_cards.clone();
+        for river in cards {
+            let mut masked = reaches.clone();
+            for player in 0..2 {
+                for combo in &self.river_blocked_combos[river as usize] {
+                    masked[player][*combo] = 0.0;
+                }
+            }
+            let child = self.walk(state.clone(), masked, Some(river), traverser, iteration);
+            for player in 0..2 {
+                for combo in 0..COMBO_COUNT {
+                    values[player][combo] += child[player][combo] / 44.0;
+                }
+            }
+        }
+        values
+    }
+
+    fn terminal_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        river: Option<u8>,
+    ) -> [Vec<f64>; 2] {
+        match state.terminal.as_ref().expect("terminal turn-river state") {
+            Terminal::Fold { winner } => {
+                let utility_p0 = if *winner == 0 {
+                    state.invested[1]
+                } else {
+                    -state.invested[0]
+                };
+                [
+                    self.constant_terminal_values(&reaches[1], utility_p0),
+                    self.constant_terminal_values(&reaches[0], -utility_p0),
+                ]
+            }
+            Terminal::Showdown => match river {
+                Some(card) => self.river_showdown_values(state, reaches, card),
+                None => self.turn_all_in_values(state, reaches),
+            },
+        }
+    }
+
+    fn constant_terminal_values(&self, opponent_reach: &[f64], utility: f64) -> Vec<f64> {
+        (0..COMBO_COUNT)
+            .map(|combo| {
+                utility * compatible_mass_from_conflicts(opponent_reach, &self.conflicts, combo)
+            })
+            .collect()
+    }
+
+    fn river_showdown_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        river: u8,
+    ) -> [Vec<f64>; 2] {
+        [
+            self.river_player_showdown_values(
+                &reaches[1],
+                river,
+                state.invested[1],
+                -state.invested[0],
+                (state.invested[1] - state.invested[0]) / 2.0,
+            ),
+            self.river_player_showdown_values(
+                &reaches[0],
+                river,
+                state.invested[0],
+                -state.invested[1],
+                (state.invested[0] - state.invested[1]) / 2.0,
+            ),
+        ]
+    }
+
+    fn river_player_showdown_values(
+        &self,
+        opponent_reach: &[f64],
+        river: u8,
+        win: f64,
+        loss: f64,
+        tie: f64,
+    ) -> Vec<f64> {
+        let data = self.river_data[river as usize]
+            .as_ref()
+            .expect("known river card");
+        let mut by_strength = vec![0.0; data.strength_group_count];
+        for (combo, weight) in opponent_reach.iter().enumerate() {
+            if data.legal[0][combo] || data.legal[1][combo] {
+                by_strength[data.strength_ranks[combo]] += *weight;
+            }
+        }
+        let mut lower_by_strength = vec![0.0; data.strength_group_count];
+        let mut running = 0.0;
+        for (rank, weight) in by_strength.iter().enumerate() {
+            lower_by_strength[rank] = running;
+            running += *weight;
+        }
+        let total = running;
+        let mut values = vec![0.0; COMBO_COUNT];
+        for own in 0..COMBO_COUNT {
+            if !(data.legal[0][own] || data.legal[1][own]) {
+                continue;
+            }
+            let strength = data.strengths[own];
+            let rank = data.strength_ranks[own];
+            let mut lower = lower_by_strength[rank];
+            let mut equal = by_strength[rank];
+            let mut higher = total - lower - equal;
+            for opponent in &self.conflicts[own] {
+                let weight = opponent_reach[*opponent];
+                match data.strengths[*opponent].cmp(&strength) {
+                    std::cmp::Ordering::Less => lower -= weight,
+                    std::cmp::Ordering::Equal => equal -= weight,
+                    std::cmp::Ordering::Greater => higher -= weight,
+                }
+            }
+            values[own] = lower.max(0.0) * win + equal.max(0.0) * tie + higher.max(0.0) * loss;
+        }
+        values
+    }
+
+    fn turn_all_in_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for river in &self.river_cards {
+            let mut masked = reaches.clone();
+            for player in 0..2 {
+                for combo in &self.river_blocked_combos[*river as usize] {
+                    masked[player][*combo] = 0.0;
+                }
+            }
+            let child = self.river_showdown_values(state, &masked, *river);
+            for player in 0..2 {
+                for combo in 0..COMBO_COUNT {
+                    values[player][combo] += child[player][combo] / 44.0;
+                }
+            }
+        }
+        values
+    }
+
+    fn profile_walk(
+        &self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        river: Option<u8>,
+        best_responder: Option<usize>,
+        average_strategy: bool,
+    ) -> [Vec<f64>; 2] {
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches, river);
+        }
+        if state.street == Street::River && river.is_none() {
+            let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+            for card in &self.river_cards {
+                let mut masked = reaches.clone();
+                for player in 0..2 {
+                    for combo in &self.river_blocked_combos[*card as usize] {
+                        masked[player][*combo] = 0.0;
+                    }
+                }
+                let child = self.profile_walk(
+                    state.clone(),
+                    masked,
+                    Some(*card),
+                    best_responder,
+                    average_strategy,
+                );
+                for player in 0..2 {
+                    for combo in 0..COMBO_COUNT {
+                        values[player][combo] += child[player][combo] / 44.0;
+                    }
+                }
+            }
+            return values;
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let actor = state.actor;
+        let key = Self::node_key(&state, river);
+        let legal = self.legal_for(river, actor);
+        let node = self.nodes.get(&key).expect("trained turn-river node");
+        let strategy = if average_strategy {
+            node.average_strategy(legal)
+        } else {
+            node.strategy(legal)
+        };
+        let action_count = actions.len();
+        let mut children = Vec::with_capacity(action_count);
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            if best_responder != Some(actor) {
+                for combo in 0..COMBO_COUNT {
+                    child_reaches[actor][combo] *= strategy[combo * action_count + action_index];
+                }
+            }
+            children.push(self.profile_walk(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                river,
+                best_responder,
+                average_strategy,
+            ));
+        }
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            if best_responder == Some(actor) {
+                values[actor][combo] = children
+                    .iter()
+                    .map(|child| child[actor][combo])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                for child in &children {
+                    values[opponent][combo] += child[opponent][combo];
+                }
+            } else {
+                for action in 0..action_count {
+                    values[actor][combo] +=
+                        strategy[combo * action_count + action] * children[action][actor][combo];
+                    values[opponent][combo] += children[action][opponent][combo];
+                }
+            }
+        }
+        values
+    }
+
+    fn finish_continuation_values(self) -> TurnRiverContinuationValues {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let joint_mass = joint_compatibility_mass(&reaches);
+        let profile = self.profile_walk(root.clone(), reaches.clone(), None, None, true);
+        let br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), true);
+        let br1 = self.profile_walk(root.clone(), reaches.clone(), None, Some(1), true);
+        let current_profile = self.profile_walk(root.clone(), reaches.clone(), None, None, false);
+        let current_br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), false);
+        let current_br1 = self.profile_walk(root, reaches.clone(), None, Some(1), false);
+        let aggregate = |values: &[f64], player: usize| {
+            reaches[player]
+                .iter()
+                .zip(values)
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>()
+                / joint_mass
+        };
+        let profile_p0 = aggregate(&profile[0], 0);
+        let profile_p1 = aggregate(&profile[1], 1);
+        let best_p0 = aggregate(&br0[0], 0);
+        let best_p1 = aggregate(&br1[1], 1);
+        let current_profile_p0 = aggregate(&current_profile[0], 0);
+        let current_profile_p1 = aggregate(&current_profile[1], 1);
+        let current_best_p0 = aggregate(&current_br0[0], 0);
+        let current_best_p1 = aggregate(&current_br1[1], 1);
+        let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| {
+                    compatible_mass_from_conflicts(&reaches[1 - player], &self.conflicts, combo)
+                        as f32
+                })
+                .collect()
+        });
+        let counterfactual_values_bb = std::array::from_fn(|player| {
+            profile[player]
+                .iter()
+                .zip(&compatible_mass[player])
+                .map(|(value, mass)| {
+                    if *mass > 0.0 {
+                        (*value / *mass as f64) as f32
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        });
+        let mut turn_information_sets = 0usize;
+        let mut river_information_sets = 0usize;
+        let mut maximum_probability_sum_error = 0.0f64;
+        for (history, node) in &self.nodes {
+            let river = Self::river_from_key(history);
+            if river.is_some() {
+                river_information_sets += 1;
+            } else {
+                turn_information_sets += 1;
+            }
+            let legal = self.legal_for(river, node.actor);
+            let probabilities = node.average_strategy(legal);
+            let action_count = node.action_labels.len();
+            for combo in 0..COMBO_COUNT {
+                if legal[combo] {
+                    let sum = probabilities[combo * action_count..(combo + 1) * action_count]
+                        .iter()
+                        .sum::<f64>();
+                    maximum_probability_sum_error =
+                        maximum_probability_sum_error.max((sum - 1.0).abs());
+                }
+            }
+        }
+        TurnRiverContinuationValues {
+            schema: "hu-turn-river-public-belief-continuation-values-v1".to_owned(),
+            method: "value_only_alternating_vectorized_dcfr_exact_private_cards_observed_river_chance_and_complete_turn_river_betting"
+                .to_owned()
+                + if self.config.regret_matching_plus {
+                    "_regret_matching_plus"
+                } else {
+                    ""
+                },
+            counterfactual_values_bb,
+            opponent_compatible_mass: compatible_mass,
+            metrics: TurnRiverSolveMetrics {
+                information_sets: self.nodes.len(),
+                turn_information_sets,
+                river_information_sets,
+                exact_river_cards: self.river_cards.len(),
+                profile_value_p0_bb: profile_p0,
+                profile_value_p1_bb: profile_p1,
+                best_response_value_p0_bb: best_p0,
+                best_response_value_p1_bb: best_p1,
+                exact_abstract_exploitability_bb_per_hand: (((best_p0 - profile_p0)
+                    + (best_p1 - profile_p1))
+                    / 2.0)
+                    .max(0.0),
+                current_strategy_exploitability_bb_per_hand: (((current_best_p0
+                    - current_profile_p0)
+                    + (current_best_p1 - current_profile_p1))
+                    / 2.0)
+                    .max(0.0),
+                zero_sum_residual_bb: (profile_p0 + profile_p1).abs(),
+                maximum_probability_sum_error,
+            },
+        }
+    }
+
+    fn finish(self) -> TurnRiverSolution {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let joint_mass = joint_compatibility_mass(&reaches);
+        let profile = self.profile_walk(root.clone(), reaches.clone(), None, None, true);
+        let br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), true);
+        let br1 = self.profile_walk(root.clone(), reaches.clone(), None, Some(1), true);
+        let current_profile = self.profile_walk(root.clone(), reaches.clone(), None, None, false);
+        let current_br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), false);
+        let current_br1 = self.profile_walk(root, reaches.clone(), None, Some(1), false);
+        let aggregate = |values: &[f64], player: usize| {
+            reaches[player]
+                .iter()
+                .zip(values)
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>()
+                / joint_mass
+        };
+        let profile_p0 = aggregate(&profile[0], 0);
+        let profile_p1 = aggregate(&profile[1], 1);
+        let best_p0 = aggregate(&br0[0], 0);
+        let best_p1 = aggregate(&br1[1], 1);
+        let current_profile_p0 = aggregate(&current_profile[0], 0);
+        let current_profile_p1 = aggregate(&current_profile[1], 1);
+        let current_best_p0 = aggregate(&current_br0[0], 0);
+        let current_best_p1 = aggregate(&current_br1[1], 1);
+        let exploitability = ((best_p0 - profile_p0) + (best_p1 - profile_p1)) / 2.0;
+        let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| {
+                    compatible_mass_from_conflicts(&reaches[1 - player], &self.conflicts, combo)
+                        as f32
+                })
+                .collect()
+        });
+        let counterfactual_values_bb = std::array::from_fn(|player| {
+            profile[player]
+                .iter()
+                .zip(&compatible_mass[player])
+                .map(|(value, mass)| {
+                    if *mass > 0.0 {
+                        (*value / *mass as f64) as f32
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        });
+        let mut maximum_probability_sum_error = 0.0f64;
+        let mut turn_information_sets = 0usize;
+        let mut river_information_sets = 0usize;
+        let strategies = self
+            .nodes
+            .iter()
+            .map(|(history, node)| {
+                let river = Self::river_from_key(history);
+                if river.is_some() {
+                    river_information_sets += 1;
+                } else {
+                    turn_information_sets += 1;
+                }
+                let legal = self.legal_for(river, node.actor);
+                let probabilities = node.average_strategy(legal);
+                let action_count = node.action_labels.len();
+                for combo in 0..COMBO_COUNT {
+                    if legal[combo] {
+                        let sum = probabilities[combo * action_count..(combo + 1) * action_count]
+                            .iter()
+                            .sum::<f64>();
+                        maximum_probability_sum_error =
+                            maximum_probability_sum_error.max((sum - 1.0).abs());
+                    }
+                }
+                PublicBeliefStrategy {
+                    public_history: history.clone(),
+                    actor: node.actor,
+                    action_labels: node.action_labels.clone(),
+                    probabilities: probabilities
+                        .into_iter()
+                        .map(|value| value as f32)
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let zero_sum_residual = (profile_p0 + profile_p1).abs();
+        let metrics = TurnRiverSolveMetrics {
+            information_sets: strategies.len(),
+            turn_information_sets,
+            river_information_sets,
+            exact_river_cards: self.river_cards.len(),
+            profile_value_p0_bb: profile_p0,
+            profile_value_p1_bb: profile_p1,
+            best_response_value_p0_bb: best_p0,
+            best_response_value_p1_bb: best_p1,
+            exact_abstract_exploitability_bb_per_hand: exploitability.max(0.0),
+            current_strategy_exploitability_bb_per_hand: (((current_best_p0 - current_profile_p0)
+                + (current_best_p1 - current_profile_p1))
+                / 2.0)
+                .max(0.0),
+            zero_sum_residual_bb: zero_sum_residual,
+            maximum_probability_sum_error,
+        };
+        let mut reasons = Vec::new();
+        if metrics.zero_sum_residual_bb > 1e-8 {
+            reasons.push(format!(
+                "zero-sum residual {:.3e} exceeds 1e-8",
+                metrics.zero_sum_residual_bb
+            ));
+        }
+        if metrics.maximum_probability_sum_error > 1e-6 {
+            reasons.push(format!(
+                "probability sum error {:.3e} exceeds 1e-6",
+                metrics.maximum_probability_sum_error
+            ));
+        }
+        if metrics.exact_abstract_exploitability_bb_per_hand > 0.05 {
+            reasons.push(format!(
+                "turn-river abstraction exploitability {:.6}bb/hand exceeds 0.05bb/hand",
+                metrics.exact_abstract_exploitability_bb_per_hand
+            ));
+        }
+        TurnRiverSolution {
+            schema: "hu-turn-river-public-belief-solution-v1".to_owned(),
+            method: "alternating_vectorized_dcfr_exact_private_cards_observed_river_chance_and_complete_turn_river_betting"
+                .to_owned()
+                + if self.config.regret_matching_plus {
+                    "_regret_matching_plus"
+                } else {
+                    ""
+                },
+            approximate: true,
+            game: self.config.game,
+            state: self.config.state,
+            iterations: self.config.iterations,
+            averaging_delay: self.config.averaging_delay,
+            counterfactual_values_bb,
+            opponent_compatible_mass: compatible_mass,
+            strategies,
+            validation: BlueprintValidation {
+                status: if reasons.is_empty() {
+                    "accepted"
+                } else {
+                    "rejected"
+                }
+                .to_owned(),
+                reasons,
+            },
+            metrics,
+        }
+    }
+}
+
+pub fn solve_turn_river(config: TurnRiverSolveConfig) -> Result<TurnRiverSolution, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.train();
+    Ok(solver.finish())
+}
+
+pub fn solve_turn_river_continuation_values(
+    config: TurnRiverSolveConfig,
+) -> Result<TurnRiverContinuationValues, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.train();
+    Ok(solver.finish_continuation_values())
+}
+
+#[derive(Clone, Debug)]
 pub struct TurnTargetGenerationConfig {
     pub game: BlueprintConfig,
     pub states: usize,
@@ -2862,6 +3662,20 @@ pub struct TurnValueTarget {
     pub opponent_compatible_mass: [Vec<f32>; 2],
     pub exact_river_cards: usize,
     pub maximum_river_exploitability_bb_per_hand: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_river_exploitability_bb_per_hand: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_river_exploitability_bb_per_hand: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_river_maximum_probability_sum_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_river_solver_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_river_information_sets: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_information_sets: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub river_information_sets: Option<usize>,
     pub zero_sum_residual_bb: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range_particles: Option<u64>,
@@ -2897,6 +3711,10 @@ pub struct TurnTargetDataset {
     pub game: BlueprintConfig,
     pub seed: u64,
     pub river_iterations: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_river_iterations: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_river_averaging_delay: Option<u64>,
     pub state_distribution: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_policy_sha256: Option<String>,
@@ -2948,7 +3766,7 @@ pub fn generate_turn_targets(
             shaped_range(&board, state_index, 0),
             shaped_range(&board, state_index, 1),
         ];
-        targets.push(turn_target_from_exact_rivers(
+        targets.push(turn_target_from_complete_continuation(
             &config.game,
             board,
             1,
@@ -2979,19 +3797,20 @@ pub fn generate_turn_targets(
         .fold(0.0f64, f64::max);
     if maximum_river_exploitability > 0.05 {
         reasons.push(format!(
-            "at least one river solve has {:.6}bb/hand abstract exploitability",
+            "at least one complete turn-river solve has {:.6}bb/hand abstract exploitability",
             maximum_river_exploitability
         ));
     }
     Ok(TurnTargetDataset {
-        schema: "hu-turn-public-belief-cfv-dataset-v1".to_owned(),
-        method:
-            "exact_legal_river_enumeration_with_exact_card_removal_and_solved_river_betting_leaves"
-                .to_owned(),
+        schema: "hu-turn-public-belief-cfv-dataset-v2".to_owned(),
+        method: "complete_turn_river_public_belief_dcfr_with_exact_private_cards_observed_river_chance_and_exact_showdown"
+            .to_owned(),
         approximate: true,
         game: config.game,
         seed: config.seed,
         river_iterations: config.river_iterations,
+        turn_river_iterations: Some(config.river_iterations),
+        turn_river_averaging_delay: Some(config.river_averaging_delay),
         state_distribution: "synthetic_reachable_like_pilot".to_owned(),
         source_policy_sha256: None,
         sampling_exploration_probability: None,
@@ -3010,7 +3829,124 @@ pub fn generate_turn_targets(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn turn_target_from_exact_rivers(
+fn turn_target_from_complete_continuation(
+    game: &BlueprintConfig,
+    board: [u8; 4],
+    actor: usize,
+    invested: [f64; 2],
+    ranges: [Vec<f64>; 2],
+    river_iterations: u64,
+    river_averaging_delay: u64,
+    _threads: usize,
+    state_index: usize,
+) -> Result<TurnValueTarget, String> {
+    let state = PublicBeliefState::turn_start(board, actor, invested, ranges)
+        .validate_street_and_normalize(game, Street::Turn, 4)?;
+    let solution = solve_turn_river_continuation_values(TurnRiverSolveConfig {
+        game: game.clone(),
+        state: state.clone(),
+        iterations: river_iterations,
+        averaging_delay: river_averaging_delay,
+        regret_matching_plus: false,
+    })?;
+    Ok(TurnValueTarget {
+        state_id: format!("turn-pbs-{state_index:06}"),
+        board,
+        actor,
+        invested_bb: invested,
+        ranges: std::array::from_fn(|player| {
+            state.ranges[player]
+                .iter()
+                .map(|value| *value as f32)
+                .collect()
+        }),
+        counterfactual_values_bb: solution.counterfactual_values_bb,
+        opponent_compatible_mass: solution.opponent_compatible_mass,
+        exact_river_cards: solution.metrics.exact_river_cards,
+        maximum_river_exploitability_bb_per_hand: solution
+            .metrics
+            .exact_abstract_exploitability_bb_per_hand,
+        turn_river_exploitability_bb_per_hand: Some(
+            solution.metrics.exact_abstract_exploitability_bb_per_hand,
+        ),
+        current_turn_river_exploitability_bb_per_hand: Some(
+            solution.metrics.current_strategy_exploitability_bb_per_hand,
+        ),
+        turn_river_maximum_probability_sum_error: Some(
+            solution.metrics.maximum_probability_sum_error,
+        ),
+        turn_river_solver_method: Some(solution.method),
+        turn_river_information_sets: Some(solution.metrics.information_sets),
+        turn_information_sets: Some(solution.metrics.turn_information_sets),
+        river_information_sets: Some(solution.metrics.river_information_sets),
+        zero_sum_residual_bb: solution.metrics.zero_sum_residual_bb,
+        range_particles: None,
+        range_replicates: None,
+        range_effective_sample_size: None,
+        belief_method: None,
+        range_maximum_total_variation: None,
+        input_sha256: None,
+        off_policy_explorer: None,
+        sampling_exploration_probability: None,
+        public_action_line: None,
+        resolver_root_board: None,
+        resolver_public_history: None,
+        resolver_leaf_reach_probability: None,
+    })
+}
+
+pub fn upgrade_turn_value_target(
+    game: &BlueprintConfig,
+    source: &TurnValueTarget,
+    iterations: u64,
+    averaging_delay: u64,
+) -> Result<TurnValueTarget, String> {
+    let ranges = std::array::from_fn(|player| {
+        source.ranges[player]
+            .iter()
+            .map(|value| *value as f64)
+            .collect::<Vec<_>>()
+    });
+    let fingerprint = turn_target_input_sha256(
+        game,
+        source.board,
+        source.actor,
+        source.invested_bb,
+        &ranges,
+        iterations,
+        averaging_delay,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut upgraded = turn_target_from_complete_continuation(
+        game,
+        source.board,
+        source.actor,
+        source.invested_bb,
+        ranges,
+        iterations,
+        averaging_delay,
+        1,
+        0,
+    )?;
+    upgraded.state_id = source.state_id.clone();
+    upgraded.range_particles = source.range_particles;
+    upgraded.range_replicates = source.range_replicates;
+    upgraded.range_effective_sample_size = source.range_effective_sample_size;
+    upgraded.belief_method = source.belief_method.clone();
+    upgraded.range_maximum_total_variation = source.range_maximum_total_variation;
+    upgraded.input_sha256 = Some(fingerprint);
+    upgraded.off_policy_explorer = source.off_policy_explorer;
+    upgraded.sampling_exploration_probability = source.sampling_exploration_probability;
+    upgraded.public_action_line = source.public_action_line.clone();
+    upgraded.resolver_root_board = source.resolver_root_board;
+    upgraded.resolver_public_history = source.resolver_public_history.clone();
+    upgraded.resolver_leaf_reach_probability = source.resolver_leaf_reach_probability;
+    Ok(upgraded)
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn legacy_turn_target_from_exact_rivers(
     game: &BlueprintConfig,
     board: [u8; 4],
     actor: usize,
@@ -3159,6 +4095,13 @@ fn turn_target_from_exact_rivers(
         }),
         exact_river_cards,
         maximum_river_exploitability_bb_per_hand: maximum_river_exploitability,
+        turn_river_exploitability_bb_per_hand: None,
+        current_turn_river_exploitability_bb_per_hand: None,
+        turn_river_maximum_probability_sum_error: None,
+        turn_river_solver_method: None,
+        turn_river_information_sets: None,
+        turn_information_sets: None,
+        river_information_sets: None,
         zero_sum_residual_bb: zero_sum_residual,
         range_particles: None,
         range_replicates: None,
@@ -3309,7 +4252,7 @@ pub fn generate_self_play_turn_targets(
                 }
                 cached
             } else {
-                let mut solved = turn_target_from_exact_rivers(
+                let mut solved = turn_target_from_complete_continuation(
                     &config.game,
                     board,
                     turn_state.actor,
@@ -3324,7 +4267,7 @@ pub fn generate_self_play_turn_targets(
                 solved
             }
         } else {
-            turn_target_from_exact_rivers(
+            turn_target_from_complete_continuation(
                 &config.game,
                 board,
                 turn_state.actor,
@@ -3428,7 +4371,7 @@ pub fn generate_self_play_turn_targets(
     }
     if maximum_river_exploitability > 0.05 {
         reasons.push(format!(
-            "at least one river solve has {maximum_river_exploitability:.6}bb/hand abstract exploitability"
+            "at least one complete turn-river solve has {maximum_river_exploitability:.6}bb/hand abstract exploitability"
         ));
     }
     if minimum_ess < config.range_particles as f64 * 0.1 {
@@ -3437,13 +4380,15 @@ pub fn generate_self_play_turn_targets(
         ));
     }
     Ok(TurnTargetDataset {
-        schema: "hu-turn-public-belief-cfv-dataset-v1".to_owned(),
-        method: "frozen_policy_self_play_public_states_with_exact_per-player_reach_factors_particle_replicate_validation_and_exact_river_enumeration"
+        schema: "hu-turn-public-belief-cfv-dataset-v2".to_owned(),
+        method: "frozen_policy_self_play_public_states_with_exact_per_player_reach_factors_particle_replicate_validation_and_complete_turn_river_public_belief_solving"
             .to_owned(),
         approximate: true,
         game: config.game,
         seed: config.seed,
         river_iterations: config.river_iterations,
+        turn_river_iterations: Some(config.river_iterations),
+        turn_river_averaging_delay: Some(config.river_averaging_delay),
         state_distribution: if config.exploration_probability > 0.0 {
             "frozen_v26_one_player_epsilon_exploration_exact_reach_factor_public_beliefs"
         } else {
@@ -3594,7 +4539,7 @@ pub fn generate_resolver_leaf_turn_targets(
                 }
                 cached
             } else {
-                turn_target_from_exact_rivers(
+                turn_target_from_complete_continuation(
                     &config.game,
                     leaf.board,
                     leaf.actor,
@@ -3607,7 +4552,7 @@ pub fn generate_resolver_leaf_turn_targets(
                 )?
             }
         } else {
-            turn_target_from_exact_rivers(
+            turn_target_from_complete_continuation(
                 &config.game,
                 leaf.board,
                 leaf.actor,
@@ -3658,7 +4603,7 @@ pub fn generate_resolver_leaf_turn_targets(
     let mut reasons = Vec::new();
     if maximum_river_exploitability > 0.05 {
         reasons.push(format!(
-            "at least one resolver-leaf river solve has {maximum_river_exploitability:.6}bb/hand abstract exploitability"
+            "at least one resolver-leaf complete turn-river solve has {maximum_river_exploitability:.6}bb/hand abstract exploitability"
         ));
     }
     if maximum_zero_sum_residual > 1e-7 {
@@ -3677,12 +4622,14 @@ pub fn generate_resolver_leaf_turn_targets(
             .push("resolver source value network was not trained from accepted targets".to_owned());
     }
     Ok(TurnTargetDataset {
-        schema: "hu-turn-public-belief-cfv-dataset-v1".to_owned(),
-        method: "flop_resolver_average_strategy_counterfactual_turn_leaf_capture_with_exact_river_enumeration".to_owned(),
+        schema: "hu-turn-public-belief-cfv-dataset-v2".to_owned(),
+        method: "flop_resolver_average_strategy_counterfactual_turn_leaf_capture_with_complete_turn_river_public_belief_solving".to_owned(),
         approximate: true,
         game: config.game,
         seed: config.seed,
         river_iterations: config.river_iterations,
+        turn_river_iterations: Some(config.river_iterations),
+        turn_river_averaging_delay: Some(config.river_averaging_delay),
         state_distribution:
             "flop_resolver_average_strategy_counterfactual_turn_leaves".to_owned(),
         source_policy_sha256,
@@ -3992,7 +4939,7 @@ fn maximum_range_total_variation(first: &[Vec<f64>; 2], second: &[Vec<f64>; 2]) 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn turn_target_input_sha256(
+pub fn turn_target_input_sha256(
     game: &BlueprintConfig,
     board: [u8; 4],
     actor: usize,
@@ -4002,6 +4949,7 @@ fn turn_target_input_sha256(
     river_averaging_delay: u64,
 ) -> Result<String, serde_json::Error> {
     let bytes = serde_json::to_vec(&serde_json::json!({
+        "continuationSemantics": "complete_turn_river_public_belief_v3_with_solver_provenance_current_policy_and_probability_diagnostics",
         "game": game,
         "board": board,
         "actor": actor,
@@ -4069,6 +5017,7 @@ fn shaped_range(board: &[u8], state_index: usize, player: usize) -> Vec<f64> {
     weights
 }
 
+#[cfg(test)]
 fn normalize_masked(range: &[f64], board: &[u8]) -> Vec<f64> {
     let blocked = board.iter().copied().collect::<BTreeSet<_>>();
     let mut normalized = all_combos()
@@ -4365,6 +5314,128 @@ mod tests {
             averaging_delay: 0,
         };
         assert_eq!(solve_river(config.clone()), solve_river(config));
+    }
+
+    #[test]
+    fn turn_river_solve_keeps_turn_betting_and_observed_river_chance() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let config = TurnRiverSolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+        };
+        let solution = solve_turn_river(config.clone()).unwrap();
+        let values = solve_turn_river_continuation_values(config).unwrap();
+        assert_eq!(
+            values.counterfactual_values_bb,
+            solution.counterfactual_values_bb
+        );
+        assert_eq!(
+            values.opponent_compatible_mass,
+            solution.opponent_compatible_mass
+        );
+        assert_eq!(values.metrics, solution.metrics);
+        assert_eq!(solution.metrics.exact_river_cards, 48);
+        assert!(solution.metrics.turn_information_sets > 0);
+        assert!(solution.metrics.river_information_sets > 0);
+        assert_eq!(
+            solution.metrics.information_sets,
+            solution.metrics.turn_information_sets + solution.metrics.river_information_sets
+        );
+        assert!(solution.strategies.iter().any(|node| node
+            .public_history
+            .iter()
+            .any(|part| part.starts_with("Turn:p"))));
+        assert!(solution.strategies.iter().any(|node| node
+            .public_history
+            .iter()
+            .any(|part| part.starts_with("River:p"))));
+        assert!(solution.strategies.iter().any(|node| node
+            .public_history
+            .iter()
+            .any(|part| part.starts_with("chance:river:"))));
+        assert!(solution.metrics.zero_sum_residual_bb < 1e-8);
+        assert!(solution.metrics.maximum_probability_sum_error < 1e-6);
+        assert!(solution
+            .metrics
+            .current_strategy_exploitability_bb_per_hand
+            .is_finite());
+        assert!(solution.metrics.current_strategy_exploitability_bb_per_hand >= 0.0);
+        assert!(solution
+            .counterfactual_values_bb
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn turn_river_chance_matches_legacy_river_average_when_turn_is_forced_check() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut game = tiny_game();
+        game.effective_stack_bb = 2.0;
+        game.action_abstraction.include_all_in = false;
+        let invested = [1.999, 1.999];
+        let direct = legacy_turn_target_from_exact_rivers(
+            &game,
+            board,
+            1,
+            invested,
+            ranges.clone(),
+            4,
+            0,
+            1,
+            0,
+        )
+        .unwrap();
+        let solved = solve_turn_river(TurnRiverSolveConfig {
+            game,
+            state: PublicBeliefState::turn_start(board, 1, invested, ranges),
+            iterations: 4,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+        })
+        .unwrap();
+        for player in 0..2 {
+            for (left, right) in direct.counterfactual_values_bb[player]
+                .iter()
+                .zip(&solved.counterfactual_values_bb[player])
+            {
+                assert!((left - right).abs() < 1e-5, "{left} != {right}");
+            }
+        }
+    }
+
+    #[test]
+    fn turn_target_upgrade_preserves_provenance_and_changes_continuation_semantics() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut game = tiny_game();
+        game.effective_stack_bb = 2.0;
+        game.action_abstraction.include_all_in = false;
+        let invested = [1.999, 1.999];
+        let mut source =
+            legacy_turn_target_from_exact_rivers(&game, board, 1, invested, ranges, 2, 0, 1, 7)
+                .unwrap();
+        source.belief_method = Some("pinned-test-belief".to_owned());
+        source.public_action_line = Some(vec!["pinned-action".to_owned()]);
+        let upgraded = upgrade_turn_value_target(&game, &source, 2, 0).unwrap();
+        assert_eq!(upgraded.state_id, source.state_id);
+        assert_eq!(upgraded.belief_method, source.belief_method);
+        assert_eq!(upgraded.public_action_line, source.public_action_line);
+        assert!(upgraded.input_sha256.is_some());
+        assert!(upgraded.turn_river_exploitability_bb_per_hand.is_some());
+        assert!(upgraded
+            .current_turn_river_exploitability_bb_per_hand
+            .is_some());
+        assert!(upgraded.turn_river_maximum_probability_sum_error.is_some());
+        assert_eq!(
+            upgraded.maximum_river_exploitability_bb_per_hand,
+            upgraded.turn_river_exploitability_bb_per_hand.unwrap()
+        );
     }
 
     #[test]

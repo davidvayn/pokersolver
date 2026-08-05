@@ -15,10 +15,22 @@ class PublicValueNetworkTests(unittest.TestCase):
         source_hash: str,
         status: str = "accepted",
         resolver_leaf: bool = False,
+        schema: str = module.COMPLETE_TURN_TARGET_SCHEMA,
     ) -> module.Dataset:
         target = {
             "board": board,
             "maximum_river_exploitability_bb_per_hand": 0.04,
+            "turn_river_exploitability_bb_per_hand": 0.04,
+            "current_turn_river_exploitability_bb_per_hand": 0.05,
+            "turn_river_maximum_probability_sum_error": 1e-12,
+            "turn_river_solver_method": (
+                "value_only_alternating_vectorized_dcfr_exact_private_cards_"
+                "observed_river_chance_and_complete_turn_river_betting"
+            ),
+            "turn_river_information_sets": 100,
+            "turn_information_sets": 4,
+            "river_information_sets": 96,
+            "exact_river_cards": 48,
             "zero_sum_residual_bb": -1e-10,
             "range_particles": 4096,
             "range_replicates": 2,
@@ -54,7 +66,7 @@ class PublicValueNetworkTests(unittest.TestCase):
             projection_weights=np.ones((1, 2, module.COMBO_COUNT), dtype=np.float32),
             groups=np.asarray([0], dtype=np.int32),
             source={
-                "schema": "hu-turn-public-belief-cfv-dataset-v1",
+                "schema": schema,
                 "source_policy_sha256": "f" * 64,
                 "validation": {"status": status, "reasons": []},
                 "targets": [target],
@@ -149,10 +161,12 @@ class PublicValueNetworkTests(unittest.TestCase):
             ],
         }
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "targets.json"
-            path.write_text(json.dumps(payload))
-            with self.assertRaisesRegex(ValueError, "board-blocked"):
-                module.load_dataset(path)
+            for version in ("v1", "v2"):
+                payload["schema"] = f"hu-turn-public-belief-cfv-dataset-{version}"
+                path = Path(directory) / f"targets-{version}.json"
+                path.write_text(json.dumps(payload))
+                with self.assertRaisesRegex(ValueError, "board-blocked"):
+                    module.load_dataset(path)
 
     def test_hand_class_encoding_has_exactly_169_classes(self) -> None:
         self.assertEqual(set(module.HAND_CLASS_IDS), set(range(169)))
@@ -312,6 +326,34 @@ class PublicValueNetworkTests(unittest.TestCase):
             combined.source["component_dataset_sha256"], ["a" * 64, "b" * 64]
         )
         self.assertEqual(combined.source["validation"]["status"], "accepted")
+
+    def test_legacy_target_schema_is_readable_but_release_rejected(self) -> None:
+        primary = self.synthetic_dataset(
+            [0, 5, 10, 15],
+            "a" * 64,
+            schema=module.LEGACY_TARGET_SCHEMA,
+        )
+        supplement = self.synthetic_dataset(
+            [1, 6, 11, 16],
+            "b" * 64,
+            schema=module.LEGACY_TARGET_SCHEMA,
+        )
+        combined = module.combine_training_datasets(primary, [supplement])
+        self.assertEqual(combined.source["validation"]["status"], "rejected")
+        self.assertTrue(
+            any(
+                "omits complete turn betting" in reason
+                for reason in combined.source["validation"]["reasons"]
+            )
+        )
+
+    def test_v2_target_without_complete_solver_provenance_is_release_rejected(
+        self,
+    ) -> None:
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        dataset.source["targets"][0].pop("turn_river_solver_method")
+        reasons = module.complete_turn_release_reasons(dataset.source)
+        self.assertTrue(any("solver provenance" in reason for reason in reasons))
 
     def test_supplemental_dataset_rejects_duplicate_boards_but_revalidates_small_component(
         self,
