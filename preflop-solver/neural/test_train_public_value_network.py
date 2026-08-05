@@ -327,6 +327,16 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertTrue(all(layer["activation"] == "gelu-fast" for layer in context))
         self.assertEqual(head[-1]["activation"], "linear")
 
+    def test_xwide_gelu_increases_capacity_and_preserves_export_shape(self) -> None:
+        model = module.SharedComboValueNetwork(True, "xwide-gelu", "pot")
+        context = module.tower_payload(model.context_tower, "gelu-fast", "gelu-fast")
+        query = module.tower_payload(model.query_tower, "gelu-fast", "gelu-fast")
+        head = module.tower_payload(model.head, "gelu-fast", "linear")
+        self.assertEqual([layer["outputSize"] for layer in context], [256, 256, 128])
+        self.assertEqual([layer["outputSize"] for layer in query], [192, 192, 128])
+        self.assertEqual([layer["outputSize"] for layer in head], [256, 128, 64, 1])
+        self.assertEqual(head[-1]["activation"], "linear")
+
     def test_supplemental_dataset_offsets_groups_and_preserves_component_hashes(
         self,
     ) -> None:

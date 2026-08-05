@@ -380,6 +380,33 @@ class SharedComboValueNetwork(nn.Module):
                 nn.GELU(approx="fast"),
                 nn.Linear(64, 1),
             )
+        elif architecture == "xwide-gelu":
+            embedding = 128
+            self.context_tower = nn.Sequential(
+                nn.Linear(context_count, 256),
+                nn.GELU(approx="fast"),
+                nn.Linear(256, 256),
+                nn.GELU(approx="fast"),
+                nn.Linear(256, embedding),
+                nn.GELU(approx="fast"),
+            )
+            self.query_tower = nn.Sequential(
+                nn.Linear(query_count, 192),
+                nn.GELU(approx="fast"),
+                nn.Linear(192, 192),
+                nn.GELU(approx="fast"),
+                nn.Linear(192, embedding),
+                nn.GELU(approx="fast"),
+            )
+            self.head = nn.Sequential(
+                nn.Linear(embedding * 2, 256),
+                nn.GELU(approx="fast"),
+                nn.Linear(256, 128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, 64),
+                nn.GELU(approx="fast"),
+                nn.Linear(64, 1),
+            )
         else:
             raise ValueError(f"unknown shared-combo architecture {architecture}")
 
@@ -473,7 +500,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-cross-seed-correlation", type=float, default=0.95)
     parser.add_argument("--suit-augmentations", type=int, choices=(1, 24), default=1)
     parser.add_argument(
-        "--architecture", choices=("compact", "wide", "deep-gelu"), default="compact"
+        "--architecture",
+        choices=("compact", "wide", "deep-gelu", "xwide-gelu"),
+        default="compact",
     )
     parser.add_argument(
         "--split-seed",
@@ -1617,7 +1646,11 @@ def export_model(
     source_policy_sha256: str | None,
     value_normalization: str,
 ) -> None:
-    hidden_activation = "gelu-fast" if model.architecture == "deep-gelu" else "relu"
+    hidden_activation = (
+        "gelu-fast"
+        if model.architecture in ("deep-gelu", "xwide-gelu")
+        else "relu"
+    )
     path.write_text(
         json.dumps(
             {
