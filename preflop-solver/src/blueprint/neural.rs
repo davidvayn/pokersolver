@@ -60,10 +60,16 @@ pub struct ExploitabilityCertificate {
     pub seed: u64,
     pub confidence: f64,
     pub threads: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opponent_samples_per_deal: Option<u32>,
     pub exact_betting_tree_nodes: u64,
     pub sample_mean_exploitability_bb: f64,
     pub sample_standard_error_bb: f64,
     pub hoeffding_margin_bb: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub empirical_bernstein_margin_bb: Option<f64>,
+    pub confidence_bound_method: &'static str,
+    pub confidence_bound_reference: &'static str,
     pub exploitability_upper_bound_bb: f64,
     pub relaxation: &'static str,
     pub guarantee: &'static str,
@@ -1351,7 +1357,7 @@ fn clairvoyant_response_value(
 ) -> f64 {
     *visited_nodes += 1;
     if state.terminal.is_some() {
-        let utility_p0 = state.utility_p0(deal, &generator.config.game);
+        let utility_p0 = complete_runout_utility_p0(&state, deal);
         return if responder == 0 {
             utility_p0
         } else {
@@ -1389,6 +1395,136 @@ fn clairvoyant_response_value(
             })
             .sum()
     }
+}
+
+fn complete_runout_utility_p0(state: &GameState, deal: &Deal) -> f64 {
+    match state.terminal.as_ref().expect("terminal utility") {
+        Terminal::Fold { winner } => {
+            if *winner == 0 {
+                state.invested[1]
+            } else {
+                -state.invested[0]
+            }
+        }
+        Terminal::Showdown => {
+            let equity = showdown_result(&deal.holes, &deal.board);
+            equity * state.invested[1] - (1.0 - equity) * state.invested[0]
+        }
+    }
+}
+
+fn sample_opponent_hidden_scenarios(
+    template: &Deal,
+    responder: usize,
+    samples: u32,
+    rng: &mut SplitMix64,
+) -> Vec<Deal> {
+    let responder_holes = template.holes[responder];
+    let mut blocked = [false; 52];
+    for card in responder_holes.into_iter().chain(template.board) {
+        blocked[card as usize] = true;
+    }
+    let available = (0..52u8)
+        .filter(|card| !blocked[*card as usize])
+        .collect::<Vec<_>>();
+    debug_assert_eq!(available.len(), 45);
+    (0..samples)
+        .map(|_| {
+            let first_index = rng.index(available.len());
+            let mut second_index = rng.index(available.len() - 1);
+            if second_index >= first_index {
+                second_index += 1;
+            }
+            let opponent_holes = [available[first_index], available[second_index]];
+            let mut holes = [[0u8; 2]; 2];
+            holes[responder] = responder_holes;
+            holes[1 - responder] = opponent_holes;
+            Deal::from_sampled_cards(holes, template.board)
+        })
+        .collect()
+}
+
+fn opponent_hidden_future_board_response_value(
+    generator: &SampleGenerator,
+    state: GameState,
+    scenarios: &[Deal],
+    weights: &[f64],
+    responder: usize,
+    visited_nodes: &mut u64,
+) -> f64 {
+    *visited_nodes += 1;
+    debug_assert_eq!(scenarios.len(), weights.len());
+    if state.terminal.is_some() {
+        return scenarios
+            .iter()
+            .zip(weights)
+            .map(|(deal, weight)| {
+                let utility_p0 = complete_runout_utility_p0(&state, deal);
+                weight
+                    * if responder == 0 {
+                        utility_p0
+                    } else {
+                        -utility_p0
+                    }
+            })
+            .sum();
+    }
+    let actions = state.legal_actions(&generator.config.game);
+    if state.actor == responder {
+        return actions
+            .iter()
+            .map(|action| {
+                opponent_hidden_future_board_response_value(
+                    generator,
+                    state.apply(action, &generator.config.game),
+                    scenarios,
+                    weights,
+                    responder,
+                    visited_nodes,
+                )
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+    }
+
+    let mut branch_weights = vec![vec![0.0; scenarios.len()]; actions.len()];
+    for (scenario_index, (deal, reach)) in scenarios.iter().zip(weights).enumerate() {
+        if *reach <= 0.0 {
+            continue;
+        }
+        let strategy = generator.current_strategy(&state, deal, &actions);
+        for (action_index, probability) in strategy.into_iter().enumerate() {
+            branch_weights[action_index][scenario_index] = reach * probability;
+        }
+    }
+    actions
+        .iter()
+        .zip(branch_weights)
+        .map(|(action, child_weights)| {
+            opponent_hidden_future_board_response_value(
+                generator,
+                state.apply(action, &generator.config.game),
+                scenarios,
+                &child_weights,
+                responder,
+                visited_nodes,
+            )
+        })
+        .sum()
+}
+
+fn one_sided_empirical_bernstein_margin(
+    sample_variance: f64,
+    range: f64,
+    samples: u64,
+    confidence: f64,
+) -> f64 {
+    debug_assert!(sample_variance.is_finite() && sample_variance >= 0.0);
+    debug_assert!(range.is_finite() && range > 0.0);
+    debug_assert!(samples >= 2);
+    debug_assert!((0.0..1.0).contains(&confidence));
+    let log_term = (2.0 / (1.0 - confidence)).ln();
+    (2.0 * sample_variance * log_term / samples as f64).sqrt()
+        + 7.0 * range * log_term / (3.0 * (samples - 1) as f64)
 }
 
 /// Compute a conservative upper bound by relaxing the responder's information.
@@ -1498,16 +1634,171 @@ pub fn certify_exploitability_upper_bound(
         seed: config.seed,
         confidence: config.confidence,
         threads: worker_count,
+        opponent_samples_per_deal: None,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: margin,
+        empirical_bernstein_margin_bb: None,
+        confidence_bound_method: "one_sided_hoeffding",
+        confidence_bound_reference: "https://doi.org/10.1007/BF02288859",
         exploitability_upper_bound_bb: (mean + margin).min(depth),
         relaxation: "each responder observes both private hands and the complete board runout",
         guarantee: "the relaxed responder contains all legal imperfect-information responses, so its i.i.d. chance expectation upper-bounds true exploitability",
         assumptions: vec![
             "complete deals are independent uniform samples from the exact card-removal distribution",
             "the frozen opponent network is evaluated exactly on every reached betting action",
+            "utilities are zero-sum and bounded to the effective stack in absolute value",
+        ],
+    })
+}
+
+/// Compute a tighter conservative upper bound without revealing the
+/// opponent's private cards.
+///
+/// Each outer sample reveals the responder's cards and the complete public
+/// runout. Conditional opponent hands remain hidden and are represented by a
+/// common sample-average game. The responder must select one action for all
+/// opponent particles reaching the same public history. Maximizing a finite
+/// unbiased sample average has non-negative optimization bias, so the
+/// expectation of this relaxed empirical best response remains an upper bound
+/// on the true imperfect-information best response. The outer Hoeffding bound
+/// covers both deal and opponent-particle sampling error.
+pub fn certify_opponent_hidden_exploitability_upper_bound(
+    config: ExploitabilityCertificateConfig,
+    opponent_samples_per_deal: u32,
+) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
+    if config.deals < 2 {
+        return Err("exploitability certification requires at least two deals".into());
+    }
+    if opponent_samples_per_deal == 0 {
+        return Err("opponent-hidden certification requires opponent samples".into());
+    }
+    if !config.confidence.is_finite() || !(0.0..1.0).contains(&config.confidence) {
+        return Err("certificate confidence must be strictly between zero and one".into());
+    }
+    if config.threads == 0 {
+        return Err("certificate thread count must be positive".into());
+    }
+    let generator = SampleGenerator::new(SampleGenerationConfig {
+        game: config.game.clone(),
+        traversals: 1,
+        start_iteration: 0,
+        seed: config.seed,
+        max_records: 1,
+        output: PathBuf::from("unused-opponent-hidden-certificate.jsonl.gz"),
+        network_path: Some(config.network_path),
+        trajectory_sampling: false,
+        evaluate_trajectory_values: false,
+        value_rollouts_per_action: 1,
+        enumerate_turn_river_chance: false,
+    })?;
+    if generator.networks.is_none() {
+        return Err("exploitability certification requires a frozen policy".into());
+    }
+    let mut rng = SplitMix64::new(config.seed);
+    let deals = (0..config.deals)
+        .map(|index| (index, Deal::sample(&mut rng)))
+        .collect::<Vec<_>>();
+    let worker_count = config.threads.min(deals.len());
+    let chunk_size = deals.len().div_ceil(worker_count);
+    let deal_chunks = deals
+        .chunks(chunk_size)
+        .map(<[(u64, Deal)]>::to_vec)
+        .collect::<Vec<_>>();
+    let evaluated = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for chunk in deal_chunks {
+            let generator = &generator;
+            let game = &config.game;
+            handles.push(scope.spawn(move || {
+                chunk
+                    .into_iter()
+                    .map(|(index, template)| {
+                        let mut visited_nodes = 0u64;
+                        let responses: [f64; 2] = std::array::from_fn(|responder| {
+                            let seed = config.seed
+                                ^ index.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                                ^ (responder as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                            let mut scenario_rng = SplitMix64::new(seed);
+                            let scenarios = sample_opponent_hidden_scenarios(
+                                &template,
+                                responder,
+                                opponent_samples_per_deal,
+                                &mut scenario_rng,
+                            );
+                            let weights = vec![
+                                1.0 / opponent_samples_per_deal as f64;
+                                opponent_samples_per_deal as usize
+                            ];
+                            opponent_hidden_future_board_response_value(
+                                generator,
+                                GameState::initial(game),
+                                &scenarios,
+                                &weights,
+                                responder,
+                                &mut visited_nodes,
+                            )
+                        });
+                        (
+                            ((responses[0] + responses[1]) / 2.0)
+                                .clamp(0.0, game.effective_stack_bb),
+                            visited_nodes,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("certificate worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut visited_nodes = 0u64;
+    let mut mean = 0.0;
+    let mut squared_deviation_sum = 0.0;
+    let depth = config.game.effective_stack_bb;
+    for (index, (exploitability, nodes)) in evaluated.into_iter().enumerate() {
+        visited_nodes += nodes;
+        let sample_index = index + 1;
+        let delta = exploitability - mean;
+        mean += delta / sample_index as f64;
+        squared_deviation_sum += delta * (exploitability - mean);
+    }
+    let sample_variance = squared_deviation_sum / (config.deals - 1) as f64;
+    let sample_standard_error = (sample_variance.max(0.0) / config.deals as f64).sqrt();
+    let alpha = 1.0 - config.confidence;
+    let hoeffding_margin = depth * ((1.0 / alpha).ln() / (2.0 * config.deals as f64)).sqrt();
+    let empirical_bernstein_margin = one_sided_empirical_bernstein_margin(
+        sample_variance,
+        depth,
+        config.deals,
+        config.confidence,
+    );
+    Ok(ExploitabilityCertificate {
+        schema: "hu-neural-opponent-hidden-upper-bound-v1",
+        method: "future_public_runout_relaxation_with_hidden_opponent_sample_average_best_response_and_empirical_bernstein_ucb",
+        depth_bb: depth,
+        deals: config.deals,
+        seed: config.seed,
+        confidence: config.confidence,
+        threads: worker_count,
+        opponent_samples_per_deal: Some(opponent_samples_per_deal),
+        exact_betting_tree_nodes: visited_nodes,
+        sample_mean_exploitability_bb: mean,
+        sample_standard_error_bb: sample_standard_error,
+        hoeffding_margin_bb: hoeffding_margin,
+        empirical_bernstein_margin_bb: Some(empirical_bernstein_margin),
+        confidence_bound_method: "maurer_pontil_2009_theorem_4_one_sided_empirical_bernstein",
+        confidence_bound_reference: "https://arxiv.org/abs/0907.3740",
+        exploitability_upper_bound_bb: (mean + empirical_bernstein_margin).min(depth),
+        relaxation: "each responder observes its own private cards and the complete public runout, while opponent private cards remain hidden behind a common sample-average belief",
+        guarantee: "future-board revelation contains every legal response; the expected sample-average optimum upper-bounds the relaxed best response by convexity, and the one-sided empirical Bernstein bound covers its outer i.i.d. expectation",
+        assumptions: vec![
+            "outer responder-card and board samples are independent and exact under card removal",
+            "conditional opponent particles are independent uniform samples with replacement and shared across every candidate response in an outer game",
+            "the frozen opponent network is evaluated exactly on every reached betting action",
+            "complete sampled runouts settle every showdown exactly",
             "utilities are zero-sum and bounded to the effective stack in absolute value",
         ],
     })
@@ -1746,6 +2037,8 @@ mod tests {
         };
         let first = certify_exploitability_upper_bound(make()).unwrap();
         let second = certify_exploitability_upper_bound(make()).unwrap();
+        let hidden_first = certify_opponent_hidden_exploitability_upper_bound(make(), 4).unwrap();
+        let hidden_second = certify_opponent_hidden_exploitability_upper_bound(make(), 4).unwrap();
         fs::remove_file(path).unwrap();
         assert_eq!(
             serde_json::to_vec(&first).unwrap(),
@@ -1755,6 +2048,34 @@ mod tests {
         assert!(first.sample_mean_exploitability_bb >= 0.0);
         assert!(first.exploitability_upper_bound_bb >= first.sample_mean_exploitability_bb);
         assert!(first.exploitability_upper_bound_bb <= 2.0);
+        assert_eq!(
+            serde_json::to_vec(&hidden_first).unwrap(),
+            serde_json::to_vec(&hidden_second).unwrap()
+        );
+        assert_eq!(hidden_first.opponent_samples_per_deal, Some(4));
+        assert_eq!(
+            hidden_first.schema,
+            "hu-neural-opponent-hidden-upper-bound-v1"
+        );
+        assert!(hidden_first.exact_betting_tree_nodes > 0);
+        assert!(hidden_first.sample_mean_exploitability_bb >= 0.0);
+        assert!(
+            hidden_first.exploitability_upper_bound_bb
+                >= hidden_first.sample_mean_exploitability_bb
+        );
+        assert!(hidden_first.exploitability_upper_bound_bb <= 2.0);
+    }
+
+    #[test]
+    fn empirical_bernstein_margin_matches_the_bounded_variable_theorem() {
+        let confidence: f64 = 0.99;
+        let range = 20.0;
+        let samples = 100;
+        let expected = 7.0 * range * (2.0 / (1.0 - confidence)).ln() / (3.0 * (samples - 1) as f64);
+        let measured = one_sided_empirical_bernstein_margin(0.0, range, samples, confidence);
+        assert!((measured - expected).abs() < 1e-12);
+        assert!(one_sided_empirical_bernstein_margin(0.0, range, 1_000, confidence) < measured);
+        assert!(one_sided_empirical_bernstein_margin(0.5, range, samples, confidence) > measured);
     }
 
     #[test]

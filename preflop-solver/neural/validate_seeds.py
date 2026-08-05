@@ -2,8 +2,9 @@
 """Reach-aware cross-seed checks for frozen neural average policies.
 
 This validator deliberately fails closed. Cross-seed agreement, finite
-probabilities, and artifact hashes are useful reproducibility gates, but they
-do not supply a full-game exploitability upper bound.
+probabilities, and artifact hashes are useful reproducibility gates, but only
+an independently generated conservative certificate can supply the declared
+full-game exploitability upper bound.
 """
 
 from __future__ import annotations
@@ -264,6 +265,7 @@ def exploitability_certificate(
     compact_grid: bool,
     policy_model: ActionScorer,
     postflop_policy_model: ActionScorer | None = None,
+    opponent_samples_per_deal: int = 0,
 ) -> dict[str, Any]:
     subprocess.run(
         ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
@@ -305,16 +307,39 @@ def exploitability_certificate(
         ]
         if compact_grid:
             command.append("--compact-serving-grid")
+        if opponent_samples_per_deal > 0:
+            command.extend(
+                (
+                    "--opponent-samples-per-deal",
+                    str(opponent_samples_per_deal),
+                )
+            )
         result = subprocess.run(
             command, cwd=root, check=True, capture_output=True, text=True
         )
     certificate = json.loads(result.stdout)
+    expected_schema = (
+        "hu-neural-opponent-hidden-upper-bound-v1"
+        if opponent_samples_per_deal > 0
+        else "hu-neural-clairvoyant-upper-bound-v1"
+    )
     if (
-        certificate.get("schema") != "hu-neural-clairvoyant-upper-bound-v1"
+        certificate.get("schema") != expected_schema
         or certificate.get("confidence") != confidence
         or certificate.get("deals") != deals
     ):
         raise RuntimeError("full-game exploitability certificate is invalid")
+    if opponent_samples_per_deal > 0:
+        margin = certificate.get("empirical_bernstein_margin_bb")
+        if (
+            certificate.get("opponent_samples_per_deal")
+            != opponent_samples_per_deal
+            or certificate.get("confidence_bound_method")
+            != "maurer_pontil_2009_theorem_4_one_sided_empirical_bernstein"
+            or not isinstance(margin, (int, float))
+            or not np.isfinite(margin)
+        ):
+            raise RuntimeError("opponent-hidden exploitability certificate is invalid")
     return certificate
 
 
@@ -478,6 +503,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exploitability-certificate-deals", type=int, default=0)
     parser.add_argument("--exploitability-certificate-seed", type=int, default=0xA11CE5EED)
     parser.add_argument("--exploitability-certificate-threads", type=int, default=8)
+    parser.add_argument(
+        "--exploitability-certificate-opponent-samples-per-deal",
+        type=int,
+        default=0,
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -510,6 +540,8 @@ def main() -> None:
         raise ValueError("certificate deals must be zero (disabled) or at least two")
     if args.exploitability_certificate_threads <= 0:
         raise ValueError("certificate threads must be positive")
+    if args.exploitability_certificate_opponent_samples_per_deal < 0:
+        raise ValueError("certificate opponent samples cannot be negative")
     root = Path(__file__).resolve().parents[2]
     first_state, first_model = load_run(args.run_a.resolve(), args.round_number)
     second_state, second_model = load_run(args.run_b.resolve(), args.round_number)
@@ -626,6 +658,7 @@ def main() -> None:
                 postflop_policy_model=postflop_models[index]
                 if postflop_models
                 else None,
+                opponent_samples_per_deal=args.exploitability_certificate_opponent_samples_per_deal,
             )
             for index, model in enumerate((first_model, second_model))
         ]
@@ -663,7 +696,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v8",
+        "schema": "hu-neural-cross-seed-validation-v9",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
@@ -704,7 +737,7 @@ def main() -> None:
         "status": "rejected_not_activated",
         "reasons": [
             "Cross-seed stability is a reproducibility check, not equilibrium proof.",
-            "The 99% clairvoyant full-game exploitability upper bound has not reached 0.10bb."
+            "The conservative 99% full-game exploitability upper bound has not reached 0.10bb."
             if not gates["exploitability_upper_99_at_most_0_10"]
             else "The conservative 99% full-game exploitability upper bound passed.",
             "Independent action-EV standard-error coverage has not reached the release gate."

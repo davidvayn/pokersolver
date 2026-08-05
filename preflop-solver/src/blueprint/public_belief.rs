@@ -5464,16 +5464,9 @@ mod tests {
         network.head[0].biases[COMBO_COUNT..].fill(-0.1);
         let turn = 15;
         let conflicts = combo_conflicts();
-        let (values, residual) = turn_leaf_card_values(
-            &network,
-            &conflicts,
-            &board,
-            0,
-            [1.0, 1.0],
-            &ranges,
-            turn,
-        )
-        .expect("turn is reachable");
+        let (values, residual) =
+            turn_leaf_card_values(&network, &conflicts, &board, 0, [1.0, 1.0], &ranges, turn)
+                .expect("turn is reachable");
 
         for player_values in &values {
             for combo in all_combos()

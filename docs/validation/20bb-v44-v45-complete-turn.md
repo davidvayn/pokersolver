@@ -192,3 +192,34 @@ disjoint leaf and matched-resolver selection, continuation-cache and preflop
 DCFR regeneration, action-EV uncertainty measurement, learned-response red
 teaming, and an independent one-sided 99% full-game exploitability upper bound.
 The public model stays unavailable until every declared activation gate passes.
+
+## Tighter full-game certificate pilot
+
+The earlier clairvoyant certificate revealed both private hands and the full
+runout. Its implementation also settled pre-river all-ins through the ordinary
+deterministic rollout-equity approximation rather than the sampled complete
+board. The latter is unsuitable for a rigorous chance-sampling certificate, so
+all earlier numeric certificate results remain diagnostic only. Certificate
+showdowns now use the sampled five-card runout exactly.
+
+A new conservative pilot removes the largest information leak: the responder
+sees its own cards and the future public runout, but opponent cards remain
+hidden behind one common conditional particle set. Every action at a public
+history is selected jointly across all opponent particles reaching that
+history. It therefore cannot choose an action separately for each hidden hand.
+The empirical optimum has non-negative sample-optimization bias by convexity,
+so its expectation is still above the corresponding relaxed best response,
+which in turn is above the legal imperfect-information best response.
+
+The outer confidence interval uses the one-sided empirical Bernstein bound
+from [Maurer and Pontil (2009)](https://arxiv.org/abs/0907.3740), scaled from
+`[0,1]` to `[0,20bb]`. The artifact also retains the looser Hoeffding margin for
+audit comparison. Two deliberately tiny v26 research checks measured point
+values of `1.741143bb/hand` with 2 outer deals and 4 opponent particles and
+`2.489149bb/hand` with 8 outer deals and 16 particles. Their 99% upper bounds
+both correctly cap at `20bb`; neither is release evidence. The variation and
+large finite-sample margins show that this pilot needs substantially larger
+outer and hidden-hand samples and, more importantly, that future-board
+revelation may remain too loose. Activation therefore remains blocked on the
+declared full-game bound even though the evaluator itself is now materially
+tighter and its chance settlement is exact.

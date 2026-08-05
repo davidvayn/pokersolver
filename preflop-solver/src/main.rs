@@ -683,6 +683,11 @@ fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
         .iter()
         .map(|target| target.zero_sum_residual_bb.abs())
         .fold(0.0f64, f64::max);
+    let maximum_probability_sum_error = dataset
+        .targets
+        .iter()
+        .filter_map(|target| target.turn_river_maximum_probability_sum_error)
+        .fold(0.0f64, f64::max);
     let mut reasons = if dataset.validation.status == "accepted" {
         Vec::new()
     } else {
@@ -696,6 +701,90 @@ fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
             .cloned()
             .collect()
     };
+    for (index, target) in dataset.targets.iter().enumerate() {
+        let exploitability = target
+            .turn_river_exploitability_bb_per_hand
+            .expect("checked complete target");
+        let current_exploitability = target
+            .current_turn_river_exploitability_bb_per_hand
+            .expect("checked complete target");
+        let probability_error = target
+            .turn_river_maximum_probability_sum_error
+            .expect("checked complete target");
+        let turn_gain = target
+            .turn_only_best_response_gain_bb_per_hand
+            .expect("checked complete target");
+        let river_gain = target
+            .river_only_best_response_gain_bb_per_hand
+            .expect("checked complete target");
+        let method = target
+            .turn_river_solver_method
+            .as_deref()
+            .expect("checked complete target");
+        let information_sets = target
+            .turn_river_information_sets
+            .expect("checked complete target");
+        let turn_information_sets = target
+            .turn_information_sets
+            .expect("checked complete target");
+        let river_information_sets = target
+            .river_information_sets
+            .expect("checked complete target");
+        if !exploitability.is_finite()
+            || exploitability < 0.0
+            || !current_exploitability.is_finite()
+            || current_exploitability < 0.0
+        {
+            reasons.push(format!("target {index} has invalid exploitability metrics"));
+        }
+        if !probability_error.is_finite() || probability_error > 1e-6 {
+            reasons.push(format!("target {index} probability-sum error exceeds 1e-6"));
+        }
+        if !turn_gain.is_finite()
+            || turn_gain < 0.0
+            || turn_gain > exploitability + 1e-8
+            || !river_gain.is_finite()
+            || river_gain < 0.0
+            || river_gain > exploitability + 1e-8
+        {
+            reasons.push(format!(
+                "target {index} has invalid street best-response attribution"
+            ));
+        }
+        if !method.contains("complete_turn_river_betting") || !method.contains("paired_alternating")
+        {
+            reasons.push(format!(
+                "target {index} lacks corrected paired-alternating solver provenance"
+            ));
+        }
+        if target.exact_river_cards != 48
+            || turn_information_sets == 0
+            || river_information_sets == 0
+            || turn_information_sets.checked_add(river_information_sets) != Some(information_sets)
+        {
+            reasons.push(format!(
+                "target {index} has incomplete river or information-set provenance"
+            ));
+        }
+        let vector_shapes_and_values_valid = (0..2).all(|player| {
+            let range_len = target.ranges[player].len();
+            range_len > 0
+                && target.counterfactual_values_bb[player].len() == range_len
+                && target.opponent_compatible_mass[player].len() == range_len
+                && target.ranges[player]
+                    .iter()
+                    .all(|value| value.is_finite() && *value >= 0.0)
+                && target.counterfactual_values_bb[player]
+                    .iter()
+                    .all(|value| value.is_finite())
+                && target.opponent_compatible_mass[player]
+                    .iter()
+                    .all(|value| value.is_finite() && *value >= 0.0)
+        });
+        if !vector_shapes_and_values_valid {
+            reasons.push(format!("target {index} has invalid continuation vectors"));
+        }
+    }
     if maximum_exploitability > 0.05 {
         reasons.push(format!(
             "maximum complete turn-river exploitability {maximum_exploitability:.6}bb/hand exceeds 0.05bb/hand"
@@ -706,6 +795,13 @@ fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
             "maximum complete turn-river zero-sum residual {maximum_zero_sum_residual:.3e}bb exceeds 1e-7bb"
         ));
     }
+    if maximum_probability_sum_error > 1e-6 {
+        reasons.push(format!(
+            "maximum complete turn-river probability-sum error {maximum_probability_sum_error:.3e} exceeds 1e-6"
+        ));
+    }
+    reasons.sort();
+    reasons.dedup();
     dataset.validation = blueprint::BlueprintValidation {
         status: if reasons.is_empty() {
             "accepted"
@@ -730,6 +826,7 @@ fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
             "averagingDelay": averaging_delay,
             "maximumTurnRiverExploitabilityBbPerHand": maximum_exploitability,
             "maximumZeroSumResidualBb": maximum_zero_sum_residual,
+            "maximumProbabilitySumError": maximum_probability_sum_error,
             "validation": dataset.validation,
             "output": output_path,
         }))?
@@ -1203,22 +1300,28 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
         .ok_or("--networks is required for neural certification")?;
-    let certificate = blueprint::neural::certify_exploitability_upper_bound(
-        blueprint::neural::ExploitabilityCertificateConfig {
-            game,
-            deals: parse_or(args, "--deals", 10_000u64)?,
-            seed: parse_or(args, "--seed", 0xA11CE5EEDu64)?,
-            confidence: parse_or(args, "--confidence", 0.99f64)?,
-            threads: parse_or(
-                args,
-                "--threads",
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(1),
-            )?,
-            network_path,
-        },
-    )?;
+    let config = blueprint::neural::ExploitabilityCertificateConfig {
+        game,
+        deals: parse_or(args, "--deals", 10_000u64)?,
+        seed: parse_or(args, "--seed", 0xA11CE5EEDu64)?,
+        confidence: parse_or(args, "--confidence", 0.99f64)?,
+        threads: parse_or(
+            args,
+            "--threads",
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
+        )?,
+        network_path,
+    };
+    let certificate = if let Some(samples) = value(args, "--opponent-samples-per-deal") {
+        blueprint::neural::certify_opponent_hidden_exploitability_upper_bound(
+            config,
+            samples.parse()?,
+        )?
+    } else {
+        blueprint::neural::certify_exploitability_upper_bound(config)?
+    };
     let output = serde_json::to_string_pretty(&certificate)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
         if let Some(parent) = path.parent() {
@@ -1662,6 +1765,10 @@ Full-game learned-response options:
                                   Default: exact; broader layers require calibration
   --seed <integer>                Deterministic training/evaluation root seed
   --output <path>                 Optional full resolver/evaluation JSON
+
+Neural exploitability-certificate options:
+  --opponent-samples-per-deal <N> Hide opponent cards and use N common
+                                  conditional particles per future-board game
 
 Complete turn/river label options:
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
