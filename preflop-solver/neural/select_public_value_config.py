@@ -32,6 +32,13 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def comparable_identity(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "datasetSha256": report.get("datasetSha256"),
@@ -93,33 +100,37 @@ def summarize_candidate(
     )
     if not np.isfinite(ensemble_tuning):
         raise ValueError(f"value report lacks tuning ensemble diagnostics: {path}")
+    configuration = {
+        "architecture": report.get("architecture"),
+        "variantSet": report.get("variantSet"),
+        "featureSchema": report.get("featureSchema"),
+        "suitAugmentationsPerState": report.get("suitAugmentationsPerState"),
+        "valueNormalization": report.get("valueNormalization"),
+        "steps": report.get("steps"),
+        "batchSize": report.get("batchSize"),
+        "evaluationInterval": report.get("evaluationInterval"),
+        "learningRate": report.get("learningRate"),
+        "learningRateFinal": report.get("learningRateFinal"),
+        "learningRateSchedule": report.get("learningRateSchedule", "constant"),
+        "adamBiasCorrection": report.get("adamBiasCorrection", False),
+        "earlyStoppingPatience": report.get("earlyStoppingPatience"),
+        "huberDelta": report.get("loss", {}).get("huberDelta"),
+        "rawBbAuxiliaryWeight": report.get("loss", {}).get(
+            "rawBbAuxiliaryWeight"
+        ),
+        "minimumPrimaryBatchFraction": report.get("minimumPrimaryBatchFraction"),
+        "supplementalSamplingWeight": report.get("supplementalSamplingWeight"),
+    }
+    training_seeds = sorted(entry["seed"] for entry in weights)
     return {
         "report": str(path),
         "reportSha256": sha256_file(path),
         "identity": comparable_identity(report),
-        "configuration": {
-            "architecture": report.get("architecture"),
-            "variantSet": report.get("variantSet"),
-            "featureSchema": report.get("featureSchema"),
-            "suitAugmentationsPerState": report.get("suitAugmentationsPerState"),
-            "valueNormalization": report.get("valueNormalization"),
-            "steps": report.get("steps"),
-            "batchSize": report.get("batchSize"),
-            "evaluationInterval": report.get("evaluationInterval"),
-            "learningRate": report.get("learningRate"),
-            "learningRateFinal": report.get("learningRateFinal"),
-            "learningRateSchedule": report.get("learningRateSchedule", "constant"),
-            "adamBiasCorrection": report.get("adamBiasCorrection", False),
-            "earlyStoppingPatience": report.get("earlyStoppingPatience"),
-            "huberDelta": report.get("loss", {}).get("huberDelta"),
-            "rawBbAuxiliaryWeight": report.get("loss", {}).get(
-                "rawBbAuxiliaryWeight"
-            ),
-            "minimumPrimaryBatchFraction": report.get(
-                "minimumPrimaryBatchFraction"
-            ),
-            "supplementalSamplingWeight": report.get("supplementalSamplingWeight"),
-        },
+        "configuration": configuration,
+        "trainingSeeds": training_seeds,
+        "selectionTieBreaker": canonical_sha256(
+            {"configuration": configuration, "trainingSeeds": training_seeds}
+        ),
         "seedTuningRmseBb": tuning_rmse,
         "maximumSeedTuningRmseBb": max(tuning_rmse),
         "meanSeedTuningRmseBb": float(np.mean(tuning_rmse)),
@@ -146,7 +157,7 @@ def select_candidate(
             candidate["maximumSeedTuningRmseBb"],
             candidate["meanSeedTuningRmseBb"],
             candidate["twoSeedOutputEnsembleTuningRmseBb"],
-            candidate["reportSha256"],
+            candidate["selectionTieBreaker"],
         ),
     )
     return {

@@ -79,6 +79,29 @@ class PublicValueConfigSelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "restore"):
                 module.select_candidate([second])
 
+    def test_exact_tie_is_invariant_to_validation_values(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            first = self.report(directory, "alpha", [0.20, 0.21], 0.01)
+            second = self.report(directory, "omega", [0.20, 0.21], 9.0)
+            before = module.select_candidate([first, second])
+            selected_before = before["selectedConfiguration"]["architecture"]
+
+            for path, validation in ((first, 99.0), (second, -99.0)):
+                payload = json.loads(path.read_text())
+                for variant in payload["variants"]["range"]:
+                    variant["metrics"]["weightedRmseBb"] = validation
+                path.write_text(json.dumps(payload))
+
+            after = module.select_candidate([first, second])
+            self.assertEqual(
+                after["selectedConfiguration"]["architecture"], selected_before
+            )
+            self.assertEqual(
+                after["candidates"][0]["selectionTieBreaker"],
+                before["candidates"][0]["selectionTieBreaker"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
