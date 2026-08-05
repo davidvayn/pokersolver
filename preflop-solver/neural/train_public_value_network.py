@@ -489,6 +489,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="cosine-decay the learning rate to this value over all configured steps",
     )
+    parser.add_argument(
+        "--adam-bias-correction",
+        action="store_true",
+        help="apply standard first/second-moment bias correction in AdamW",
+    )
     parser.add_argument("--seeds", default="10601,10602")
     parser.add_argument("--validation-fraction", type=float, default=0.25)
     parser.add_argument("--tuning-fraction", type=float, default=0.15)
@@ -1621,6 +1626,7 @@ def train_one(
     batch_size: int,
     learning_rate: float,
     learning_rate_final: float | None,
+    adam_bias_correction: bool,
     evaluation_interval: int,
     early_stopping_patience: int,
     architecture: str,
@@ -1642,6 +1648,7 @@ def train_one(
             learning_rate, learning_rate_final, steps
         ),
         weight_decay=1e-5,
+        bias_correction=adam_bias_correction,
     )
 
     def loss_fn(
@@ -1959,6 +1966,7 @@ def main() -> None:
                 args.batch_size,
                 args.learning_rate,
                 args.learning_rate_final,
+                args.adam_bias_correction,
                 args.evaluation_interval,
                 args.early_stopping_patience,
                 args.architecture,
@@ -2147,6 +2155,7 @@ def main() -> None:
         "learningRateSchedule": (
             "cosine" if args.learning_rate_final is not None else "constant"
         ),
+        "adamBiasCorrection": args.adam_bias_correction,
         "evaluationInterval": args.evaluation_interval,
         "earlyStoppingPatience": args.early_stopping_patience,
         "variants": variants,

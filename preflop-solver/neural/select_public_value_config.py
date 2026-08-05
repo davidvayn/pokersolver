@@ -106,6 +106,7 @@ def summarize_candidate(
             "learningRate": report.get("learningRate"),
             "learningRateFinal": report.get("learningRateFinal"),
             "learningRateSchedule": report.get("learningRateSchedule", "constant"),
+            "adamBiasCorrection": report.get("adamBiasCorrection", False),
             "earlyStoppingPatience": report.get("earlyStoppingPatience"),
             "huberDelta": report.get("loss", {}).get("huberDelta"),
             "rawBbAuxiliaryWeight": report.get("loss", {}).get(
