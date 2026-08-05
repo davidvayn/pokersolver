@@ -289,6 +289,7 @@ def exploitability_certificate(
         network_path.write_text(
             json.dumps(bundle, separators=(",", ":")), encoding="utf-8"
         )
+        expected_network_sha256 = hashlib.sha256(network_path.read_bytes()).hexdigest()
         command = [
             str(binary),
             "neural-certificate",
@@ -327,6 +328,7 @@ def exploitability_certificate(
         certificate.get("schema") != expected_schema
         or certificate.get("confidence") != confidence
         or certificate.get("deals") != deals
+        or certificate.get("network_sha256") != expected_network_sha256
     ):
         raise RuntimeError("full-game exploitability certificate is invalid")
     if opponent_samples_per_deal > 0:

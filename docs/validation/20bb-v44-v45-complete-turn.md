@@ -214,7 +214,8 @@ which in turn is above the legal imperfect-information best response.
 The outer confidence interval uses the one-sided empirical Bernstein bound
 from [Maurer and Pontil (2009)](https://arxiv.org/abs/0907.3740), scaled from
 `[0,1]` to `[0,20bb]`. The artifact also retains the looser Hoeffding margin for
-audit comparison. Two deliberately tiny v26 research checks measured point
+audit comparison and pins the SHA-256 of the routed policy bytes it evaluates.
+Two deliberately tiny v26 research checks measured point
 values of `1.741143bb/hand` with 2 outer deals and 4 opponent particles and
 `2.489149bb/hand` with 8 outer deals and 16 particles. Their 99% upper bounds
 both correctly cap at `20bb`; neither is release evidence. The variation and

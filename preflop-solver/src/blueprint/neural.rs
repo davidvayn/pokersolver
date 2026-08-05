@@ -58,6 +58,7 @@ pub struct ExploitabilityCertificate {
     pub depth_bb: f64,
     pub deals: u64,
     pub seed: u64,
+    pub network_sha256: String,
     pub confidence: f64,
     pub threads: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1546,6 +1547,7 @@ pub fn certify_exploitability_upper_bound(
     if config.threads == 0 {
         return Err("certificate thread count must be positive".into());
     }
+    let network_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
     let generator = SampleGenerator::new(SampleGenerationConfig {
         game: config.game.clone(),
         traversals: 1,
@@ -1632,6 +1634,7 @@ pub fn certify_exploitability_upper_bound(
         depth_bb: depth,
         deals: config.deals,
         seed: config.seed,
+        network_sha256,
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: None,
@@ -1680,6 +1683,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
     if config.threads == 0 {
         return Err("certificate thread count must be positive".into());
     }
+    let network_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
     let generator = SampleGenerator::new(SampleGenerationConfig {
         game: config.game.clone(),
         traversals: 1,
@@ -1781,6 +1785,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         depth_bb: depth,
         deals: config.deals,
         seed: config.seed,
+        network_sha256,
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: Some(opponent_samples_per_deal),
@@ -2024,7 +2029,9 @@ mod tests {
             "pokersolver-neural-certificate-{}.json",
             std::process::id()
         ));
-        fs::write(&path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let payload = serde_json::to_vec(&bundle).unwrap();
+        let expected_network_sha256 = format!("{:x}", Sha256::digest(&payload));
+        fs::write(&path, payload).unwrap();
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 2.0;
         let make = || ExploitabilityCertificateConfig {
@@ -2045,6 +2052,7 @@ mod tests {
             serde_json::to_vec(&second).unwrap()
         );
         assert!(first.exact_betting_tree_nodes > 0);
+        assert_eq!(first.network_sha256, expected_network_sha256);
         assert!(first.sample_mean_exploitability_bb >= 0.0);
         assert!(first.exploitability_upper_bound_bb >= first.sample_mean_exploitability_bb);
         assert!(first.exploitability_upper_bound_bb <= 2.0);
@@ -2053,6 +2061,7 @@ mod tests {
             serde_json::to_vec(&hidden_second).unwrap()
         );
         assert_eq!(hidden_first.opponent_samples_per_deal, Some(4));
+        assert_eq!(hidden_first.network_sha256, first.network_sha256);
         assert_eq!(
             hidden_first.schema,
             "hu-neural-opponent-hidden-upper-bound-v1"
