@@ -357,6 +357,15 @@ class PublicValueNetworkTests(unittest.TestCase):
         reasons = module.complete_turn_release_reasons(dataset.source)
         self.assertTrue(any("solver provenance" in reason for reason in reasons))
 
+    def test_v2_target_with_single_traversal_clock_is_release_rejected(self) -> None:
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        dataset.source["targets"][0]["turn_river_solver_method"] = (
+            "value_only_alternating_vectorized_dcfr_exact_private_cards_"
+            "observed_river_chance_and_complete_turn_river_betting"
+        )
+        reasons = module.complete_turn_release_reasons(dataset.source)
+        self.assertTrue(any("paired alternating" in reason for reason in reasons))
+
     def test_street_attribution_cannot_exceed_full_best_response(self) -> None:
         dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
         dataset.source["targets"][0][

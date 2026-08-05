@@ -734,6 +734,10 @@ def complete_turn_target_reasons(target: dict[str, Any], index: int) -> list[str
     method = str(target.get("turn_river_solver_method", ""))
     if "complete_turn_river_betting" not in method:
         reasons.append(f"target {index} lacks complete turn-river solver provenance")
+    if "paired_alternating" not in method:
+        reasons.append(
+            f"target {index} predates paired alternating turn-river updates"
+        )
     if int(target.get("turn_information_sets", 0)) <= 0:
         reasons.append(f"target {index} lacks turn information-set provenance")
     if int(target.get("river_information_sets", 0)) <= 0:
