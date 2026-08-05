@@ -484,6 +484,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=3_000)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument(
+        "--learning-rate-final",
+        type=float,
+        help="cosine-decay the learning rate to this value over all configured steps",
+    )
     parser.add_argument("--seeds", default="10601,10602")
     parser.add_argument("--validation-fraction", type=float, default=0.25)
     parser.add_argument("--tuning-fraction", type=float, default=0.15)
@@ -1523,6 +1528,22 @@ def weighted_quantile(
     )
 
 
+def learning_rate_schedule(
+    initial: float, final: float | None, steps: int
+) -> float | Any:
+    if not np.isfinite(initial) or initial <= 0.0:
+        raise ValueError("learning rate must be positive and finite")
+    if steps <= 0:
+        raise ValueError("training steps must be positive")
+    if final is None:
+        return initial
+    if not np.isfinite(final) or final <= 0.0 or final > initial:
+        raise ValueError(
+            "final learning rate must be positive, finite, and at most the initial rate"
+        )
+    return optim.cosine_decay(initial, steps, final)
+
+
 def corpus_diagnostics(
     dataset: Dataset, contexts: np.ndarray, queries: np.ndarray
 ) -> dict[str, Any]:
@@ -1599,6 +1620,7 @@ def train_one(
     steps: int,
     batch_size: int,
     learning_rate: float,
+    learning_rate_final: float | None,
     evaluation_interval: int,
     early_stopping_patience: int,
     architecture: str,
@@ -1615,7 +1637,12 @@ def train_one(
         use_ranges, architecture, value_normalization, feature_schema
     )
     mx.eval(model.parameters())
-    optimizer = optim.AdamW(learning_rate=learning_rate, weight_decay=1e-5)
+    optimizer = optim.AdamW(
+        learning_rate=learning_rate_schedule(
+            learning_rate, learning_rate_final, steps
+        ),
+        weight_decay=1e-5,
+    )
 
     def loss_fn(
         current: SharedComboValueNetwork,
@@ -1931,6 +1958,7 @@ def main() -> None:
                 args.steps,
                 args.batch_size,
                 args.learning_rate,
+                args.learning_rate_final,
                 args.evaluation_interval,
                 args.early_stopping_patience,
                 args.architecture,
@@ -2115,6 +2143,10 @@ def main() -> None:
         "steps": args.steps,
         "batchSize": args.batch_size,
         "learningRate": args.learning_rate,
+        "learningRateFinal": args.learning_rate_final,
+        "learningRateSchedule": (
+            "cosine" if args.learning_rate_final is not None else "constant"
+        ),
         "evaluationInterval": args.evaluation_interval,
         "earlyStoppingPatience": args.early_stopping_patience,
         "variants": variants,

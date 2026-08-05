@@ -335,6 +335,15 @@ class PublicValueNetworkTests(unittest.TestCase):
         variants[1]["metrics"]["weightedRmseBb"] = 0.25
         self.assertTrue(module.every_seed_within_rmse(variants, 0.25))
 
+    def test_learning_rate_schedule_is_constant_or_cosine_decayed(self) -> None:
+        self.assertEqual(module.learning_rate_schedule(3e-4, None, 100), 3e-4)
+        schedule = module.learning_rate_schedule(3e-4, 3e-5, 100)
+        self.assertAlmostEqual(float(schedule(module.mx.array(0)).item()), 3e-4)
+        self.assertAlmostEqual(float(schedule(module.mx.array(100)).item()), 3e-5)
+        for final in (0.0, 4e-4, float("nan")):
+            with self.assertRaisesRegex(ValueError, "final learning rate"):
+                module.learning_rate_schedule(3e-4, final, 100)
+
     def test_public_board_texture_is_suit_invariant(self) -> None:
         # 9h, Th, Jh, 2c and the same ranks under a global suit permutation.
         first = module.public_board_texture([30, 34, 38, 0])
