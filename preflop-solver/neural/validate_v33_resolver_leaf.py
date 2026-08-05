@@ -23,6 +23,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parity", type=Path, required=True)
     parser.add_argument("--candidate-resolver", type=Path, action="append", default=[])
     parser.add_argument("--baseline-resolver", type=Path, action="append", default=[])
+    parser.add_argument("--model-version", default="20bb-v33-resolver-leaf-candidate")
+    parser.add_argument("--research-candidate", default="v33")
+    parser.add_argument("--research-baseline", default="v31")
+    parser.add_argument("--maximum-authentic-rmse-bb", type=float)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -71,6 +75,10 @@ def compose(
     parity: dict[str, Any],
     candidate_resolvers: list[dict[str, Any]] | None = None,
     baseline_resolvers: list[dict[str, Any]] | None = None,
+    model_version: str = "20bb-v33-resolver-leaf-candidate",
+    research_candidate: str = "v33",
+    research_baseline: str = "v31",
+    maximum_authentic_rmse_bb: float | None = None,
 ) -> dict[str, Any]:
     candidate_resolvers = candidate_resolvers or []
     baseline_resolvers = baseline_resolvers or []
@@ -95,12 +103,17 @@ def compose(
     leaf_improvement = relative_improvement(baseline_leaf_rmse, candidate_leaf_rmse)
 
     primary_states = int(candidate.get("primaryStates", 0))
-    supplemental = [int(value) for value in candidate.get("supplementalTrainingStates", [])]
+    supplemental = [
+        int(value) for value in candidate.get("supplementalTrainingStates", [])
+    ]
     train = {int(value) for value in candidate.get("trainStates", [])}
     tuning = {int(value) for value in candidate.get("tuningStates", [])}
     holdout = {int(value) for value in candidate.get("validationStates", [])}
     supplemental_train_only = bool(supplemental) and all(
-        value >= primary_states and value in train and value not in tuning and value not in holdout
+        value >= primary_states
+        and value in train
+        and value not in tuning
+        and value not in holdout
         for value in supplemental
     )
     evaluation_hash = candidate_leaf.get("sourceDatasetSha256")
@@ -141,7 +154,8 @@ def compose(
     )
     gate(
         "sourcePolicyPinned",
-        candidate.get("sourcePolicySha256") == baseline.get("sourcePolicySha256")
+        candidate.get("sourcePolicySha256")
+        == baseline.get("sourcePolicySha256")
         == candidate_leaf.get("sourcePolicySha256"),
         candidate.get("sourcePolicySha256"),
         "same frozen source policy across training and evaluation",
@@ -165,6 +179,13 @@ def compose(
         authentic_improvement,
         ">=-5% matched authentic RMSE improvement",
     )
+    if maximum_authentic_rmse_bb is not None:
+        gate(
+            "absoluteAuthenticHoldoutRmse",
+            float(candidate["meanRangeRmseBb"]) <= maximum_authentic_rmse_bb,
+            candidate["meanRangeRmseBb"],
+            f"<={maximum_authentic_rmse_bb:.6f}bb paired mean RMSE",
+        )
     for band in POT_BANDS:
         threshold = -0.10 if band == "small" else -0.05
         gate(
@@ -189,10 +210,10 @@ def compose(
         candidate_seed = candidate_report.get("value_network_seed")
         if candidate_seed is not None:
             candidate_seed = int(candidate_seed)
-        matched = (
-            candidate_report.get("state", {}).get("board")
-            == baseline_report.get("state", {}).get("board")
-            and candidate_report.get("iterations") == baseline_report.get("iterations")
+        matched = candidate_report.get("state", {}).get("board") == baseline_report.get(
+            "state", {}
+        ).get("board") and candidate_report.get("iterations") == baseline_report.get(
+            "iterations"
         )
         candidate_value = resolver_exploitability(candidate_report)
         baseline_value = resolver_exploitability(baseline_report)
@@ -272,22 +293,24 @@ def compose(
         resolver_seed_evaluations,
         "exactly three distinct matched boards for every candidate seed",
     )
+    prediction_gate_names = [
+        "matchedAuthenticHoldout",
+        "supplementalDataTrainingOnly",
+        "resolverEvaluationCorpusUntouched",
+        "sourceTargetsAccepted",
+        "sourcePolicyPinned",
+        "pairedCrossSeedCorrelation",
+        "pythonRustParity",
+        "authenticHoldoutNoRegression",
+        "smallPotNoRegression",
+        "mediumPotNoRegression",
+        "largePotNoRegression",
+        "resolverLeafReachWeightedImprovement",
+    ]
+    if maximum_authentic_rmse_bb is not None:
+        prediction_gate_names.append("absoluteAuthenticHoldoutRmse")
     prediction_prerequisites = all(
-        gates[name]["passed"]
-        for name in (
-            "matchedAuthenticHoldout",
-            "supplementalDataTrainingOnly",
-            "resolverEvaluationCorpusUntouched",
-            "sourceTargetsAccepted",
-            "sourcePolicyPinned",
-            "pairedCrossSeedCorrelation",
-            "pythonRustParity",
-            "authenticHoldoutNoRegression",
-            "smallPotNoRegression",
-            "mediumPotNoRegression",
-            "largePotNoRegression",
-            "resolverLeafReachWeightedImprovement",
-        )
+        gates[name]["passed"] for name in prediction_gate_names
     )
     candidate_resolver_mean = (
         resolver_winner["candidateMeanExploitabilityBbPerHand"]
@@ -318,14 +341,31 @@ def compose(
         },
         ">=2% mean improvement and improvement on at least two of three matched boards",
     )
+    resolver_seed_agreement = all_candidate_seeds_resolved and all(
+        row["relativeImprovement"] is not None
+        and float(row["relativeImprovement"]) >= 0.0
+        and int(row["improvedBoards"]) >= 2
+        for row in resolver_seed_evaluations
+    )
+    gate(
+        "matchedResolverCrossSeedAgreement",
+        resolver_seed_agreement,
+        resolver_seed_evaluations,
+        "every candidate seed has non-negative matched mean improvement and improves at least two of three boards",
+    )
     gate(
         "modelSelectionEligible",
-        prediction_prerequisites and gates["matchedResolverImprovement"]["passed"],
+        prediction_prerequisites
+        and gates["matchedResolverImprovement"]["passed"]
+        and gates["matchedResolverCrossSeedAgreement"]["passed"],
         {
             "predictionPrerequisites": prediction_prerequisites,
             "matchedResolverImprovement": gates["matchedResolverImprovement"]["passed"],
+            "matchedResolverCrossSeedAgreement": gates[
+                "matchedResolverCrossSeedAgreement"
+            ]["passed"],
         },
-        "all prediction-integrity gates and the matched downstream resolver gate pass",
+        "all prediction-integrity, matched downstream resolver, and cross-seed agreement gates pass",
     )
     gate(
         "fullGameExploitabilityUpperBound",
@@ -343,11 +383,13 @@ def compose(
     research_preferred = gates["modelSelectionEligible"]["passed"]
     return {
         "schema": "hu-v33-resolver-leaf-conditioning-sequence-v2",
-        "modelVersion": "20bb-v33-resolver-leaf-candidate",
+        "modelVersion": model_version,
         "status": "rejected",
         "activationAllowed": False,
         "activeManifestModified": False,
-        "researchSelection": "v33" if research_preferred else "v31",
+        "researchSelection": (
+            research_candidate if research_preferred else research_baseline
+        ),
         "sourcePolicySha256": candidate.get("sourcePolicySha256"),
         "sourceDatasetSha256": candidate.get("datasetSha256"),
         "selectedSeed": selected["seed"],
@@ -363,18 +405,16 @@ def compose(
             "crossSeedPredictionCorrelation": candidate[
                 "crossSeedPredictionCorrelation"
             ]["range"],
-            "maximumPythonRustParityErrorBb": parity.get(
-                "maximumAbsoluteErrorBb"
-            ),
+            "maximumPythonRustParityErrorBb": parity.get("maximumAbsoluteErrorBb"),
         },
         "resolverLeafEvaluation": {
             "datasetSha256": evaluation_hash,
             "baselineReachWeightedRmseBb": baseline_leaf_rmse,
             "candidateReachWeightedRmseBb": candidate_leaf_rmse,
             "relativeImprovement": leaf_improvement,
-            "sampledLeafReachMass": candidate_leaf[
-                "resolverReachEvaluation"
-            ]["sampledLeafReachMass"],
+            "sampledLeafReachMass": candidate_leaf["resolverReachEvaluation"][
+                "sampledLeafReachMass"
+            ],
         },
         "resolverEvaluation": {
             "eligible": gates["modelSelectionEligible"]["passed"],
@@ -407,9 +447,15 @@ def main() -> None:
         load(args.parity),
         [load(path) for path in args.candidate_resolver],
         [load(path) for path in args.baseline_resolver],
+        args.model_version,
+        args.research_candidate,
+        args.research_baseline,
+        args.maximum_authentic_rmse_bb,
     )
     selected_path = args.candidate.parent / report["selectedWeights"]
-    report["selectedWeightsSha256"] = hashlib.sha256(selected_path.read_bytes()).hexdigest()
+    report["selectedWeightsSha256"] = hashlib.sha256(
+        selected_path.read_bytes()
+    ).hexdigest()
     report["selectedWeightsBytes"] = selected_path.stat().st_size
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

@@ -42,6 +42,20 @@ def weighted_error_bb(
     )
 
 
+def player_weighted_signed_error_bb(
+    truth_bb: np.ndarray, prediction_bb: np.ndarray, weights: np.ndarray
+) -> list[float]:
+    errors = (prediction_bb - truth_bb).reshape((-1, 2, training.COMBO_COUNT))
+    player_weights = weights.reshape((-1, 2, training.COMBO_COUNT))
+    return [
+        float(
+            np.sum(player_weights[:, player] * errors[:, player])
+            / max(float(player_weights[:, player].sum()), 1e-12)
+        )
+        for player in range(2)
+    ]
+
+
 def resolver_reach_weighted_error_bb(
     truth_bb: np.ndarray,
     prediction_bb: np.ndarray,
@@ -75,6 +89,9 @@ def compose(
         truth_bb = truth * dataset.target_scales[index]
         state_weights = dataset.weights[index].reshape(2, training.COMBO_COUNT)
         rmse, mae = weighted_error_bb(truth_bb, prediction, state_weights)
+        player_bias = player_weighted_signed_error_bb(
+            truth_bb, prediction, state_weights
+        )
         texture = training.public_board_texture(dataset.boards[index])
         source_target = dataset.source["targets"][index]
         resolver_reach = source_target.get("resolver_leaf_reach_probability")
@@ -88,6 +105,10 @@ def compose(
                 "texture": texture,
                 "weightedRmseBb": rmse,
                 "weightedMaeBb": mae,
+                "playerWeightedMeanErrorBb": player_bias,
+                "maximumAbsolutePlayerWeightedMeanErrorBb": max(
+                    abs(value) for value in player_bias
+                ),
                 "resolverLeafReachProbability": resolver_reach,
                 "resolverRootBoard": source_target.get("resolver_root_board"),
                 "resolverPublicHistory": source_target.get("resolver_public_history"),
@@ -119,19 +140,33 @@ def compose(
             rmse, mae = weighted_error_bb(
                 truth_array[offsets], prediction_array[offsets], weight_array[offsets]
             )
+            player_bias = player_weighted_signed_error_bb(
+                truth_array[offsets],
+                prediction_array[offsets],
+                weight_array[offsets],
+            )
             summaries[facet][label] = {
                 "states": len(offsets),
                 "weightedRmseBb": rmse,
                 "weightedMaeBb": mae,
+                "playerWeightedMeanErrorBb": player_bias,
+                "maximumAbsolutePlayerWeightedMeanErrorBb": max(
+                    abs(value) for value in player_bias
+                ),
             }
     overall_rmse, overall_mae = weighted_error_bb(
         truth_array, prediction_array, weight_array
     )
+    overall_player_bias = player_weighted_signed_error_bb(
+        truth_array, prediction_array, weight_array
+    )
     resolver_reaches = np.asarray(
         [
-            float(row["resolverLeafReachProbability"])
-            if row["resolverLeafReachProbability"] is not None
-            else np.nan
+            (
+                float(row["resolverLeafReachProbability"])
+                if row["resolverLeafReachProbability"] is not None
+                else np.nan
+            )
             for row in rows
         ],
         dtype=np.float64,
@@ -143,10 +178,20 @@ def compose(
             weight_array,
             resolver_reaches,
         )
-        resolver_evaluation: dict[str, float] | None = {
+        reach_shape = (len(resolver_reaches),) + (1,) * (weight_array.ndim - 1)
+        resolver_bias = player_weighted_signed_error_bb(
+            truth_array,
+            prediction_array,
+            weight_array * resolver_reaches.reshape(reach_shape),
+        )
+        resolver_evaluation: dict[str, Any] | None = {
             "sampledLeafReachMass": float(resolver_reaches.sum()),
             "reachWeightedRmseBb": resolver_rmse,
             "reachWeightedMaeBb": resolver_mae,
+            "playerWeightedMeanErrorBb": resolver_bias,
+            "maximumAbsolutePlayerWeightedMeanErrorBb": max(
+                abs(value) for value in resolver_bias
+            ),
         }
     else:
         resolver_evaluation = None
@@ -162,6 +207,10 @@ def compose(
         "states": len(rows),
         "weightedRmseBb": overall_rmse,
         "weightedMaeBb": overall_mae,
+        "playerWeightedMeanErrorBb": overall_player_bias,
+        "maximumAbsolutePlayerWeightedMeanErrorBb": max(
+            abs(value) for value in overall_player_bias
+        ),
         "resolverReachEvaluation": resolver_evaluation,
         "facets": summaries,
         "perState": rows,

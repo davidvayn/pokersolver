@@ -51,9 +51,7 @@ class PublicValueNetworkTests(unittest.TestCase):
             targets=np.zeros((1, 2 * module.COMBO_COUNT), dtype=np.float32),
             target_scales=np.ones(1, dtype=np.float32),
             weights=np.ones((1, 2 * module.COMBO_COUNT), dtype=np.float32),
-            projection_weights=np.ones(
-                (1, 2, module.COMBO_COUNT), dtype=np.float32
-            ),
+            projection_weights=np.ones((1, 2, module.COMBO_COUNT), dtype=np.float32),
             groups=np.asarray([0], dtype=np.int32),
             source={
                 "schema": "hu-turn-public-belief-cfv-dataset-v1",
@@ -116,14 +114,16 @@ class PublicValueNetworkTests(unittest.TestCase):
         ranges[0][blocked_key] = 1.0
         payload = {
             "schema": "hu-turn-public-belief-cfv-dataset-v1",
-            "targets": [{
-                "board": [0, 5, 10, 15],
-                "invested_bb": [1.0, 1.0],
-                "actor": 1,
-                "ranges": ranges,
-                "counterfactual_values_bb": values,
-                "opponent_compatible_mass": masses,
-            }],
+            "targets": [
+                {
+                    "board": [0, 5, 10, 15],
+                    "invested_bb": [1.0, 1.0],
+                    "actor": 1,
+                    "ranges": ranges,
+                    "counterfactual_values_bb": values,
+                    "opponent_compatible_mass": masses,
+                }
+            ],
         }
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "targets.json"
@@ -164,6 +164,52 @@ class PublicValueNetworkTests(unittest.TestCase):
         )
         self.assertGreater(int(np.sum(selected == 0)), 950)
 
+    def test_primary_replay_guarantees_authentic_row_in_every_pot_band(self) -> None:
+        invested = np.asarray(
+            [
+                [2.0, 2.0],
+                [5.0, 5.0],
+                [12.0, 12.0],
+                [2.5, 2.5],
+                [6.0, 6.0],
+                [14.0, 14.0],
+            ],
+            dtype=np.float32,
+        )
+        selected = module.primary_replay_batch_rows(
+            np.random.default_rng(13),
+            np.asarray([0, 1, 2]),
+            np.asarray([3, 4, 5]),
+            invested,
+            6,
+            0.5,
+        )
+        self.assertEqual(int(np.sum(selected < 3)), 3)
+        bands = [module.pot_band(invested[row]) for row in selected]
+        self.assertEqual([bands.count(index) for index in range(3)], [2, 2, 2])
+        for band in range(3):
+            self.assertTrue(
+                any(
+                    row < 3 and module.pot_band(invested[row]) == band
+                    for row in selected
+                )
+            )
+
+    def test_weighted_metrics_report_strategic_signed_bias(self) -> None:
+        truth = np.zeros((1, 2 * module.COMBO_COUNT), dtype=np.float32)
+        prediction = np.zeros_like(truth)
+        prediction[:, : module.COMBO_COUNT] = 0.5
+        prediction[:, module.COMBO_COUNT :] = -0.25
+        metrics = module.weighted_metrics(
+            truth,
+            prediction,
+            np.ones_like(truth),
+            np.asarray([2.0], dtype=np.float32),
+        )
+        self.assertAlmostEqual(metrics["weightedMeanErrorBb"], 0.25)
+        self.assertEqual(metrics["playerWeightedMeanErrorBb"], [1.0, -0.5])
+        self.assertAlmostEqual(metrics["maximumAbsolutePlayerWeightedMeanErrorBb"], 1.0)
+
     def test_public_board_texture_is_suit_invariant(self) -> None:
         # 9h, Th, Jh, 2c and the same ranks under a global suit permutation.
         first = module.public_board_texture([30, 34, 38, 0])
@@ -189,7 +235,9 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertTrue(all(layer["activation"] == "gelu-fast" for layer in context))
         self.assertEqual(head[-1]["activation"], "linear")
 
-    def test_supplemental_dataset_offsets_groups_and_preserves_component_hashes(self) -> None:
+    def test_supplemental_dataset_offsets_groups_and_preserves_component_hashes(
+        self,
+    ) -> None:
         primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
         supplement = self.synthetic_dataset([1, 6, 11, 16], "b" * 64)
         combined = module.combine_training_datasets(primary, [supplement])
@@ -199,23 +247,28 @@ class PublicValueNetworkTests(unittest.TestCase):
         )
         self.assertEqual(combined.source["validation"]["status"], "accepted")
 
-    def test_supplemental_dataset_rejects_duplicate_boards_but_revalidates_small_component(self) -> None:
+    def test_supplemental_dataset_rejects_duplicate_boards_but_revalidates_small_component(
+        self,
+    ) -> None:
         primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
         duplicate = self.synthetic_dataset([0, 5, 10, 15], "b" * 64)
         combined = module.combine_training_datasets(primary, [duplicate])
         self.assertEqual(combined.source["validation"]["status"], "rejected")
         self.assertTrue(
-            any("95% distinct" in reason for reason in combined.source["validation"]["reasons"])
+            any(
+                "95% distinct" in reason
+                for reason in combined.source["validation"]["reasons"]
+            )
         )
         rejected = self.synthetic_dataset([1, 6, 11, 16], "c" * 64, "rejected")
         combined = module.combine_training_datasets(primary, [rejected])
         self.assertEqual(combined.source["validation"]["status"], "accepted")
 
-    def test_exact_resolver_leaf_supplement_does_not_require_particle_diagnostics(self) -> None:
+    def test_exact_resolver_leaf_supplement_does_not_require_particle_diagnostics(
+        self,
+    ) -> None:
         primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
-        resolver = self.synthetic_dataset(
-            [1, 6, 11, 16], "d" * 64, resolver_leaf=True
-        )
+        resolver = self.synthetic_dataset([1, 6, 11, 16], "d" * 64, resolver_leaf=True)
         combined = module.combine_training_datasets(primary, [resolver])
         self.assertEqual(combined.source["validation"]["status"], "accepted")
 
@@ -268,7 +321,8 @@ class PublicValueNetworkTests(unittest.TestCase):
         permuted_ranges[:, mapping] = ranges
         permuted_masses[:, mapping] = masses
         permuted_board = np.asarray(
-            [module.permute_card(int(card), permutation) for card in board], dtype=np.int16
+            [module.permute_card(int(card), permutation) for card in board],
+            dtype=np.int16,
         )
         permuted_context, permuted_queries = module.build_features(
             permuted_board,

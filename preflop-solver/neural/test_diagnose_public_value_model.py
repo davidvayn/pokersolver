@@ -14,6 +14,17 @@ class PublicValueDiagnosticsTests(unittest.TestCase):
         self.assertEqual(rmse, 1.0)
         self.assertEqual(mae, 1.0)
 
+    def test_player_signed_error_does_not_cancel_zero_sum_bias(self) -> None:
+        truth = np.zeros((1, 2, module.training.COMBO_COUNT))
+        prediction = np.zeros_like(truth)
+        prediction[:, 0, :] = 0.4
+        prediction[:, 1, :] = -0.2
+        bias = module.player_weighted_signed_error_bb(
+            truth, prediction, np.ones_like(truth)
+        )
+        self.assertAlmostEqual(bias[0], 0.4)
+        self.assertAlmostEqual(bias[1], -0.2)
+
     def test_selected_indices_reject_duplicates(self) -> None:
         with self.assertRaisesRegex(ValueError, "unique"):
             module.selected_indices("1,2,1")

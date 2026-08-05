@@ -41,7 +41,9 @@ def combo_cards(key: int) -> tuple[int, int]:
     return high, key - high * (high - 1) // 2
 
 
-COMBO_CARDS = np.asarray([combo_cards(key) for key in range(COMBO_COUNT)], dtype=np.int16)
+COMBO_CARDS = np.asarray(
+    [combo_cards(key) for key in range(COMBO_COUNT)], dtype=np.int16
+)
 
 
 def hand_class_index(first: int, second: int) -> int:
@@ -135,7 +137,9 @@ def evaluate_cards(cards: list[int]) -> int:
     return top_n(rank_mask, 5)
 
 
-def poker_query_features(board: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def poker_query_features(
+    board: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     legal = np.ones(COMBO_COUNT, dtype=bool)
     strengths = np.zeros(COMBO_COUNT, dtype=np.int64)
     category = np.zeros((COMBO_COUNT, 9), dtype=np.float32)
@@ -156,9 +160,10 @@ def poker_query_features(board: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.
         for river in range(52):
             if river in board_set or river == first or river == second:
                 continue
-            final_category = evaluate_cards(
-                [*(int(card) for card in board), river, first, second]
-            ) >> 24
+            final_category = (
+                evaluate_cards([*(int(card) for card in board), river, first, second])
+                >> 24
+            )
             river_categories[combo, final_category] += 1.0
             improved += int(final_category > current_category)
             rivers += 1
@@ -174,8 +179,11 @@ def poker_query_features(board: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.
     percentile = np.zeros(COMBO_COUNT, dtype=np.float32)
     for combo in np.flatnonzero(legal):
         percentile[combo] = percentile_by_strength[int(strengths[combo])]
-    return strengths, category, percentile, np.concatenate(
-        (river_categories, improvement[:, None]), axis=1
+    return (
+        strengths,
+        category,
+        percentile,
+        np.concatenate((river_categories, improvement[:, None]), axis=1),
     )
 
 
@@ -312,9 +320,9 @@ class SharedComboValueNetwork(nn.Module):
         own_invested = context[:, :, 19, None]
         opponent_invested = context[:, :, 20, None]
         scale = value_scales[:, None, None]
-        baseline = (
-            equity * opponent_invested - (1.0 - equity) * own_invested
-        ) * (DEPTH_BB / scale)
+        baseline = (equity * opponent_invested - (1.0 - equity) * own_invested) * (
+            DEPTH_BB / scale
+        )
         if not self.use_ranges:
             context = mx.concatenate(
                 (
@@ -361,6 +369,15 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="relative within-pot-band draw weight for supplemental training states",
     )
+    parser.add_argument(
+        "--minimum-primary-batch-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "minimum fraction of each pot-stratified batch drawn from the "
+            "authentic primary corpus when supplements are present"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=3_000)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -376,7 +393,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evaluation-interval", type=int, default=50)
     parser.add_argument("--early-stopping-patience", type=int, default=10)
     parser.add_argument("--maximum-rmse-bb", type=float, default=0.25)
-    parser.add_argument("--minimum-range-relative-improvement", type=float, default=0.02)
+    parser.add_argument(
+        "--minimum-range-relative-improvement", type=float, default=0.02
+    )
     parser.add_argument("--minimum-cross-seed-correlation", type=float, default=0.95)
     parser.add_argument("--suit-augmentations", type=int, choices=(1, 24), default=1)
     parser.add_argument(
@@ -425,7 +444,9 @@ def combo_permutation(permutation: tuple[int, int, int, int]) -> np.ndarray:
     for key, (first, second) in enumerate(COMBO_CARDS):
         permuted_first = permute_card(int(first), permutation)
         permuted_second = permute_card(int(second), permutation)
-        high, low = max(permuted_first, permuted_second), min(permuted_first, permuted_second)
+        high, low = max(permuted_first, permuted_second), min(
+            permuted_first, permuted_second
+        )
         mapping[key] = high * (high - 1) // 2 + low
     if len(np.unique(mapping)) != COMBO_COUNT:
         raise AssertionError("suit permutation must be a combination bijection")
@@ -538,10 +559,13 @@ def load_dataset(
         values = np.asarray(state["counterfactual_values_bb"], dtype=np.float32)
         masses = np.asarray(state["opponent_compatible_mass"], dtype=np.float32)
         if ranges.shape != (2, COMBO_COUNT) or values.shape != ranges.shape:
-            raise ValueError("public beliefs and values must use exact 1326-combo vectors")
+            raise ValueError(
+                "public beliefs and values must use exact 1326-combo vectors"
+            )
         for permutation, mapping in zip(permutations, mappings):
             board = np.asarray(
-                [permute_card(card, permutation) for card in original_board], dtype=np.int16
+                [permute_card(card, permutation) for card in original_board],
+                dtype=np.int16,
             )
             permuted_ranges = np.zeros_like(ranges)
             permuted_values = np.zeros_like(values)
@@ -553,7 +577,9 @@ def load_dataset(
                 for combo in np.flatnonzero(permuted_ranges[player] > 0):
                     first, second = combo_cards(int(combo))
                     if first in board or second in board:
-                        raise ValueError("target contains a board-blocked private combination")
+                        raise ValueError(
+                            "target contains a board-blocked private combination"
+                        )
             boards.append(board)
             actors.append(int(state["actor"]))
             invested = np.asarray(state["invested_bb"], dtype=np.float32)
@@ -598,7 +624,10 @@ def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> D
         for component in components
     ):
         raise ValueError("combined datasets must pin the same frozen source policy")
-    if any(component.source.get("schema") != primary.source.get("schema") for component in components):
+    if any(
+        component.source.get("schema") != primary.source.get("schema")
+        for component in components
+    ):
         raise ValueError("combined datasets must use the same target schema")
 
     reasons: list[str] = []
@@ -608,9 +637,14 @@ def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> D
     # subjected to the distinct-board gate.
     if primary.source.get("validation", {}).get("status") != "accepted":
         reasons.append("primary target corpus is not accepted")
-    all_targets = [target for component in components for target in component.source["targets"]]
+    all_targets = [
+        target for component in components for target in component.source["targets"]
+    ]
     for index, target in enumerate(all_targets):
-        if float(target.get("maximum_river_exploitability_bb_per_hand", float("inf"))) > 0.05:
+        if (
+            float(target.get("maximum_river_exploitability_bb_per_hand", float("inf")))
+            > 0.05
+        ):
             reasons.append(f"target {index} exceeds the river exploitability gate")
         if abs(float(target.get("zero_sum_residual_bb", float("inf")))) > 1e-7:
             reasons.append(f"target {index} exceeds the zero-sum residual gate")
@@ -630,7 +664,9 @@ def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> D
                 reasons.append(f"target {index} lacks paired belief validation")
             particles = int(target.get("range_particles", 0))
             if float(target.get("range_effective_sample_size", 0.0)) < particles * 0.1:
-                reasons.append(f"target {index} has insufficient effective belief samples")
+                reasons.append(
+                    f"target {index} has insufficient effective belief samples"
+                )
             if not belief_method.startswith("exact_per-player_reach_factors"):
                 reasons.append(f"target {index} lacks exact reach-factor beliefs")
             if float(target.get("range_maximum_total_variation", float("inf"))) > 0.15:
@@ -641,7 +677,9 @@ def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> D
 
     source = dict(primary.source)
     source["targets"] = all_targets
-    source["state_distribution"] = "accepted_primary_with_validated_training_supplements"
+    source["state_distribution"] = (
+        "accepted_primary_with_validated_training_supplements"
+    )
     source["component_dataset_sha256"] = [
         component.source_sha256 for component in components
     ]
@@ -682,7 +720,9 @@ def scaled_log(value: float | np.ndarray, scale: float) -> float | np.ndarray:
     return np.log1p(np.maximum(value, 0.0) * scale) / np.log1p(scale)
 
 
-def range_statistics(ranges: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def range_statistics(
+    ranges: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     card = np.zeros((2, 52), dtype=np.float32)
     rank = np.zeros((2, 13), dtype=np.float32)
     suit = np.zeros((2, 4), dtype=np.float32)
@@ -709,7 +749,9 @@ def range_statistics(ranges: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nda
     return card, rank, suit, classes
 
 
-def canonical_combo_parts(first: int, second: int, board: np.ndarray) -> tuple[int, int, np.ndarray, np.ndarray]:
+def canonical_combo_parts(
+    first: int, second: int, board: np.ndarray
+) -> tuple[int, int, np.ndarray, np.ndarray]:
     first_rank, second_rank = first >> 2, second >> 2
     if first_rank != second_rank:
         high, low = (first, second) if first_rank > second_rank else (second, first)
@@ -743,14 +785,19 @@ def build_features(
         ]
     )
     board_rank = np.bincount(board >> 2, minlength=13).astype(np.float32) / 4.0
-    board_suit = np.sort(np.bincount(board & 3, minlength=4).astype(np.float32))[::-1] / 4.0
+    board_suit = (
+        np.sort(np.bincount(board & 3, minlength=4).astype(np.float32))[::-1] / 4.0
+    )
     context = np.zeros((2, CONTEXT_COUNT), dtype=np.float32)
     queries = np.zeros((2, COMBO_COUNT, QUERY_COUNT), dtype=np.float32)
     for player in range(2):
         opponent = 1 - player
         context[player, :17] = np.concatenate((board_rank, board_suit))
         context[player, 17:19] = [float(actor == player), float(actor == opponent)]
-        context[player, 19:21] = [invested[player] / DEPTH_BB, invested[opponent] / DEPTH_BB]
+        context[player, 19:21] = [
+            invested[player] / DEPTH_BB,
+            invested[opponent] / DEPTH_BB,
+        ]
         context[player, 21:190] = scaled_log(class_mass[player], HAND_CLASS_COUNT)
         context[player, 190:] = scaled_log(class_mass[opponent], HAND_CLASS_COUNT)
         for combo, (first_raw, second_raw) in enumerate(COMBO_CARDS):
@@ -798,7 +845,10 @@ def build_features(
                 own_cards = [card_mass[player, high], card_mass[player, low]]
                 opponent_cards = [card_mass[opponent, high], card_mass[opponent, low]]
                 own_suits = [suit_mass[player, high & 3], suit_mass[player, low & 3]]
-                opponent_suits = [suit_mass[opponent, high & 3], suit_mass[opponent, low & 3]]
+                opponent_suits = [
+                    suit_mass[opponent, high & 3],
+                    suit_mass[opponent, low & 3],
+                ]
             query[offset + 4 : offset + 8] = scaled_log(
                 np.asarray(own_cards + opponent_cards), 26.0
             )
@@ -874,11 +924,11 @@ def three_way_state_split(
         max(1, int(round(state_count * validation_fraction))),
     )
     validation = np.sort(rng.permutation(validation_pool)[:validation_count])
-    remaining_pool = np.setdiff1d(np.arange(state_count), validation, assume_unique=True)
-    remaining = len(remaining_pool)
-    tuning_count = min(
-        remaining - 1, max(1, int(round(state_count * tuning_fraction)))
+    remaining_pool = np.setdiff1d(
+        np.arange(state_count), validation, assume_unique=True
     )
+    remaining = len(remaining_pool)
+    tuning_count = min(remaining - 1, max(1, int(round(state_count * tuning_fraction))))
     remaining_order = rng.permutation(remaining_pool)
     tuning = np.sort(remaining_order[:tuning_count])
     train = np.sort(remaining_order[tuning_count:])
@@ -890,7 +940,7 @@ def weighted_metrics(
     prediction: np.ndarray,
     weights: np.ndarray,
     target_scales: np.ndarray,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     normalized = weights / max(float(weights.sum()), 1e-12)
     error = prediction - truth
     mask = weights > 0
@@ -899,9 +949,26 @@ def weighted_metrics(
     prediction_bb = prediction * scale
     correlation = float(np.corrcoef(truth_bb[mask], prediction_bb[mask])[0, 1])
     absolute_bb = np.abs(prediction_bb - truth_bb)
+    signed_bb = prediction_bb - truth_bb
+    player_signed = signed_bb.reshape((-1, 2, COMBO_COUNT))
+    player_weights = weights.reshape((-1, 2, COMBO_COUNT))
+    player_bias = [
+        float(
+            np.sum(player_weights[:, player] * player_signed[:, player])
+            / max(float(player_weights[:, player].sum()), 1e-12)
+        )
+        for player in range(2)
+    ]
     return {
-        "weightedRmseBb": float(np.sqrt(np.sum(normalized * absolute_bb * absolute_bb))),
+        "weightedRmseBb": float(
+            np.sqrt(np.sum(normalized * absolute_bb * absolute_bb))
+        ),
         "weightedMaeBb": float(np.sum(normalized * absolute_bb)),
+        "weightedMeanErrorBb": float(np.sum(normalized * signed_bb)),
+        "playerWeightedMeanErrorBb": player_bias,
+        "maximumAbsolutePlayerWeightedMeanErrorBb": max(
+            abs(value) for value in player_bias
+        ),
         "reachWeightWithin025Bb": float(np.sum(normalized[absolute_bb <= 0.25])),
         "reachWeightWithin050Bb": float(np.sum(normalized[absolute_bb <= 0.50])),
         "correlation": correlation,
@@ -917,11 +984,51 @@ def stratified_batch_rows(
 ) -> np.ndarray:
     if batch_size <= 0 or len(rows) == 0:
         raise ValueError("stratified sampling requires rows and a positive batch size")
-    buckets = [rows[[pot_band(invested[row]) == band for row in rows]] for band in range(3)]
+    buckets = [
+        rows[[pot_band(invested[row]) == band for row in rows]] for band in range(3)
+    ]
     available = [band for band, bucket in enumerate(buckets) if len(bucket)]
     selected = []
     for offset in range(batch_size):
         bucket = buckets[available[offset % len(available)]]
+        probabilities = None
+        if sampling_weights is not None:
+            local = sampling_weights[bucket]
+            probabilities = local / local.sum()
+        selected.append(int(rng.choice(bucket, p=probabilities)))
+    rng.shuffle(selected)
+    return np.asarray(selected, dtype=np.int64)
+
+
+def primary_replay_batch_rows(
+    rng: np.random.Generator,
+    primary_rows: np.ndarray,
+    supplemental_rows: np.ndarray,
+    invested: np.ndarray,
+    batch_size: int,
+    minimum_primary_fraction: float,
+    sampling_weights: np.ndarray | None = None,
+) -> np.ndarray:
+    if not 0.0 <= minimum_primary_fraction <= 1.0:
+        raise ValueError("primary replay fraction must be between zero and one")
+    if len(supplemental_rows) == 0 or minimum_primary_fraction == 0.0:
+        rows = np.concatenate((primary_rows, supplemental_rows))
+        return stratified_batch_rows(rng, rows, invested, batch_size, sampling_weights)
+    rows = np.concatenate((primary_rows, supplemental_rows))
+    buckets = [
+        rows[[pot_band(invested[row]) == band for row in rows]] for band in range(3)
+    ]
+    available = [band for band, bucket in enumerate(buckets) if len(bucket)]
+    if batch_size <= 0 or not available:
+        raise ValueError("primary replay requires rows and a positive batch size")
+    primary_slots = int(np.ceil(batch_size * minimum_primary_fraction))
+    selected: list[int] = []
+    for offset in range(batch_size):
+        band = available[offset % len(available)]
+        preferred = primary_rows if offset < primary_slots else supplemental_rows
+        bucket = preferred[[pot_band(invested[row]) == band for row in preferred]]
+        if len(bucket) == 0:
+            bucket = buckets[band]
         probabilities = None
         if sampling_weights is not None:
             local = sampling_weights[bucket]
@@ -955,6 +1062,11 @@ def pot_band_metrics(
             "states": int(len(np.unique(dataset.groups[selected_rows]))),
             "weightedRmseBb": metrics["weightedRmseBb"],
             "weightedMaeBb": metrics["weightedMaeBb"],
+            "weightedMeanErrorBb": metrics["weightedMeanErrorBb"],
+            "playerWeightedMeanErrorBb": metrics["playerWeightedMeanErrorBb"],
+            "maximumAbsolutePlayerWeightedMeanErrorBb": metrics[
+                "maximumAbsolutePlayerWeightedMeanErrorBb"
+            ],
         }
     return result
 
@@ -973,30 +1085,43 @@ def weighted_prediction_correlation(
     return float(np.corrcoef(first[mask], second[mask])[0, 1])
 
 
-def weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
+def weighted_quantile(
+    values: np.ndarray, weights: np.ndarray, quantile: float
+) -> float:
     order = np.argsort(values)
     cumulative = np.cumsum(weights[order])
     target = quantile * float(cumulative[-1])
-    return float(values[order[min(np.searchsorted(cumulative, target), len(order) - 1)]])
+    return float(
+        values[order[min(np.searchsorted(cumulative, target), len(order) - 1)]]
+    )
 
 
 def corpus_diagnostics(
     dataset: Dataset, contexts: np.ndarray, queries: np.ndarray
 ) -> dict[str, Any]:
     base_rows = np.asarray(
-        [np.flatnonzero(dataset.groups == group)[0] for group in np.unique(dataset.groups)]
+        [
+            np.flatnonzero(dataset.groups == group)[0]
+            for group in np.unique(dataset.groups)
+        ]
     )
     ranges = dataset.ranges[base_rows]
     legal_rows = []
     for board in dataset.boards[base_rows]:
         blocked = set(map(int, board))
         legal_rows.append(
-            [first not in blocked and second not in blocked for first, second in COMBO_CARDS]
+            [
+                first not in blocked and second not in blocked
+                for first, second in COMBO_CARDS
+            ]
         )
     legal = np.asarray(legal_rows, dtype=bool)
     coverage = (ranges > 0).sum(axis=2) / legal.sum(axis=1)[:, None]
     entropy_effective = np.exp(
-        -np.sum(np.where(ranges > 0, ranges * np.log(np.maximum(ranges, 1e-30)), 0.0), axis=2)
+        -np.sum(
+            np.where(ranges > 0, ranges * np.log(np.maximum(ranges, 1e-30)), 0.0),
+            axis=2,
+        )
     )
     baseline = np.zeros((len(base_rows), 2, COMBO_COUNT), dtype=np.float32)
     for row_index, row in enumerate(base_rows):
@@ -1006,14 +1131,17 @@ def corpus_diagnostics(
                 equity * dataset.invested[row, 1 - player]
                 - (1.0 - equity) * dataset.invested[row, player]
             )
-    truth = dataset.targets[base_rows].reshape((-1, 2, COMBO_COUNT)) * dataset.target_scales[
-        base_rows, None, None
-    ]
+    truth = (
+        dataset.targets[base_rows].reshape((-1, 2, COMBO_COUNT))
+        * dataset.target_scales[base_rows, None, None]
+    )
     error = np.abs(truth - baseline)
     reach = dataset.projection_weights[base_rows]
     normalized = reach / max(float(reach.sum()), 1e-12)
     return {
-        "distinctTurnBoards": int(len({tuple(map(int, board)) for board in dataset.boards[base_rows]})),
+        "distinctTurnBoards": int(
+            len({tuple(map(int, board)) for board in dataset.boards[base_rows]})
+        ),
         "minimumExactComboReachCoverage": float(coverage.min()),
         "meanExactComboReachCoverage": float(coverage.mean()),
         "minimumRangeEntropyEffectiveCombos": float(entropy_effective.min()),
@@ -1035,6 +1163,8 @@ def train_one(
     contexts: np.ndarray,
     queries: np.ndarray,
     train_rows: np.ndarray,
+    primary_train_rows: np.ndarray,
+    supplemental_train_rows: np.ndarray,
     tuning_rows: np.ndarray,
     validation_rows: np.ndarray,
     use_ranges: bool,
@@ -1049,6 +1179,7 @@ def train_one(
     huber_delta: float,
     raw_bb_auxiliary_weight: float,
     row_sampling_weights: np.ndarray,
+    minimum_primary_batch_fraction: float,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1078,7 +1209,9 @@ def train_one(
         # numerically comparable with the normalized objective. At 20bb a
         # Huber delta of 0.05 therefore changes regime at one raw big blind.
         raw_depth_units = errors * (value_scales[:, None] / DEPTH_BB)
-        raw = mx.sum(weights * huber(raw_depth_units)) / mx.maximum(mx.sum(weights), 1e-8)
+        raw = mx.sum(weights * huber(raw_depth_units)) / mx.maximum(
+            mx.sum(weights), 1e-8
+        )
         return normalized + raw_bb_auxiliary_weight * raw
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
@@ -1089,11 +1222,13 @@ def train_one(
     completed_steps = 0
     tuning_history: list[dict[str, float | int]] = []
     for step in range(1, steps + 1):
-        selected = stratified_batch_rows(
+        selected = primary_replay_batch_rows(
             rng,
-            train_rows,
+            primary_train_rows,
+            supplemental_train_rows,
             dataset.invested,
             min(batch_size, max(len(train_rows), 1)),
+            minimum_primary_batch_fraction,
             row_sampling_weights,
         )
         loss, gradients = loss_and_grad(
@@ -1242,6 +1377,7 @@ def main() -> None:
         or args.huber_delta <= 0
         or args.raw_bb_auxiliary_weight < 0
         or not 0.0 < args.supplemental_sampling_weight <= 1.0
+        or not 0.0 <= args.minimum_primary_batch_fraction <= 1.0
     ):
         raise ValueError("early-stopping and robust-loss settings are invalid")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1266,10 +1402,15 @@ def main() -> None:
         args.tuning_fraction,
         args.holdout_start_index,
     )
+    primary_train_states = train_states.copy()
     supplemental_states = np.arange(primary_state_count, len(dataset.source["targets"]))
     if len(supplemental_states):
         train_states = np.concatenate((train_states, supplemental_states))
     train_rows = np.flatnonzero(np.isin(dataset.groups, train_states))
+    primary_train_rows = np.flatnonzero(np.isin(dataset.groups, primary_train_states))
+    supplemental_train_rows = np.flatnonzero(
+        np.isin(dataset.groups, supplemental_states)
+    )
     tuning_rows = np.flatnonzero(np.isin(dataset.groups, tuning_states))
     validation_rows = np.flatnonzero(np.isin(dataset.groups, validation_states))
     row_sampling_weights = np.ones(len(dataset.boards), dtype=np.float64)
@@ -1295,6 +1436,8 @@ def main() -> None:
                 contexts,
                 queries,
                 train_rows,
+                primary_train_rows,
+                supplemental_train_rows,
                 tuning_rows,
                 validation_rows,
                 use_ranges,
@@ -1309,6 +1452,7 @@ def main() -> None:
                 args.huber_delta,
                 args.raw_bb_auxiliary_weight,
                 row_sampling_weights,
+                args.minimum_primary_batch_fraction,
             )
             model_path = args.output_dir / f"turn-value-{variant}-seed{seed}.json"
             export_model(
@@ -1381,13 +1525,18 @@ def main() -> None:
         "dataset": str(args.dataset),
         "supplementalDatasets": [str(path) for path in args.supplemental_dataset],
         "datasetSha256": dataset.source_sha256,
-        "componentDatasetSha256": dataset.source.get("component_dataset_sha256", [dataset.source_sha256]),
+        "componentDatasetSha256": dataset.source.get(
+            "component_dataset_sha256", [dataset.source_sha256]
+        ),
         "sourcePolicySha256": dataset.source.get("source_policy_sha256"),
         "sourceValidation": dataset.source.get("validation"),
         "states": int(len(dataset.source["targets"])),
         "primaryStates": primary_state_count,
         "supplementalTrainingStates": supplemental_states.tolist(),
         "supplementalSamplingWeight": args.supplemental_sampling_weight,
+        "minimumPrimaryBatchFraction": args.minimum_primary_batch_fraction,
+        "primaryTrainingRows": int(len(primary_train_rows)),
+        "supplementalTrainingRows": int(len(supplemental_train_rows)),
         "augmentedStates": int(len(dataset.targets)),
         "suitAugmentationsPerState": args.suit_augmentations,
         "structurallySuitEquivariant": True,
@@ -1402,6 +1551,7 @@ def main() -> None:
             "huberDelta": args.huber_delta,
             "rawBbAuxiliaryWeight": args.raw_bb_auxiliary_weight,
             "potStratifiedBatches": True,
+            "authenticPrimaryReplay": args.minimum_primary_batch_fraction > 0.0,
         },
         "trainStates": train_states.tolist(),
         "tuningStates": tuning_states.tolist(),
@@ -1419,7 +1569,10 @@ def main() -> None:
         "rangeRelativeImprovement": relative_improvement,
         "targetSamplingStandardErrorBb": 0.0,
         "corpusDiagnostics": corpus_diagnostics(dataset, contexts, queries),
-        "validation": {"status": "accepted" if not reasons else "rejected", "reasons": reasons},
+        "validation": {
+            "status": "accepted" if not reasons else "rejected",
+            "reasons": reasons,
+        },
     }
     report_path = args.output_dir / "turn-value-paired-report.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

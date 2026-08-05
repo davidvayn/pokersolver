@@ -97,9 +97,7 @@ class V33ResolverLeafTests(unittest.TestCase):
             for value, board in zip(values, boards, strict=True)
         ]
         baseline_resolvers = [
-            resolver(0.50, board, seed)
-            for seed in (1, 2)
-            for board in boards
+            resolver(0.50, board, seed) for seed in (1, 2) for board in boards
         ]
         report = module.compose(
             self.baseline,
@@ -120,13 +118,11 @@ class V33ResolverLeafTests(unittest.TestCase):
         boards = ([0, 5, 10], [1, 6, 11], [2, 7, 12])
         candidate_resolvers = [
             resolver(value, board, seed)
-            for seed, values in ((1, (0.55, 0.55, 0.55)), (2, (0.40, 0.45, 0.48)))
+            for seed, values in ((1, (0.49, 0.49, 0.51)), (2, (0.40, 0.45, 0.48)))
             for value, board in zip(values, boards, strict=True)
         ]
         baseline_resolvers = [
-            resolver(0.50, board, seed)
-            for seed in (1, 2)
-            for board in boards
+            resolver(0.50, board, seed) for seed in (1, 2) for board in boards
         ]
         report = module.compose(
             self.baseline,
@@ -139,9 +135,35 @@ class V33ResolverLeafTests(unittest.TestCase):
         )
         self.assertEqual(module.selected_seed(self.candidate)["seed"], 1)
         self.assertEqual(report["selectedSeed"], 2)
-        self.assertEqual(report["resolverEvaluation"]["selectionBasis"],
-                         "lowest matched mean downstream resolver exploitability")
+        self.assertEqual(
+            report["resolverEvaluation"]["selectionBasis"],
+            "lowest matched mean downstream resolver exploitability",
+        )
         self.assertEqual(report["researchSelection"], "v33")
+
+    def test_cross_seed_resolver_disagreement_fails_closed(self):
+        boards = ([0, 5, 10], [1, 6, 11], [2, 7, 12])
+        candidate_resolvers = [
+            resolver(value, board, seed)
+            for seed, values in ((1, (0.40, 0.45, 0.48)), (2, (0.55, 0.45, 0.55)))
+            for value, board in zip(values, boards, strict=True)
+        ]
+        baseline_resolvers = [
+            resolver(0.50, board, seed) for seed in (1, 2) for board in boards
+        ]
+        report = module.compose(
+            self.baseline,
+            self.candidate,
+            leaf_report(1.0),
+            leaf_report(0.8),
+            parity(),
+            candidate_resolvers,
+            baseline_resolvers,
+        )
+        self.assertTrue(report["gates"]["matchedResolverImprovement"]["passed"])
+        self.assertFalse(report["gates"]["matchedResolverCrossSeedAgreement"]["passed"])
+        self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
+        self.assertEqual(report["researchSelection"], "v31")
 
     def test_missing_second_seed_resolver_is_fail_closed(self):
         boards = ([0, 5, 10], [1, 6, 11], [2, 7, 12])
@@ -151,7 +173,10 @@ class V33ResolverLeafTests(unittest.TestCase):
             leaf_report(1.0),
             leaf_report(0.8),
             parity(),
-            [resolver(value, board, 1) for value, board in zip((0.4, 0.45, 0.48), boards, strict=True)],
+            [
+                resolver(value, board, 1)
+                for value, board in zip((0.4, 0.45, 0.48), boards, strict=True)
+            ],
             [resolver(0.5, board, 1) for board in boards],
         )
         self.assertFalse(report["gates"]["matchedResolverCoverage"]["passed"])
@@ -166,13 +191,45 @@ class V33ResolverLeafTests(unittest.TestCase):
             leaf_report(0.8),
             parity(),
         )
-        self.assertTrue(report["gates"]["resolverLeafReachWeightedImprovement"]["passed"])
+        self.assertTrue(
+            report["gates"]["resolverLeafReachWeightedImprovement"]["passed"]
+        )
         self.assertFalse(report["gates"]["fullGameExploitabilityUpperBound"]["passed"])
         self.assertFalse(report["activationAllowed"])
 
+    def test_absolute_authentic_gate_overrides_directional_resolver_gain(self):
+        boards = ([0, 5, 10], [1, 6, 11], [2, 7, 12])
+        candidate_resolvers = [
+            resolver(value, board, seed)
+            for seed, values in ((1, (0.45, 0.48, 0.53)), (2, (0.46, 0.49, 0.52)))
+            for value, board in zip(values, boards, strict=True)
+        ]
+        baseline_resolvers = [
+            resolver(0.50, board, seed) for seed in (1, 2) for board in boards
+        ]
+        report = module.compose(
+            self.baseline,
+            self.candidate,
+            leaf_report(1.0),
+            leaf_report(0.8),
+            parity(),
+            candidate_resolvers,
+            baseline_resolvers,
+            model_version="20bb-v36-primary-replay-candidate",
+            research_candidate="v36",
+            research_baseline="v31",
+            maximum_authentic_rmse_bb=0.25,
+        )
+        self.assertEqual(report["modelVersion"], "20bb-v36-primary-replay-candidate")
+        self.assertFalse(report["gates"]["absoluteAuthenticHoldoutRmse"]["passed"])
+        self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
+        self.assertEqual(report["researchSelection"], "v31")
+
     def test_checked_candidate_remains_fail_closed_and_evaluation_is_disjoint(self):
         candidate = json.loads(
-            Path(__file__).with_name("20bb-v33-resolver-leaf-candidate.json").read_text()
+            Path(__file__)
+            .with_name("20bb-v33-resolver-leaf-candidate.json")
+            .read_text()
         )
         self.assertEqual(candidate["status"], "rejected")
         self.assertFalse(candidate["activationAllowed"])
