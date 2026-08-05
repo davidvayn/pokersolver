@@ -58,7 +58,14 @@ def leaf_report(rmse):
 
 
 def parity():
-    return {"maximumAbsoluteErrorBb": 1e-6, "validation": {"status": "accepted"}}
+    return [
+        {
+            "model": f"seed-{seed}.json",
+            "maximumAbsoluteErrorBb": 1e-6,
+            "validation": {"status": "accepted"},
+        }
+        for seed in (1, 2)
+    ]
 
 
 def resolver(value, board=None, seed=1):
@@ -247,6 +254,17 @@ class V33ResolverLeafTests(unittest.TestCase):
         gate = report["gates"]["absoluteAuthenticHoldoutRmse"]
         self.assertFalse(gate["passed"])
         self.assertEqual(gate["measured"]["maximumSeedRmseBb"], 0.28)
+
+    def test_parity_must_cover_both_candidate_seeds(self):
+        report = module.compose(
+            self.baseline,
+            self.candidate,
+            leaf_report(1.0),
+            leaf_report(0.8),
+            parity()[:1],
+        )
+        self.assertFalse(report["gates"]["pythonRustParity"]["passed"])
+        self.assertFalse(report["gates"]["modelSelectionEligible"]["passed"])
 
     def test_checked_candidate_remains_fail_closed_and_evaluation_is_disjoint(self):
         candidate = json.loads(

@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--baseline-leaf", type=Path, required=True)
     parser.add_argument("--candidate-leaf", type=Path, required=True)
-    parser.add_argument("--parity", type=Path, required=True)
+    parser.add_argument("--parity", type=Path, action="append", required=True)
     parser.add_argument("--candidate-resolver", type=Path, action="append", default=[])
     parser.add_argument("--baseline-resolver", type=Path, action="append", default=[])
     parser.add_argument("--model-version", default="20bb-v33-resolver-leaf-candidate")
@@ -72,7 +72,7 @@ def compose(
     candidate: dict[str, Any],
     baseline_leaf: dict[str, Any],
     candidate_leaf: dict[str, Any],
-    parity: dict[str, Any],
+    parity: dict[str, Any] | list[dict[str, Any]],
     candidate_resolvers: list[dict[str, Any]] | None = None,
     baseline_resolvers: list[dict[str, Any]] | None = None,
     model_version: str = "20bb-v33-resolver-leaf-candidate",
@@ -118,6 +118,8 @@ def compose(
     )
     evaluation_hash = candidate_leaf.get("sourceDatasetSha256")
     component_hashes = candidate.get("componentDatasetSha256", [])
+    variants = range_variants(candidate)
+    candidate_seeds = {int(row["seed"]) for row in variants}
 
     gates: dict[str, dict[str, Any]] = {}
 
@@ -166,12 +168,46 @@ def compose(
         candidate["crossSeedPredictionCorrelation"]["range"],
         ">=0.95",
     )
+    parity_reports = parity if isinstance(parity, list) else [parity]
+    expected_parity_models = {
+        Path(str(row["weights"])).name: int(row["seed"]) for row in variants
+    }
+    parity_evidence = []
+    seen_parity_models: set[str] = set()
+    parity_reports_valid = len(parity_reports) == len(expected_parity_models)
+    for parity_report in parity_reports:
+        model_name = Path(str(parity_report.get("model", ""))).name
+        error = parity_report.get("maximumAbsoluteErrorBb")
+        accepted = (
+            parity_report.get("validation", {}).get("status") == "accepted"
+            and isinstance(error, (int, float))
+            and float(error) <= 1e-4
+        )
+        matched_seed = expected_parity_models.get(model_name)
+        unique = model_name not in seen_parity_models
+        parity_reports_valid = (
+            parity_reports_valid
+            and matched_seed is not None
+            and unique
+            and accepted
+        )
+        seen_parity_models.add(model_name)
+        parity_evidence.append(
+            {
+                "seed": matched_seed,
+                "model": model_name,
+                "maximumAbsoluteErrorBb": error,
+                "accepted": accepted,
+            }
+        )
+    parity_reports_valid = parity_reports_valid and seen_parity_models == set(
+        expected_parity_models
+    )
     gate(
         "pythonRustParity",
-        parity.get("validation", {}).get("status") == "accepted"
-        and float(parity["maximumAbsoluteErrorBb"]) <= 1e-4,
-        parity.get("maximumAbsoluteErrorBb"),
-        "accepted and <=0.0001bb",
+        parity_reports_valid,
+        parity_evidence,
+        "exactly one accepted <=0.0001bb report matching every candidate seed",
     )
     gate(
         "authenticHoldoutNoRegression",
@@ -209,8 +245,6 @@ def compose(
         ">=10% on untouched resolver-reach-weighted leaves",
     )
 
-    variants = range_variants(candidate)
-    candidate_seeds = {int(row["seed"]) for row in variants}
     resolver_pairs = []
     for candidate_report, baseline_report in zip(
         candidate_resolvers, baseline_resolvers, strict=True
@@ -413,7 +447,14 @@ def compose(
             "crossSeedPredictionCorrelation": candidate[
                 "crossSeedPredictionCorrelation"
             ]["range"],
-            "maximumPythonRustParityErrorBb": parity.get("maximumAbsoluteErrorBb"),
+            "maximumPythonRustParityErrorBb": max(
+                (
+                    float(row["maximumAbsoluteErrorBb"])
+                    for row in parity_evidence
+                    if isinstance(row["maximumAbsoluteErrorBb"], (int, float))
+                ),
+                default=None,
+            ),
         },
         "resolverLeafEvaluation": {
             "datasetSha256": evaluation_hash,
@@ -452,7 +493,7 @@ def main() -> None:
         load(args.candidate),
         load(args.baseline_leaf),
         load(args.candidate_leaf),
-        load(args.parity),
+        [load(path) for path in args.parity],
         [load(path) for path in args.candidate_resolver],
         [load(path) for path in args.baseline_resolver],
         args.model_version,
