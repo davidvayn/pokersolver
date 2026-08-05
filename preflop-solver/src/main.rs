@@ -31,6 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "flop-pbs-resolve" => run_flop_pbs_resolve(&args[1..]),
+        "flop-pbs-evaluate" => run_flop_pbs_evaluate(&args[1..]),
         "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
@@ -273,6 +274,49 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
         fs::write(&path, format!("{output}\n"))?;
         println!("{}", serde_json::to_string_pretty(&solution.metrics)?);
         eprintln!("wrote depth-limited flop pilot {}", path.display());
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn run_flop_pbs_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let solution_path = value(args, "--solution")
+        .map(PathBuf::from)
+        .ok_or("--solution is required")?;
+    let evaluation_path = value(args, "--evaluation-value-network")
+        .map(PathBuf::from)
+        .ok_or("--evaluation-value-network is required")?;
+    let frozen: blueprint::public_belief::FlopSolution =
+        serde_json::from_slice(&fs::read(solution_path)?)?;
+    let evaluation = blueprint::public_belief::PublicValueNetwork::read(&evaluation_path)?;
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    let scored = blueprint::public_belief::evaluate_frozen_flop_solution(
+        game,
+        &frozen,
+        evaluation,
+        parse_or(
+            args,
+            "--threads",
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
+        )?,
+    )?;
+    let output = serde_json::to_string_pretty(&scored)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{output}\n"))?;
+        println!("{}", serde_json::to_string_pretty(&scored.metrics)?);
+        eprintln!(
+            "wrote cross-evaluated frozen flop solution {}",
+            path.display()
+        );
     } else {
         println!("{output}");
     }

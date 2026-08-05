@@ -1371,6 +1371,79 @@ impl FlopSolver {
         }
     }
 
+    fn load_frozen_average_strategies(
+        &mut self,
+        strategies: &[PublicBeliefStrategy],
+    ) -> Result<(), String> {
+        if strategies.is_empty() {
+            return Err("frozen flop solution contains no strategies".to_owned());
+        }
+        for strategy in strategies {
+            if strategy.actor > 1 || strategy.action_labels.is_empty() {
+                return Err("frozen flop strategy has an invalid actor or action set".to_owned());
+            }
+            let expected = COMBO_COUNT * strategy.action_labels.len();
+            if strategy.probabilities.len() != expected
+                || strategy
+                    .probabilities
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err("frozen flop strategy has invalid probabilities".to_owned());
+            }
+            let node = RangeNode {
+                actor: strategy.actor,
+                action_labels: strategy.action_labels.clone(),
+                regrets: vec![0.0; expected],
+                strategy_sum: strategy
+                    .probabilities
+                    .iter()
+                    .map(|value| *value as f64)
+                    .collect(),
+                last_discount_iteration: 0,
+            };
+            if self
+                .nodes
+                .insert(strategy.public_history.clone(), node)
+                .is_some()
+            {
+                return Err("frozen flop solution contains duplicate public histories".to_owned());
+            }
+        }
+        self.validate_frozen_strategy_tree(self.config.state.game_state())
+    }
+
+    fn validate_frozen_strategy_tree(&self, state: GameState) -> Result<(), String> {
+        if state.terminal.is_some() || state.street == Street::Turn {
+            return Ok(());
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let node = self.nodes.get(&state.public_history).ok_or_else(|| {
+            "frozen flop solution is missing a reachable public history".to_owned()
+        })?;
+        let labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        if node.actor != state.actor || node.action_labels != labels {
+            return Err("frozen flop strategy does not match the configured game tree".to_owned());
+        }
+        let action_count = actions.len();
+        for combo in 0..COMBO_COUNT {
+            let offset = combo * action_count;
+            let sum = node.strategy_sum[offset..offset + action_count]
+                .iter()
+                .sum::<f64>();
+            if self.legal[state.actor][combo] && (sum - 1.0).abs() > 1e-4 {
+                return Err("frozen flop strategy probabilities do not sum to one".to_owned());
+            }
+        }
+        for action in actions {
+            self.validate_frozen_strategy_tree(state.apply(&action, &self.config.game))?;
+        }
+        Ok(())
+    }
+
     fn walk(
         &mut self,
         state: GameState,
@@ -2169,6 +2242,39 @@ pub fn solve_flop_cross_evaluated(
     solution.evaluation_value_network_seed = Some(evaluation_seed);
     solution.evaluation_value_network_source_dataset_sha256 = evaluation_source_dataset;
     solution.evaluation_value_network_source_policy_sha256 = evaluation_source_policy;
+    Ok(solution)
+}
+
+/// Re-score a serialized frozen resolver strategy without retraining it.
+pub fn evaluate_frozen_flop_solution(
+    game: BlueprintConfig,
+    frozen: &FlopSolution,
+    evaluation_value_network: PublicValueNetwork,
+    threads: usize,
+) -> Result<FlopSolution, String> {
+    evaluation_value_network.validate()?;
+    let mut solver = FlopSolver::new(FlopResolveConfig {
+        game,
+        state: frozen.state.clone(),
+        iterations: frozen.iterations.max(2),
+        averaging_delay: 0,
+        value_network: evaluation_value_network.clone(),
+        threads,
+    })?;
+    solver.load_frozen_average_strategies(&frozen.strategies)?;
+    let mut solution = solver.finish();
+    solution.method = "serialized_frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+    solution.value_network_seed = frozen.value_network_seed;
+    solution.uses_exact_ranges = frozen.uses_exact_ranges;
+    solution.value_network_source_dataset_sha256 =
+        frozen.value_network_source_dataset_sha256.clone();
+    solution.value_network_source_policy_sha256 = frozen.value_network_source_policy_sha256.clone();
+    solution.evaluation_value_network_seed = Some(evaluation_value_network.seed);
+    solution.evaluation_value_network_source_dataset_sha256 =
+        evaluation_value_network.source_dataset_sha256;
+    solution.evaluation_value_network_source_policy_sha256 =
+        evaluation_value_network.source_policy_sha256;
+    solution.strategies = frozen.strategies.clone();
     Ok(solution)
 }
 
@@ -4450,8 +4556,11 @@ mod tests {
         let mut evaluation_network = resolver_network;
         evaluation_network.seed = 42;
         evaluation_network.source_dataset_sha256 = Some("b".repeat(64));
-        let cross = solve_flop_cross_evaluated(config, evaluation_network).unwrap();
+        let cross = solve_flop_cross_evaluated(config, evaluation_network.clone()).unwrap();
+        let rescored =
+            evaluate_frozen_flop_solution(tiny_game(), &ordinary, evaluation_network, 1).unwrap();
         assert_eq!(cross.strategies, ordinary.strategies);
+        assert_eq!(rescored.strategies, ordinary.strategies);
         assert_eq!(cross.value_network_seed, 41);
         assert_eq!(
             cross.value_network_source_dataset_sha256,
@@ -4463,11 +4572,18 @@ mod tests {
             Some("b".repeat(64))
         );
         assert!(cross.method.contains("scored_by_independent"));
+        assert!(rescored.method.contains("serialized_frozen"));
         assert!(
             (cross.metrics.depth_limited_exploitability_bb_per_hand
                 - ordinary.metrics.depth_limited_exploitability_bb_per_hand)
                 .abs()
                 < 1e-10
+        );
+        assert!(
+            (rescored.metrics.depth_limited_exploitability_bb_per_hand
+                - cross.metrics.depth_limited_exploitability_bb_per_hand)
+                .abs()
+                < 1e-6
         );
     }
 
