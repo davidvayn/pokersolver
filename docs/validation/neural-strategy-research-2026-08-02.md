@@ -74,12 +74,13 @@ prerequisite to starting it:
    full-hand/preflop/postflop browser acceptance before adding an active
    manifest.
 
-The certificate is a true upper bound because it enlarges the responder's
-information and then solves every betting action exactly; it is not a learned
-approximate response. Its one-sided Hoeffding chance bound and exact-card deals
-are deterministic across thread counts. The information relaxation is
-conservative enough that a good policy may still fail. That outcome keeps the
-depth hidden and does not justify relabeling a lower bound as release evidence.
+The certificate was intended to be a true upper bound by enlarging the
+responder's information and solving every betting action exactly; it is not a
+learned approximate response. A later v45 audit found that pre-river all-ins
+used the ordinary deterministic rollout-equity approximation instead of the
+sampled complete runout. The historical numeric artifacts in this document are
+therefore diagnostic, not qualifying upper bounds. The corrected implementation
+settles the sampled five-card runout exactly and retains the fail-closed gate.
 
 ## Long-run outcome and temporal distillation
 
@@ -167,13 +168,14 @@ expanded 87,700,000 exact betting-tree nodes. The results were:
 | 5101 | 4.83081bb | 0.03443bb | 0.46036bb | 5.29117bb |
 | 5102 | 4.84144bb | 0.03485bb | 0.46036bb | 5.30180bb |
 
-The responder observes both private hands and the complete board. This makes
-the result a mathematically valid upper bound on imperfect-information
-exploitability, but also introduces a large value-of-perfect-information gap.
-It must not be reported as a 4.84bb estimate of true exploitability. Increasing
-the deal count can shrink the chance margin but cannot remove the observed
-relaxed-response mean. Consequently, the 125,000-deal release certificate was
-not launched and further identical neural iterations were stopped.
+The responder observes both private hands and the complete board. Even apart
+from the subsequently discovered all-in settlement issue, this introduces a
+large value-of-perfect-information gap. The 4.84bb result must not be reported
+as an estimate of true exploitability or as release evidence. Increasing the
+deal count can shrink the chance margin but cannot remove the information
+relaxation gap. See the v45 complete-turn report for the corrected exact-runout,
+opponent-hidden successor. Consequently, the 125,000-deal release certificate
+was not launched and further identical neural iterations were stopped.
 
 The next architecture prerequisite is a substantially tighter evaluator that
 preserves responder information sets, followed by a dedicated preflop solve or

@@ -114,7 +114,9 @@ Until then:
 - learned-response coverage/confidence remains a blocker;
 - the lower-bound audit has not found a validated exploit;
 - failure to find an exploit does not upper-bound exploitability; and
-- the clairvoyant approximately 5.29bb upper bound remains mathematically safe
-  but far too loose to serve as the 0.10bb release gate.
+- the historical clairvoyant approximately 5.29bb result is diagnostic only;
+  the v45 audit found that its pre-river all-in settlement was not suitable for
+  a rigorous chance-sampling certificate, and the corrected successor still
+  fails the 0.10bb release gate.
 
 No active manifest or frozen research policy was changed.
