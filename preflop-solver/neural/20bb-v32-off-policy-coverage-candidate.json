@@ -1,0 +1,265 @@
+{
+  "activationAllowed": false,
+  "activeManifestModified": false,
+  "capacityPilot": {
+    "architecture": "deep-gelu",
+    "baselineMeanRangeRmseBb": 0.5402135252952576,
+    "decision": "rejected_keep_compact",
+    "deepMeanRangeRmseBb": 0.5575263202190399,
+    "maximumPythonRustParityErrorBb": 1.0174433453968845e-05,
+    "potBandRmseBb": {
+      "large": 1.6789751648902893,
+      "medium": 0.7788681983947754,
+      "small": 0.22524584084749222
+    },
+    "relativeImprovement": -0.032048058986157216
+  },
+  "failedGates": [
+    "deepCapacityPilotPreferred",
+    "matchedResolverImprovement",
+    "fullGameExploitabilityUpperBound"
+  ],
+  "gates": {
+    "compactPotModel": {
+      "measured": {
+        "architecture": "compact",
+        "normalization": "pot"
+      },
+      "passed": true,
+      "threshold": "compact architecture with pot normalization"
+    },
+    "deepCapacityPilotPreferred": {
+      "measured": {
+        "parityErrorBb": 1.0174433453968845e-05,
+        "relativeImprovement": -0.032048058986157216
+      },
+      "passed": false,
+      "threshold": ">=5% matched-holdout improvement (research selection gate only)"
+    },
+    "fullGameExploitabilityUpperBound": {
+      "measured": null,
+      "passed": false,
+      "threshold": "independent one-sided 99% upper bound <=0.10bb/hand"
+    },
+    "largePotImprovement": {
+      "measured": 0.1412930657252497,
+      "passed": true,
+      "threshold": ">=5% matched-holdout improvement"
+    },
+    "matchedPrimaryHoldout": {
+      "measured": {
+        "baseline": [
+          65,
+          69,
+          70,
+          72,
+          73,
+          75,
+          76,
+          77,
+          81,
+          84,
+          85,
+          86,
+          88,
+          91,
+          92,
+          94,
+          96,
+          99,
+          104,
+          107,
+          109,
+          110,
+          111,
+          112,
+          116,
+          117,
+          118,
+          121,
+          122,
+          124,
+          125,
+          126
+        ],
+        "candidate": [
+          65,
+          69,
+          70,
+          72,
+          73,
+          75,
+          76,
+          77,
+          81,
+          84,
+          85,
+          86,
+          88,
+          91,
+          92,
+          94,
+          96,
+          99,
+          104,
+          107,
+          109,
+          110,
+          111,
+          112,
+          116,
+          117,
+          118,
+          121,
+          122,
+          124,
+          125,
+          126
+        ]
+      },
+      "passed": true,
+      "threshold": "identical untouched primary validation-state indices"
+    },
+    "matchedResolverImprovement": {
+      "measured": {
+        "baseline": 0.7115292449738256,
+        "candidate": 0.7383035765381085,
+        "eligible": true
+      },
+      "passed": false,
+      "threshold": "upstream gates pass and matched candidate mean < baseline mean"
+    },
+    "mediumPotImprovement": {
+      "measured": 0.09025934043130894,
+      "passed": true,
+      "threshold": ">=5% matched-holdout improvement"
+    },
+    "overallHoldoutImprovement": {
+      "measured": 0.0985703132387296,
+      "passed": true,
+      "threshold": ">=5% matched-holdout RMSE improvement"
+    },
+    "pairedCrossSeedCorrelation": {
+      "measured": 0.9974335719879446,
+      "passed": true,
+      "threshold": ">=0.95"
+    },
+    "pythonRustParity": {
+      "measured": 6.9042223493909205e-06,
+      "passed": true,
+      "threshold": "accepted and <=0.0001bb"
+    },
+    "smallPotNoRegression": {
+      "measured": -0.04404975544286634,
+      "passed": true,
+      "threshold": ">=-5% matched-holdout improvement"
+    },
+    "sourcePolicyPinned": {
+      "measured": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+      "passed": true,
+      "threshold": "same frozen source policy as baseline"
+    },
+    "sourceTargetsAccepted": {
+      "measured": {
+        "reasons": [],
+        "status": "accepted"
+      },
+      "passed": true,
+      "threshold": "combined target validation accepted"
+    },
+    "supplementalDataTrainingOnly": {
+      "measured": {
+        "primaryStates": 128,
+        "supplementalStates": [
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139
+        ]
+      },
+      "passed": true,
+      "threshold": "non-empty supplemental states appear only in training"
+    }
+  },
+  "interpretation": "The controlled-exploration pilot is evaluated on the identical untouched primary holdout. Supplemental states may train the network but cannot enter tuning or validation. Passing prediction gates only permits matched resolver evaluation; it never substitutes for a full-game exploitability upper bound.",
+  "modelVersion": "20bb-v32-off-policy-coverage-candidate",
+  "resolverEvaluation": {
+    "baselineMeanExploitabilityBbPerHand": 0.7115292449738256,
+    "candidateMeanExploitabilityBbPerHand": 0.7383035765381085,
+    "eligible": true,
+    "pairs": [
+      {
+        "baselineExploitabilityBbPerHand": 0.5403096684373097,
+        "board": [
+          0,
+          21,
+          34
+        ],
+        "candidateExploitabilityBbPerHand": 0.7245638250725405,
+        "iterations": 100,
+        "matched": true
+      },
+      {
+        "baselineExploitabilityBbPerHand": 0.9001148391361469,
+        "board": [
+          51,
+          45,
+          20
+        ],
+        "candidateExploitabilityBbPerHand": 0.7871301445089798,
+        "iterations": 100,
+        "matched": true
+      },
+      {
+        "baselineExploitabilityBbPerHand": 0.6941632273480205,
+        "board": [
+          30,
+          34,
+          38
+        ],
+        "candidateExploitabilityBbPerHand": 0.7032167600328054,
+        "iterations": 100,
+        "matched": true
+      }
+    ]
+  },
+  "schema": "hu-v32-off-policy-coverage-sequence-v1",
+  "selectedSeed": 11401,
+  "selectedSeedTuningRmseBb": 0.33268582820892334,
+  "selectedWeights": "turn-value-range-seed11401.json",
+  "selectedWeightsBytes": 700598,
+  "selectedWeightsSha256": "0acc76df65aa2dc89dea57c41091d43e44b8688c0089ed6d7cdfd43463ff5500",
+  "sourceDatasetSha256": "4d84c415953b4c1b1bb2a8817f397cd13f60f67672e2b3c135f7b631cdded6ac",
+  "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+  "status": "rejected",
+  "turnValueEvaluation": {
+    "baselineMeanRangeRmseBb": 0.5402135252952576,
+    "baselinePotBandRmseBb": {
+      "large": 1.5737942457199097,
+      "medium": 0.803120344877243,
+      "small": 0.21539181470870972
+    },
+    "candidateMeanRangeRmseBb": 0.48696450889110565,
+    "candidatePotBandRmseBb": {
+      "large": 1.3514280319213867,
+      "medium": 0.7306312322616577,
+      "small": 0.22487977147102356
+    },
+    "crossSeedPredictionCorrelation": 0.9974335719879446,
+    "maximumPythonRustParityErrorBb": 6.9042223493909205e-06,
+    "relativeImprovement": 0.0985703132387296,
+    "relativeImprovementByPotBand": {
+      "large": 0.1412930657252497,
+      "medium": 0.09025934043130894,
+      "small": -0.04404975544286634
+    }
+  }
+}

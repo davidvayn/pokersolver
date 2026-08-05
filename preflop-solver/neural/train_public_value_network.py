@@ -17,12 +17,13 @@ import mlx.optimizers as optim
 from mlx.utils import tree_map
 import numpy as np
 
-SCHEMA = "hu-turn-public-belief-value-network-pilot-v3"
-NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v3"
+SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
+NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
 COMBO_COUNT = 1326
 DEPTH_BB = 20.0
-RESIDUAL_SCALE_BB = 5.0
+MINIMUM_VALUE_SCALE_BB = 1.0
+POT_BAND_NAMES = ("small", "medium", "large")
 CONTEXT_PUBLIC_COUNT = 21
 CONTEXT_RANGE_COUNT = 338
 CONTEXT_COUNT = CONTEXT_PUBLIC_COUNT + CONTEXT_RANGE_COUNT
@@ -213,6 +214,7 @@ class Dataset:
     ranges: np.ndarray
     masses: np.ndarray
     targets: np.ndarray
+    target_scales: np.ndarray
     weights: np.ndarray
     projection_weights: np.ndarray
     groups: np.ndarray
@@ -223,42 +225,96 @@ class Dataset:
 class SharedComboValueNetwork(nn.Module):
     """One shared query head evaluates every player/private-card combination."""
 
-    def __init__(self, use_ranges: bool, architecture: str = "compact"):
+    def __init__(
+        self,
+        use_ranges: bool,
+        architecture: str = "compact",
+        value_normalization: str = "pot",
+    ):
         super().__init__()
         self.use_ranges = use_ranges
         self.architecture = architecture
+        self.value_normalization = value_normalization
         if architecture == "compact":
             context_hidden, embedding, query_hidden, head_hidden = 64, 32, 48, 32
+            self.context_tower = nn.Sequential(
+                nn.Linear(CONTEXT_COUNT, context_hidden),
+                nn.ReLU(),
+                nn.Linear(context_hidden, embedding),
+                nn.ReLU(),
+            )
+            self.query_tower = nn.Sequential(
+                nn.Linear(QUERY_COUNT, query_hidden),
+                nn.ReLU(),
+                nn.Linear(query_hidden, embedding),
+                nn.ReLU(),
+            )
+            self.head = nn.Sequential(
+                nn.Linear(embedding * 2, head_hidden),
+                nn.ReLU(),
+                nn.Linear(head_hidden, 1),
+            )
         elif architecture == "wide":
             context_hidden, embedding, query_hidden, head_hidden = 128, 64, 96, 64
+            self.context_tower = nn.Sequential(
+                nn.Linear(CONTEXT_COUNT, context_hidden),
+                nn.ReLU(),
+                nn.Linear(context_hidden, embedding),
+                nn.ReLU(),
+            )
+            self.query_tower = nn.Sequential(
+                nn.Linear(QUERY_COUNT, query_hidden),
+                nn.ReLU(),
+                nn.Linear(query_hidden, embedding),
+                nn.ReLU(),
+            )
+            self.head = nn.Sequential(
+                nn.Linear(embedding * 2, head_hidden),
+                nn.ReLU(),
+                nn.Linear(head_hidden, 1),
+            )
+        elif architecture == "deep-gelu":
+            embedding = 64
+            self.context_tower = nn.Sequential(
+                nn.Linear(CONTEXT_COUNT, 128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, 128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, embedding),
+                nn.GELU(approx="fast"),
+            )
+            self.query_tower = nn.Sequential(
+                nn.Linear(QUERY_COUNT, 128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, 128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, embedding),
+                nn.GELU(approx="fast"),
+            )
+            self.head = nn.Sequential(
+                nn.Linear(embedding * 2, 128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, 64),
+                nn.GELU(approx="fast"),
+                nn.Linear(64, 1),
+            )
         else:
             raise ValueError(f"unknown shared-combo architecture {architecture}")
-        self.context_tower = nn.Sequential(
-            nn.Linear(CONTEXT_COUNT, context_hidden),
-            nn.ReLU(),
-            nn.Linear(context_hidden, embedding),
-            nn.ReLU(),
-        )
-        self.query_tower = nn.Sequential(
-            nn.Linear(QUERY_COUNT, query_hidden),
-            nn.ReLU(),
-            nn.Linear(query_hidden, embedding),
-            nn.ReLU(),
-        )
-        self.head = nn.Sequential(
-            nn.Linear(embedding * 2, head_hidden),
-            nn.ReLU(),
-            nn.Linear(head_hidden, 1),
-            nn.Tanh(),
-        )
 
     def __call__(
-        self, context: mx.array, queries: mx.array, projection_weights: mx.array
+        self,
+        context: mx.array,
+        queries: mx.array,
+        projection_weights: mx.array,
+        value_scales: mx.array,
     ) -> mx.array:
         equity = queries[:, :, :, 94] if self.use_ranges else queries[:, :, :, 65]
         own_invested = context[:, :, 19, None]
         opponent_invested = context[:, :, 20, None]
-        baseline = equity * opponent_invested - (1.0 - equity) * own_invested
+        scale = value_scales[:, None, None]
+        baseline = (
+            equity * opponent_invested - (1.0 - equity) * own_invested
+        ) * (DEPTH_BB / scale)
         if not self.use_ranges:
             context = mx.concatenate(
                 (
@@ -281,7 +337,7 @@ class SharedComboValueNetwork(nn.Module):
         )
         combined = mx.concatenate((expanded_context, query_embedding), axis=-1)
         residual = self.head(combined).reshape((combined.shape[0], 2, COMBO_COUNT))
-        raw = baseline + residual * (RESIDUAL_SCALE_BB / DEPTH_BB)
+        raw = baseline + residual
         joint_mass = mx.maximum(mx.sum(projection_weights[:, 0, :], axis=1), 1e-8)
         aggregate = mx.sum(raw * projection_weights, axis=2) / joint_mass[:, None]
         residual = mx.sum(aggregate, axis=1)
@@ -292,6 +348,19 @@ class SharedComboValueNetwork(nn.Module):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument(
+        "--supplemental-dataset",
+        type=Path,
+        action="append",
+        default=[],
+        help="add validated targets to training only; primary tuning/holdout stays pinned",
+    )
+    parser.add_argument(
+        "--supplemental-sampling-weight",
+        type=float,
+        default=1.0,
+        help="relative within-pot-band draw weight for supplemental training states",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=3_000)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -310,7 +379,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-range-relative-improvement", type=float, default=0.02)
     parser.add_argument("--minimum-cross-seed-correlation", type=float, default=0.95)
     parser.add_argument("--suit-augmentations", type=int, choices=(1, 24), default=1)
-    parser.add_argument("--architecture", choices=("compact", "wide"), default="compact")
+    parser.add_argument(
+        "--architecture", choices=("compact", "wide", "deep-gelu"), default="compact"
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        help="pin train/tuning/holdout membership independently of model seeds",
+    )
+    parser.add_argument(
+        "--variant-set",
+        choices=("both", "range-only"),
+        default="both",
+        help="range-only is for architecture pilots after the range ablation is established",
+    )
+    parser.add_argument(
+        "--value-normalization",
+        choices=("pot", "payoff-exposure"),
+        default="pot",
+    )
+    parser.add_argument("--huber-delta", type=float, default=0.05)
+    parser.add_argument("--raw-bb-auxiliary-weight", type=float, default=0.25)
     return parser.parse_args()
 
 
@@ -343,7 +432,92 @@ def combo_permutation(permutation: tuple[int, int, int, int]) -> np.ndarray:
     return mapping
 
 
-def load_dataset(path: Path, suit_augmentation_count: int = 1) -> Dataset:
+def value_scale_bb(
+    invested: np.ndarray | list[float], normalization: str, depth_bb: float = DEPTH_BB
+) -> float:
+    invested_array = np.asarray(invested, dtype=np.float64)
+    if invested_array.shape != (2,) or np.any(invested_array < 0):
+        raise ValueError("value normalization requires two non-negative investments")
+    if normalization == "pot":
+        scale = float(invested_array.sum())
+    elif normalization == "payoff-exposure":
+        remaining = np.maximum(depth_bb - invested_array, 0.0)
+        scale = float(invested_array.max() + remaining.min())
+    elif normalization == "depth":
+        # Kept for loading historical v3 models in parity tests and diagnostics.
+        scale = depth_bb
+    else:
+        raise ValueError(f"unknown value normalization {normalization}")
+    return max(scale, MINIMUM_VALUE_SCALE_BB)
+
+
+def pot_band(invested: np.ndarray | list[float]) -> int:
+    maximum = float(np.max(np.asarray(invested, dtype=np.float64)))
+    if maximum <= 3.5:
+        return 0
+    if maximum <= 7.5:
+        return 1
+    return 2
+
+
+def public_board_texture(board: np.ndarray | list[int]) -> dict[str, str]:
+    cards = np.asarray(board, dtype=np.int16)
+    if cards.shape != (4,) or len(set(int(card) for card in cards)) != 4:
+        raise ValueError("turn texture requires four unique board cards")
+    if np.any(cards < 0) or np.any(cards >= 52):
+        raise ValueError("turn texture contains an invalid card")
+
+    rank_counts = np.bincount(cards >> 2, minlength=13)
+    pairs = int(np.sum(rank_counts == 2))
+    maximum_rank_count = int(rank_counts.max())
+    if maximum_rank_count == 4:
+        rank_texture = "quads"
+    elif maximum_rank_count == 3:
+        rank_texture = "trips"
+    elif pairs == 2:
+        rank_texture = "two-pair"
+    elif pairs == 1:
+        rank_texture = "paired"
+    else:
+        rank_texture = "unpaired"
+
+    suit_counts = sorted(
+        (int(value) for value in np.bincount(cards & 3, minlength=4) if value),
+        reverse=True,
+    )
+    if suit_counts[0] == 4:
+        suit_texture = "four-flush"
+    elif suit_counts[0] == 3:
+        suit_texture = "three-flush"
+    elif suit_counts == [2, 2]:
+        suit_texture = "two-tone"
+    elif suit_counts == [2, 1, 1]:
+        suit_texture = "single-suit-pair"
+    else:
+        suit_texture = "rainbow"
+
+    ranks = {int(rank) for rank in cards >> 2}
+    windows = [set(range(start, start + 5)) for start in range(9)]
+    windows.append({12, 0, 1, 2, 3})
+    maximum_window = max(len(ranks & window) for window in windows)
+    if maximum_window >= 4:
+        connectivity = "four-straight"
+    elif maximum_window == 3:
+        connectivity = "connected"
+    else:
+        connectivity = "disconnected"
+    return {
+        "rank": rank_texture,
+        "suit": suit_texture,
+        "connectivity": connectivity,
+    }
+
+
+def load_dataset(
+    path: Path,
+    suit_augmentation_count: int = 1,
+    value_normalization: str = "depth",
+) -> Dataset:
     raw = json.loads(path.read_text())
     if raw.get("schema") != "hu-turn-public-belief-cfv-dataset-v1":
         raise ValueError("incompatible public-belief target dataset")
@@ -353,6 +527,7 @@ def load_dataset(path: Path, suit_augmentation_count: int = 1) -> Dataset:
     range_rows: list[np.ndarray] = []
     mass_rows: list[np.ndarray] = []
     targets: list[np.ndarray] = []
+    target_scales: list[float] = []
     weights: list[np.ndarray] = []
     groups: list[int] = []
     permutations = suit_permutations(suit_augmentation_count)
@@ -381,15 +556,22 @@ def load_dataset(path: Path, suit_augmentation_count: int = 1) -> Dataset:
                         raise ValueError("target contains a board-blocked private combination")
             boards.append(board)
             actors.append(int(state["actor"]))
-            invested_rows.append(np.asarray(state["invested_bb"], dtype=np.float32))
+            invested = np.asarray(state["invested_bb"], dtype=np.float32)
+            scale = value_scale_bb(invested, value_normalization)
+            invested_rows.append(invested)
             range_rows.append(permuted_ranges)
             mass_rows.append(permuted_masses)
-            targets.append(permuted_values.reshape(-1) / DEPTH_BB)
+            targets.append(permuted_values.reshape(-1) / scale)
+            target_scales.append(scale)
             weights.append((permuted_ranges * permuted_masses).reshape(-1))
             groups.append(group)
     projection_weights = np.stack(weights).reshape((-1, 2, COMBO_COUNT))
     weight_array = projection_weights.reshape((-1, COMBO_COUNT * 2)).copy()
-    weight_array *= weight_array.size / max(float(weight_array.sum()), 1e-12)
+    # Every sampled public state receives equal loss mass. Exact combo reach
+    # still determines the within-state weighting, but a high-reach pot band
+    # cannot drown out another state solely because of blocker-compatible mass.
+    row_totals = np.maximum(weight_array.sum(axis=1, keepdims=True), 1e-12)
+    weight_array *= (COMBO_COUNT * 2) / row_totals
     return Dataset(
         boards=np.stack(boards),
         actors=np.asarray(actors, dtype=np.int8),
@@ -397,11 +579,102 @@ def load_dataset(path: Path, suit_augmentation_count: int = 1) -> Dataset:
         ranges=np.stack(range_rows),
         masses=np.stack(mass_rows),
         targets=np.stack(targets),
+        target_scales=np.asarray(target_scales, dtype=np.float32),
         weights=weight_array,
         projection_weights=projection_weights,
         groups=np.asarray(groups, dtype=np.int32),
         source=raw,
         source_sha256=sha256_file(path),
+    )
+
+
+def combine_training_datasets(primary: Dataset, supplements: list[Dataset]) -> Dataset:
+    if not supplements:
+        return primary
+    components = [primary, *supplements]
+    source_policy = primary.source.get("source_policy_sha256")
+    if not source_policy or any(
+        component.source.get("source_policy_sha256") != source_policy
+        for component in components
+    ):
+        raise ValueError("combined datasets must pin the same frozen source policy")
+    if any(component.source.get("schema") != primary.source.get("schema") for component in components):
+        raise ValueError("combined datasets must use the same target schema")
+
+    reasons: list[str] = []
+    # The primary corpus must independently pass every corpus-size/release gate.
+    # A small research supplement may fail only its standalone minimum-size gate;
+    # every one of its targets is revalidated below and the combined corpus is
+    # subjected to the distinct-board gate.
+    if primary.source.get("validation", {}).get("status") != "accepted":
+        reasons.append("primary target corpus is not accepted")
+    all_targets = [target for component in components for target in component.source["targets"]]
+    for index, target in enumerate(all_targets):
+        if float(target.get("maximum_river_exploitability_bb_per_hand", float("inf"))) > 0.05:
+            reasons.append(f"target {index} exceeds the river exploitability gate")
+        if abs(float(target.get("zero_sum_residual_bb", float("inf")))) > 1e-7:
+            reasons.append(f"target {index} exceeds the zero-sum residual gate")
+        belief_method = str(target.get("belief_method", ""))
+        if belief_method == "exact_resolver_average_strategy_counterfactual_reach":
+            reach = float(target.get("resolver_leaf_reach_probability", 0.0))
+            if not np.isfinite(reach) or reach <= 0.0:
+                reasons.append(f"target {index} lacks positive resolver leaf reach")
+            if len(target.get("resolver_root_board", [])) != 3:
+                reasons.append(f"target {index} lacks a resolver root board")
+            if not target.get("resolver_public_history"):
+                reasons.append(f"target {index} lacks resolver public history")
+        else:
+            if int(target.get("range_particles", 0)) < 4096:
+                reasons.append(f"target {index} lacks 4096-particle belief validation")
+            if int(target.get("range_replicates", 0)) < 2:
+                reasons.append(f"target {index} lacks paired belief validation")
+            particles = int(target.get("range_particles", 0))
+            if float(target.get("range_effective_sample_size", 0.0)) < particles * 0.1:
+                reasons.append(f"target {index} has insufficient effective belief samples")
+            if not belief_method.startswith("exact_per-player_reach_factors"):
+                reasons.append(f"target {index} lacks exact reach-factor beliefs")
+            if float(target.get("range_maximum_total_variation", float("inf"))) > 0.15:
+                reasons.append(f"target {index} exceeds the belief variation gate")
+    distinct_boards = len({tuple(target["board"]) for target in all_targets})
+    if distinct_boards * 100 < len(all_targets) * 95:
+        reasons.append("combined target corpus has fewer than 95% distinct turn boards")
+
+    source = dict(primary.source)
+    source["targets"] = all_targets
+    source["state_distribution"] = "accepted_primary_with_validated_training_supplements"
+    source["component_dataset_sha256"] = [
+        component.source_sha256 for component in components
+    ]
+    source["validation"] = {
+        "status": "accepted" if not reasons else "rejected",
+        "reasons": list(dict.fromkeys(reasons)),
+    }
+    digest = hashlib.sha256(
+        "|".join(source["component_dataset_sha256"]).encode("ascii")
+    ).hexdigest()
+
+    groups = []
+    offset = 0
+    for component in components:
+        groups.append(component.groups + offset)
+        offset += len(component.source["targets"])
+    return Dataset(
+        boards=np.concatenate([component.boards for component in components]),
+        actors=np.concatenate([component.actors for component in components]),
+        invested=np.concatenate([component.invested for component in components]),
+        ranges=np.concatenate([component.ranges for component in components]),
+        masses=np.concatenate([component.masses for component in components]),
+        targets=np.concatenate([component.targets for component in components]),
+        target_scales=np.concatenate(
+            [component.target_scales for component in components]
+        ),
+        weights=np.concatenate([component.weights for component in components]),
+        projection_weights=np.concatenate(
+            [component.projection_weights for component in components]
+        ),
+        groups=np.concatenate(groups),
+        source=source,
+        source_sha256=digest,
     )
 
 
@@ -613,15 +886,21 @@ def three_way_state_split(
 
 
 def weighted_metrics(
-    truth: np.ndarray, prediction: np.ndarray, weights: np.ndarray
+    truth: np.ndarray,
+    prediction: np.ndarray,
+    weights: np.ndarray,
+    target_scales: np.ndarray,
 ) -> dict[str, float]:
     normalized = weights / max(float(weights.sum()), 1e-12)
     error = prediction - truth
     mask = weights > 0
-    correlation = float(np.corrcoef(truth[mask], prediction[mask])[0, 1])
-    absolute_bb = np.abs(error) * DEPTH_BB
+    scale = target_scales.reshape((-1, 1))
+    truth_bb = truth * scale
+    prediction_bb = prediction * scale
+    correlation = float(np.corrcoef(truth_bb[mask], prediction_bb[mask])[0, 1])
+    absolute_bb = np.abs(prediction_bb - truth_bb)
     return {
-        "weightedRmseBb": float(np.sqrt(np.sum(normalized * error * error)) * DEPTH_BB),
+        "weightedRmseBb": float(np.sqrt(np.sum(normalized * absolute_bb * absolute_bb))),
         "weightedMaeBb": float(np.sum(normalized * absolute_bb)),
         "reachWeightWithin025Bb": float(np.sum(normalized[absolute_bb <= 0.25])),
         "reachWeightWithin050Bb": float(np.sum(normalized[absolute_bb <= 0.50])),
@@ -629,9 +908,67 @@ def weighted_metrics(
     }
 
 
+def stratified_batch_rows(
+    rng: np.random.Generator,
+    rows: np.ndarray,
+    invested: np.ndarray,
+    batch_size: int,
+    sampling_weights: np.ndarray | None = None,
+) -> np.ndarray:
+    if batch_size <= 0 or len(rows) == 0:
+        raise ValueError("stratified sampling requires rows and a positive batch size")
+    buckets = [rows[[pot_band(invested[row]) == band for row in rows]] for band in range(3)]
+    available = [band for band, bucket in enumerate(buckets) if len(bucket)]
+    selected = []
+    for offset in range(batch_size):
+        bucket = buckets[available[offset % len(available)]]
+        probabilities = None
+        if sampling_weights is not None:
+            local = sampling_weights[bucket]
+            probabilities = local / local.sum()
+        selected.append(int(rng.choice(bucket, p=probabilities)))
+    rng.shuffle(selected)
+    return np.asarray(selected, dtype=np.int64)
+
+
+def pot_band_metrics(
+    dataset: Dataset,
+    rows: np.ndarray,
+    prediction: np.ndarray,
+) -> dict[str, dict[str, float | int]]:
+    result: dict[str, dict[str, float | int]] = {}
+    for band, name in enumerate(POT_BAND_NAMES):
+        local = np.flatnonzero(
+            np.asarray([pot_band(dataset.invested[row]) == band for row in rows])
+        )
+        if len(local) == 0:
+            result[name] = {"states": 0, "weightedRmseBb": float("nan")}
+            continue
+        selected_rows = rows[local]
+        metrics = weighted_metrics(
+            dataset.targets[selected_rows],
+            prediction[local],
+            dataset.weights[selected_rows],
+            dataset.target_scales[selected_rows],
+        )
+        result[name] = {
+            "states": int(len(np.unique(dataset.groups[selected_rows]))),
+            "weightedRmseBb": metrics["weightedRmseBb"],
+            "weightedMaeBb": metrics["weightedMaeBb"],
+        }
+    return result
+
+
 def weighted_prediction_correlation(
-    first: np.ndarray, second: np.ndarray, weights: np.ndarray
+    first: np.ndarray,
+    second: np.ndarray,
+    weights: np.ndarray,
+    target_scales: np.ndarray | None = None,
 ) -> float:
+    if target_scales is not None:
+        scale = target_scales.reshape((-1, 1))
+        first = first * scale
+        second = second * scale
     mask = weights > 0
     return float(np.corrcoef(first[mask], second[mask])[0, 1])
 
@@ -669,7 +1006,9 @@ def corpus_diagnostics(
                 equity * dataset.invested[row, 1 - player]
                 - (1.0 - equity) * dataset.invested[row, player]
             )
-    truth = dataset.targets[base_rows].reshape((-1, 2, COMBO_COUNT)) * DEPTH_BB
+    truth = dataset.targets[base_rows].reshape((-1, 2, COMBO_COUNT)) * dataset.target_scales[
+        base_rows, None, None
+    ]
     error = np.abs(truth - baseline)
     reach = dataset.projection_weights[base_rows]
     normalized = reach / max(float(reach.sum()), 1e-12)
@@ -686,9 +1025,8 @@ def corpus_diagnostics(
         "baselineAbsoluteErrorP99Bb": weighted_quantile(
             error.reshape(-1), reach.reshape(-1), 0.99
         ),
-        "reachWeightBeyondResidualScale": float(
-            reach[error > RESIDUAL_SCALE_BB].sum() / max(float(reach.sum()), 1e-12)
-        ),
+        "maximumValueScaleBb": float(dataset.target_scales[base_rows].max()),
+        "minimumValueScaleBb": float(dataset.target_scales[base_rows].min()),
     }
 
 
@@ -707,10 +1045,14 @@ def train_one(
     evaluation_interval: int,
     early_stopping_patience: int,
     architecture: str,
+    value_normalization: str,
+    huber_delta: float,
+    raw_bb_auxiliary_weight: float,
+    row_sampling_weights: np.ndarray,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
-    model = SharedComboValueNetwork(use_ranges, architecture)
+    model = SharedComboValueNetwork(use_ranges, architecture, value_normalization)
     mx.eval(model.parameters())
     optimizer = optim.AdamW(learning_rate=learning_rate, weight_decay=1e-5)
 
@@ -719,11 +1061,25 @@ def train_one(
         context: mx.array,
         query: mx.array,
         projection_weights: mx.array,
+        value_scales: mx.array,
         targets: mx.array,
         weights: mx.array,
     ) -> mx.array:
-        errors = current(context, query, projection_weights) - targets
-        return mx.sum(weights * errors * errors) / mx.maximum(mx.sum(weights), 1e-8)
+        errors = current(context, query, projection_weights, value_scales) - targets
+
+        def huber(values: mx.array) -> mx.array:
+            absolute = mx.abs(values)
+            quadratic = mx.minimum(absolute, huber_delta)
+            linear = absolute - quadratic
+            return 0.5 * quadratic * quadratic + huber_delta * linear
+
+        normalized = mx.sum(weights * huber(errors)) / mx.maximum(mx.sum(weights), 1e-8)
+        # Express the raw-BB error in depth units so this auxiliary remains
+        # numerically comparable with the normalized objective. At 20bb a
+        # Huber delta of 0.05 therefore changes regime at one raw big blind.
+        raw_depth_units = errors * (value_scales[:, None] / DEPTH_BB)
+        raw = mx.sum(weights * huber(raw_depth_units)) / mx.maximum(mx.sum(weights), 1e-8)
+        return normalized + raw_bb_auxiliary_weight * raw
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     best_tuning_rmse = float("inf")
@@ -733,14 +1089,19 @@ def train_one(
     completed_steps = 0
     tuning_history: list[dict[str, float | int]] = []
     for step in range(1, steps + 1):
-        selected = rng.choice(
-            train_rows, size=min(batch_size, len(train_rows)), replace=True
+        selected = stratified_batch_rows(
+            rng,
+            train_rows,
+            dataset.invested,
+            min(batch_size, max(len(train_rows), 1)),
+            row_sampling_weights,
         )
         loss, gradients = loss_and_grad(
             model,
             mx.array(contexts[selected]),
             mx.array(queries[selected]),
             mx.array(dataset.projection_weights[selected]),
+            mx.array(dataset.target_scales[selected]),
             mx.array(dataset.targets[selected]),
             mx.array(dataset.weights[selected]),
         )
@@ -753,12 +1114,14 @@ def train_one(
                     mx.array(contexts[tuning_rows]),
                     mx.array(queries[tuning_rows]),
                     mx.array(dataset.projection_weights[tuning_rows]),
+                    mx.array(dataset.target_scales[tuning_rows]),
                 )
             )
             tuning_rmse = weighted_metrics(
                 dataset.targets[tuning_rows],
                 tuning_prediction,
                 dataset.weights[tuning_rows],
+                dataset.target_scales[tuning_rows],
             )["weightedRmseBb"]
             tuning_history.append({"step": step, "weightedRmseBb": tuning_rmse})
             if tuning_rmse < best_tuning_rmse - 1e-6:
@@ -782,15 +1145,20 @@ def train_one(
             mx.array(contexts[validation_rows]),
             mx.array(queries[validation_rows]),
             mx.array(dataset.projection_weights[validation_rows]),
+            mx.array(dataset.target_scales[validation_rows]),
         )
     )
     metrics = weighted_metrics(
-        dataset.targets[validation_rows], prediction, dataset.weights[validation_rows]
+        dataset.targets[validation_rows],
+        prediction,
+        dataset.weights[validation_rows],
+        dataset.target_scales[validation_rows],
     )
     metrics["bestTuningRmseBb"] = best_tuning_rmse
     metrics["bestStep"] = best_step
     metrics["completedSteps"] = completed_steps
     metrics["tuningHistory"] = tuning_history
+    metrics["potBandMetrics"] = pot_band_metrics(dataset, validation_rows, prediction)
     return model, prediction, metrics
 
 
@@ -805,6 +1173,19 @@ def layer_payload(layer: nn.Linear, activation: str) -> dict[str, Any]:
     }
 
 
+def tower_payload(
+    tower: nn.Sequential, hidden_activation: str, final_activation: str
+) -> list[dict[str, Any]]:
+    linear_layers = [layer for layer in tower.layers if isinstance(layer, nn.Linear)]
+    return [
+        layer_payload(
+            layer,
+            final_activation if index == len(linear_layers) - 1 else hidden_activation,
+        )
+        for index, layer in enumerate(linear_layers)
+    ]
+
+
 def export_model(
     model: SharedComboValueNetwork,
     path: Path,
@@ -812,7 +1193,9 @@ def export_model(
     source_dataset_sha256: str,
     source_validation_status: str,
     source_policy_sha256: str | None,
+    value_normalization: str,
 ) -> None:
+    hidden_activation = "gelu-fast" if model.architecture == "deep-gelu" else "relu"
     path.write_text(
         json.dumps(
             {
@@ -822,8 +1205,9 @@ def export_model(
                 "seed": seed,
                 "usesExactRanges": model.use_ranges,
                 "targetScaleBb": DEPTH_BB,
+                "valueNormalization": value_normalization,
                 "rangeScale": COMBO_COUNT,
-                "residualScaleBb": RESIDUAL_SCALE_BB,
+                "residualUnit": "normalized_state_value_scale",
                 "baseline": (
                     "range_conditioned_current_showdown_equity"
                     if model.use_ranges
@@ -836,18 +1220,13 @@ def export_model(
                 "contextSize": CONTEXT_COUNT,
                 "queryStructuralCount": QUERY_STRUCTURAL_COUNT,
                 "querySize": QUERY_COUNT,
-                "contextTower": [
-                    layer_payload(model.context_tower.layers[0], "relu"),
-                    layer_payload(model.context_tower.layers[2], "relu"),
-                ],
-                "queryTower": [
-                    layer_payload(model.query_tower.layers[0], "relu"),
-                    layer_payload(model.query_tower.layers[2], "relu"),
-                ],
-                "head": [
-                    layer_payload(model.head.layers[0], "relu"),
-                    layer_payload(model.head.layers[2], "tanh"),
-                ],
+                "contextTower": tower_payload(
+                    model.context_tower, hidden_activation, hidden_activation
+                ),
+                "queryTower": tower_payload(
+                    model.query_tower, hidden_activation, hidden_activation
+                ),
+                "head": tower_payload(model.head, hidden_activation, "linear"),
             },
             separators=(",", ":"),
         )
@@ -857,27 +1236,59 @@ def export_model(
 
 def main() -> None:
     args = parse_args()
-    if args.evaluation_interval <= 0 or args.early_stopping_patience <= 0:
-        raise ValueError("early-stopping interval and patience must be positive")
+    if (
+        args.evaluation_interval <= 0
+        or args.early_stopping_patience <= 0
+        or args.huber_delta <= 0
+        or args.raw_bb_auxiliary_weight < 0
+        or not 0.0 < args.supplemental_sampling_weight <= 1.0
+    ):
+        raise ValueError("early-stopping and robust-loss settings are invalid")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    dataset = load_dataset(args.dataset, args.suit_augmentations)
+    primary_dataset = load_dataset(
+        args.dataset, args.suit_augmentations, args.value_normalization
+    )
+    primary_state_count = len(primary_dataset.source["targets"])
+    supplemental_datasets = [
+        load_dataset(path, args.suit_augmentations, args.value_normalization)
+        for path in args.supplemental_dataset
+    ]
+    dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
     contexts, queries = feature_dataset(dataset)
     seeds = [int(seed) for seed in args.seeds.split(",")]
     if len(seeds) != 2:
         raise ValueError("paired training requires exactly two independent seeds")
+    split_seed = args.split_seed if args.split_seed is not None else seeds[0]
     train_states, tuning_states, validation_states = three_way_state_split(
-        len(dataset.source["targets"]),
-        seeds[0],
+        primary_state_count,
+        split_seed,
         args.validation_fraction,
         args.tuning_fraction,
         args.holdout_start_index,
     )
+    supplemental_states = np.arange(primary_state_count, len(dataset.source["targets"]))
+    if len(supplemental_states):
+        train_states = np.concatenate((train_states, supplemental_states))
     train_rows = np.flatnonzero(np.isin(dataset.groups, train_states))
     tuning_rows = np.flatnonzero(np.isin(dataset.groups, tuning_states))
     validation_rows = np.flatnonzero(np.isin(dataset.groups, validation_states))
-    variants: dict[str, list[dict[str, Any]]] = {"range": [], "noRange": []}
-    predictions: dict[str, list[np.ndarray]] = {"range": [], "noRange": []}
-    for variant, use_ranges in (("range", True), ("noRange", False)):
+    row_sampling_weights = np.ones(len(dataset.boards), dtype=np.float64)
+    if len(supplemental_states):
+        row_sampling_weights[np.isin(dataset.groups, supplemental_states)] = (
+            args.supplemental_sampling_weight
+        )
+    variant_specs = (
+        (("range", True), ("noRange", False))
+        if args.variant_set == "both"
+        else (("range", True),)
+    )
+    variants: dict[str, list[dict[str, Any]]] = {
+        variant: [] for variant, _ in variant_specs
+    }
+    predictions: dict[str, list[np.ndarray]] = {
+        variant: [] for variant, _ in variant_specs
+    }
+    for variant, use_ranges in variant_specs:
         for seed in seeds:
             model, prediction, metrics = train_one(
                 dataset,
@@ -894,6 +1305,10 @@ def main() -> None:
                 args.evaluation_interval,
                 args.early_stopping_patience,
                 args.architecture,
+                args.value_normalization,
+                args.huber_delta,
+                args.raw_bb_auxiliary_weight,
+                row_sampling_weights,
             )
             model_path = args.output_dir / f"turn-value-{variant}-seed{seed}.json"
             export_model(
@@ -903,23 +1318,37 @@ def main() -> None:
                 dataset.source_sha256,
                 dataset.source["validation"]["status"],
                 dataset.source.get("source_policy_sha256"),
+                args.value_normalization,
             )
             variants[variant].append(
                 {"seed": seed, "metrics": metrics, "weights": model_path.name}
             )
             predictions[variant].append(prediction)
     validation_weights = dataset.weights[validation_rows]
+    validation_scales = dataset.target_scales[validation_rows]
     cross_seed = {
-        variant: weighted_prediction_correlation(values[0], values[1], validation_weights)
+        variant: weighted_prediction_correlation(
+            values[0], values[1], validation_weights, validation_scales
+        )
         for variant, values in predictions.items()
     }
     range_rmse = float(
         np.mean([entry["metrics"]["weightedRmseBb"] for entry in variants["range"]])
     )
-    no_range_rmse = float(
-        np.mean([entry["metrics"]["weightedRmseBb"] for entry in variants["noRange"]])
+    no_range_rmse = (
+        float(
+            np.mean(
+                [entry["metrics"]["weightedRmseBb"] for entry in variants["noRange"]]
+            )
+        )
+        if "noRange" in variants
+        else None
     )
-    relative_improvement = (no_range_rmse - range_rmse) / max(no_range_rmse, 1e-12)
+    relative_improvement = (
+        (no_range_rmse - range_rmse) / max(no_range_rmse, 1e-12)
+        if no_range_rmse is not None
+        else None
+    )
     reasons: list[str] = []
     if dataset.source["validation"]["status"] != "accepted":
         reasons.append("source target corpus is not release-accepted")
@@ -927,7 +1356,7 @@ def main() -> None:
         reasons.append(
             f"range-network mean holdout RMSE {range_rmse:.6f}bb exceeds {args.maximum_rmse_bb:.6f}bb"
         )
-    if (
+    if relative_improvement is not None and (
         not np.isfinite(relative_improvement)
         or relative_improvement < args.minimum_range_relative_improvement
     ):
@@ -945,17 +1374,35 @@ def main() -> None:
         "schema": SCHEMA,
         "networkSchema": NETWORK_SCHEMA,
         "architecture": args.architecture,
+        "variantSet": args.variant_set,
+        "splitSeed": split_seed,
+        "valueNormalization": args.value_normalization,
         "featureSchema": FEATURE_SCHEMA,
         "dataset": str(args.dataset),
+        "supplementalDatasets": [str(path) for path in args.supplemental_dataset],
         "datasetSha256": dataset.source_sha256,
+        "componentDatasetSha256": dataset.source.get("component_dataset_sha256", [dataset.source_sha256]),
         "sourcePolicySha256": dataset.source.get("source_policy_sha256"),
+        "sourceValidation": dataset.source.get("validation"),
         "states": int(len(dataset.source["targets"])),
+        "primaryStates": primary_state_count,
+        "supplementalTrainingStates": supplemental_states.tolist(),
+        "supplementalSamplingWeight": args.supplemental_sampling_weight,
         "augmentedStates": int(len(dataset.targets)),
         "suitAugmentationsPerState": args.suit_augmentations,
         "structurallySuitEquivariant": True,
         "structurallyZeroSumProjected": True,
         "baseline": "range_conditioned_current_showdown_equity_with_structural_percentile_ablation",
-        "residualScaleBb": RESIDUAL_SCALE_BB,
+        "residualUnit": "normalized_state_value_scale",
+        "loss": {
+            "kind": (
+                "state-balanced reach-weighted Huber with depth-normalized "
+                "raw-bb auxiliary"
+            ),
+            "huberDelta": args.huber_delta,
+            "rawBbAuxiliaryWeight": args.raw_bb_auxiliary_weight,
+            "potStratifiedBatches": True,
+        },
         "trainStates": train_states.tolist(),
         "tuningStates": tuning_states.tolist(),
         "validationStates": validation_states.tolist(),

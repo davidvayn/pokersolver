@@ -1,0 +1,130 @@
+{
+  "schema": "hu-v31-value-calibration-candidate-summary-v1",
+  "modelVersion": "20bb-v31-calibration-candidate",
+  "status": "rejected",
+  "activationAllowed": false,
+  "activeManifestModified": false,
+  "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+  "sourceDatasetSha256": "d4c0b6a6072cb88494e18ec2c46311beaf6cb202baf5cf322669b20573dbc366",
+  "implementation": {
+    "networkSchema": "hu-public-belief-combo-value-network-v4",
+    "target": "linear residual in a dynamic state-value unit",
+    "loss": "state-balanced reach-weighted Huber with depth-normalized raw-bb auxiliary",
+    "batching": "equal draws from every available small, medium, and large pot band",
+    "runtime": "backward-compatible Rust v3/v4 inference with exact dynamic rescaling"
+  },
+  "normalizationSelection": {
+    "rule": "lowest paired mean range tuning RMSE; holdout is evaluation only",
+    "potMeanTuningRmseBb": 0.3543718606233597,
+    "payoffExposureMeanTuningRmseBb": 0.4133911430835724,
+    "selected": "pot",
+    "selectedSeed": 10902,
+    "selectedSeedTuningRmseBb": 0.35372430086135864,
+    "selectedWeightsSha256": "2ec8e8d2af6704e5e53f98a182b19d5cb1836137a6dff3b34cfff94b7b569b52",
+    "selectedWeightsBytes": 700400
+  },
+  "turnValueEvaluation": {
+    "meanRangeRmseBb": 0.5402135252952576,
+    "meanNoRangeRmseBb": 1.1329419612884521,
+    "rangeRelativeImprovement": 0.5231763464026938,
+    "crossSeedPredictionCorrelation": 0.997031764584202,
+    "maximumPythonRustParityErrorBb": 0.000007893301003036868,
+    "potBands": {
+      "small": {
+        "v30RmseBb": 0.27431520819664,
+        "v31RmseBb": 0.21539181470870972,
+        "relativeImprovement": 0.21480177448160903,
+        "gatePassed": true
+      },
+      "medium": {
+        "v30RmseBb": 0.9490787982940674,
+        "v31RmseBb": 0.803120344877243,
+        "relativeImprovement": 0.15378960490865357,
+        "gatePassed": false
+      },
+      "large": {
+        "v30RmseBb": 2.1153621673583984,
+        "v31RmseBb": 1.5737942457199097,
+        "relativeImprovement": 0.2560166433886745,
+        "gatePassed": true
+      }
+    },
+    "matchedHoldoutCorrection": {
+      "reason": "The original v30 pot-band summary used v30's seed-dependent holdout, not v31's pinned indices. This audit evaluates the selected v30 and v31 artifacts on the identical 32 v31 holdout states; it supersedes the original cross-report percentages for comparative claims but does not change the rejection.",
+      "stateIndices": [65, 69, 70, 72, 73, 75, 76, 77, 81, 84, 85, 86, 88, 91, 92, 94, 96, 99, 104, 107, 109, 110, 111, 112, 116, 117, 118, 121, 122, 124, 125, 126],
+      "v30SelectedSeedRmseBb": 0.6154191493988037,
+      "v31SelectedSeedRmseBb": 0.5481752753257751,
+      "relativeImprovement": 0.1092653947960659,
+      "potBands": {
+        "small": {
+          "v30RmseBb": 0.26591095328330994,
+          "v31RmseBb": 0.21807503700256348,
+          "relativeImprovement": 0.17989449365040497
+        },
+        "medium": {
+          "v30RmseBb": 0.9070345759391785,
+          "v31RmseBb": 0.8180526494979858,
+          "relativeImprovement": 0.09810202252952507
+        },
+        "large": {
+          "v30RmseBb": 1.766129732131958,
+          "v31RmseBb": 1.593880295753479,
+          "relativeImprovement": 0.09752932254596519
+        }
+      }
+    }
+  },
+  "resolverEvaluation": {
+    "iterations": 100,
+    "meanV30ExploitabilityBbPerHand": 0.6027099132844659,
+    "meanV31ExploitabilityBbPerHand": 0.7115292449738256,
+    "boards": [
+      {
+        "label": "dry-low",
+        "board": "2c,7d,Th",
+        "v30ExploitabilityBbPerHand": 0.5729292743483545,
+        "v31ExploitabilityBbPerHand": 0.5403096684373097
+      },
+      {
+        "label": "dry-high",
+        "board": "As,Kd,7c",
+        "v30ExploitabilityBbPerHand": 0.5484292524404037,
+        "v31ExploitabilityBbPerHand": 0.9001148391361469
+      },
+      {
+        "label": "monotone",
+        "board": "9h,Th,Jh",
+        "v30ExploitabilityBbPerHand": 0.6867712130646393,
+        "v31ExploitabilityBbPerHand": 0.6941632273480205
+      }
+    ],
+    "allInIncluded": false,
+    "gatePassed": false
+  },
+  "independentLearnedResponse": {
+    "evaluatedModel": "frozen 20bb v26 routed policy",
+    "trainingDeals": 2000,
+    "evaluationDeals": 4000,
+    "estimatedExploitabilityLowerBoundBbPerHand": 0.00475,
+    "lowerConfidenceBound99PercentBbPerHand": 0.0,
+    "minimumResolverLookupCoverage": 0.00088261253309797,
+    "postflopLookupCoverage": 0.0,
+    "confidentInformationSets": 2,
+    "interpretation": "inconclusive lower-bound probe; never a release upper-bound certificate"
+  },
+  "conditionalSteps": {
+    "balanced512Corpus": "not_run_prerequisite_failed",
+    "exactLowSprAllInHybrid": "not_run_prerequisite_failed"
+  },
+  "failedGates": [
+    "mediumPotImprovement",
+    "turnHoldoutRmse",
+    "matchedResolverImprovement",
+    "flopDepthLimitedExploitability",
+    "balanced512CorpusValidated",
+    "exactLowSprAllInHybridValidated",
+    "fullGameExploitabilityUpperBound"
+  ],
+  "diagnosis": "A corrected identical-holdout audit shows pot normalization improves the selected model by 10.93% overall, but no pot band reaches the original 25% improvement target and the downstream resolver regresses on two of three board textures. More generic data or exact all-in branches are not yet justified.",
+  "nextResearchTarget": "Improve board-conditional value generalization and the learned-response evaluator's postflop coverage on frozen artifacts before revisiting corpus scale or exact low-SPR branches."
+}

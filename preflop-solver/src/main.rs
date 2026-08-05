@@ -31,6 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "flop-pbs-resolve" => run_flop_pbs_resolve(&args[1..]),
+        "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -113,6 +114,8 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
             )?,
             network_path,
             belief_replicates: parse_or(args, "--belief-replicates", 2u32)?,
+            exploration_probability: parse_or(args, "--exploration", 0.0f64)?,
+            minimum_pot_bb: parse_or(args, "--minimum-pot-bb", 0.0f64)?,
             checkpoint_dir: value(args, "--checkpoint-dir").map(PathBuf::from),
         },
     )?;
@@ -131,11 +134,84 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
             "schema": dataset.schema,
             "stateDistribution": dataset.state_distribution,
             "sourcePolicySha256": dataset.source_policy_sha256,
+            "explorationProbability": dataset.sampling_exploration_probability,
+            "minimumSampledPotBb": dataset.minimum_sampled_pot_bb,
             "states": dataset.targets.len(),
             "minimumRangeEffectiveSampleSize": dataset.targets.iter().filter_map(|target| target.range_effective_sample_size).fold(f64::INFINITY, f64::min),
             "minimumRangeReplicates": dataset.targets.iter().filter_map(|target| target.range_replicates).min(),
             "maximumRangeTotalVariation": dataset.targets.iter().filter_map(|target| target.range_maximum_total_variation).fold(0.0f64, f64::max),
             "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "validation": dataset.validation,
+            "output": path,
+        }))?
+    );
+    Ok(())
+}
+
+fn run_flop_pbs_leaf_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    let network_path = value(args, "--value-network")
+        .map(PathBuf::from)
+        .ok_or("--value-network is required")?;
+    let root_boards = parse_flop_boards(
+        &value(args, "--boards")
+            .ok_or("--boards is required, for example 2c,7d,Th;As,Kd,7c;9h,Th,Jh")?,
+    )?;
+    let resolver_iterations = parse_or(args, "--resolver-iterations", 20u64)?;
+    let river_iterations = parse_or(args, "--river-iterations", 200u64)?;
+    let dataset = blueprint::public_belief::generate_resolver_leaf_turn_targets(
+        blueprint::public_belief::ResolverLeafTurnTargetConfig {
+            game,
+            root_boards,
+            states_per_board: parse_or(args, "--states-per-board", 3usize)?,
+            root_pot_bb: parse_or(args, "--pot-bb", 4.0f64)?,
+            root_actor: parse_or(args, "--actor", 1usize)?,
+            resolver_iterations,
+            resolver_averaging_delay: parse_or(
+                args,
+                "--resolver-averaging-delay",
+                resolver_iterations / 10,
+            )?,
+            river_iterations,
+            river_averaging_delay: parse_or(
+                args,
+                "--river-averaging-delay",
+                river_iterations / 10,
+            )?,
+            seed: parse_or(args, "--seed", 0x1EAF_C0DEu64)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+            value_network_path: network_path,
+            checkpoint_dir: value(args, "--checkpoint-dir").map(PathBuf::from),
+        },
+    )?;
+    let path = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("flop-resolver-leaf-targets.json"));
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&path, format!("{}\n", serde_json::to_string(&dataset)?))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": dataset.schema,
+            "states": dataset.targets.len(),
+            "resolverIterations": dataset.resolver_iterations,
+            "resolverLeafPopulation": dataset.resolver_leaf_population,
+            "meanResolverLeafProbabilityMass": dataset.resolver_leaf_probability_mass,
+            "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
+            "maximumZeroSumResidualBb": dataset.targets.iter().map(|target| target.zero_sum_residual_bb.abs()).fold(0.0f64, f64::max),
             "validation": dataset.validation,
             "output": path,
         }))?
@@ -346,6 +422,13 @@ fn parse_board<const N: usize>(value: &str) -> Result<[u8; N], Box<dyn Error>> {
         return Err("board cards must be unique".into());
     }
     Ok(board)
+}
+
+fn parse_flop_boards(value: &str) -> Result<Vec<[u8; 3]>, Box<dyn Error>> {
+    value
+        .split(';')
+        .map(|board| parse_board::<3>(board.trim()))
+        .collect()
 }
 
 fn parse_card(token: &str) -> Result<u8, Box<dyn Error>> {
@@ -1043,6 +1126,7 @@ Usage:
   preflop-solver turn-pbs-self-play-targets [options]
   preflop-solver turn-pbs-value-predict [options]
   preflop-solver flop-pbs-resolve [options]
+  preflop-solver flop-pbs-leaf-targets [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5

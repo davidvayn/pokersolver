@@ -47,6 +47,8 @@ def activate(values: np.ndarray, activation: str) -> np.ndarray:
         return np.tanh(values)
     if activation == "linear":
         return values
+    if activation == "gelu-fast":
+        return values / (1.0 + np.exp(-1.702 * values))
     raise ValueError(f"unknown activation {activation}")
 
 
@@ -75,7 +77,7 @@ def python_prediction(
         if model["usesExactRanges"]
         else queries[:, :, 65].copy()
     )
-    baseline = (
+    baseline_depth = (
         equity * context[:, 20, None]
         - (1.0 - equity) * context[:, 19, None]
     )
@@ -88,15 +90,22 @@ def python_prediction(
     residual = dense_forward(
         np.concatenate((expanded, query_embedding), axis=-1), model["head"]
     ).reshape(2, training.COMBO_COUNT)
-    raw = baseline + residual * (
-        float(model["residualScaleBb"]) / float(model["targetScaleBb"])
-    )
+    if model["schema"] == training.NETWORK_SCHEMA:
+        scale_bb = training.value_scale_bb(
+            dataset.invested[state_index], model["valueNormalization"]
+        )
+        raw = baseline_depth * (training.DEPTH_BB / scale_bb) + residual
+    else:
+        scale_bb = float(model["targetScaleBb"])
+        raw = baseline_depth + residual * (
+            float(model["residualScaleBb"]) / scale_bb
+        )
     projection_weights = dataset.projection_weights[state_index]
     joint_mass = max(float(projection_weights[0].sum()), 1e-8)
     aggregate = (raw * projection_weights).sum(axis=1) / joint_mass
     projected = raw - float(aggregate.sum()) / 2.0
     projected[dataset.ranges[state_index] <= 0] = 0.0
-    return projected * float(model["targetScaleBb"])
+    return projected * scale_bb
 
 
 def rust_prediction(
@@ -123,10 +132,14 @@ def rust_prediction(
 
 def main() -> None:
     args = parse_args()
-    dataset = training.load_dataset(args.dataset, 1)
     model = json.loads(args.model.read_text())
-    if model.get("schema") != training.NETWORK_SCHEMA:
-        raise ValueError("parity validation requires a shared-combo v3 model")
+    if model.get("schema") not in {
+        training.NETWORK_SCHEMA,
+        "hu-public-belief-combo-value-network-v3",
+    }:
+        raise ValueError("parity validation requires a shared-combo v3 or v4 model")
+    normalization = model.get("valueNormalization", "depth")
+    dataset = training.load_dataset(args.dataset, 1, normalization)
     state_indices = selected_state_indices(args.state_indices, args.state_index)
     per_state = []
     for state_index in state_indices:

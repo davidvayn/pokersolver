@@ -9,6 +9,61 @@ import train_public_value_network as module
 
 
 class PublicValueNetworkTests(unittest.TestCase):
+    @staticmethod
+    def synthetic_dataset(
+        board: list[int],
+        source_hash: str,
+        status: str = "accepted",
+        resolver_leaf: bool = False,
+    ) -> module.Dataset:
+        target = {
+            "board": board,
+            "maximum_river_exploitability_bb_per_hand": 0.04,
+            "zero_sum_residual_bb": -1e-10,
+            "range_particles": 4096,
+            "range_replicates": 2,
+            "range_effective_sample_size": 1000.0,
+            "belief_method": "exact_per-player_reach_factors_test",
+            "range_maximum_total_variation": 0.10,
+        }
+        if resolver_leaf:
+            for field in (
+                "range_particles",
+                "range_replicates",
+                "range_effective_sample_size",
+                "range_maximum_total_variation",
+            ):
+                target.pop(field)
+            target.update(
+                {
+                    "belief_method": "exact_resolver_average_strategy_counterfactual_reach",
+                    "resolver_leaf_reach_probability": 0.25,
+                    "resolver_root_board": board[:3],
+                    "resolver_public_history": ["flop_start", "check", "check"],
+                }
+            )
+        return module.Dataset(
+            boards=np.asarray([board], dtype=np.int16),
+            actors=np.asarray([0], dtype=np.int8),
+            invested=np.asarray([[4.0, 4.0]], dtype=np.float32),
+            ranges=np.zeros((1, 2, module.COMBO_COUNT), dtype=np.float32),
+            masses=np.zeros((1, 2, module.COMBO_COUNT), dtype=np.float32),
+            targets=np.zeros((1, 2 * module.COMBO_COUNT), dtype=np.float32),
+            target_scales=np.ones(1, dtype=np.float32),
+            weights=np.ones((1, 2 * module.COMBO_COUNT), dtype=np.float32),
+            projection_weights=np.ones(
+                (1, 2, module.COMBO_COUNT), dtype=np.float32
+            ),
+            groups=np.asarray([0], dtype=np.int32),
+            source={
+                "schema": "hu-turn-public-belief-cfv-dataset-v1",
+                "source_policy_sha256": "f" * 64,
+                "validation": {"status": status, "reasons": []},
+                "targets": [target],
+            },
+            source_sha256=source_hash,
+        )
+
     def test_combo_card_inverse_matches_triangular_keys(self) -> None:
         keys = []
         for high in range(1, 52):
@@ -78,6 +133,91 @@ class PublicValueNetworkTests(unittest.TestCase):
 
     def test_hand_class_encoding_has_exactly_169_classes(self) -> None:
         self.assertEqual(set(module.HAND_CLASS_IDS), set(range(169)))
+
+    def test_value_scales_separate_pot_from_legal_payoff_exposure(self) -> None:
+        self.assertEqual(module.value_scale_bb([2.0, 2.0], "pot"), 4.0)
+        self.assertEqual(module.value_scale_bb([2.0, 2.0], "payoff-exposure"), 20.0)
+        self.assertEqual(module.value_scale_bb([18.0, 18.0], "pot"), 36.0)
+        self.assertEqual(module.value_scale_bb([18.0, 18.0], "payoff-exposure"), 20.0)
+
+    def test_stratified_batch_draws_every_available_pot_band(self) -> None:
+        invested = np.asarray(
+            [[2.0, 2.0], [2.5, 2.5], [5.0, 5.0], [7.0, 7.0], [12.0, 12.0]],
+            dtype=np.float32,
+        )
+        rows = np.arange(len(invested))
+        selected = module.stratified_batch_rows(
+            np.random.default_rng(9), rows, invested, 6
+        )
+        bands = [module.pot_band(invested[row]) for row in selected]
+        self.assertEqual({0, 1, 2}, set(bands))
+        self.assertEqual([bands.count(index) for index in range(3)], [2, 2, 2])
+
+    def test_stratified_batch_honors_supplemental_sampling_weight(self) -> None:
+        invested = np.asarray([[2.0, 2.0], [2.0, 2.0]], dtype=np.float32)
+        selected = module.stratified_batch_rows(
+            np.random.default_rng(11),
+            np.asarray([0, 1]),
+            invested,
+            1000,
+            np.asarray([1.0, 0.01]),
+        )
+        self.assertGreater(int(np.sum(selected == 0)), 950)
+
+    def test_public_board_texture_is_suit_invariant(self) -> None:
+        # 9h, Th, Jh, 2c and the same ranks under a global suit permutation.
+        first = module.public_board_texture([30, 34, 38, 0])
+        second = module.public_board_texture([29, 33, 37, 3])
+        self.assertEqual(first, second)
+        self.assertEqual(first["rank"], "unpaired")
+        self.assertEqual(first["suit"], "three-flush")
+        self.assertEqual(first["connectivity"], "connected")
+
+    def test_public_board_texture_distinguishes_paired_two_tone_board(self) -> None:
+        texture = module.public_board_texture([48, 49, 28, 29])
+        self.assertEqual(texture["rank"], "two-pair")
+        self.assertEqual(texture["suit"], "two-tone")
+
+    def test_deep_gelu_export_preserves_every_dense_layer(self) -> None:
+        model = module.SharedComboValueNetwork(True, "deep-gelu", "pot")
+        context = module.tower_payload(model.context_tower, "gelu-fast", "gelu-fast")
+        query = module.tower_payload(model.query_tower, "gelu-fast", "gelu-fast")
+        head = module.tower_payload(model.head, "gelu-fast", "linear")
+        self.assertEqual(len(context), 3)
+        self.assertEqual(len(query), 3)
+        self.assertEqual(len(head), 3)
+        self.assertTrue(all(layer["activation"] == "gelu-fast" for layer in context))
+        self.assertEqual(head[-1]["activation"], "linear")
+
+    def test_supplemental_dataset_offsets_groups_and_preserves_component_hashes(self) -> None:
+        primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        supplement = self.synthetic_dataset([1, 6, 11, 16], "b" * 64)
+        combined = module.combine_training_datasets(primary, [supplement])
+        np.testing.assert_array_equal(combined.groups, [0, 1])
+        self.assertEqual(
+            combined.source["component_dataset_sha256"], ["a" * 64, "b" * 64]
+        )
+        self.assertEqual(combined.source["validation"]["status"], "accepted")
+
+    def test_supplemental_dataset_rejects_duplicate_boards_but_revalidates_small_component(self) -> None:
+        primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        duplicate = self.synthetic_dataset([0, 5, 10, 15], "b" * 64)
+        combined = module.combine_training_datasets(primary, [duplicate])
+        self.assertEqual(combined.source["validation"]["status"], "rejected")
+        self.assertTrue(
+            any("95% distinct" in reason for reason in combined.source["validation"]["reasons"])
+        )
+        rejected = self.synthetic_dataset([1, 6, 11, 16], "c" * 64, "rejected")
+        combined = module.combine_training_datasets(primary, [rejected])
+        self.assertEqual(combined.source["validation"]["status"], "accepted")
+
+    def test_exact_resolver_leaf_supplement_does_not_require_particle_diagnostics(self) -> None:
+        primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        resolver = self.synthetic_dataset(
+            [1, 6, 11, 16], "d" * 64, resolver_leaf=True
+        )
+        combined = module.combine_training_datasets(primary, [resolver])
+        self.assertEqual(combined.source["validation"]["status"], "accepted")
 
     def test_python_evaluator_matches_rust_reference_hands(self) -> None:
         straight_flush = module.evaluate_cards([51, 47, 43, 39, 35, 0, 1])

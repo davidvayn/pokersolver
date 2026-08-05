@@ -1,0 +1,213 @@
+{
+  "activationAllowed": false,
+  "activeManifestModified": false,
+  "authenticEvaluation": {
+    "baselineMeanRangeRmseBb": 0.5402135252952576,
+    "baselinePotBandRmseBb": {
+      "large": 1.5737942457199097,
+      "medium": 0.803120344877243,
+      "small": 0.21539181470870972
+    },
+    "candidateMeanRangeRmseBb": 0.4648815095424652,
+    "candidatePotBandRmseBb": {
+      "large": 1.239399015903473,
+      "medium": 0.6868630349636078,
+      "small": 0.2433520257472992
+    },
+    "crossSeedPredictionCorrelation": 0.996256244303511,
+    "maximumPythonRustParityErrorBb": 9.77889974862478e-06,
+    "relativeImprovement": 0.13944859250167627,
+    "relativeImprovementByPotBand": {
+      "large": 0.2124770952275737,
+      "medium": 0.14475702259965184,
+      "small": -0.12981092654984192
+    }
+  },
+  "failedGates": [
+    "smallPotNoRegression",
+    "matchedResolverImprovement",
+    "fullGameExploitabilityUpperBound"
+  ],
+  "gates": {
+    "authenticHoldoutNoRegression": {
+      "measured": 0.13944859250167627,
+      "passed": true,
+      "threshold": ">=-5% matched authentic RMSE improvement"
+    },
+    "fullGameExploitabilityUpperBound": {
+      "measured": null,
+      "passed": false,
+      "threshold": "independent one-sided 99% upper bound <=0.10bb/hand"
+    },
+    "largePotNoRegression": {
+      "measured": 0.2124770952275737,
+      "passed": true,
+      "threshold": ">=-5% matched authentic improvement"
+    },
+    "matchedAuthenticHoldout": {
+      "measured": [
+        65,
+        69,
+        70,
+        72,
+        73,
+        75,
+        76,
+        77,
+        81,
+        84,
+        85,
+        86,
+        88,
+        91,
+        92,
+        94,
+        96,
+        99,
+        104,
+        107,
+        109,
+        110,
+        111,
+        112,
+        116,
+        117,
+        118,
+        121,
+        122,
+        124,
+        125,
+        126
+      ],
+      "passed": true,
+      "threshold": "identical untouched authentic validation states"
+    },
+    "matchedResolverImprovement": {
+      "measured": {
+        "baseline": null,
+        "candidate": null,
+        "eligible": false,
+        "improvedBoards": 0,
+        "relativeImprovement": null
+      },
+      "passed": false,
+      "threshold": ">=2% mean improvement and improvement on at least two of three matched boards"
+    },
+    "mediumPotNoRegression": {
+      "measured": 0.14475702259965184,
+      "passed": true,
+      "threshold": ">=-5% matched authentic improvement"
+    },
+    "pairedCrossSeedCorrelation": {
+      "measured": 0.996256244303511,
+      "passed": true,
+      "threshold": ">=0.95"
+    },
+    "pythonRustParity": {
+      "measured": 9.77889974862478e-06,
+      "passed": true,
+      "threshold": "accepted and <=0.0001bb"
+    },
+    "resolverEvaluationCorpusUntouched": {
+      "measured": {
+        "evaluation": "3f4382d823b60ecaa55112a2477cf9fd5e2ebf5cf8738c8104bba5279eba3869",
+        "trainingComponents": [
+          "d4c0b6a6072cb88494e18ec2c46311beaf6cb202baf5cf322669b20573dbc366",
+          "efa5fd4318110386f788135a473307390e85ff4986cbb2f74bab48701bd783e0",
+          "bb984d1928502d7ab67f7e9fcba07170ea1807cad3381b0fdf45a41ec3abf3e2"
+        ]
+      },
+      "passed": true,
+      "threshold": "evaluation dataset hash is absent from every training component"
+    },
+    "resolverLeafReachWeightedImprovement": {
+      "measured": 0.1451622323292874,
+      "passed": true,
+      "threshold": ">=10% on untouched resolver-reach-weighted leaves"
+    },
+    "smallPotNoRegression": {
+      "measured": -0.12981092654984192,
+      "passed": false,
+      "threshold": ">=-10% matched authentic improvement"
+    },
+    "sourcePolicyPinned": {
+      "measured": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+      "passed": true,
+      "threshold": "same frozen source policy across training and evaluation"
+    },
+    "sourceTargetsAccepted": {
+      "measured": {
+        "reasons": [],
+        "status": "accepted"
+      },
+      "passed": true,
+      "threshold": "combined training targets accepted"
+    },
+    "supplementalDataTrainingOnly": {
+      "measured": {
+        "primaryStates": 128,
+        "supplementalStates": [
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147,
+          148,
+          149,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157
+        ]
+      },
+      "passed": true,
+      "threshold": "non-empty resolver supplement appears only in training"
+    }
+  },
+  "interpretation": "Resolver-leaf targets are sampled from a frozen average resolver policy on training-only root boards. A disjoint leaf corpus and the original matched resolver boards remain untouched. Local improvement never substitutes for the missing full-game exploitability upper bound.",
+  "modelVersion": "20bb-v33-resolver-leaf-candidate",
+  "researchSelection": "v31",
+  "resolverEvaluation": {
+    "baselineMeanExploitabilityBbPerHand": null,
+    "candidateMeanExploitabilityBbPerHand": null,
+    "eligible": false,
+    "improvedBoards": 0,
+    "pairs": [],
+    "relativeImprovement": null
+  },
+  "resolverLeafEvaluation": {
+    "baselineReachWeightedRmseBb": 1.070260718214725,
+    "candidateReachWeightedRmseBb": 0.9148992831843291,
+    "datasetSha256": "3f4382d823b60ecaa55112a2477cf9fd5e2ebf5cf8738c8104bba5279eba3869",
+    "relativeImprovement": 0.1451622323292874,
+    "sampledLeafReachMass": 0.021690847
+  },
+  "schema": "hu-v33-resolver-leaf-conditioning-sequence-v1",
+  "selectedSeed": 11802,
+  "selectedSeedTuningRmseBb": 0.35025840997695923,
+  "selectedWeights": "turn-value-range-seed11802.json",
+  "selectedWeightsBytes": 700184,
+  "selectedWeightsSha256": "60b4af1ad210c23804c422e9fda124babd14bd8c573e187632db74943a580e70",
+  "sourceDatasetSha256": "d0835f589f8939fbaa4cb132cc9c451c2922466b1346536a0808963058dd4228",
+  "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+  "status": "rejected"
+}

@@ -24,6 +24,7 @@ const SHARED_CONTEXT_COUNT: usize = 359;
 const SHARED_QUERY_STRUCTURAL_COUNT: usize = 76;
 const SHARED_QUERY_COUNT: usize = 95;
 const HAND_CLASS_COUNT: usize = 169;
+const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PublicBeliefState {
@@ -195,7 +196,10 @@ impl ValueNetworkLayer {
                 .iter()
                 .chain(&self.biases)
                 .any(|value| !value.is_finite())
-            || !matches!(self.activation.as_str(), "relu" | "linear" | "tanh")
+            || !matches!(
+                self.activation.as_str(),
+                "relu" | "linear" | "tanh" | "gelu-fast"
+            )
         {
             return Err("public value network contains an invalid dense layer".to_owned());
         }
@@ -217,6 +221,7 @@ impl ValueNetworkLayer {
             *out = match self.activation.as_str() {
                 "relu" => out.max(0.0),
                 "tanh" => out.tanh(),
+                "gelu-fast" => *out / (1.0 + (-1.702 * *out).exp()),
                 _ => *out,
             };
         }
@@ -232,6 +237,8 @@ pub struct PublicValueNetwork {
     uses_exact_ranges: bool,
     target_scale_bb: f64,
     range_scale: f64,
+    #[serde(default)]
+    value_normalization: Option<String>,
     #[serde(default)]
     residual_scale_bb: f64,
     #[serde(default)]
@@ -302,20 +309,32 @@ impl PublicValueNetwork {
                     );
                 }
             }
-            "hu-public-belief-combo-value-network-v3" => {
+            "hu-public-belief-combo-value-network-v3"
+            | "hu-public-belief-combo-value-network-v4" => {
                 if self.feature_schema.as_deref() != Some("rank-suit-invariant-combo-query-v1")
                     || self.context_public_count != SHARED_CONTEXT_PUBLIC_COUNT
                     || self.context_size != SHARED_CONTEXT_COUNT
                     || self.query_structural_count != SHARED_QUERY_STRUCTURAL_COUNT
                     || self.query_size != SHARED_QUERY_COUNT
-                    || !self.residual_scale_bb.is_finite()
-                    || self.residual_scale_bb <= 0.0
                     || self.context_tower.is_empty()
                     || self.query_tower.is_empty()
                 {
                     return Err(
                         "shared-combo public value network schema is incompatible".to_owned()
                     );
+                }
+                if self.schema == "hu-public-belief-combo-value-network-v3"
+                    && (!self.residual_scale_bb.is_finite() || self.residual_scale_bb <= 0.0)
+                {
+                    return Err("shared-combo v3 residual scale is invalid".to_owned());
+                }
+                if self.schema == "hu-public-belief-combo-value-network-v4"
+                    && !matches!(
+                        self.value_normalization.as_deref(),
+                        Some("pot" | "payoff-exposure")
+                    )
+                {
+                    return Err("shared-combo v4 value normalization is invalid".to_owned());
                 }
                 let mut context_size = SHARED_CONTEXT_COUNT;
                 for layer in &self.context_tower {
@@ -345,7 +364,10 @@ impl PublicValueNetwork {
         invested: [f64; 2],
         ranges: &[Vec<f64>; 2],
     ) -> [Vec<f64>; 2] {
-        if self.schema == "hu-public-belief-combo-value-network-v3" {
+        if matches!(
+            self.schema.as_str(),
+            "hu-public-belief-combo-value-network-v3" | "hu-public-belief-combo-value-network-v4"
+        ) {
             return self.predict_shared_combo(board, actor, invested, ranges);
         }
         let mut range_features = ranges
@@ -454,7 +476,11 @@ impl PublicValueNetwork {
                     };
                     let opponent = 1 - player;
                     let baseline = equity * invested[opponent] - (1.0 - equity) * invested[player];
-                    baseline + output[0] as f64 * self.residual_scale_bb
+                    if self.schema == "hu-public-belief-combo-value-network-v4" {
+                        baseline + output[0] as f64 * self.state_value_scale_bb(invested)
+                    } else {
+                        baseline + output[0] as f64 * self.residual_scale_bb
+                    }
                 })
                 .collect()
         });
@@ -487,6 +513,20 @@ impl PublicValueNetwork {
             }
         }
         result
+    }
+
+    fn state_value_scale_bb(&self, invested: [f64; 2]) -> f64 {
+        match self.value_normalization.as_deref() {
+            Some("pot") => (invested[0] + invested[1]).max(1.0),
+            Some("payoff-exposure") => {
+                let remaining = [
+                    (self.target_scale_bb - invested[0]).max(0.0),
+                    (self.target_scale_bb - invested[1]).max(0.0),
+                ];
+                (invested[0].max(invested[1]) + remaining[0].min(remaining[1])).max(1.0)
+            }
+            _ => self.target_scale_bb,
+        }
     }
 }
 
@@ -902,6 +942,17 @@ struct FlopSolver {
     maximum_leaf_zero_sum_residual: Cell<f64>,
 }
 
+#[derive(Clone, Debug)]
+struct ResolverTurnLeaf {
+    root_board: [u8; 3],
+    public_history: Vec<String>,
+    board: [u8; 4],
+    actor: usize,
+    invested: [f64; 2],
+    ranges: [Vec<f64>; 2],
+    reach_probability: f64,
+}
+
 impl FlopSolver {
     fn new(mut config: FlopResolveConfig) -> Result<Self, String> {
         config.game.validate()?;
@@ -1103,6 +1154,81 @@ impl FlopSolver {
         }
         self.maximum_leaf_zero_sum_residual.set(maximum_residual);
         result
+    }
+
+    fn capture_average_turn_leaves(&self) -> Vec<ResolverTurnLeaf> {
+        let state = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let root_joint_mass = joint_compatibility_mass(&reaches);
+        let mut leaves = Vec::new();
+        self.capture_average_turn_leaves_walk(state, reaches, root_joint_mass, &mut leaves);
+        leaves
+    }
+
+    fn capture_average_turn_leaves_walk(
+        &self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        root_joint_mass: f64,
+        leaves: &mut Vec<ResolverTurnLeaf>,
+    ) {
+        if state.street == Street::Turn && state.terminal.is_none() {
+            let root_board: [u8; 3] = self
+                .config
+                .state
+                .board
+                .clone()
+                .try_into()
+                .expect("validated flop board");
+            for turn in 0..52u8 {
+                if root_board.contains(&turn) {
+                    continue;
+                }
+                let Some((ranges, _, unnormalized_joint_mass)) =
+                    normalized_turn_ranges(&reaches, turn)
+                else {
+                    continue;
+                };
+                let reach_probability =
+                    unnormalized_joint_mass / root_joint_mass.max(EPSILON) / 45.0;
+                if !reach_probability.is_finite() || reach_probability <= EPSILON {
+                    continue;
+                }
+                leaves.push(ResolverTurnLeaf {
+                    root_board,
+                    public_history: state.public_history.clone(),
+                    board: [root_board[0], root_board[1], root_board[2], turn],
+                    actor: state.actor,
+                    invested: state.invested,
+                    ranges,
+                    reach_probability,
+                });
+            }
+            return;
+        }
+        if state.terminal.is_some() {
+            return;
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let actor = state.actor;
+        let action_count = actions.len();
+        let strategy = self
+            .nodes
+            .get(&state.public_history)
+            .expect("trained flop node")
+            .average_strategy(&self.legal[actor]);
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * action_count + action_index];
+            }
+            self.capture_average_turn_leaves_walk(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                root_joint_mass,
+                leaves,
+            );
+        }
     }
 
     fn profile_walk(
@@ -1335,25 +1461,7 @@ fn turn_leaf_card_values(
     reaches: &[Vec<f64>; 2],
     turn: u8,
 ) -> Option<([Vec<f64>; 2], f64)> {
-    let mut masked = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
-    let mut totals = [0.0; 2];
-    for player in 0..2 {
-        for combo in all_combos() {
-            let weight = if combo.cards().contains(&turn) {
-                0.0
-            } else {
-                reaches[player][combo.key()]
-            };
-            masked[player][combo.key()] = weight;
-            totals[player] += weight;
-        }
-        if totals[player] <= EPSILON {
-            return None;
-        }
-        for weight in &mut masked[player] {
-            *weight /= totals[player];
-        }
-    }
+    let (masked, totals, _) = normalized_turn_ranges(reaches, turn)?;
     let mut board = flop_board.to_vec();
     board.push(turn);
     let mut predicted = network.predict(&board, actor, invested, &masked);
@@ -1386,6 +1494,38 @@ fn turn_leaf_card_values(
             .collect()
     });
     Some((contribution, residual.abs()))
+}
+
+fn normalized_turn_ranges(
+    reaches: &[Vec<f64>; 2],
+    turn: u8,
+) -> Option<([Vec<f64>; 2], [f64; 2], f64)> {
+    let mut masked = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+    let mut totals = [0.0; 2];
+    for player in 0..2 {
+        for combo in all_combos() {
+            let weight = if combo.cards().contains(&turn) {
+                0.0
+            } else {
+                reaches[player][combo.key()]
+            };
+            masked[player][combo.key()] = weight;
+            totals[player] += weight;
+        }
+        if totals[player] <= EPSILON {
+            return None;
+        }
+    }
+    let unnormalized_joint_mass = joint_compatibility_mass(&masked);
+    if unnormalized_joint_mass <= EPSILON {
+        return None;
+    }
+    for player in 0..2 {
+        for weight in &mut masked[player] {
+            *weight /= totals[player];
+        }
+    }
+    Some((masked, totals, unnormalized_joint_mass))
 }
 
 pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
@@ -1983,6 +2123,18 @@ pub struct TurnValueTarget {
     pub range_maximum_total_variation: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_policy_explorer: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling_exploration_probability: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_action_line: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_root_board: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_public_history: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_leaf_reach_probability: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1996,6 +2148,20 @@ pub struct TurnTargetDataset {
     pub state_distribution: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling_exploration_probability: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_sampled_pot_bb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_source_value_network_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_iterations: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_leaf_population: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_leaf_probability_mass: Option<f64>,
     pub targets: Vec<TurnValueTarget>,
     pub validation: BlueprintValidation,
 }
@@ -2076,6 +2242,13 @@ pub fn generate_turn_targets(
         river_iterations: config.river_iterations,
         state_distribution: "synthetic_reachable_like_pilot".to_owned(),
         source_policy_sha256: None,
+        sampling_exploration_probability: None,
+        exploration_method: None,
+        minimum_sampled_pot_bb: None,
+        resolver_source_value_network_sha256: None,
+        resolver_iterations: None,
+        resolver_leaf_population: None,
+        resolver_leaf_probability_mass: None,
         targets,
         validation: BlueprintValidation {
             status: "rejected".to_owned(),
@@ -2241,6 +2414,12 @@ fn turn_target_from_exact_rivers(
         belief_method: None,
         range_maximum_total_variation: None,
         input_sha256: None,
+        off_policy_explorer: None,
+        sampling_exploration_probability: None,
+        public_action_line: None,
+        resolver_root_board: None,
+        resolver_public_history: None,
+        resolver_leaf_reach_probability: None,
     })
 }
 
@@ -2255,6 +2434,8 @@ pub struct SelfPlayTurnTargetConfig {
     pub threads: usize,
     pub network_path: PathBuf,
     pub belief_replicates: u32,
+    pub exploration_probability: f64,
+    pub minimum_pot_bb: f64,
     pub checkpoint_dir: Option<PathBuf>,
 }
 
@@ -2266,6 +2447,11 @@ pub fn generate_self_play_turn_targets(
         || config.range_particles < 2
         || config.belief_replicates < 2
         || config.threads == 0
+        || !config.exploration_probability.is_finite()
+        || !(0.0..1.0).contains(&config.exploration_probability)
+        || !config.minimum_pot_bb.is_finite()
+        || config.minimum_pot_bb < 0.0
+        || config.minimum_pot_bb > config.game.effective_stack_bb * 2.0
     {
         return Err("self-play targets require states, range particles, and threads".into());
     }
@@ -2284,24 +2470,41 @@ pub fn generate_self_play_turn_targets(
             return Err("could not sample enough nonterminal self-play turn states".into());
         }
         let true_deal = Deal::sample(&mut chance);
-        let Some((turn_state, action_line)) =
-            sample_turn_line(&policy, &config.game, &true_deal, &mut chance)
-        else {
+        let explorer = (config.exploration_probability > 0.0).then_some(targets.len() % 2);
+        let Some((turn_state, action_line)) = sample_turn_line(
+            &policy,
+            &config.game,
+            &true_deal,
+            &mut chance,
+            explorer,
+            config.exploration_probability,
+        ) else {
             continue;
         };
+        if turn_state.invested.iter().sum::<f64>() + EPSILON < config.minimum_pot_bb {
+            continue;
+        }
         let board = [
             true_deal.board[0],
             true_deal.board[1],
             true_deal.board[2],
             true_deal.board[3],
         ];
-        let ranges = exact_reach_factors_for_line(
+        let ranges = match exact_reach_factors_for_line(
             &policy,
             &config.game,
             board,
             &action_line,
             config.threads,
-        )?;
+        ) {
+            Ok(ranges) => ranges,
+            Err(error)
+                if config.exploration_probability > 0.0 && error.contains("zero exact reach") =>
+            {
+                continue
+            }
+            Err(error) => return Err(error.into()),
+        };
         let mut minimum_ess = f64::INFINITY;
         let mut maximum_total_variation = 0.0f64;
         let mut particle_replicates = Vec::with_capacity(config.belief_replicates as usize);
@@ -2328,6 +2531,7 @@ pub fn generate_self_play_turn_targets(
             particle_replicates.push(estimate);
         }
         let state_index = targets.len();
+        let exploration_action_line = explorer.map(|_| action_line.clone());
         let fingerprint = turn_target_input_sha256(
             &config.game,
             board,
@@ -2391,7 +2595,12 @@ pub fn generate_self_play_turn_targets(
                     .is_some_and(|stored| (stored - minimum_ess).abs() <= 1e-9)
                 && target
                     .range_maximum_total_variation
-                    .is_some_and(|stored| (stored - maximum_total_variation).abs() <= 1e-12);
+                    .is_some_and(|stored| (stored - maximum_total_variation).abs() <= 1e-12)
+                && target.off_policy_explorer == explorer
+                && target.sampling_exploration_probability
+                    == (config.exploration_probability > 0.0)
+                        .then_some(config.exploration_probability)
+                && target.public_action_line == exploration_action_line;
             if !diagnostics_match {
                 target.range_particles = Some(config.range_particles);
                 target.range_replicates = Some(config.belief_replicates);
@@ -2399,6 +2608,10 @@ pub fn generate_self_play_turn_targets(
                 target.belief_method = Some(belief_method.to_owned());
                 target.range_maximum_total_variation = Some(maximum_total_variation);
                 target.input_sha256 = Some(fingerprint);
+                target.off_policy_explorer = explorer;
+                target.sampling_exploration_probability =
+                    explorer.map(|_| config.exploration_probability);
+                target.public_action_line = exploration_action_line.clone();
                 write_target_checkpoint(path, &target)?;
                 // Normalize a freshly solved or upgraded checkpoint once at
                 // the persistence boundary. Stable cached checkpoints are
@@ -2413,6 +2626,10 @@ pub fn generate_self_play_turn_targets(
             target.belief_method = Some(belief_method.to_owned());
             target.range_maximum_total_variation = Some(maximum_total_variation);
             target.input_sha256 = Some(fingerprint);
+            target.off_policy_explorer = explorer;
+            target.sampling_exploration_probability =
+                explorer.map(|_| config.exploration_probability);
+            target.public_action_line = exploration_action_line;
         }
         targets.push(target);
     }
@@ -2475,8 +2692,25 @@ pub fn generate_self_play_turn_targets(
         game: config.game,
         seed: config.seed,
         river_iterations: config.river_iterations,
-        state_distribution: "frozen_v26_self_play_exact_reach_factor_public_beliefs".to_owned(),
+        state_distribution: if config.exploration_probability > 0.0 {
+            "frozen_v26_one_player_epsilon_exploration_exact_reach_factor_public_beliefs"
+        } else {
+            "frozen_v26_self_play_exact_reach_factor_public_beliefs"
+        }
+        .to_owned(),
         source_policy_sha256: Some(source_policy_sha256),
+        sampling_exploration_probability: (config.exploration_probability > 0.0)
+            .then_some(config.exploration_probability),
+        exploration_method: (config.exploration_probability > 0.0).then(|| {
+            "one_player_per_trajectory_epsilon_uniform_action_sampling_with_frozen_policy_belief_conditioning"
+                .to_owned()
+        }),
+        minimum_sampled_pot_bb: (config.minimum_pot_bb > 0.0)
+            .then_some(config.minimum_pot_bb),
+        resolver_source_value_network_sha256: None,
+        resolver_iterations: None,
+        resolver_leaf_population: None,
+        resolver_leaf_probability_mass: None,
         targets,
         validation: BlueprintValidation {
             status: if reasons.is_empty() { "accepted" } else { "rejected" }.to_owned(),
@@ -2485,22 +2719,361 @@ pub fn generate_self_play_turn_targets(
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct ResolverLeafTurnTargetConfig {
+    pub game: BlueprintConfig,
+    pub root_boards: Vec<[u8; 3]>,
+    pub states_per_board: usize,
+    pub root_pot_bb: f64,
+    pub root_actor: usize,
+    pub resolver_iterations: u64,
+    pub resolver_averaging_delay: u64,
+    pub river_iterations: u64,
+    pub river_averaging_delay: u64,
+    pub seed: u64,
+    pub threads: usize,
+    pub value_network_path: PathBuf,
+    pub checkpoint_dir: Option<PathBuf>,
+}
+
+pub fn generate_resolver_leaf_turn_targets(
+    mut config: ResolverLeafTurnTargetConfig,
+) -> Result<TurnTargetDataset, Box<dyn Error>> {
+    config.game.validate()?;
+    config.game.action_abstraction.include_all_in = false;
+    let distinct_roots = config.root_boards.iter().copied().collect::<BTreeSet<_>>();
+    if config.root_boards.len() < 3
+        || distinct_roots.len() != config.root_boards.len()
+        || config
+            .root_boards
+            .iter()
+            .any(|board| board.iter().copied().collect::<BTreeSet<_>>().len() != 3)
+        || config.states_per_board < 3
+        || !config.root_pot_bb.is_finite()
+        || config.root_pot_bb < 2.0
+        || config.root_pot_bb > config.game.effective_stack_bb * 2.0
+        || config.root_actor > 1
+        || config.resolver_iterations < 2
+        || config.resolver_averaging_delay >= config.resolver_iterations
+        || config.river_iterations < 2
+        || config.river_averaging_delay >= config.river_iterations
+        || config.threads == 0
+    {
+        return Err("resolver-leaf targets require three distinct roots, three states per root, and valid solve controls".into());
+    }
+    if let Some(directory) = &config.checkpoint_dir {
+        fs::create_dir_all(directory)?;
+    }
+    let network_bytes = fs::read(&config.value_network_path)?;
+    let source_value_network_sha256 = format!("{:x}", Sha256::digest(&network_bytes));
+    let network = PublicValueNetwork::read(&config.value_network_path)?;
+    let source_policy_sha256 = network.source_policy_sha256.clone();
+    let source_validation_status = network.source_validation_status.clone();
+    let mut selected_leaves =
+        Vec::with_capacity(config.root_boards.len() * config.states_per_board);
+    let mut leaf_population = 0usize;
+    let mut leaf_probability_mass = 0.0f64;
+    for (root_index, board) in config.root_boards.iter().copied().enumerate() {
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut solver = FlopSolver::new(FlopResolveConfig {
+            game: config.game.clone(),
+            state: PublicBeliefState::flop_start(
+                board,
+                config.root_actor,
+                [config.root_pot_bb / 2.0, config.root_pot_bb / 2.0],
+                ranges,
+            ),
+            iterations: config.resolver_iterations,
+            averaging_delay: config.resolver_averaging_delay,
+            value_network: network.clone(),
+            threads: config.threads,
+        })?;
+        solver.train();
+        // Resolver inference runs across worker threads. Platform math can
+        // differ below persisted f32 precision, so canonicalize at the data
+        // boundary before hashing, sampling, or solving labels. Otherwise a
+        // numerically identical replay can miss every resumable checkpoint.
+        let leaves = solver
+            .capture_average_turn_leaves()
+            .into_iter()
+            .filter_map(canonicalize_resolver_turn_leaf)
+            .collect::<Vec<_>>();
+        if leaves.len() < config.states_per_board {
+            return Err(format!(
+                "resolver root {root_index} produced only {} positive-reach leaves",
+                leaves.len()
+            )
+            .into());
+        }
+        leaf_population += leaves.len();
+        leaf_probability_mass += leaves
+            .iter()
+            .map(|leaf| leaf.reach_probability)
+            .sum::<f64>();
+        selected_leaves.extend(sample_resolver_turn_leaves(
+            &leaves,
+            config.states_per_board,
+            config.seed ^ (root_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        )?);
+    }
+
+    let mut targets = Vec::with_capacity(selected_leaves.len());
+    for (state_index, leaf) in selected_leaves.into_iter().enumerate() {
+        let fingerprint = turn_target_input_sha256(
+            &config.game,
+            leaf.board,
+            leaf.actor,
+            leaf.invested,
+            &leaf.ranges,
+            config.river_iterations,
+            config.river_averaging_delay,
+        )?;
+        let checkpoint_path = config.checkpoint_dir.as_ref().map(|directory| {
+            directory.join(format!("resolver-turn-{state_index:06}-{fingerprint}.json"))
+        });
+        let mut target = if let Some(path) = &checkpoint_path {
+            if path.exists() {
+                let cached: TurnValueTarget = serde_json::from_slice(&fs::read(path)?)?;
+                if cached.input_sha256.as_deref() != Some(fingerprint.as_str()) {
+                    return Err(format!(
+                        "checkpoint {} has the wrong input fingerprint",
+                        path.display()
+                    )
+                    .into());
+                }
+                cached
+            } else {
+                turn_target_from_exact_rivers(
+                    &config.game,
+                    leaf.board,
+                    leaf.actor,
+                    leaf.invested,
+                    leaf.ranges.clone(),
+                    config.river_iterations,
+                    config.river_averaging_delay,
+                    config.threads,
+                    state_index,
+                )?
+            }
+        } else {
+            turn_target_from_exact_rivers(
+                &config.game,
+                leaf.board,
+                leaf.actor,
+                leaf.invested,
+                leaf.ranges.clone(),
+                config.river_iterations,
+                config.river_averaging_delay,
+                config.threads,
+                state_index,
+            )?
+        };
+        let diagnostics_match = target.input_sha256.as_deref() == Some(fingerprint.as_str())
+            && target.belief_method.as_deref()
+                == Some("exact_resolver_average_strategy_counterfactual_reach")
+            && target.resolver_root_board == Some(leaf.root_board)
+            && target.resolver_public_history.as_ref() == Some(&leaf.public_history)
+            && target
+                .resolver_leaf_reach_probability
+                .is_some_and(|stored| (stored - leaf.reach_probability).abs() <= 1e-15);
+        if !diagnostics_match {
+            target.input_sha256 = Some(fingerprint);
+            target.belief_method =
+                Some("exact_resolver_average_strategy_counterfactual_reach".to_owned());
+            target.resolver_root_board = Some(leaf.root_board);
+            target.resolver_public_history = Some(leaf.public_history);
+            target.resolver_leaf_reach_probability = Some(leaf.reach_probability);
+            if let Some(path) = &checkpoint_path {
+                write_target_checkpoint(path, &target)?;
+                target = serde_json::from_slice(&fs::read(path)?)?;
+            }
+        }
+        targets.push(target);
+    }
+
+    let maximum_river_exploitability = targets
+        .iter()
+        .map(|target| target.maximum_river_exploitability_bb_per_hand)
+        .fold(0.0f64, f64::max);
+    let maximum_zero_sum_residual = targets
+        .iter()
+        .map(|target| target.zero_sum_residual_bb.abs())
+        .fold(0.0f64, f64::max);
+    let distinct_turn_boards = targets
+        .iter()
+        .map(|target| target.board)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let mut reasons = Vec::new();
+    if maximum_river_exploitability > 0.05 {
+        reasons.push(format!(
+            "at least one resolver-leaf river solve has {maximum_river_exploitability:.6}bb/hand abstract exploitability"
+        ));
+    }
+    if maximum_zero_sum_residual > 1e-7 {
+        reasons.push(format!(
+            "maximum resolver-leaf zero-sum residual {maximum_zero_sum_residual:.3e} exceeds 1e-7"
+        ));
+    }
+    if distinct_turn_boards * 100 < targets.len() * 95 {
+        reasons.push(format!(
+            "only {distinct_turn_boards} of {} resolver targets have distinct turn boards",
+            targets.len()
+        ));
+    }
+    if source_validation_status.as_deref() != Some("accepted") {
+        reasons
+            .push("resolver source value network was not trained from accepted targets".to_owned());
+    }
+    Ok(TurnTargetDataset {
+        schema: "hu-turn-public-belief-cfv-dataset-v1".to_owned(),
+        method: "flop_resolver_average_strategy_counterfactual_turn_leaf_capture_with_exact_river_enumeration".to_owned(),
+        approximate: true,
+        game: config.game,
+        seed: config.seed,
+        river_iterations: config.river_iterations,
+        state_distribution:
+            "flop_resolver_average_strategy_counterfactual_turn_leaves".to_owned(),
+        source_policy_sha256,
+        sampling_exploration_probability: None,
+        exploration_method: None,
+        minimum_sampled_pot_bb: None,
+        resolver_source_value_network_sha256: Some(source_value_network_sha256),
+        resolver_iterations: Some(config.resolver_iterations),
+        resolver_leaf_population: Some(leaf_population),
+        resolver_leaf_probability_mass: Some(
+            leaf_probability_mass / config.root_boards.len() as f64,
+        ),
+        targets,
+        validation: BlueprintValidation {
+            status: if reasons.is_empty() { "accepted" } else { "rejected" }.to_owned(),
+            reasons,
+        },
+    })
+}
+
+fn sample_resolver_turn_leaves(
+    leaves: &[ResolverTurnLeaf],
+    count: usize,
+    seed: u64,
+) -> Result<Vec<ResolverTurnLeaf>, String> {
+    let mut rng = SplitMix64::new(seed);
+    let mut selected = Vec::with_capacity(count);
+    let mut used = BTreeSet::new();
+    for band in 0..3 {
+        if selected.len() == count {
+            break;
+        }
+        let candidates = leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, leaf)| {
+                resolver_leaf_pot_band(leaf.invested) == band && !used.contains(&leaf.board)
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if let Some(index) = weighted_resolver_leaf_index(leaves, &candidates, &mut rng) {
+            used.insert(leaves[index].board);
+            selected.push(leaves[index].clone());
+        }
+    }
+    while selected.len() < count {
+        let candidates = leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, leaf)| !used.contains(&leaf.board))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let Some(index) = weighted_resolver_leaf_index(leaves, &candidates, &mut rng) else {
+            return Err(
+                "resolver leaves do not contain enough distinct positive-reach boards".to_owned(),
+            );
+        };
+        used.insert(leaves[index].board);
+        selected.push(leaves[index].clone());
+    }
+    Ok(selected)
+}
+
+fn canonicalize_resolver_turn_leaf(mut leaf: ResolverTurnLeaf) -> Option<ResolverTurnLeaf> {
+    for range in &mut leaf.ranges {
+        for weight in range {
+            *weight = (*weight as f32) as f64;
+        }
+    }
+    leaf.reach_probability = (leaf.reach_probability * RESOLVER_REACH_CANONICAL_SCALE).round()
+        / RESOLVER_REACH_CANONICAL_SCALE;
+    (leaf.reach_probability > EPSILON).then_some(leaf)
+}
+
+fn weighted_resolver_leaf_index(
+    leaves: &[ResolverTurnLeaf],
+    candidates: &[usize],
+    rng: &mut SplitMix64,
+) -> Option<usize> {
+    let total = candidates
+        .iter()
+        .map(|index| leaves[*index].reach_probability)
+        .sum::<f64>();
+    if total <= EPSILON {
+        return None;
+    }
+    let roll = rng.next_f64() * total;
+    let mut cumulative = 0.0;
+    for index in candidates {
+        cumulative += leaves[*index].reach_probability;
+        if roll < cumulative {
+            return Some(*index);
+        }
+    }
+    candidates.last().copied()
+}
+
+fn resolver_leaf_pot_band(invested: [f64; 2]) -> usize {
+    let maximum = invested[0].max(invested[1]);
+    if maximum <= 3.5 {
+        0
+    } else if maximum <= 7.5 {
+        1
+    } else {
+        2
+    }
+}
+
 fn sample_turn_line(
     policy: &FrozenPolicy,
     game: &BlueprintConfig,
     deal: &Deal,
     rng: &mut SplitMix64,
+    explorer: Option<usize>,
+    exploration_probability: f64,
 ) -> Option<(GameState, Vec<String>)> {
     let mut state = GameState::initial(game);
     let mut line = Vec::new();
     while state.terminal.is_none() && state.street != Street::Turn {
         let actions = state.legal_actions(game);
         let strategy = policy.strategy(&state, deal, &actions, game);
-        let selected = sample_index(&strategy, rng);
+        let sampling = if explorer == Some(state.actor) {
+            epsilon_sampling_strategy(&strategy, exploration_probability)
+        } else {
+            strategy
+        };
+        let selected = sample_index(&sampling, rng);
         line.push(actions[selected].label.clone());
         state = state.apply(&actions[selected], game);
     }
     (state.street == Street::Turn && state.terminal.is_none()).then_some((state, line))
+}
+
+fn epsilon_sampling_strategy(strategy: &[f64], exploration_probability: f64) -> Vec<f64> {
+    if strategy.is_empty() {
+        return Vec::new();
+    }
+    let uniform = exploration_probability / strategy.len() as f64;
+    strategy
+        .iter()
+        .map(|probability| (1.0 - exploration_probability) * probability + uniform)
+        .collect()
 }
 
 fn exact_reach_factors_for_line(
@@ -2860,6 +3433,7 @@ mod tests {
             uses_exact_ranges: true,
             target_scale_bb: 20.0,
             range_scale: COMBO_COUNT as f64,
+            value_normalization: None,
             residual_scale_bb: 0.0,
             source_dataset_sha256: Some("0".repeat(64)),
             source_policy_sha256: None,
@@ -2891,6 +3465,7 @@ mod tests {
             uses_exact_ranges: true,
             target_scale_bb: 20.0,
             range_scale: COMBO_COUNT as f64,
+            value_normalization: None,
             residual_scale_bb: 5.0,
             source_dataset_sha256: Some("1".repeat(64)),
             source_policy_sha256: None,
@@ -2906,6 +3481,34 @@ mod tests {
             query_tower: vec![layer(SHARED_QUERY_COUNT, 1, "linear")],
             head: vec![layer(2, 1, "tanh")],
         }
+    }
+
+    #[test]
+    fn v4_value_normalization_matches_training_scales() {
+        let mut network = zero_shared_value_network();
+        network.schema = "hu-public-belief-combo-value-network-v4".to_owned();
+        network.value_normalization = Some("pot".to_owned());
+        network.residual_scale_bb = 0.0;
+        network.head[0].activation = "linear".to_owned();
+        network.validate().unwrap();
+        assert_eq!(network.state_value_scale_bb([2.0, 2.0]), 4.0);
+        assert_eq!(network.state_value_scale_bb([18.0, 18.0]), 36.0);
+        network.value_normalization = Some("payoff-exposure".to_owned());
+        assert_eq!(network.state_value_scale_bb([2.0, 2.0]), 20.0);
+        assert_eq!(network.state_value_scale_bb([18.0, 18.0]), 20.0);
+    }
+
+    #[test]
+    fn epsilon_sampling_strategy_explores_without_changing_probability_mass() {
+        let mixed = epsilon_sampling_strategy(&[1.0, 0.0, 0.0, 0.0], 0.2);
+        for (measured, expected) in mixed.iter().zip([0.85, 0.05, 0.05, 0.05]) {
+            assert!((measured - expected).abs() <= 1e-12);
+        }
+        assert!((mixed.iter().sum::<f64>() - 1.0).abs() <= f64::EPSILON);
+        assert_eq!(
+            epsilon_sampling_strategy(&[0.25, 0.75], 0.0),
+            vec![0.25, 0.75]
+        );
     }
 
     #[test]
@@ -3080,6 +3683,88 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.contains("include_all_in=false"));
+    }
+
+    #[test]
+    fn resolver_leaf_capture_uses_frozen_average_reach_and_exact_turn_blockers() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut game = tiny_game();
+        game.action_abstraction.include_all_in = false;
+        let mut solver = FlopSolver::new(FlopResolveConfig {
+            game,
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 4,
+            averaging_delay: 0,
+            value_network: zero_shared_value_network(),
+            threads: 1,
+        })
+        .unwrap();
+        solver.train();
+        let leaves = solver.capture_average_turn_leaves();
+        assert!(leaves.len() > 49);
+        let probability_mass = leaves
+            .iter()
+            .map(|leaf| leaf.reach_probability)
+            .sum::<f64>();
+        assert!(probability_mass > 0.0 && probability_mass <= 1.0 + 1e-9);
+        for leaf in &leaves {
+            assert_eq!(leaf.root_board, board);
+            assert!(leaf.reach_probability.is_finite() && leaf.reach_probability > 0.0);
+            for player in 0..2 {
+                assert!((leaf.ranges[player].iter().sum::<f64>() - 1.0).abs() < 1e-9);
+                for combo in all_combos() {
+                    if combo.cards().iter().any(|card| leaf.board.contains(card)) {
+                        assert_eq!(leaf.ranges[player][combo.key()], 0.0);
+                    }
+                }
+            }
+        }
+        let first = sample_resolver_turn_leaves(&leaves, 3, 91).unwrap();
+        let repeated = sample_resolver_turn_leaves(&leaves, 3, 91).unwrap();
+        assert_eq!(
+            first.iter().map(|leaf| leaf.board).collect::<Vec<_>>(),
+            repeated.iter().map(|leaf| leaf.board).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            first
+                .iter()
+                .map(|leaf| &leaf.public_history)
+                .collect::<Vec<_>>(),
+            repeated
+                .iter()
+                .map(|leaf| &leaf.public_history)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            first
+                .iter()
+                .map(|leaf| leaf.board)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3
+        );
+        let canonical = canonicalize_resolver_turn_leaf(leaves[0].clone()).unwrap();
+        assert_eq!(
+            canonical.reach_probability,
+            (leaves[0].reach_probability * RESOLVER_REACH_CANONICAL_SCALE).round()
+                / RESOLVER_REACH_CANONICAL_SCALE
+        );
+        for player in 0..2 {
+            for weight in &canonical.ranges[player] {
+                assert_eq!(*weight, (*weight as f32) as f64);
+            }
+        }
+        let mut perturbed = canonical.clone();
+        perturbed.reach_probability += 1e-12;
+        let weight = perturbed.ranges[0]
+            .iter_mut()
+            .find(|weight| **weight > 1e-6)
+            .unwrap();
+        *weight += 1e-16;
+        let perturbed = canonicalize_resolver_turn_leaf(perturbed).unwrap();
+        assert_eq!(canonical.reach_probability, perturbed.reach_probability);
+        assert_eq!(canonical.ranges, perturbed.ranges);
     }
 
     #[test]
