@@ -9,14 +9,21 @@
 use super::neural::FrozenPolicy;
 use super::*;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
+const SHARED_CONTEXT_PUBLIC_COUNT: usize = 21;
+const SHARED_CONTEXT_COUNT: usize = 359;
+const SHARED_QUERY_STRUCTURAL_COUNT: usize = 76;
+const SHARED_QUERY_COUNT: usize = 95;
+const HAND_CLASS_COUNT: usize = 169;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PublicBeliefState {
@@ -226,11 +233,32 @@ pub struct PublicValueNetwork {
     target_scale_bb: f64,
     range_scale: f64,
     #[serde(default)]
+    residual_scale_bb: f64,
+    #[serde(default)]
     source_dataset_sha256: Option<String>,
     #[serde(default)]
+    source_policy_sha256: Option<String>,
+    #[serde(default)]
     source_validation_status: Option<String>,
+    #[serde(default)]
+    feature_schema: Option<String>,
+    #[serde(default)]
+    context_public_count: usize,
+    #[serde(default)]
+    context_size: usize,
+    #[serde(default)]
+    query_structural_count: usize,
+    #[serde(default)]
+    query_size: usize,
+    #[serde(default)]
     public_tower: Vec<ValueNetworkLayer>,
+    #[serde(default)]
     range_tower: Vec<ValueNetworkLayer>,
+    #[serde(default)]
+    context_tower: Vec<ValueNetworkLayer>,
+    #[serde(default)]
+    query_tower: Vec<ValueNetworkLayer>,
+    #[serde(default)]
     head: Vec<ValueNetworkLayer>,
 }
 
@@ -242,42 +270,84 @@ impl PublicValueNetwork {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.schema != "hu-public-belief-value-network-v2"
-            || !self.target_scale_bb.is_finite()
+        if !self.target_scale_bb.is_finite()
             || self.target_scale_bb <= 0.0
             || !self.range_scale.is_finite()
             || self.range_scale <= 0.0
-            || self.public_tower.is_empty()
-            || self.range_tower.is_empty()
             || self.head.is_empty()
         {
             return Err("public value network header is incompatible".to_owned());
         }
-        let mut public_size = 56;
-        for layer in &self.public_tower {
-            public_size = layer.validate(public_size)?;
-        }
-        let mut range_size = COMBO_COUNT * 2;
-        for layer in &self.range_tower {
-            range_size = layer.validate(range_size)?;
-        }
-        let mut head_size = public_size + range_size;
-        for layer in &self.head {
-            head_size = layer.validate(head_size)?;
-        }
-        if head_size != COMBO_COUNT * 2 {
-            return Err("public value network must output two exact-combo CFV vectors".to_owned());
+        match self.schema.as_str() {
+            "hu-public-belief-value-network-v2" => {
+                if self.public_tower.is_empty() || self.range_tower.is_empty() {
+                    return Err("legacy public value network towers are missing".to_owned());
+                }
+                let mut public_size = 56;
+                for layer in &self.public_tower {
+                    public_size = layer.validate(public_size)?;
+                }
+                let mut range_size = COMBO_COUNT * 2;
+                for layer in &self.range_tower {
+                    range_size = layer.validate(range_size)?;
+                }
+                let mut head_size = public_size + range_size;
+                for layer in &self.head {
+                    head_size = layer.validate(head_size)?;
+                }
+                if head_size != COMBO_COUNT * 2 {
+                    return Err(
+                        "legacy public value network must output two exact-combo CFV vectors"
+                            .to_owned(),
+                    );
+                }
+            }
+            "hu-public-belief-combo-value-network-v3" => {
+                if self.feature_schema.as_deref() != Some("rank-suit-invariant-combo-query-v1")
+                    || self.context_public_count != SHARED_CONTEXT_PUBLIC_COUNT
+                    || self.context_size != SHARED_CONTEXT_COUNT
+                    || self.query_structural_count != SHARED_QUERY_STRUCTURAL_COUNT
+                    || self.query_size != SHARED_QUERY_COUNT
+                    || !self.residual_scale_bb.is_finite()
+                    || self.residual_scale_bb <= 0.0
+                    || self.context_tower.is_empty()
+                    || self.query_tower.is_empty()
+                {
+                    return Err(
+                        "shared-combo public value network schema is incompatible".to_owned()
+                    );
+                }
+                let mut context_size = SHARED_CONTEXT_COUNT;
+                for layer in &self.context_tower {
+                    context_size = layer.validate(context_size)?;
+                }
+                let mut query_size = SHARED_QUERY_COUNT;
+                for layer in &self.query_tower {
+                    query_size = layer.validate(query_size)?;
+                }
+                let mut head_size = context_size + query_size;
+                for layer in &self.head {
+                    head_size = layer.validate(head_size)?;
+                }
+                if head_size != 1 {
+                    return Err("shared-combo public value network must output one CFV".to_owned());
+                }
+            }
+            _ => return Err("public value network schema is incompatible".to_owned()),
         }
         Ok(())
     }
 
-    fn predict(
+    pub fn predict(
         &self,
         board: &[u8],
         actor: usize,
         invested: [f64; 2],
         ranges: &[Vec<f64>; 2],
     ) -> [Vec<f64>; 2] {
+        if self.schema == "hu-public-belief-combo-value-network-v3" {
+            return self.predict_shared_combo(board, actor, invested, ranges);
+        }
         let mut range_features = ranges
             .iter()
             .flatten()
@@ -326,6 +396,457 @@ impl PublicValueNetwork {
                 .collect()
         })
     }
+
+    fn predict_shared_combo(
+        &self,
+        board: &[u8],
+        actor: usize,
+        invested: [f64; 2],
+        ranges: &[Vec<f64>; 2],
+    ) -> [Vec<f64>; 2] {
+        let conflicts = combo_conflicts();
+        let (mut contexts, mut queries) = shared_combo_features(
+            board,
+            actor,
+            invested,
+            ranges,
+            &conflicts,
+            self.target_scale_bb,
+        );
+        if !self.uses_exact_ranges {
+            for context in &mut contexts {
+                context[SHARED_CONTEXT_PUBLIC_COUNT..].fill(0.0);
+            }
+            for player_queries in &mut queries {
+                for query in player_queries {
+                    query[SHARED_QUERY_STRUCTURAL_COUNT..].fill(0.0);
+                }
+            }
+        }
+        let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            let context_embedding = self
+                .context_tower
+                .iter()
+                .fold(contexts[player].clone(), |values, layer| {
+                    layer.forward(&values)
+                });
+            queries[player]
+                .iter()
+                .enumerate()
+                .map(|(combo, query)| {
+                    if ranges[player][combo] <= 0.0 {
+                        return 0.0;
+                    }
+                    let query_embedding = self
+                        .query_tower
+                        .iter()
+                        .fold(query.clone(), |values, layer| layer.forward(&values));
+                    let mut combined = context_embedding.clone();
+                    combined.extend(query_embedding);
+                    let output = self
+                        .head
+                        .iter()
+                        .fold(combined, |values, layer| layer.forward(&values));
+                    let equity = if self.uses_exact_ranges {
+                        query[94] as f64
+                    } else {
+                        query[65] as f64
+                    };
+                    let opponent = 1 - player;
+                    let baseline = equity * invested[opponent] - (1.0 - equity) * invested[player];
+                    baseline + output[0] as f64 * self.residual_scale_bb
+                })
+                .collect()
+        });
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
+                .collect()
+        });
+        let joint_mass = ranges[0]
+            .iter()
+            .zip(&masses[0])
+            .map(|(reach, mass)| reach * mass)
+            .sum::<f64>()
+            .max(EPSILON);
+        let aggregate = |player: usize| {
+            ranges[player]
+                .iter()
+                .zip(&result[player])
+                .zip(&masses[player])
+                .map(|((reach, value), mass)| reach * value * mass)
+                .sum::<f64>()
+                / joint_mass
+        };
+        let residual = aggregate(0) + aggregate(1);
+        for player in 0..2 {
+            for (combo, value) in result[player].iter_mut().enumerate() {
+                if ranges[player][combo] > 0.0 {
+                    *value -= residual / 2.0;
+                }
+            }
+        }
+        result
+    }
+}
+
+type SharedContexts = [Vec<f32>; 2];
+type SharedQueries = [Vec<Vec<f32>>; 2];
+
+#[derive(Debug)]
+struct BoardQueryFeatures {
+    context: [f32; 17],
+    strengths: Vec<u32>,
+    queries: Vec<Vec<f32>>,
+}
+
+fn board_query_features(board: &[u8]) -> Arc<BoardQueryFeatures> {
+    static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, Arc<BoardQueryFeatures>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(features) = cache
+        .lock()
+        .expect("board feature cache")
+        .get(board)
+        .cloned()
+    {
+        return features;
+    }
+    let combos = all_combos();
+    let mut context = [0.0f32; 17];
+    let mut suit_counts = [0.0f32; 4];
+    for card in board {
+        context[(card >> 2) as usize] += 0.25;
+        suit_counts[(card & 3) as usize] += 0.25;
+    }
+    suit_counts.sort_by(|left, right| right.total_cmp(left));
+    context[13..].copy_from_slice(&suit_counts);
+    let mut strengths = vec![0u32; COMBO_COUNT];
+    let mut queries = vec![vec![0.0f32; SHARED_QUERY_STRUCTURAL_COUNT]; COMBO_COUNT];
+    let mut river_category_counts = vec![[0u8; 9]; COMBO_COUNT];
+    let mut improvements = vec![0u8; COMBO_COUNT];
+    let blocked = board.iter().copied().collect::<BTreeSet<_>>();
+    for combo in &combos {
+        let [first, second] = combo.cards();
+        if blocked.contains(&first) || blocked.contains(&second) {
+            continue;
+        }
+        let first_rank = first >> 2;
+        let second_rank = second >> 2;
+        let pair = first_rank == second_rank;
+        let (high, low) = if !pair && second_rank > first_rank {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        let high_rank = (high >> 2) as usize;
+        let low_rank = (low >> 2) as usize;
+        let mut first_suit_board = [0.0f32; 13];
+        let mut second_suit_board = [0.0f32; 13];
+        for card in board {
+            let rank = (card >> 2) as usize;
+            first_suit_board[rank] += f32::from((card & 3) == (high & 3));
+            second_suit_board[rank] += f32::from((card & 3) == (low & 3));
+        }
+        let (high_suit_board, low_suit_board) = if pair {
+            (
+                std::array::from_fn(|rank| first_suit_board[rank] + second_suit_board[rank]),
+                std::array::from_fn(|rank| {
+                    (first_suit_board[rank] - second_suit_board[rank]).abs()
+                }),
+            )
+        } else {
+            (first_suit_board, second_suit_board)
+        };
+        let query = &mut queries[combo.key()];
+        query[high_rank] = 1.0;
+        query[13 + low_rank] = 1.0;
+        query[26] = f32::from(pair);
+        query[27] = f32::from((high & 3) == (low & 3));
+        query[28..41].copy_from_slice(&high_suit_board);
+        query[41..54].copy_from_slice(&low_suit_board);
+        query[54] = high_suit_board.iter().sum::<f32>() / 4.0;
+        query[55] = low_suit_board.iter().sum::<f32>() / 4.0;
+        let mut cards = board.to_vec();
+        cards.extend([first, second]);
+        let current = evaluate(&cards);
+        strengths[combo.key()] = current;
+        let current_category = (current >> 24) as usize;
+        query[56 + current_category] = 1.0;
+        let mut rivers = 0u8;
+        for river in 0..52u8 {
+            if blocked.contains(&river) || river == first || river == second {
+                continue;
+            }
+            cards.insert(board.len(), river);
+            let final_category = (evaluate(&cards) >> 24) as usize;
+            cards.remove(board.len());
+            river_category_counts[combo.key()][final_category] += 1;
+            improvements[combo.key()] += u8::from(final_category > current_category);
+            rivers += 1;
+        }
+        debug_assert_eq!(rivers, 46);
+    }
+    let mut strength_counts = BTreeMap::<u32, usize>::new();
+    for strength in strengths.iter().filter(|strength| **strength > 0) {
+        *strength_counts.entry(*strength).or_default() += 1;
+    }
+    let legal_count = strength_counts.values().sum::<usize>() as f32;
+    let mut lower = 0usize;
+    let mut percentile = BTreeMap::new();
+    for (strength, count) in strength_counts {
+        percentile.insert(strength, (lower as f32 + count as f32 / 2.0) / legal_count);
+        lower += count;
+    }
+    for combo in 0..COMBO_COUNT {
+        if strengths[combo] == 0 {
+            continue;
+        }
+        queries[combo][65] = percentile[&strengths[combo]];
+        for category in 0..9 {
+            queries[combo][66 + category] = river_category_counts[combo][category] as f32 / 46.0;
+        }
+        queries[combo][75] = improvements[combo] as f32 / 46.0;
+    }
+    let result = Arc::new(BoardQueryFeatures {
+        context,
+        strengths,
+        queries,
+    });
+    let mut guard = cache.lock().expect("board feature cache");
+    if guard.len() >= 128 {
+        if let Some(oldest) = guard.keys().next().cloned() {
+            guard.remove(&oldest);
+        }
+    }
+    guard.insert(board.to_vec(), result.clone());
+    result
+}
+
+#[allow(clippy::type_complexity)]
+fn shared_combo_features(
+    board: &[u8],
+    actor: usize,
+    invested: [f64; 2],
+    ranges: &[Vec<f64>; 2],
+    conflicts: &[Vec<usize>],
+    depth_bb: f64,
+) -> (SharedContexts, SharedQueries) {
+    let combos = all_combos();
+    let board_features = board_query_features(board);
+    let mut card_mass = [[0.0f64; 52]; 2];
+    let mut rank_mass = [[0.0f64; 13]; 2];
+    let mut suit_mass = [[0.0f64; 4]; 2];
+    let mut class_mass: [Vec<f64>; 2] = std::array::from_fn(|_| vec![0.0; HAND_CLASS_COUNT]);
+    for player in 0..2 {
+        for combo in &combos {
+            let weight = ranges[player][combo.key()];
+            if weight <= 0.0 {
+                continue;
+            }
+            let [first, second] = combo.cards();
+            card_mass[player][first as usize] += weight;
+            card_mass[player][second as usize] += weight;
+            let first_rank = (first >> 2) as usize;
+            let second_rank = (second >> 2) as usize;
+            rank_mass[player][first_rank] += weight;
+            if second_rank != first_rank {
+                rank_mass[player][second_rank] += weight;
+            }
+            let first_suit = (first & 3) as usize;
+            let second_suit = (second & 3) as usize;
+            suit_mass[player][first_suit] += weight;
+            if second_suit != first_suit {
+                suit_mass[player][second_suit] += weight;
+            }
+            class_mass[player][hand_class_index(first, second)] += weight;
+        }
+    }
+    let immediate_equity = [
+        current_range_equity(&board_features.strengths, &ranges[1], conflicts),
+        current_range_equity(&board_features.strengths, &ranges[0], conflicts),
+    ];
+    let mut contexts: SharedContexts = std::array::from_fn(|_| Vec::new());
+    let mut queries: SharedQueries = std::array::from_fn(|_| Vec::with_capacity(COMBO_COUNT));
+    let range_totals = [ranges[0].iter().sum::<f64>(), ranges[1].iter().sum::<f64>()];
+    for player in 0..2 {
+        let opponent = 1 - player;
+        let context = &mut contexts[player];
+        context.extend(board_features.context);
+        context.extend([
+            f32::from(actor == player),
+            f32::from(actor == opponent),
+            (invested[player] / depth_bb) as f32,
+            (invested[opponent] / depth_bb) as f32,
+        ]);
+        context.extend(
+            class_mass[player]
+                .iter()
+                .map(|value| scaled_log_feature(*value, HAND_CLASS_COUNT as f64)),
+        );
+        context.extend(
+            class_mass[opponent]
+                .iter()
+                .map(|value| scaled_log_feature(*value, HAND_CLASS_COUNT as f64)),
+        );
+        debug_assert_eq!(context.len(), SHARED_CONTEXT_COUNT);
+        for combo in &combos {
+            let [first, second] = combo.cards();
+            let first_rank = first >> 2;
+            let second_rank = second >> 2;
+            let pair = first_rank == second_rank;
+            let (high, low) = if !pair && second_rank > first_rank {
+                (second, first)
+            } else {
+                (first, second)
+            };
+            let high_rank = (high >> 2) as usize;
+            let low_rank = (low >> 2) as usize;
+            let mut query = board_features.queries[combo.key()].clone();
+            query.resize(SHARED_QUERY_COUNT, 0.0);
+            let key = combo.key();
+            query[76] = scaled_log_feature(ranges[player][key], COMBO_COUNT as f64);
+            query[77] = scaled_log_feature(ranges[opponent][key], COMBO_COUNT as f64);
+            query[78] = compatible_mass_from_conflicts(&ranges[opponent], conflicts, key) as f32;
+            query[79] = compatible_mass_from_conflicts(&ranges[player], conflicts, key) as f32;
+            let (own_cards, opponent_cards, own_suits, opponent_suits) = if pair {
+                (
+                    [
+                        card_mass[player][high as usize] + card_mass[player][low as usize],
+                        (card_mass[player][high as usize] - card_mass[player][low as usize]).abs(),
+                    ],
+                    [
+                        card_mass[opponent][high as usize] + card_mass[opponent][low as usize],
+                        (card_mass[opponent][high as usize] - card_mass[opponent][low as usize])
+                            .abs(),
+                    ],
+                    [
+                        suit_mass[player][(high & 3) as usize]
+                            + suit_mass[player][(low & 3) as usize],
+                        (suit_mass[player][(high & 3) as usize]
+                            - suit_mass[player][(low & 3) as usize])
+                            .abs(),
+                    ],
+                    [
+                        suit_mass[opponent][(high & 3) as usize]
+                            + suit_mass[opponent][(low & 3) as usize],
+                        (suit_mass[opponent][(high & 3) as usize]
+                            - suit_mass[opponent][(low & 3) as usize])
+                            .abs(),
+                    ],
+                )
+            } else {
+                (
+                    [
+                        card_mass[player][high as usize],
+                        card_mass[player][low as usize],
+                    ],
+                    [
+                        card_mass[opponent][high as usize],
+                        card_mass[opponent][low as usize],
+                    ],
+                    [
+                        suit_mass[player][(high & 3) as usize],
+                        suit_mass[player][(low & 3) as usize],
+                    ],
+                    [
+                        suit_mass[opponent][(high & 3) as usize],
+                        suit_mass[opponent][(low & 3) as usize],
+                    ],
+                )
+            };
+            for (offset, value) in own_cards.into_iter().chain(opponent_cards).enumerate() {
+                query[80 + offset] = scaled_log_feature(value, 26.0);
+            }
+            for (offset, value) in [
+                rank_mass[player][high_rank],
+                rank_mass[player][low_rank],
+                rank_mass[opponent][high_rank],
+                rank_mass[opponent][low_rank],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                query[84 + offset] = scaled_log_feature(value, 6.5);
+            }
+            for (offset, value) in own_suits.into_iter().chain(opponent_suits).enumerate() {
+                query[88 + offset] = scaled_log_feature(value, 2.0);
+            }
+            query[92] = range_totals[player] as f32;
+            query[93] = range_totals[opponent] as f32;
+            query[94] = immediate_equity[player][key];
+            queries[player].push(query);
+        }
+    }
+    (contexts, queries)
+}
+
+fn current_range_equity(
+    strengths: &[u32],
+    opponent_range: &[f64],
+    conflicts: &[Vec<usize>],
+) -> Vec<f32> {
+    let unique = strengths
+        .iter()
+        .copied()
+        .filter(|strength| *strength > 0)
+        .collect::<BTreeSet<_>>();
+    let ranks = unique
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, strength)| (strength, rank))
+        .collect::<BTreeMap<_, _>>();
+    let mut group_mass = vec![0.0f64; unique.len()];
+    for (strength, weight) in strengths.iter().zip(opponent_range) {
+        if let Some(rank) = ranks.get(strength) {
+            group_mass[*rank] += *weight;
+        }
+    }
+    let mut lower_by_rank = vec![0.0f64; unique.len()];
+    let mut running = 0.0;
+    for (rank, mass) in group_mass.iter().enumerate() {
+        lower_by_rank[rank] = running;
+        running += *mass;
+    }
+    (0..COMBO_COUNT)
+        .map(|own| {
+            let Some(rank) = ranks.get(&strengths[own]).copied() else {
+                return 0.0;
+            };
+            let mut lower = lower_by_rank[rank];
+            let mut equal = group_mass[rank];
+            for opponent in &conflicts[own] {
+                let weight = opponent_range[*opponent];
+                match strengths[*opponent].cmp(&strengths[own]) {
+                    std::cmp::Ordering::Less => lower -= weight,
+                    std::cmp::Ordering::Equal => equal -= weight,
+                    std::cmp::Ordering::Greater => {}
+                }
+            }
+            let compatible = compatible_mass_from_conflicts(opponent_range, conflicts, own);
+            if compatible > EPSILON {
+                ((lower.max(0.0) + equal.max(0.0) / 2.0) / compatible) as f32
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+fn hand_class_index(first: u8, second: u8) -> usize {
+    let first_rank = (first >> 2) as usize;
+    let second_rank = (second >> 2) as usize;
+    if first_rank == second_rank {
+        return first_rank;
+    }
+    let high = first_rank.max(second_rank);
+    let low = first_rank.min(second_rank);
+    let unordered_index = high * (high - 1) / 2 + low;
+    13 + unordered_index * 2 + usize::from((first & 3) == (second & 3))
+}
+
+fn scaled_log_feature(value: f64, scale: f64) -> f32 {
+    (value.max(0.0).mul_add(scale, 1.0).ln() / scale.ln_1p()) as f32
 }
 
 #[derive(Clone, Debug)]
@@ -335,6 +856,7 @@ pub struct FlopResolveConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
     pub value_network: PublicValueNetwork,
+    pub threads: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -360,6 +882,8 @@ pub struct FlopSolution {
     pub value_network_seed: u64,
     pub uses_exact_ranges: bool,
     pub value_network_source_dataset_sha256: Option<String>,
+    #[serde(default)]
+    pub value_network_source_policy_sha256: Option<String>,
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub strategies: Vec<PublicBeliefStrategy>,
@@ -372,7 +896,7 @@ pub struct FlopSolution {
 struct FlopSolver {
     config: FlopResolveConfig,
     legal: [Vec<bool>; 2],
-    conflicts: Vec<Vec<usize>>,
+    conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
     turn_leaf_evaluations: Cell<u64>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
@@ -388,7 +912,10 @@ impl FlopSolver {
                     .to_owned(),
             );
         }
-        if config.iterations < 2 || config.averaging_delay >= config.iterations {
+        if config.iterations < 2
+            || config.averaging_delay >= config.iterations
+            || config.threads == 0
+        {
             return Err(
                 "flop resolving requires alternating iterations and a valid averaging delay"
                     .to_owned(),
@@ -526,74 +1053,55 @@ impl FlopSolver {
         self.turn_leaf_evaluations
             .set(self.turn_leaf_evaluations.get() + 1);
         let mut result = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
-        for turn in 0..52u8 {
-            if self.config.state.board.contains(&turn) {
-                continue;
-            }
-            let mut masked = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
-            let mut totals = [0.0; 2];
-            for player in 0..2 {
-                for combo in all_combos() {
-                    let weight = if combo.cards().contains(&turn) {
-                        0.0
-                    } else {
-                        reaches[player][combo.key()]
-                    };
-                    masked[player][combo.key()] = weight;
-                    totals[player] += weight;
-                }
-                if totals[player] <= EPSILON {
-                    continue;
-                }
-                for weight in &mut masked[player] {
-                    *weight /= totals[player];
-                }
-            }
-            if totals.iter().any(|total| *total <= EPSILON) {
-                continue;
-            }
-            let mut board = self.config.state.board.clone();
-            board.push(turn);
-            let mut predicted =
-                self.config
-                    .value_network
-                    .predict(&board, state.actor, state.invested, &masked);
-            let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
-                (0..COMBO_COUNT)
-                    .map(|combo| {
-                        compatible_mass_from_conflicts(&masked[1 - player], &self.conflicts, combo)
-                    })
-                    .collect()
-            });
-            let joint = joint_compatibility_mass(&masked);
-            let aggregate = |player: usize| {
-                masked[player]
+        let turns = (0..52u8)
+            .filter(|turn| !self.config.state.board.contains(turn))
+            .collect::<Vec<_>>();
+        let worker_count = self.config.threads.min(turns.len()).max(1);
+        let solved = std::thread::scope(|scope| {
+            let mut workers = Vec::with_capacity(worker_count);
+            for worker in 0..worker_count {
+                let assigned = turns
                     .iter()
-                    .zip(&predicted[player])
-                    .zip(&masses[player])
-                    .map(|((reach, value), mass)| reach * value * mass)
-                    .sum::<f64>()
-                    / joint.max(EPSILON)
-            };
-            let residual = aggregate(0) + aggregate(1);
-            self.maximum_leaf_zero_sum_residual.set(
-                self.maximum_leaf_zero_sum_residual
-                    .get()
-                    .max(residual.abs()),
-            );
-            for values in &mut predicted {
-                for value in values {
-                    *value -= residual / 2.0;
-                }
+                    .copied()
+                    .skip(worker)
+                    .step_by(worker_count)
+                    .collect::<Vec<_>>();
+                let network = &self.config.value_network;
+                let conflicts = self.conflicts.clone();
+                let board = self.config.state.board.clone();
+                workers.push(scope.spawn(move || {
+                    assigned
+                        .into_iter()
+                        .filter_map(|turn| {
+                            turn_leaf_card_values(
+                                network,
+                                &conflicts,
+                                &board,
+                                state.actor,
+                                state.invested,
+                                reaches,
+                                turn,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }));
             }
+            let mut values = Vec::with_capacity(turns.len());
+            for worker in workers {
+                values.extend(worker.join().expect("turn value worker panicked"));
+            }
+            values
+        });
+        let mut maximum_residual = self.maximum_leaf_zero_sum_residual.get();
+        for (contribution, residual) in solved {
+            maximum_residual = maximum_residual.max(residual);
             for player in 0..2 {
                 for combo in 0..COMBO_COUNT {
-                    result[player][combo] +=
-                        predicted[player][combo] * masses[player][combo] * totals[1 - player]
-                            / 45.0;
+                    result[player][combo] += contribution[player][combo];
                 }
             }
         }
+        self.maximum_leaf_zero_sum_residual.set(maximum_residual);
         result
     }
 
@@ -800,6 +1308,10 @@ impl FlopSolver {
                 .config
                 .value_network
                 .source_dataset_sha256,
+            value_network_source_policy_sha256: self
+                .config
+                .value_network
+                .source_policy_sha256,
             state: self.config.state,
             iterations: self.config.iterations,
             strategies,
@@ -812,6 +1324,68 @@ impl FlopSolver {
             },
         }
     }
+}
+
+fn turn_leaf_card_values(
+    network: &PublicValueNetwork,
+    conflicts: &[Vec<usize>],
+    flop_board: &[u8],
+    actor: usize,
+    invested: [f64; 2],
+    reaches: &[Vec<f64>; 2],
+    turn: u8,
+) -> Option<([Vec<f64>; 2], f64)> {
+    let mut masked = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+    let mut totals = [0.0; 2];
+    for player in 0..2 {
+        for combo in all_combos() {
+            let weight = if combo.cards().contains(&turn) {
+                0.0
+            } else {
+                reaches[player][combo.key()]
+            };
+            masked[player][combo.key()] = weight;
+            totals[player] += weight;
+        }
+        if totals[player] <= EPSILON {
+            return None;
+        }
+        for weight in &mut masked[player] {
+            *weight /= totals[player];
+        }
+    }
+    let mut board = flop_board.to_vec();
+    board.push(turn);
+    let mut predicted = network.predict(&board, actor, invested, &masked);
+    let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+        (0..COMBO_COUNT)
+            .map(|combo| compatible_mass_from_conflicts(&masked[1 - player], conflicts, combo))
+            .collect()
+    });
+    let joint = joint_compatibility_mass(&masked);
+    let aggregate = |player: usize| {
+        masked[player]
+            .iter()
+            .zip(&predicted[player])
+            .zip(&masses[player])
+            .map(|((reach, value), mass)| reach * value * mass)
+            .sum::<f64>()
+            / joint.max(EPSILON)
+    };
+    let residual = aggregate(0) + aggregate(1);
+    for values in &mut predicted {
+        for value in values {
+            *value -= residual / 2.0;
+        }
+    }
+    let contribution = std::array::from_fn(|player| {
+        (0..COMBO_COUNT)
+            .map(|combo| {
+                predicted[player][combo] * masses[player][combo] * totals[1 - player] / 45.0
+            })
+            .collect()
+    });
+    Some((contribution, residual.abs()))
 }
 
 pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
@@ -961,7 +1535,9 @@ struct RiverSolver {
     config: RiverSolveConfig,
     legal: [Vec<bool>; 2],
     strengths: Vec<u32>,
-    conflicts: Vec<Vec<usize>>,
+    strength_ranks: Vec<usize>,
+    strength_group_count: usize,
+    conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
 }
 
@@ -982,7 +1558,7 @@ impl RiverSolver {
                 .map(|weight| *weight > 0.0)
                 .collect()
         });
-        let strengths = combos
+        let strengths: Vec<u32> = combos
             .iter()
             .map(|combo| {
                 let mut cards = state.board.clone();
@@ -990,20 +1566,25 @@ impl RiverSolver {
                 evaluate(&cards)
             })
             .collect();
-        let conflicts = combos
+        let strength_groups = strengths.iter().copied().collect::<BTreeSet<_>>();
+        let strength_to_rank = strength_groups
             .iter()
-            .map(|own| {
-                combos
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, other)| own.overlaps(*other).then_some(index))
-                    .collect()
-            })
+            .copied()
+            .enumerate()
+            .map(|(rank, strength)| (strength, rank))
+            .collect::<BTreeMap<_, _>>();
+        let strength_ranks = strengths
+            .iter()
+            .map(|strength| strength_to_rank[strength])
             .collect();
+        let strength_group_count = strength_groups.len();
+        let conflicts = combo_conflicts();
         Ok(Self {
             config: RiverSolveConfig { state, ..config },
             legal,
             strengths,
+            strength_ranks,
+            strength_group_count,
             conflicts,
             nodes: BTreeMap::new(),
         })
@@ -1145,22 +1726,23 @@ impl RiverSolver {
         loss: f64,
         tie: f64,
     ) -> Vec<f64> {
-        let mut by_strength = BTreeMap::<u32, f64>::new();
-        for (strength, weight) in self.strengths.iter().zip(opponent_reach) {
-            *by_strength.entry(*strength).or_default() += *weight;
+        let mut by_strength = vec![0.0; self.strength_group_count];
+        for (rank, weight) in self.strength_ranks.iter().zip(opponent_reach) {
+            by_strength[*rank] += *weight;
         }
-        let mut lower_by_strength = BTreeMap::new();
+        let mut lower_by_strength = vec![0.0; self.strength_group_count];
         let mut running = 0.0;
-        for (strength, weight) in &by_strength {
-            lower_by_strength.insert(*strength, running);
-            running += weight;
+        for (rank, weight) in by_strength.iter().enumerate() {
+            lower_by_strength[rank] = running;
+            running += *weight;
         }
         let total = running;
         let mut values = vec![0.0; COMBO_COUNT];
         for own in 0..COMBO_COUNT {
             let strength = self.strengths[own];
-            let mut lower = *lower_by_strength.get(&strength).unwrap_or(&0.0);
-            let mut equal = *by_strength.get(&strength).unwrap_or(&0.0);
+            let rank = self.strength_ranks[own];
+            let mut lower = lower_by_strength[rank];
+            let mut equal = by_strength[rank];
             let mut higher = total - lower - equal;
             for opponent in &self.conflicts[own] {
                 let weight = opponent_reach[*opponent];
@@ -1392,7 +1974,15 @@ pub struct TurnValueTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range_particles: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_replicates: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range_effective_sample_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub belief_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_maximum_total_variation: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1404,6 +1994,8 @@ pub struct TurnTargetDataset {
     pub seed: u64,
     pub river_iterations: u64,
     pub state_distribution: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_policy_sha256: Option<String>,
     pub targets: Vec<TurnValueTarget>,
     pub validation: BlueprintValidation,
 }
@@ -1483,6 +2075,7 @@ pub fn generate_turn_targets(
         seed: config.seed,
         river_iterations: config.river_iterations,
         state_distribution: "synthetic_reachable_like_pilot".to_owned(),
+        source_policy_sha256: None,
         targets,
         validation: BlueprintValidation {
             status: "rejected".to_owned(),
@@ -1643,7 +2236,11 @@ fn turn_target_from_exact_rivers(
         maximum_river_exploitability_bb_per_hand: maximum_river_exploitability,
         zero_sum_residual_bb: zero_sum_residual,
         range_particles: None,
+        range_replicates: None,
         range_effective_sample_size: None,
+        belief_method: None,
+        range_maximum_total_variation: None,
+        input_sha256: None,
     })
 }
 
@@ -1657,15 +2254,26 @@ pub struct SelfPlayTurnTargetConfig {
     pub seed: u64,
     pub threads: usize,
     pub network_path: PathBuf,
+    pub belief_replicates: u32,
+    pub checkpoint_dir: Option<PathBuf>,
 }
 
 pub fn generate_self_play_turn_targets(
     config: SelfPlayTurnTargetConfig,
 ) -> Result<TurnTargetDataset, Box<dyn Error>> {
     config.game.validate()?;
-    if config.states == 0 || config.range_particles < 2 || config.threads == 0 {
+    if config.states == 0
+        || config.range_particles < 2
+        || config.belief_replicates < 2
+        || config.threads == 0
+    {
         return Err("self-play targets require states, range particles, and threads".into());
     }
+    if let Some(directory) = &config.checkpoint_dir {
+        fs::create_dir_all(directory)?;
+    }
+    let policy_bytes = fs::read(&config.network_path)?;
+    let source_policy_sha256 = format!("{:x}", Sha256::digest(&policy_bytes));
     let policy = FrozenPolicy::load(&config.network_path)?;
     let mut chance = SplitMix64::new(config.seed);
     let mut targets = Vec::with_capacity(config.states);
@@ -1687,30 +2295,125 @@ pub fn generate_self_play_turn_targets(
             true_deal.board[2],
             true_deal.board[3],
         ];
-        let (ranges, effective_sample_size) = particle_belief_for_line(
+        let ranges = exact_reach_factors_for_line(
             &policy,
             &config.game,
             board,
             &action_line,
-            config.range_particles,
-            &mut chance,
-        );
-        if effective_sample_size < 2.0 {
-            continue;
+            config.threads,
+        )?;
+        let mut minimum_ess = f64::INFINITY;
+        let mut maximum_total_variation = 0.0f64;
+        let mut particle_replicates = Vec::with_capacity(config.belief_replicates as usize);
+        for replicate in 0..config.belief_replicates {
+            let mut particle_rng = SplitMix64::new(
+                config.seed
+                    ^ 0xB311_EF00_0000_0000
+                    ^ (targets.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ replicate as u64,
+            );
+            let (estimate, effective_sample_size) = particle_reach_factors_from_exact(
+                &ranges,
+                board,
+                config.range_particles,
+                &mut particle_rng,
+            )?;
+            minimum_ess = minimum_ess.min(effective_sample_size);
+            maximum_total_variation =
+                maximum_total_variation.max(maximum_range_total_variation(&ranges, &estimate));
+            for previous in &particle_replicates {
+                maximum_total_variation =
+                    maximum_total_variation.max(maximum_range_total_variation(previous, &estimate));
+            }
+            particle_replicates.push(estimate);
         }
-        let mut target = turn_target_from_exact_rivers(
+        let state_index = targets.len();
+        let fingerprint = turn_target_input_sha256(
             &config.game,
             board,
             turn_state.actor,
             turn_state.invested,
-            ranges,
+            &ranges,
             config.river_iterations,
             config.river_averaging_delay,
-            config.threads,
-            targets.len(),
         )?;
-        target.range_particles = Some(config.range_particles);
-        target.range_effective_sample_size = Some(effective_sample_size);
+        let checkpoint_path = config
+            .checkpoint_dir
+            .as_ref()
+            .map(|directory| directory.join(format!("turn-{state_index:06}-{fingerprint}.json")));
+        let mut target = if let Some(path) = &checkpoint_path {
+            if path.exists() {
+                let cached: TurnValueTarget = serde_json::from_slice(&fs::read(&path)?)?;
+                if cached.input_sha256.as_deref() != Some(fingerprint.as_str()) {
+                    return Err(format!(
+                        "checkpoint {} has the wrong input fingerprint",
+                        path.display()
+                    )
+                    .into());
+                }
+                cached
+            } else {
+                let mut solved = turn_target_from_exact_rivers(
+                    &config.game,
+                    board,
+                    turn_state.actor,
+                    turn_state.invested,
+                    ranges.clone(),
+                    config.river_iterations,
+                    config.river_averaging_delay,
+                    config.threads,
+                    state_index,
+                )?;
+                solved.input_sha256 = Some(fingerprint.clone());
+                solved
+            }
+        } else {
+            turn_target_from_exact_rivers(
+                &config.game,
+                board,
+                turn_state.actor,
+                turn_state.invested,
+                ranges,
+                config.river_iterations,
+                config.river_averaging_delay,
+                config.threads,
+                state_index,
+            )?
+        };
+        let belief_method =
+            "exact_per-player_reach_factors_with_independent_stratified_resampling_replicates";
+        if let Some(path) = &checkpoint_path {
+            let diagnostics_match = target.range_particles == Some(config.range_particles)
+                && target.range_replicates == Some(config.belief_replicates)
+                && target.belief_method.as_deref() == Some(belief_method)
+                && target
+                    .range_effective_sample_size
+                    .is_some_and(|stored| (stored - minimum_ess).abs() <= 1e-9)
+                && target
+                    .range_maximum_total_variation
+                    .is_some_and(|stored| (stored - maximum_total_variation).abs() <= 1e-12);
+            if !diagnostics_match {
+                target.range_particles = Some(config.range_particles);
+                target.range_replicates = Some(config.belief_replicates);
+                target.range_effective_sample_size = Some(minimum_ess);
+                target.belief_method = Some(belief_method.to_owned());
+                target.range_maximum_total_variation = Some(maximum_total_variation);
+                target.input_sha256 = Some(fingerprint);
+                write_target_checkpoint(path, &target)?;
+                // Normalize a freshly solved or upgraded checkpoint once at
+                // the persistence boundary. Stable cached checkpoints are
+                // deliberately not rewritten: repeated parse/serialize
+                // cycles can move diagnostic f64 values by one ULP.
+                target = serde_json::from_slice(&fs::read(path)?)?;
+            }
+        } else {
+            target.range_particles = Some(config.range_particles);
+            target.range_replicates = Some(config.belief_replicates);
+            target.range_effective_sample_size = Some(minimum_ess);
+            target.belief_method = Some(belief_method.to_owned());
+            target.range_maximum_total_variation = Some(maximum_total_variation);
+            target.input_sha256 = Some(fingerprint);
+        }
         targets.push(target);
     }
     let maximum_river_exploitability = targets
@@ -1722,10 +2425,36 @@ pub fn generate_self_play_turn_targets(
         .filter_map(|target| target.range_effective_sample_size)
         .fold(f64::INFINITY, f64::min);
     let mut reasons = Vec::new();
-    if config.range_particles < 100_000 {
+    let maximum_range_total_variation = targets
+        .iter()
+        .filter_map(|target| target.range_maximum_total_variation)
+        .fold(0.0f64, f64::max);
+    let distinct_turn_boards = targets
+        .iter()
+        .map(|target| target.board)
+        .collect::<BTreeSet<_>>()
+        .len();
+    if config.states < 64 {
         reasons.push(format!(
-            "self-play beliefs use {} importance particles; release requires 100000 plus independent replicate agreement",
+            "authentic public-belief pilot has {} states; release requires at least 64 before model gating",
+            config.states
+        ));
+    }
+    if config.range_particles < 4_096 {
+        reasons.push(format!(
+            "belief validation uses {} particles per replicate; the pilot gate requires 4096",
             config.range_particles
+        ));
+    }
+    if distinct_turn_boards * 100 < config.states * 95 {
+        reasons.push(format!(
+            "only {distinct_turn_boards} of {} target states have distinct turn boards; the pilot requires at least 95%",
+            config.states
+        ));
+    }
+    if maximum_range_total_variation > 0.15 {
+        reasons.push(format!(
+            "maximum exact-vs-particle or cross-replicate exact-combo range total variation {maximum_range_total_variation:.6} exceeds the stratified 4096-particle pilot bound 0.15"
         ));
     }
     if maximum_river_exploitability > 0.05 {
@@ -1740,13 +2469,14 @@ pub fn generate_self_play_turn_targets(
     }
     Ok(TurnTargetDataset {
         schema: "hu-turn-public-belief-cfv-dataset-v1".to_owned(),
-        method: "frozen_policy_self_play_public_states_with_importance_particle_exact_combo_beliefs_and_exact_river_enumeration"
+        method: "frozen_policy_self_play_public_states_with_exact_per-player_reach_factors_particle_replicate_validation_and_exact_river_enumeration"
             .to_owned(),
         approximate: true,
         game: config.game,
         seed: config.seed,
         river_iterations: config.river_iterations,
-        state_distribution: "frozen_v26_self_play_importance_particle_public_beliefs".to_owned(),
+        state_distribution: "frozen_v26_self_play_exact_reach_factor_public_beliefs".to_owned(),
+        source_policy_sha256: Some(source_policy_sha256),
         targets,
         validation: BlueprintValidation {
             status: if reasons.is_empty() { "accepted" } else { "rejected" }.to_owned(),
@@ -1773,68 +2503,197 @@ fn sample_turn_line(
     (state.street == Street::Turn && state.terminal.is_none()).then_some((state, line))
 }
 
-fn particle_belief_for_line(
+fn exact_reach_factors_for_line(
     policy: &FrozenPolicy,
     game: &BlueprintConfig,
     board: [u8; 4],
     line: &[String],
-    particles: u64,
-    rng: &mut SplitMix64,
-) -> ([Vec<f64>; 2], f64) {
+    threads: usize,
+) -> Result<[Vec<f64>; 2], String> {
     let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
-    let mut sum = 0.0;
-    let mut squared_sum = 0.0;
-    for _ in 0..particles {
-        let deal = sample_deal_conditioned_on_board4(board, rng);
-        let mut state = GameState::initial(game);
-        let mut likelihood = 1.0;
-        for selected_label in line {
-            let actions = state.legal_actions(game);
-            let Some(selected) = actions
+    let legal = all_combos()
+        .into_iter()
+        .filter(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+        .collect::<Vec<_>>();
+    let worker_count = threads.min(legal.len()).max(1);
+    let solved = std::thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for worker in 0..worker_count {
+            let assigned = legal
                 .iter()
-                .position(|action| &action.label == selected_label)
-            else {
-                likelihood = 0.0;
-                break;
-            };
-            let strategy = policy.strategy(&state, &deal, &actions, game);
-            likelihood *= strategy[selected];
-            state = state.apply(&actions[selected], game);
+                .copied()
+                .skip(worker)
+                .step_by(worker_count)
+                .collect::<Vec<_>>();
+            workers.push(scope.spawn(move || {
+                assigned
+                    .into_iter()
+                    .map(|combo| {
+                        Ok((
+                            combo.key(),
+                            [
+                                reach_likelihood_for_combo(policy, game, board, line, 0, combo)?,
+                                reach_likelihood_for_combo(policy, game, board, line, 1, combo)?,
+                            ],
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            }));
         }
-        if likelihood <= 0.0 || !likelihood.is_finite() {
-            continue;
+        let mut result = Vec::with_capacity(legal.len());
+        for worker in workers {
+            result.extend(
+                worker
+                    .join()
+                    .map_err(|_| "exact reach-factor worker panicked".to_owned())??,
+            );
         }
-        sum += likelihood;
-        squared_sum += likelihood * likelihood;
+        Ok::<_, String>(result)
+    })?;
+    for (combo, likelihoods) in solved {
         for player in 0..2 {
-            ranges[player][Combo::new(deal.holes[player][0], deal.holes[player][1]).key()] +=
-                likelihood;
+            ranges[player][combo] = likelihoods[player];
         }
     }
-    for range in &mut ranges {
-        let total = range.iter().sum::<f64>();
-        if total > EPSILON {
-            for weight in range {
-                *weight /= total;
-            }
+    for player in 0..2 {
+        let total = ranges[player].iter().sum::<f64>();
+        if total <= EPSILON {
+            return Err(format!(
+                "self-play line has zero exact reach for player {player}"
+            ));
+        }
+        for weight in &mut ranges[player] {
+            *weight /= total;
         }
     }
-    let effective_sample_size = sum * sum / squared_sum.max(EPSILON);
-    (ranges, effective_sample_size)
+    Ok(ranges)
 }
 
-fn sample_deal_conditioned_on_board4(board: [u8; 4], rng: &mut SplitMix64) -> Deal {
-    let mut available = (0..52u8)
-        .filter(|card| !board.contains(card))
+fn particle_reach_factors_from_exact(
+    exact: &[Vec<f64>; 2],
+    board: [u8; 4],
+    particles: u64,
+    rng: &mut SplitMix64,
+) -> Result<([Vec<f64>; 2], f64), String> {
+    let legal = all_combos()
+        .into_iter()
+        .filter(|combo| !combo.cards().iter().any(|card| board.contains(card)))
         .collect::<Vec<_>>();
-    for index in 0..5 {
-        let swap = index + rng.index(available.len() - index);
-        available.swap(index, swap);
+    let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+    let mut minimum_effective_sample_size = f64::INFINITY;
+    for player in 0..2 {
+        let mut sum = 0.0;
+        let mut squared_sum = 0.0;
+        let offset = rng.index(legal.len());
+        for sample in 0..particles {
+            // Randomly rotated stratification covers every legal exact combo
+            // before repeating one. This preserves the uniform proposal while
+            // avoiding multinomial coverage noise in the replicate diagnostic.
+            let combo = legal[(offset + sample as usize) % legal.len()];
+            let likelihood = exact[player][combo.key()];
+            if likelihood <= 0.0 || !likelihood.is_finite() {
+                continue;
+            }
+            ranges[player][combo.key()] += likelihood;
+            sum += likelihood;
+            squared_sum += likelihood * likelihood;
+        }
+        if sum <= EPSILON {
+            return Err(format!(
+                "particle replicate has zero reach for player {player}"
+            ));
+        }
+        for weight in &mut ranges[player] {
+            *weight /= sum;
+        }
+        minimum_effective_sample_size =
+            minimum_effective_sample_size.min(sum * sum / squared_sum.max(EPSILON));
     }
+    Ok((ranges, minimum_effective_sample_size))
+}
+
+fn reach_likelihood_for_combo(
+    policy: &FrozenPolicy,
+    game: &BlueprintConfig,
+    board: [u8; 4],
+    line: &[String],
+    player: usize,
+    combo: Combo,
+) -> Result<f64, String> {
+    let deal = deal_with_private_combo(board, player, combo);
+    let mut state = GameState::initial(game);
+    let mut likelihood = 1.0;
+    for selected_label in line {
+        let actions = state.legal_actions(game);
+        let selected = actions
+            .iter()
+            .position(|action| &action.label == selected_label)
+            .ok_or_else(|| format!("self-play line contains illegal action {selected_label}"))?;
+        if state.actor == player {
+            let strategy = policy.strategy(&state, &deal, &actions, game);
+            likelihood *= strategy[selected];
+        }
+        state = state.apply(&actions[selected], game);
+    }
+    Ok(likelihood)
+}
+
+fn deal_with_private_combo(board: [u8; 4], player: usize, combo: Combo) -> Deal {
+    let private = combo.cards();
+    let available = (0..52u8)
+        .filter(|card| !board.contains(card) && !private.contains(card))
+        .take(3)
+        .collect::<Vec<_>>();
+    debug_assert_eq!(available.len(), 3);
+    let mut holes = [[0u8; 2]; 2];
+    holes[player] = private;
+    holes[1 - player] = [available[0], available[1]];
     Deal::from_sampled_cards(
-        [[available[0], available[1]], [available[2], available[3]]],
-        [board[0], board[1], board[2], board[3], available[4]],
+        holes,
+        [board[0], board[1], board[2], board[3], available[2]],
     )
+}
+
+fn maximum_range_total_variation(first: &[Vec<f64>; 2], second: &[Vec<f64>; 2]) -> f64 {
+    (0..2)
+        .map(|player| {
+            first[player]
+                .iter()
+                .zip(&second[player])
+                .map(|(left, right)| (left - right).abs())
+                .sum::<f64>()
+                / 2.0
+        })
+        .fold(0.0f64, f64::max)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn turn_target_input_sha256(
+    game: &BlueprintConfig,
+    board: [u8; 4],
+    actor: usize,
+    invested: [f64; 2],
+    ranges: &[Vec<f64>; 2],
+    river_iterations: u64,
+    river_averaging_delay: u64,
+) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "game": game,
+        "board": board,
+        "actor": actor,
+        "investedBb": invested,
+        "ranges": ranges,
+        "riverIterations": river_iterations,
+        "riverAveragingDelay": river_averaging_delay,
+    }))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn write_target_checkpoint(path: &Path, target: &TurnValueTarget) -> Result<(), Box<dyn Error>> {
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec(target)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn sample_unique_board4(rng: &mut SplitMix64) -> [u8; 4] {
@@ -1905,18 +2764,25 @@ fn normalize_masked(range: &[f64], board: &[u8]) -> Vec<f64> {
     normalized
 }
 
-fn combo_conflicts() -> Vec<Vec<usize>> {
-    let combos = all_combos();
-    combos
-        .iter()
-        .map(|own| {
-            combos
-                .iter()
-                .enumerate()
-                .filter_map(|(index, other)| own.overlaps(*other).then_some(index))
-                .collect()
+fn combo_conflicts() -> Arc<Vec<Vec<usize>>> {
+    static CONFLICTS: OnceLock<Arc<Vec<Vec<usize>>>> = OnceLock::new();
+    CONFLICTS
+        .get_or_init(|| {
+            let combos = all_combos();
+            Arc::new(
+                combos
+                    .iter()
+                    .map(|own| {
+                        combos
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, other)| own.overlaps(*other).then_some(index))
+                            .collect()
+                    })
+                    .collect(),
+            )
         })
-        .collect()
+        .clone()
 }
 
 fn compatible_mass_from_conflicts(range: &[f64], conflicts: &[Vec<usize>], own: usize) -> f64 {
@@ -1949,18 +2815,19 @@ pub fn uniform_range(board: &[u8]) -> Vec<f64> {
 }
 
 fn joint_compatibility_mass(ranges: &[Vec<f64>; 2]) -> f64 {
-    let combos = all_combos();
+    let conflicts = combo_conflicts();
+    let player_one_total = ranges[1].iter().sum::<f64>();
     ranges[0]
         .iter()
         .enumerate()
         .map(|(first, first_weight)| {
             first_weight
-                * ranges[1]
-                    .iter()
-                    .enumerate()
-                    .filter(|(second, _)| !combos[first].overlaps(combos[*second]))
-                    .map(|(_, weight)| weight)
-                    .sum::<f64>()
+                * (player_one_total
+                    - conflicts[first]
+                        .iter()
+                        .map(|second| ranges[1][*second])
+                        .sum::<f64>())
+                .max(0.0)
         })
         .sum()
 }
@@ -1993,11 +2860,51 @@ mod tests {
             uses_exact_ranges: true,
             target_scale_bb: 20.0,
             range_scale: COMBO_COUNT as f64,
+            residual_scale_bb: 0.0,
             source_dataset_sha256: Some("0".repeat(64)),
+            source_policy_sha256: None,
             source_validation_status: Some("accepted".to_owned()),
+            feature_schema: None,
+            context_public_count: 0,
+            context_size: 0,
+            query_structural_count: 0,
+            query_size: 0,
             public_tower: vec![layer(56, 1, "linear")],
             range_tower: vec![layer(COMBO_COUNT * 2, 1, "linear")],
+            context_tower: Vec::new(),
+            query_tower: Vec::new(),
             head: vec![layer(2, COMBO_COUNT * 2, "tanh")],
+        }
+    }
+
+    fn zero_shared_value_network() -> PublicValueNetwork {
+        let layer = |input_size, output_size, activation: &str| ValueNetworkLayer {
+            input_size,
+            output_size,
+            activation: activation.to_owned(),
+            weights: vec![0.0; input_size * output_size],
+            biases: vec![0.0; output_size],
+        };
+        PublicValueNetwork {
+            schema: "hu-public-belief-combo-value-network-v3".to_owned(),
+            seed: 2,
+            uses_exact_ranges: true,
+            target_scale_bb: 20.0,
+            range_scale: COMBO_COUNT as f64,
+            residual_scale_bb: 5.0,
+            source_dataset_sha256: Some("1".repeat(64)),
+            source_policy_sha256: None,
+            source_validation_status: Some("rejected".to_owned()),
+            feature_schema: Some("rank-suit-invariant-combo-query-v1".to_owned()),
+            context_public_count: SHARED_CONTEXT_PUBLIC_COUNT,
+            context_size: SHARED_CONTEXT_COUNT,
+            query_structural_count: SHARED_QUERY_STRUCTURAL_COUNT,
+            query_size: SHARED_QUERY_COUNT,
+            public_tower: Vec::new(),
+            range_tower: Vec::new(),
+            context_tower: vec![layer(SHARED_CONTEXT_COUNT, 1, "linear")],
+            query_tower: vec![layer(SHARED_QUERY_COUNT, 1, "linear")],
+            head: vec![layer(2, 1, "tanh")],
         }
     }
 
@@ -2052,6 +2959,26 @@ mod tests {
     }
 
     #[test]
+    fn stratified_belief_replicates_are_deterministic_and_close_to_exact() {
+        let board = [0, 5, 10, 15];
+        let exact = std::array::from_fn(|_| uniform_range(&board));
+        let mut first_rng = SplitMix64::new(77);
+        let mut repeated_rng = SplitMix64::new(77);
+        let mut independent_rng = SplitMix64::new(78);
+        let (first, first_ess) =
+            particle_reach_factors_from_exact(&exact, board, 4_096, &mut first_rng).unwrap();
+        let (repeated, repeated_ess) =
+            particle_reach_factors_from_exact(&exact, board, 4_096, &mut repeated_rng).unwrap();
+        let (independent, _) =
+            particle_reach_factors_from_exact(&exact, board, 4_096, &mut independent_rng).unwrap();
+        assert_eq!(first, repeated);
+        assert_eq!(first_ess, repeated_ess);
+        assert!(first_ess > 4_000.0);
+        assert!(maximum_range_total_variation(&exact, &first) < 0.15);
+        assert!(maximum_range_total_variation(&first, &independent) < 0.15);
+    }
+
+    #[test]
     fn full_vector_value_network_masks_illegal_combos_and_is_finite() {
         let board = [0, 5, 10, 15];
         let ranges = std::array::from_fn(|_| uniform_range(&board));
@@ -2060,6 +2987,83 @@ mod tests {
         let values = network.predict(&board, 1, [2.0, 2.0], &ranges);
         assert_eq!(values[0].len(), COMBO_COUNT);
         assert!(values.iter().flatten().all(|value| *value == 0.0));
+    }
+
+    #[test]
+    fn shared_combo_value_network_masks_illegal_combos_and_is_finite() {
+        let board = [0, 5, 10, 15];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let network = zero_shared_value_network();
+        network.validate().unwrap();
+        let values = network.predict(&board, 1, [2.0, 2.0], &ranges);
+        assert_eq!(values[0].len(), COMBO_COUNT);
+        assert!(values.iter().flatten().all(|value| value.is_finite()));
+        for combo in all_combos() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                assert_eq!(values[0][combo.key()], 0.0);
+                assert_eq!(values[1][combo.key()], 0.0);
+            }
+        }
+        let conflicts = combo_conflicts();
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
+                .collect()
+        });
+        let joint = joint_compatibility_mass(&ranges);
+        let aggregate = |player: usize| {
+            ranges[player]
+                .iter()
+                .zip(&values[player])
+                .zip(&masses[player])
+                .map(|((reach, value), mass)| reach * value * mass)
+                .sum::<f64>()
+                / joint
+        };
+        assert!((aggregate(0) + aggregate(1)).abs() < 1e-8);
+    }
+
+    #[test]
+    fn shared_combo_features_are_exactly_suit_equivariant() {
+        let board = [0u8, 5, 10, 15];
+        let ranges = [shaped_range(&board, 3, 0), shaped_range(&board, 3, 1)];
+        let permutation = [2u8, 0, 3, 1];
+        let permute_card = |card: u8| (card >> 2) * 4 + permutation[(card & 3) as usize];
+        let permuted_board = board.map(permute_card);
+        let mut permuted_ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        let mut mapping = vec![0usize; COMBO_COUNT];
+        for combo in all_combos() {
+            let [first, second] = combo.cards();
+            let permuted = Combo::new(permute_card(first), permute_card(second));
+            mapping[combo.key()] = permuted.key();
+            for player in 0..2 {
+                permuted_ranges[player][permuted.key()] = ranges[player][combo.key()];
+            }
+        }
+        let conflicts = combo_conflicts();
+        let (contexts, queries) =
+            shared_combo_features(&board, 1, [3.0, 4.0], &ranges, &conflicts, 20.0);
+        let (permuted_contexts, permuted_queries) = shared_combo_features(
+            &permuted_board,
+            1,
+            [3.0, 4.0],
+            &permuted_ranges,
+            &conflicts,
+            20.0,
+        );
+        for player in 0..2 {
+            for (left, right) in contexts[player].iter().zip(&permuted_contexts[player]) {
+                assert!((left - right).abs() < 1e-6);
+            }
+            for combo in 0..COMBO_COUNT {
+                for (left, right) in queries[player][combo]
+                    .iter()
+                    .zip(&permuted_queries[player][mapping[combo]])
+                {
+                    assert!((left - right).abs() < 1e-6);
+                }
+            }
+        }
     }
 
     #[test]
@@ -2072,8 +3076,35 @@ mod tests {
             iterations: 2,
             averaging_delay: 0,
             value_network: zero_value_network(),
+            threads: 1,
         })
         .unwrap_err();
         assert!(error.contains("include_all_in=false"));
+    }
+
+    #[test]
+    fn parallel_turn_leaf_enumeration_matches_single_thread() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut game = tiny_game();
+        game.action_abstraction.include_all_in = false;
+        let config = |threads| FlopResolveConfig {
+            game: game.clone(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges.clone()),
+            iterations: 2,
+            averaging_delay: 0,
+            value_network: zero_shared_value_network(),
+            threads,
+        };
+        let single_solver = FlopSolver::new(config(1)).unwrap();
+        let parallel_solver = FlopSolver::new(config(4)).unwrap();
+        let state = single_solver.config.state.game_state();
+        let single = single_solver.turn_leaf_values(&state, &ranges);
+        let parallel = parallel_solver.turn_leaf_values(&state, &ranges);
+        for player in 0..2 {
+            for (left, right) in single[player].iter().zip(&parallel[player]) {
+                assert!((left - right).abs() < 1e-5);
+            }
+        }
     }
 }

@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "flop-pbs-resolve" => run_flop_pbs_resolve(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
+        "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -111,6 +112,8 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
                     .unwrap_or(1),
             )?,
             network_path,
+            belief_replicates: parse_or(args, "--belief-replicates", 2u32)?,
+            checkpoint_dir: value(args, "--checkpoint-dir").map(PathBuf::from),
         },
     )?;
     let path = value(args, "--output")
@@ -127,8 +130,11 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
         serde_json::to_string_pretty(&serde_json::json!({
             "schema": dataset.schema,
             "stateDistribution": dataset.state_distribution,
+            "sourcePolicySha256": dataset.source_policy_sha256,
             "states": dataset.targets.len(),
             "minimumRangeEffectiveSampleSize": dataset.targets.iter().filter_map(|target| target.range_effective_sample_size).fold(f64::INFINITY, f64::min),
+            "minimumRangeReplicates": dataset.targets.iter().filter_map(|target| target.range_replicates).min(),
+            "maximumRangeTotalVariation": dataset.targets.iter().filter_map(|target| target.range_maximum_total_variation).fold(0.0f64, f64::max),
             "maximumRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
             "validation": dataset.validation,
             "output": path,
@@ -167,6 +173,13 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
             iterations,
             averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
             value_network: network,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
         })?;
     let output = serde_json::to_string_pretty(&solution)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
@@ -181,6 +194,39 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
     } else {
         println!("{output}");
     }
+    Ok(())
+}
+
+fn run_turn_pbs_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let network_path = value(args, "--value-network")
+        .map(PathBuf::from)
+        .ok_or("--value-network is required")?;
+    let dataset_path = value(args, "--dataset")
+        .map(PathBuf::from)
+        .ok_or("--dataset is required")?;
+    let dataset: blueprint::public_belief::TurnTargetDataset =
+        serde_json::from_slice(&fs::read(dataset_path)?)?;
+    let state_index = parse_or(args, "--state-index", 0usize)?;
+    let target = dataset
+        .targets
+        .get(state_index)
+        .ok_or("--state-index is outside the target dataset")?;
+    let network = blueprint::public_belief::PublicValueNetwork::read(&network_path)?;
+    let ranges: [Vec<f64>; 2] = std::array::from_fn(|player| {
+        target.ranges[player]
+            .iter()
+            .map(|value| *value as f64)
+            .collect()
+    });
+    let prediction = network.predict(&target.board, target.actor, target.invested_bb, &ranges);
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "schema": "hu-public-belief-value-prediction-v1",
+            "stateIndex": state_index,
+            "counterfactualValuesBb": prediction,
+        }))?
+    );
     Ok(())
 }
 
@@ -995,6 +1041,7 @@ Usage:
   preflop-solver river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
   preflop-solver turn-pbs-self-play-targets [options]
+  preflop-solver turn-pbs-value-predict [options]
   preflop-solver flop-pbs-resolve [options]
 
 Solve options:

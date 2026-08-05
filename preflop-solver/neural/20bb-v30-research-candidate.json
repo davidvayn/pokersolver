@@ -1,0 +1,68 @@
+{
+  "schema": "hu-v30-exact-belief-shared-combo-candidate-summary-v1",
+  "modelVersion": "20bb-v30-research-candidate",
+  "status": "rejected",
+  "activationAllowed": false,
+  "activeManifestModified": false,
+  "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948",
+  "targetCorpus": {
+    "states": 128,
+    "distinctTurnBoards": 128,
+    "datasetSha256": "d4c0b6a6072cb88494e18ec2c46311beaf6cb202baf5cf322669b20573dbc366",
+    "byteDeterministicReplay": true,
+    "beliefMethod": "exact_per-player_reach_factors_with_independent_stratified_resampling_replicates",
+    "beliefParticlesPerReplicate": 4096,
+    "beliefReplicates": 2,
+    "maximumBeliefTotalVariation": 0.12883440772944543,
+    "minimumBeliefEffectiveSampleSize": 1362.4101822408013,
+    "maximumRiverExploitabilityBbPerHand": 0.03576209645951074,
+    "maximumZeroSumResidualBb": 2.092272621823099e-8,
+    "validationStatus": "accepted"
+  },
+  "architectureSelection": {
+    "rule": "select wide only if mean range tuning RMSE is at least 5% lower than compact; otherwise select compact",
+    "compactMeanRangeTuningRmseBb64": 0.4642686992883682,
+    "wideMeanRangeTuningRmseBb64": 0.4787507504224777,
+    "selectedArchitecture": "compact",
+    "selectedRangeSeed128": 10801,
+    "selectedRangeSeedTuningRmseBb128": 0.595905601978302,
+    "selectedWeightsSha256": "de58e1d79b1824eb853bcd050349c26b580a529b5930ca9f6643852a3e05bf76",
+    "selectedWeightsBytes": 699817
+  },
+  "turnValueEvaluation": {
+    "exploratory64StateMeanRangeRmseBb": 0.49642467498779297,
+    "unseen128StateMeanRangeRmseBb": 0.7847312986850739,
+    "unseen128StateSelectedSeedRmseBb": 0.7795389890670776,
+    "unseen128StateNoRangeMeanRmseBb": 1.3774646520614624,
+    "unseen128StateRangeRelativeImprovement": 0.43030748737495794,
+    "unseen128StateCrossSeedPredictionCorrelation": 0.9985467164496007,
+    "maximumPythonRustParityErrorBb": 5.330685262094903e-6,
+    "parityThresholdBb": 0.0001,
+    "rmseByInvestedPotBandBb": {
+      "smallAtMost3_5Each": 0.27431520819664,
+      "medium4To7_5Each": 0.9490787982940674,
+      "largeAtLeast10_5Each": 2.1153621673583984
+    }
+  },
+  "flopResolverEvaluation": {
+    "board": "2c,7d,Th",
+    "potBb": 4.0,
+    "iterations": 20,
+    "allInIncluded": false,
+    "rangeExploitabilityBbPerHand": 0.6506167678163624,
+    "noRangeExploitabilityBbPerHand": 0.7895280776942079,
+    "rangeRelativeImprovementOverNoRange": 0.1759422037067151,
+    "rangeRelativeImprovementOverUniform": 0.5848591004113194,
+    "maximumLeafZeroSumResidualBeforeProjectionBb": 2.0164425684754406e-13,
+    "zeroSumResidualAfterProjectionBb": 5.551115123125783e-17
+  },
+  "failedGates": [
+    "turnNetworkAccepted",
+    "turnHoldoutRmse",
+    "flopDepthLimitedExploitability",
+    "fullFlopActionAbstraction",
+    "fullGameExploitabilityUpperBound"
+  ],
+  "diagnosis": "Range conditioning is useful and inference is stable, but absolute value calibration degrades sharply as the turn pot grows. Generic corpus scaling and a wider head did not solve the publish-blocking value and resolver errors.",
+  "recommendedNextPilot": "Train a pot/stack-normalized residual target with pot-stratified sampling or loss balancing, retain the new-only holdout design, and rerun the same value/parity/resolver gates before implementing exact flop all-in branches."
+}

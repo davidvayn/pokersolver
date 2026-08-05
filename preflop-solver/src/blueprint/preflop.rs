@@ -1084,6 +1084,7 @@ pub fn build_resolver_continuation_cache(
                                 iterations: config.resolver_iterations,
                                 averaging_delay: config.resolver_averaging_delay,
                                 value_network: network.clone(),
+                                threads: 1,
                             },
                         )?;
                         let first = Combo::new(cached.holes[0][0], cached.holes[0][1]).key();
