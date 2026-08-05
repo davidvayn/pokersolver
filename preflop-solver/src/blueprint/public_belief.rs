@@ -4759,21 +4759,24 @@ fn solve_prepared_self_play_turn_targets(
     prepared: &[PreparedSelfPlayTurnTarget],
 ) -> Result<Vec<TurnValueTarget>, String> {
     let worker_count = config.threads.min(prepared.len()).max(1);
+    let next_state = std::sync::atomic::AtomicUsize::new(0);
     let worker_results = std::thread::scope(|scope| {
         let workers = (0..worker_count)
-            .map(|worker| {
+            .map(|_| {
+                let next_state = &next_state;
                 scope.spawn(move || {
-                    prepared
-                        .iter()
-                        .skip(worker)
-                        .step_by(worker_count)
-                        .map(|state| {
-                            (
-                                state.state_index,
-                                solve_prepared_self_play_turn_target(config, state),
-                            )
-                        })
-                        .collect::<Vec<_>>()
+                    let mut solved = Vec::new();
+                    loop {
+                        let index = next_state.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(state) = prepared.get(index) else {
+                            break;
+                        };
+                        solved.push((
+                            state.state_index,
+                            solve_prepared_self_play_turn_target(config, state),
+                        ));
+                    }
+                    solved
                 })
             })
             .collect::<Vec<_>>();
