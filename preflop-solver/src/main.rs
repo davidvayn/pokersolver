@@ -540,6 +540,21 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
         .ok_or("--networks is required for full-game LBR")?;
+    let maximum_granularity = match value(args, "--maximum-response-granularity")
+        .as_deref()
+        .unwrap_or("exact")
+    {
+        "exact" => blueprint::response::ResolverGranularity::ExactTrajectory,
+        "fine" => blueprint::response::ResolverGranularity::ObservableBackoff,
+        "coarse" => blueprint::response::ResolverGranularity::CoarseObservableBackoff,
+        "strategic" => blueprint::response::ResolverGranularity::StrategicObservableBackoff,
+        value => {
+            return Err(format!(
+            "unsupported response granularity {value}; expected exact, fine, coarse, or strategic"
+        )
+            .into())
+        }
+    };
     let evaluation = blueprint::response::evaluate_full_game_response(
         blueprint::response::ResponseEvaluationConfig {
             game,
@@ -547,6 +562,7 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
             evaluation_deals: parse_or(args, "--evaluation-deals", 10_000u64)?,
             rollouts_per_action: parse_or(args, "--rollouts-per-action", 8u32)?,
             minimum_range_particles: parse_or(args, "--minimum-range-particles", 4u64)?,
+            maximum_granularity,
             seed: parse_or(args, "--seed", 0x1B12_E5A1u64)?,
             network_path,
         },
@@ -1229,6 +1245,8 @@ Full-game learned-response options:
   --evaluation-deals <integer>    Default: 10000 independent paired deals
   --rollouts-per-action <integer> Default: 8 common-random action rollouts
   --minimum-range-particles <N>   Default: 4; minimum: 2
+  --maximum-response-granularity <exact|fine|coarse|strategic>
+                                  Default: exact; broader layers require calibration
   --seed <integer>                Deterministic training/evaluation root seed
   --output <path>                 Optional full resolver/evaluation JSON"
     );

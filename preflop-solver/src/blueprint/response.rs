@@ -17,8 +17,8 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const RESPONSE_SCHEMA: &str = "hu-full-game-information-set-lbr-v3";
-const RESOLVER_SCHEMA: &str = "hu-range-conditioned-postflop-resolver-v3";
+const RESPONSE_SCHEMA: &str = "hu-full-game-information-set-lbr-v4";
+const RESOLVER_SCHEMA: &str = "hu-range-conditioned-postflop-resolver-v4";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +26,16 @@ pub enum ResolverGranularity {
     ExactTrajectory,
     ObservableBackoff,
     CoarseObservableBackoff,
+    StrategicObservableBackoff,
+}
+
+fn granularity_rank(granularity: ResolverGranularity) -> u8 {
+    match granularity {
+        ResolverGranularity::ExactTrajectory => 0,
+        ResolverGranularity::ObservableBackoff => 1,
+        ResolverGranularity::CoarseObservableBackoff => 2,
+        ResolverGranularity::StrategicObservableBackoff => 3,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +45,7 @@ pub struct ResponseEvaluationConfig {
     pub evaluation_deals: u64,
     pub rollouts_per_action: u32,
     pub minimum_range_particles: u64,
+    pub maximum_granularity: ResolverGranularity,
     pub seed: u64,
     pub network_path: PathBuf,
 }
@@ -80,11 +91,13 @@ pub struct ResponsePlayerEvaluation {
     pub exact_lookup_coverage: f64,
     pub observable_backoff_lookup_coverage: f64,
     pub coarse_observable_backoff_lookup_coverage: f64,
+    pub strategic_observable_backoff_lookup_coverage: f64,
     pub preflop_lookup_coverage: f64,
     pub postflop_lookup_coverage: f64,
     pub postflop_exact_lookup_coverage: f64,
     pub postflop_observable_backoff_lookup_coverage: f64,
     pub postflop_coarse_observable_backoff_lookup_coverage: f64,
+    pub postflop_strategic_observable_backoff_lookup_coverage: f64,
     pub learned_information_sets: usize,
     pub confident_information_sets: usize,
 }
@@ -100,6 +113,7 @@ pub struct FullGameResponseEvaluation {
     pub evaluation_deals: u64,
     pub rollouts_per_action: u32,
     pub minimum_range_particles: u64,
+    pub maximum_granularity: ResolverGranularity,
     pub players: [ResponsePlayerEvaluation; 2],
     pub approximate_exploitability_lower_bound_bb_per_hand: f64,
     pub approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand: f64,
@@ -221,9 +235,11 @@ struct ResolverLookup {
     exact_hits: u64,
     observable_backoff_hits: u64,
     coarse_observable_backoff_hits: u64,
+    strategic_observable_backoff_hits: u64,
     postflop_exact_hits: u64,
     postflop_observable_backoff_hits: u64,
     postflop_coarse_observable_backoff_hits: u64,
+    postflop_strategic_observable_backoff_hits: u64,
 }
 
 pub fn evaluate_full_game_response(
@@ -263,7 +279,7 @@ pub fn evaluate_full_game_response(
         / 2.0;
     Ok(FullGameResponseEvaluation {
         schema: RESPONSE_SCHEMA.to_owned(),
-        method: "one_step_common_random_full_game_rollout_response_with_exact_fine_and_coarse_observable_information_sets"
+        method: "one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets"
             .to_owned(),
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
@@ -272,11 +288,12 @@ pub fn evaluate_full_game_response(
         evaluation_deals: config.evaluation_deals,
         rollouts_per_action: config.rollouts_per_action,
         minimum_range_particles: config.minimum_range_particles,
+        maximum_granularity: config.maximum_granularity,
         players,
         approximate_exploitability_lower_bound_bb_per_hand: lower_bound,
         approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand:
             confidence_lower_bound,
-        interpretation: "an independently evaluated fixed legal imperfect-information learned response; fine and coarse observable backoffs deliberately forget public information but never add hidden information; expected gain is a lower bound on exploitability, while the normal-approximation confidence bound is not a release upper-bound certificate"
+        interpretation: "an independently evaluated fixed legal imperfect-information learned response; fine, coarse, and strategic observable backoffs deliberately forget public information but never add hidden information; expected gain is a lower bound on exploitability, while the normal-approximation confidence bound is not a release upper-bound certificate"
             .to_owned(),
         preflop_responses,
         resolvers,
@@ -292,6 +309,7 @@ fn train_learned_response(
     let mut exact_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
     let mut backoff_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
     let mut coarse_backoff_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
+    let mut strategic_backoff_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
     for deal_index in 0..config.training_deals {
         let deal = Deal::sample(&mut chance);
         let mut trajectory_rng =
@@ -309,6 +327,7 @@ fn train_learned_response(
             &mut exact_accumulators,
             &mut backoff_accumulators,
             &mut coarse_backoff_accumulators,
+            &mut strategic_backoff_accumulators,
         );
     }
     let exact_decisions = exact_accumulators
@@ -341,9 +360,20 @@ fn train_learned_response(
                 config.game.effective_stack_bb,
             )
         });
+    let strategic_backoff_decisions = strategic_backoff_accumulators
+        .into_iter()
+        .filter(|(_, accumulator)| accumulator.count >= config.minimum_range_particles)
+        .map(|(key, accumulator)| {
+            accumulator.finish(
+                key,
+                ResolverGranularity::StrategicObservableBackoff,
+                config.game.effective_stack_bb,
+            )
+        });
     let decisions = exact_decisions
         .chain(backoff_decisions)
         .chain(coarse_backoff_decisions)
+        .chain(strategic_backoff_decisions)
         .collect::<Vec<_>>();
     let preflop = decisions
         .iter()
@@ -378,6 +408,7 @@ fn collect_trajectory_decisions(
     exact_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
     backoff_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
     coarse_backoff_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
+    strategic_backoff_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
 ) {
     if state.terminal.is_some() {
         return;
@@ -389,6 +420,8 @@ fn collect_trajectory_decisions(
             observable_backoff_information_set(&state, deal, game, &actions);
         let (coarse_key, coarse_descriptor, coarse_history) =
             coarse_observable_backoff_information_set(&state, deal, game, &actions);
+        let (strategic_key, strategic_descriptor, strategic_history, strategic_labels) =
+            strategic_observable_backoff_information_set(&state, deal, game, &actions);
         let values = actions
             .iter()
             .map(|action| {
@@ -451,6 +484,16 @@ fn collect_trajectory_decisions(
                 .collect::<Vec<_>>()
         );
         coarse_accumulator.add(&values);
+        let strategic_accumulator = strategic_backoff_accumulators
+            .entry(strategic_key)
+            .or_insert_with(|| {
+                let mut accumulator =
+                    DecisionAccumulator::new(&strategic_descriptor, strategic_history, &actions);
+                accumulator.action_labels = strategic_labels.clone();
+                accumulator
+            });
+        assert_eq!(strategic_accumulator.action_labels, strategic_labels);
+        strategic_accumulator.add(&values);
     }
     let strategy = policy.strategy(&state, deal, &actions, game);
     let selected = sample_index(&strategy, trajectory_rng);
@@ -467,6 +510,7 @@ fn collect_trajectory_decisions(
         exact_accumulators,
         backoff_accumulators,
         coarse_backoff_accumulators,
+        strategic_backoff_accumulators,
     );
 }
 
@@ -591,6 +635,91 @@ fn coarse_observable_backoff_information_set(
     )
 }
 
+fn strategic_action_labels(
+    state: &GameState,
+    actions: &[LegalAction],
+    game: &BlueprintConfig,
+) -> Vec<String> {
+    let facing_bet = state.to_call() > EPSILON;
+    let all_in_target = state.street_invested[state.actor] + state.remaining(state.actor, game);
+    let mut sized_action = 0usize;
+    actions
+        .iter()
+        .map(|action| match action.kind {
+            ActionKind::Fold => "fold".to_owned(),
+            ActionKind::Check => "check".to_owned(),
+            ActionKind::Call => "call".to_owned(),
+            ActionKind::RaiseTo(target) if (target - all_in_target).abs() <= EPSILON => {
+                "all_in".to_owned()
+            }
+            ActionKind::RaiseTo(_) => {
+                sized_action += 1;
+                if facing_bet {
+                    format!("raise_{sized_action}")
+                } else {
+                    format!("bet_{sized_action}")
+                }
+            }
+        })
+        .collect()
+}
+
+fn strategic_observable_backoff_information_set(
+    state: &GameState,
+    deal: &Deal,
+    game: &BlueprintConfig,
+    actions: &[LegalAction],
+) -> (u64, NodeDescriptor, Vec<String>, Vec<String>) {
+    let (_, mut descriptor, _) = information_set(state, deal, game);
+    let strength = descriptor
+        .hand_bucket_trajectory
+        .last()
+        .map(|bucket| {
+            if state.street == Street::Preflop {
+                bucket.clone()
+            } else {
+                bucket.split(':').next().unwrap_or("unknown").to_owned()
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    descriptor.hand_bucket_trajectory = vec![strength.clone()];
+    descriptor.public_bucket_trajectory.clear();
+    let price = if state.to_call() <= EPSILON {
+        "free"
+    } else {
+        let pot_odds = state.to_call() / (state.pot() + state.to_call()).max(EPSILON);
+        if pot_odds <= 0.25 {
+            "low"
+        } else if pot_odds <= 0.5 {
+            "medium"
+        } else {
+            "high"
+        }
+    };
+    let spr = state.remaining(state.actor, game) / state.pot().max(game.big_blind_bb);
+    let spr_band = if spr <= 1.0 {
+        "low"
+    } else if spr <= 4.0 {
+        "medium"
+    } else {
+        "high"
+    };
+    let action_labels = strategic_action_labels(state, actions, game);
+    let action_identity = action_labels.join(">");
+    let identity = format!(
+        "strategic-observable-response-v1|{:?}|p{}|h:{strength}|price:{price}|spr:{spr_band}|a:{action_identity}",
+        state.street, state.actor,
+    );
+    let key = stable_hash(identity.as_bytes());
+    descriptor.public_history_id = key;
+    (
+        key,
+        descriptor,
+        vec![format!("strategic_observable_backoff:{identity}")],
+        action_labels,
+    )
+}
+
 fn evaluate_resolver(
     policy: &FrozenPolicy,
     preflop: &[ResolverDecision],
@@ -601,7 +730,11 @@ fn evaluate_resolver(
     let confident = preflop
         .iter()
         .chain(&resolver.decisions)
-        .filter(|decision| !decision.low_confidence);
+        .filter(|decision| {
+            !decision.low_confidence
+                && granularity_rank(decision.granularity)
+                    <= granularity_rank(config.maximum_granularity)
+        });
     let exact_decisions = confident
         .clone()
         .filter(|decision| decision.granularity == ResolverGranularity::ExactTrajectory)
@@ -614,6 +747,17 @@ fn evaluate_resolver(
         .collect::<BTreeMap<_, _>>();
     let coarse_backoff_decisions = confident
         .filter(|decision| decision.granularity == ResolverGranularity::CoarseObservableBackoff)
+        .map(|decision| (decision.information_set, decision))
+        .collect::<BTreeMap<_, _>>();
+    let strategic_backoff_decisions = preflop
+        .iter()
+        .chain(&resolver.decisions)
+        .filter(|decision| {
+            !decision.low_confidence
+                && decision.granularity == ResolverGranularity::StrategicObservableBackoff
+                && granularity_rank(decision.granularity)
+                    <= granularity_rank(config.maximum_granularity)
+        })
         .map(|decision| (decision.information_set, decision))
         .collect::<BTreeMap<_, _>>();
     let mut chance = SplitMix64::new(derived_seed(config.seed, responder as u64, u64::MAX));
@@ -637,10 +781,12 @@ fn evaluate_resolver(
             &exact_decisions,
             &backoff_decisions,
             &coarse_backoff_decisions,
+            &strategic_backoff_decisions,
             GameState::initial(&config.game),
             &deal,
             &config.game,
             responder,
+            false,
             &mut response_rng,
             &mut lookup,
         );
@@ -683,6 +829,10 @@ fn evaluate_resolver(
             lookup.coarse_observable_backoff_hits,
             lookup.queries,
         ),
+        strategic_observable_backoff_lookup_coverage: ratio(
+            lookup.strategic_observable_backoff_hits,
+            lookup.queries,
+        ),
         preflop_lookup_coverage: ratio(lookup.preflop_hits, lookup.preflop_queries),
         postflop_lookup_coverage: ratio(lookup.postflop_hits, lookup.postflop_queries),
         postflop_exact_lookup_coverage: ratio(lookup.postflop_exact_hits, lookup.postflop_queries),
@@ -694,10 +844,15 @@ fn evaluate_resolver(
             lookup.postflop_coarse_observable_backoff_hits,
             lookup.postflop_queries,
         ),
+        postflop_strategic_observable_backoff_lookup_coverage: ratio(
+            lookup.postflop_strategic_observable_backoff_hits,
+            lookup.postflop_queries,
+        ),
         learned_information_sets: preflop.len() + resolver.decisions.len(),
         confident_information_sets: exact_decisions.len()
             + backoff_decisions.len()
-            + coarse_backoff_decisions.len(),
+            + coarse_backoff_decisions.len()
+            + strategic_backoff_decisions.len(),
     }
 }
 
@@ -729,10 +884,12 @@ fn response_rollout(
     exact_decisions: &BTreeMap<u64, &ResolverDecision>,
     backoff_decisions: &BTreeMap<u64, &ResolverDecision>,
     coarse_backoff_decisions: &BTreeMap<u64, &ResolverDecision>,
+    strategic_backoff_decisions: &BTreeMap<u64, &ResolverDecision>,
     state: GameState,
     deal: &Deal,
     game: &BlueprintConfig,
     responder: usize,
+    deviation_taken: bool,
     rng: &mut SplitMix64,
     lookup: &mut ResolverLookup,
 ) -> f64 {
@@ -740,7 +897,7 @@ fn response_rollout(
         return realized_utility_p0(&state, deal);
     }
     let actions = state.legal_actions(game);
-    let selected = if state.actor == responder {
+    let (selected, deviated_here) = if state.actor == responder && !deviation_taken {
         lookup.queries += 1;
         if state.street == Street::Preflop {
             lookup.preflop_queries += 1;
@@ -755,6 +912,8 @@ fn response_rollout(
         let (backoff_key, _, _) = observable_backoff_information_set(&state, deal, game, &actions);
         let (coarse_key, _, _) =
             coarse_observable_backoff_information_set(&state, deal, game, &actions);
+        let (strategic_key, _, _, strategic_labels) =
+            strategic_observable_backoff_information_set(&state, deal, game, &actions);
         let selected_decision = exact_decisions
             .get(&key)
             .filter(|decision| decision.action_labels == labels)
@@ -770,6 +929,12 @@ fn response_rollout(
                     .get(&coarse_key)
                     .filter(|decision| decision.action_labels == labels)
                     .map(|decision| (*decision, ResolverGranularity::CoarseObservableBackoff))
+            })
+            .or_else(|| {
+                strategic_backoff_decisions
+                    .get(&strategic_key)
+                    .filter(|decision| decision.action_labels == strategic_labels)
+                    .map(|decision| (*decision, ResolverGranularity::StrategicObservableBackoff))
             });
         match selected_decision {
             Some((decision, granularity)) => {
@@ -779,6 +944,9 @@ fn response_rollout(
                     ResolverGranularity::ObservableBackoff => lookup.observable_backoff_hits += 1,
                     ResolverGranularity::CoarseObservableBackoff => {
                         lookup.coarse_observable_backoff_hits += 1
+                    }
+                    ResolverGranularity::StrategicObservableBackoff => {
+                        lookup.strategic_observable_backoff_hits += 1
                     }
                 }
                 if state.street == Street::Preflop {
@@ -793,28 +961,33 @@ fn response_rollout(
                         ResolverGranularity::CoarseObservableBackoff => {
                             lookup.postflop_coarse_observable_backoff_hits += 1
                         }
+                        ResolverGranularity::StrategicObservableBackoff => {
+                            lookup.postflop_strategic_observable_backoff_hits += 1
+                        }
                     }
                 }
-                decision.selected_action
+                (decision.selected_action, true)
             }
             _ => {
                 let strategy = policy.strategy(&state, deal, &actions, game);
-                sample_index(&strategy, rng)
+                (sample_index(&strategy, rng), false)
             }
         }
     } else {
         let strategy = policy.strategy(&state, deal, &actions, game);
-        sample_index(&strategy, rng)
+        (sample_index(&strategy, rng), false)
     };
     response_rollout(
         policy,
         exact_decisions,
         backoff_decisions,
         coarse_backoff_decisions,
+        strategic_backoff_decisions,
         state.apply(&actions[selected], game),
         deal,
         game,
         responder,
+        deviation_taken || deviated_here,
         rng,
         lookup,
     )
@@ -925,6 +1098,11 @@ mod tests {
         let (second_key, _, _) =
             observable_backoff_information_set(&state, &second, &game, &actions);
         assert_eq!(first_key, second_key);
+        let (first_strategic_key, _, _, _) =
+            strategic_observable_backoff_information_set(&state, &first, &game, &actions);
+        let (second_strategic_key, _, _, _) =
+            strategic_observable_backoff_information_set(&state, &second, &game, &actions);
+        assert_eq!(first_strategic_key, second_strategic_key);
 
         let mut forgotten_history = state.clone();
         forgotten_history
@@ -955,5 +1133,86 @@ mod tests {
         let coarse_hand = coarse.hand_bucket_trajectory.last().unwrap();
         assert!(!coarse_hand.contains("eq"));
         assert!(!coarse_hand.contains("pot"));
+
+        let connected = Deal::from_cards([[1, 6], [51, 47]], [0, 5, 10, 15, 20]);
+        let disconnected = Deal::from_cards([[1, 6], [51, 47]], [0, 21, 38, 15, 20]);
+        let connected_coarse =
+            coarse_observable_backoff_information_set(&flop, &connected, &game, &flop_actions).0;
+        let disconnected_coarse =
+            coarse_observable_backoff_information_set(&flop, &disconnected, &game, &flop_actions).0;
+        assert_ne!(connected_coarse, disconnected_coarse);
+        let connected_strategic =
+            strategic_observable_backoff_information_set(&flop, &connected, &game, &flop_actions).0;
+        let disconnected_strategic = strategic_observable_backoff_information_set(
+            &flop,
+            &disconnected,
+            &game,
+            &flop_actions,
+        )
+        .0;
+        assert_eq!(connected_strategic, disconnected_strategic);
+    }
+
+    #[test]
+    fn strategic_action_shape_forgets_absolute_bet_amounts() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let first_state = GameState::initial(&game);
+        let first_actions = vec![
+            LegalAction {
+                label: "fold".to_owned(),
+                kind: ActionKind::Fold,
+            },
+            LegalAction {
+                label: "call".to_owned(),
+                kind: ActionKind::Call,
+            },
+            LegalAction {
+                label: "raise_to_2.000bb".to_owned(),
+                kind: ActionKind::RaiseTo(2.0),
+            },
+            LegalAction {
+                label: "raise_to_3.000bb".to_owned(),
+                kind: ActionKind::RaiseTo(3.0),
+            },
+            LegalAction {
+                label: "raise_all_in_to_20.000bb".to_owned(),
+                kind: ActionKind::RaiseTo(20.0),
+            },
+        ];
+        let mut second_state = first_state.clone();
+        second_state.invested = [1.0, 2.0];
+        second_state.street_invested = [1.0, 2.0];
+        let second_actions = vec![
+            LegalAction {
+                label: "fold".to_owned(),
+                kind: ActionKind::Fold,
+            },
+            LegalAction {
+                label: "call".to_owned(),
+                kind: ActionKind::Call,
+            },
+            LegalAction {
+                label: "raise_to_4.000bb".to_owned(),
+                kind: ActionKind::RaiseTo(4.0),
+            },
+            LegalAction {
+                label: "raise_to_6.000bb".to_owned(),
+                kind: ActionKind::RaiseTo(6.0),
+            },
+            LegalAction {
+                label: "raise_all_in_to_20.000bb".to_owned(),
+                kind: ActionKind::RaiseTo(20.0),
+            },
+        ];
+        let expected = vec!["fold", "call", "raise_1", "raise_2", "all_in"];
+        assert_eq!(
+            strategic_action_labels(&first_state, &first_actions, &game),
+            expected
+        );
+        assert_eq!(
+            strategic_action_labels(&second_state, &second_actions, &game),
+            expected
+        );
     }
 }
