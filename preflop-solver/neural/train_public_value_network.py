@@ -1286,6 +1286,15 @@ def weighted_prediction_correlation(
     return float(np.corrcoef(first[mask], second[mask])[0, 1])
 
 
+def every_seed_within_rmse(
+    variants: list[dict[str, Any]], maximum_rmse_bb: float
+) -> bool:
+    values = [float(entry["metrics"]["weightedRmseBb"]) for entry in variants]
+    return bool(values) and all(
+        np.isfinite(value) and value <= maximum_rmse_bb for value in values
+    )
+
+
 def weighted_quantile(
     values: np.ndarray, weights: np.ndarray, quantile: float
 ) -> float:
@@ -1717,9 +1726,13 @@ def main() -> None:
     reasons: list[str] = []
     if dataset.source["validation"]["status"] != "accepted":
         reasons.append("source target corpus is not release-accepted")
-    if not np.isfinite(range_rmse) or range_rmse > args.maximum_rmse_bb:
+    if not every_seed_within_rmse(variants["range"], args.maximum_rmse_bb):
+        maximum_seed_rmse = max(
+            float(entry["metrics"]["weightedRmseBb"])
+            for entry in variants["range"]
+        )
         reasons.append(
-            f"range-network mean holdout RMSE {range_rmse:.6f}bb exceeds {args.maximum_rmse_bb:.6f}bb"
+            f"range-network maximum seed holdout RMSE {maximum_seed_rmse:.6f}bb exceeds {args.maximum_rmse_bb:.6f}bb"
         )
     if relative_improvement is not None and (
         not np.isfinite(relative_improvement)

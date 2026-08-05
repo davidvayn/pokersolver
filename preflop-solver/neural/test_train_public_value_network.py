@@ -267,6 +267,15 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertEqual(metrics["playerWeightedMeanErrorBb"], [1.0, -0.5])
         self.assertAlmostEqual(metrics["maximumAbsolutePlayerWeightedMeanErrorBb"], 1.0)
 
+    def test_absolute_rmse_gate_requires_every_seed(self) -> None:
+        variants = [
+            {"metrics": {"weightedRmseBb": 0.24}},
+            {"metrics": {"weightedRmseBb": 0.26}},
+        ]
+        self.assertFalse(module.every_seed_within_rmse(variants, 0.25))
+        variants[1]["metrics"]["weightedRmseBb"] = 0.25
+        self.assertTrue(module.every_seed_within_rmse(variants, 0.25))
+
     def test_public_board_texture_is_suit_invariant(self) -> None:
         # 9h, Th, Jh, 2c and the same ranks under a global suit permutation.
         first = module.public_board_texture([30, 34, 38, 0])
