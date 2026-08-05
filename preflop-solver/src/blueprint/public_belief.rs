@@ -2882,6 +2882,8 @@ pub struct TurnRiverSolveMetrics {
     pub best_response_value_p0_bb: f64,
     pub best_response_value_p1_bb: f64,
     pub exact_abstract_exploitability_bb_per_hand: f64,
+    pub turn_only_best_response_gain_bb_per_hand: f64,
+    pub river_only_best_response_gain_bb_per_hand: f64,
     pub current_strategy_exploitability_bb_per_hand: f64,
     pub zero_sum_residual_bb: f64,
     pub maximum_probability_sum_error: f64,
@@ -3292,6 +3294,7 @@ impl TurnRiverSolver {
         reaches: [Vec<f64>; 2],
         river: Option<u8>,
         best_responder: Option<usize>,
+        best_response_street: Option<Street>,
         average_strategy: bool,
     ) -> [Vec<f64>; 2] {
         if state.terminal.is_some() {
@@ -3311,6 +3314,7 @@ impl TurnRiverSolver {
                     masked,
                     Some(*card),
                     best_responder,
+                    best_response_street,
                     average_strategy,
                 );
                 for player in 0..2 {
@@ -3335,7 +3339,9 @@ impl TurnRiverSolver {
         let mut children = Vec::with_capacity(action_count);
         for (action_index, action) in actions.iter().enumerate() {
             let mut child_reaches = reaches.clone();
-            if best_responder != Some(actor) {
+            let actor_takes_best_response = best_responder == Some(actor)
+                && best_response_street.map_or(true, |street| state.street == street);
+            if !actor_takes_best_response {
                 for combo in 0..COMBO_COUNT {
                     child_reaches[actor][combo] *= strategy[combo * action_count + action_index];
                 }
@@ -3345,13 +3351,16 @@ impl TurnRiverSolver {
                 child_reaches,
                 river,
                 best_responder,
+                best_response_street,
                 average_strategy,
             ));
         }
         let opponent = 1 - actor;
         let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         for combo in 0..COMBO_COUNT {
-            if best_responder == Some(actor) {
+            let actor_takes_best_response = best_responder == Some(actor)
+                && best_response_street.map_or(true, |street| state.street == street);
+            if actor_takes_best_response {
                 values[actor][combo] = children
                     .iter()
                     .map(|child| child[actor][combo])
@@ -3374,12 +3383,46 @@ impl TurnRiverSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         let joint_mass = joint_compatibility_mass(&reaches);
-        let profile = self.profile_walk(root.clone(), reaches.clone(), None, None, true);
-        let br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), true);
-        let br1 = self.profile_walk(root.clone(), reaches.clone(), None, Some(1), true);
-        let current_profile = self.profile_walk(root.clone(), reaches.clone(), None, None, false);
-        let current_br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), false);
-        let current_br1 = self.profile_walk(root, reaches.clone(), None, Some(1), false);
+        let profile = self.profile_walk(root.clone(), reaches.clone(), None, None, None, true);
+        let br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), None, true);
+        let br1 = self.profile_walk(root.clone(), reaches.clone(), None, Some(1), None, true);
+        let turn_br0 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(0),
+            Some(Street::Turn),
+            true,
+        );
+        let turn_br1 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(1),
+            Some(Street::Turn),
+            true,
+        );
+        let river_br0 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(0),
+            Some(Street::River),
+            true,
+        );
+        let river_br1 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(1),
+            Some(Street::River),
+            true,
+        );
+        let current_profile =
+            self.profile_walk(root.clone(), reaches.clone(), None, None, None, false);
+        let current_br0 =
+            self.profile_walk(root.clone(), reaches.clone(), None, Some(0), None, false);
+        let current_br1 = self.profile_walk(root, reaches.clone(), None, Some(1), None, false);
         let aggregate = |values: &[f64], player: usize| {
             reaches[player]
                 .iter()
@@ -3392,6 +3435,10 @@ impl TurnRiverSolver {
         let profile_p1 = aggregate(&profile[1], 1);
         let best_p0 = aggregate(&br0[0], 0);
         let best_p1 = aggregate(&br1[1], 1);
+        let turn_best_p0 = aggregate(&turn_br0[0], 0);
+        let turn_best_p1 = aggregate(&turn_br1[1], 1);
+        let river_best_p0 = aggregate(&river_br0[0], 0);
+        let river_best_p1 = aggregate(&river_br1[1], 1);
         let current_profile_p0 = aggregate(&current_profile[0], 0);
         let current_profile_p1 = aggregate(&current_profile[1], 1);
         let current_best_p0 = aggregate(&current_br0[0], 0);
@@ -3464,6 +3511,14 @@ impl TurnRiverSolver {
                     + (best_p1 - profile_p1))
                     / 2.0)
                     .max(0.0),
+                turn_only_best_response_gain_bb_per_hand: (((turn_best_p0 - profile_p0)
+                    + (turn_best_p1 - profile_p1))
+                    / 2.0)
+                    .max(0.0),
+                river_only_best_response_gain_bb_per_hand: (((river_best_p0 - profile_p0)
+                    + (river_best_p1 - profile_p1))
+                    / 2.0)
+                    .max(0.0),
                 current_strategy_exploitability_bb_per_hand: (((current_best_p0
                     - current_profile_p0)
                     + (current_best_p1 - current_profile_p1))
@@ -3479,12 +3534,46 @@ impl TurnRiverSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         let joint_mass = joint_compatibility_mass(&reaches);
-        let profile = self.profile_walk(root.clone(), reaches.clone(), None, None, true);
-        let br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), true);
-        let br1 = self.profile_walk(root.clone(), reaches.clone(), None, Some(1), true);
-        let current_profile = self.profile_walk(root.clone(), reaches.clone(), None, None, false);
-        let current_br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), false);
-        let current_br1 = self.profile_walk(root, reaches.clone(), None, Some(1), false);
+        let profile = self.profile_walk(root.clone(), reaches.clone(), None, None, None, true);
+        let br0 = self.profile_walk(root.clone(), reaches.clone(), None, Some(0), None, true);
+        let br1 = self.profile_walk(root.clone(), reaches.clone(), None, Some(1), None, true);
+        let turn_br0 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(0),
+            Some(Street::Turn),
+            true,
+        );
+        let turn_br1 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(1),
+            Some(Street::Turn),
+            true,
+        );
+        let river_br0 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(0),
+            Some(Street::River),
+            true,
+        );
+        let river_br1 = self.profile_walk(
+            root.clone(),
+            reaches.clone(),
+            None,
+            Some(1),
+            Some(Street::River),
+            true,
+        );
+        let current_profile =
+            self.profile_walk(root.clone(), reaches.clone(), None, None, None, false);
+        let current_br0 =
+            self.profile_walk(root.clone(), reaches.clone(), None, Some(0), None, false);
+        let current_br1 = self.profile_walk(root, reaches.clone(), None, Some(1), None, false);
         let aggregate = |values: &[f64], player: usize| {
             reaches[player]
                 .iter()
@@ -3497,6 +3586,10 @@ impl TurnRiverSolver {
         let profile_p1 = aggregate(&profile[1], 1);
         let best_p0 = aggregate(&br0[0], 0);
         let best_p1 = aggregate(&br1[1], 1);
+        let turn_best_p0 = aggregate(&turn_br0[0], 0);
+        let turn_best_p1 = aggregate(&turn_br1[1], 1);
+        let river_best_p0 = aggregate(&river_br0[0], 0);
+        let river_best_p1 = aggregate(&river_br1[1], 1);
         let current_profile_p0 = aggregate(&current_profile[0], 0);
         let current_profile_p1 = aggregate(&current_profile[1], 1);
         let current_best_p0 = aggregate(&current_br0[0], 0);
@@ -3570,6 +3663,14 @@ impl TurnRiverSolver {
             best_response_value_p0_bb: best_p0,
             best_response_value_p1_bb: best_p1,
             exact_abstract_exploitability_bb_per_hand: exploitability.max(0.0),
+            turn_only_best_response_gain_bb_per_hand: (((turn_best_p0 - profile_p0)
+                + (turn_best_p1 - profile_p1))
+                / 2.0)
+                .max(0.0),
+            river_only_best_response_gain_bb_per_hand: (((river_best_p0 - profile_p0)
+                + (river_best_p1 - profile_p1))
+                / 2.0)
+                .max(0.0),
             current_strategy_exploitability_bb_per_hand: (((current_best_p0 - current_profile_p0)
                 + (current_best_p1 - current_profile_p1))
                 / 2.0)
@@ -3668,6 +3769,10 @@ pub struct TurnValueTarget {
     pub current_turn_river_exploitability_bb_per_hand: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_river_maximum_probability_sum_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_only_best_response_gain_bb_per_hand: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub river_only_best_response_gain_bb_per_hand: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_river_solver_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3874,6 +3979,12 @@ fn turn_target_from_complete_continuation(
         ),
         turn_river_maximum_probability_sum_error: Some(
             solution.metrics.maximum_probability_sum_error,
+        ),
+        turn_only_best_response_gain_bb_per_hand: Some(
+            solution.metrics.turn_only_best_response_gain_bb_per_hand,
+        ),
+        river_only_best_response_gain_bb_per_hand: Some(
+            solution.metrics.river_only_best_response_gain_bb_per_hand,
         ),
         turn_river_solver_method: Some(solution.method),
         turn_river_information_sets: Some(solution.metrics.information_sets),
@@ -4098,6 +4209,8 @@ fn legacy_turn_target_from_exact_rivers(
         turn_river_exploitability_bb_per_hand: None,
         current_turn_river_exploitability_bb_per_hand: None,
         turn_river_maximum_probability_sum_error: None,
+        turn_only_best_response_gain_bb_per_hand: None,
+        river_only_best_response_gain_bb_per_hand: None,
         turn_river_solver_method: None,
         turn_river_information_sets: None,
         turn_information_sets: None,
@@ -4949,7 +5062,7 @@ pub fn turn_target_input_sha256(
     river_averaging_delay: u64,
 ) -> Result<String, serde_json::Error> {
     let bytes = serde_json::to_vec(&serde_json::json!({
-        "continuationSemantics": "complete_turn_river_public_belief_v3_with_solver_provenance_current_policy_and_probability_diagnostics",
+        "continuationSemantics": "complete_turn_river_public_belief_v4_with_street_attribution_solver_provenance_current_policy_and_probability_diagnostics",
         "game": game,
         "board": board,
         "actor": actor,
@@ -5364,6 +5477,14 @@ mod tests {
             .current_strategy_exploitability_bb_per_hand
             .is_finite());
         assert!(solution.metrics.current_strategy_exploitability_bb_per_hand >= 0.0);
+        assert!(
+            solution.metrics.turn_only_best_response_gain_bb_per_hand
+                <= solution.metrics.exact_abstract_exploitability_bb_per_hand + 1e-8
+        );
+        assert!(
+            solution.metrics.river_only_best_response_gain_bb_per_hand
+                <= solution.metrics.exact_abstract_exploitability_bb_per_hand + 1e-8
+        );
         assert!(solution
             .counterfactual_values_bb
             .iter()
@@ -5432,6 +5553,8 @@ mod tests {
             .current_turn_river_exploitability_bb_per_hand
             .is_some());
         assert!(upgraded.turn_river_maximum_probability_sum_error.is_some());
+        assert!(upgraded.turn_only_best_response_gain_bb_per_hand.is_some());
+        assert!(upgraded.river_only_best_response_gain_bb_per_hand.is_some());
         assert_eq!(
             upgraded.maximum_river_exploitability_bb_per_hand,
             upgraded.turn_river_exploitability_bb_per_hand.unwrap()

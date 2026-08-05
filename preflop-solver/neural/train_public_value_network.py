@@ -717,6 +717,20 @@ def complete_turn_target_reasons(target: dict[str, Any], index: int) -> list[str
     )
     if not np.isfinite(probability_error) or probability_error > 1e-6:
         reasons.append(f"target {index} exceeds the probability-sum gate")
+    for street in ("turn", "river"):
+        gain = float(
+            target.get(
+                f"{street}_only_best_response_gain_bb_per_hand", float("inf")
+            )
+        )
+        if (
+            not np.isfinite(gain)
+            or gain < 0.0
+            or gain > exploitability + 1e-8
+        ):
+            reasons.append(
+                f"target {index} has invalid {street}-only best-response attribution"
+            )
     method = str(target.get("turn_river_solver_method", ""))
     if "complete_turn_river_betting" not in method:
         reasons.append(f"target {index} lacks complete turn-river solver provenance")

@@ -23,6 +23,8 @@ class PublicValueNetworkTests(unittest.TestCase):
             "turn_river_exploitability_bb_per_hand": 0.04,
             "current_turn_river_exploitability_bb_per_hand": 0.05,
             "turn_river_maximum_probability_sum_error": 1e-12,
+            "turn_only_best_response_gain_bb_per_hand": 0.02,
+            "river_only_best_response_gain_bb_per_hand": 0.03,
             "turn_river_solver_method": (
                 "value_only_alternating_vectorized_dcfr_exact_private_cards_"
                 "observed_river_chance_and_complete_turn_river_betting"
@@ -354,6 +356,16 @@ class PublicValueNetworkTests(unittest.TestCase):
         dataset.source["targets"][0].pop("turn_river_solver_method")
         reasons = module.complete_turn_release_reasons(dataset.source)
         self.assertTrue(any("solver provenance" in reason for reason in reasons))
+
+    def test_street_attribution_cannot_exceed_full_best_response(self) -> None:
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        dataset.source["targets"][0][
+            "river_only_best_response_gain_bb_per_hand"
+        ] = 0.05
+        reasons = module.complete_turn_release_reasons(dataset.source)
+        self.assertTrue(
+            any("river-only best-response attribution" in reason for reason in reasons)
+        )
 
     def test_supplemental_dataset_rejects_duplicate_boards_but_revalidates_small_component(
         self,

@@ -543,6 +543,8 @@ fn run_turn_pbs_upgrade_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
                     .current_turn_river_exploitability_bb_per_hand
                     .is_none()
                 || cached.turn_river_maximum_probability_sum_error.is_none()
+                || cached.turn_only_best_response_gain_bb_per_hand.is_none()
+                || cached.river_only_best_response_gain_bb_per_hand.is_none()
                 || cached.turn_river_solver_method.is_none()
                 || cached.turn_river_information_sets.is_none()
                 || cached.turn_information_sets.is_none()
@@ -613,6 +615,8 @@ fn run_turn_pbs_compose_upgrade(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .current_turn_river_exploitability_bb_per_hand
                 .is_none()
             || target.turn_river_maximum_probability_sum_error.is_none()
+            || target.turn_only_best_response_gain_bb_per_hand.is_none()
+            || target.river_only_best_response_gain_bb_per_hand.is_none()
             || target.turn_river_solver_method.is_none()
             || target.turn_river_information_sets.is_none()
             || target.turn_information_sets.is_none()

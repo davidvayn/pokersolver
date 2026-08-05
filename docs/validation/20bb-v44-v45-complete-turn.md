@@ -65,9 +65,13 @@ On the first two authentic frozen-v26 states, the same solver measured:
 | 0 | 7bb | 100 | 0.210020bb/hand | 271s |
 | 0 | 7bb | 200 | 0.140692bb/hand | 525s |
 | 1 | 5bb | 200 | 0.112178bb/hand | 1,008s |
+| 2 | 2bb | 200 | 0.081833bb/hand | 2,375s |
+| 0 | 7bb | 400 | 0.128838bb/hand | 1,653s |
 
-The 100-to-200 reduction is only 33.0%, invalidating the initial optimistic
-projection that 400 iterations would reliably cross `0.05bb/hand`. A corrected
+The state-0 100-to-200 reduction was only 33.0%, and 200-to-400 then improved
+only another 8.4%. This invalidates both the initial optimistic 400-iteration
+projection and brute-force scaling of the default configuration. The in-flight
+default 400-iteration states 1 and 2 were stopped without artifacts. A corrected
 corpus will not be generated until paired authentic pilots identify a solver
 configuration or iteration ceiling that passes the gate state by state.
 
@@ -76,6 +80,57 @@ was worse at 100 iterations: `0.239932bb/hand` average-policy exploitability
 versus default DCFR's `0.189254bb/hand`. Its current policy was worse again at
 `0.363678bb/hand`. Regret clipping is therefore rejected as the default rather
 than being scaled into the label corpus.
+
+A bounded averaging/regret sweep at 100 iterations measured:
+
+| Variant | Exact local exploitability |
+| --- | ---: |
+| Default DCFR, delay 20 | 0.187062bb/hand |
+| Average exponent 3 | 0.174853bb/hand |
+| Average exponent 4 | 0.169118bb/hand |
+| Default DCFR, delay 50 | 0.172641bb/hand |
+| Positive-regret exponent 1 | 0.233913bb/hand |
+| Positive-regret exponent 2 | 0.202710bb/hand |
+
+The average-exponent-4 improvement transferred only weakly to authentic state
+0 at 200 iterations: `0.138729bb/hand` versus default `0.140692bb/hand` (1.4%).
+The paired authentic state-1 run was stopped when the deeper default plateau
+made the old sweep insufficiently promising.
+
+The default DCFR implementation advances discount time on each alternating
+single-player traversal. This matches the paper's description of alternating
+which player updates on each iteration; an uncommitted attempt to reinterpret
+two traversals as one discount round was therefore reverted without producing
+artifacts. The paper also identifies LCFR as a useful candidate for HUNL
+subgames with severe mistake actions, so a bounded comparison used exact LCFR
+parameters `(alpha,beta,gamma)=(1,1,1)`. See [Brown and Sandholm,
+2019](https://ojs.aaai.org/index.php/AAAI/article/view/4007).
+
+LCFR failed the first authentic control at 100 iterations:
+`0.249362bb/hand` versus default DCFR's `0.210020bb/hand` (18.7% worse). The
+remaining dense and authentic LCFR jobs were stopped without artifacts.
+
+## Street attribution
+
+The v4 evaluator restricts an otherwise exact best response to one street at a
+time. On authentic state 0 after 100 default iterations it measured:
+
+| Response scope | Gain over the frozen profile |
+| --- | ---: |
+| Turn only | 0.044062bb/hand |
+| River only | 0.132468bb/hand |
+| Unrestricted turn + river | 0.207871bb/hand |
+
+The one-street gains are not additive because the unrestricted response can
+coordinate deviations across streets. Nevertheless, the result localizes the
+dominant standalone weakness: turn-only response is already below `0.05`,
+while river-only response accounts for 63.7% of the full gap. The next solver
+experiment should allocate additional updates to river information sets while
+holding a frozen average turn profile, then use the unrestricted exact best
+response to reject any unsafe cross-street result.
+
+The dense uniform 4bb control corroborates the split: `0.040796bb/hand`
+turn-only, `0.128512bb/hand` river-only, and `0.187062bb/hand` unrestricted.
 
 ## Remaining boundary
 
