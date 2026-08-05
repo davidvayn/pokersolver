@@ -63,6 +63,7 @@ fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
             )?,
             value_uncertainty_bb: parse_or(args, "--value-uncertainty-bb", 1.0f64)?,
             value_network_path: network_path,
+            range_policy_path: value(args, "--range-policy").map(PathBuf::from),
             threads: parse_or(
                 args,
                 "--threads",
@@ -224,9 +225,6 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     game.iterations = 2;
     game.averaging_delay = 0;
-    // The pilot is intentionally fail-closed until exact all-in flop runouts
-    // are vectorized in the public-belief solver.
-    game.action_abstraction.include_all_in = false;
     let board = parse_board::<3>(
         &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th")?,
     )?;
@@ -1206,6 +1204,8 @@ Neural certificate options:
 
 Preflop continuation/solve options:
   preflop-cache --networks <json> [--networks-b <json>] [--deals 2652] [--rollouts-per-leaf 8]
+  preflop-cache-resolver --base-cache <json.gz> --value-network <json>
+    [--range-policy <tabular-policy.json>] [--deals 2] [--resolver-iterations 10]
   preflop-cache-compare --cache-a <json.gz> --cache-b <json.gz> [--output <json>]
   preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
   preflop-cache-refresh --cache <json.gz> --output <json.gz>

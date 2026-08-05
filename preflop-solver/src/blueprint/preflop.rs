@@ -22,11 +22,13 @@ use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-const CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v1";
+const CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v2";
+const LEGACY_CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v1";
 const POLICY_SCHEMA: &str = "hu-tabular-preflop-dcfr-v1";
-const EVALUATION_SCHEMA: &str = "hu-preflop-information-set-response-v1";
+const EVALUATION_SCHEMA: &str = "hu-preflop-information-set-response-v2";
 const ATTRIBUTION_SCHEMA: &str = "hu-preflop-local-leak-attribution-v1";
 const EXTERNAL_SAMPLING_EXPLORATION: f64 = 0.05;
+const RESOLVER_RANGE_PROBABILITY_FLOOR: f64 = 1e-9;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,12 +64,15 @@ pub struct ResolverContinuationCacheConfig {
     pub resolver_averaging_delay: u64,
     pub value_uncertainty_bb: f64,
     pub value_network_path: PathBuf,
+    pub range_policy_path: Option<PathBuf>,
     pub threads: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ContinuationEstimate {
     pub mean_utility_p0_bb: f64,
+    #[serde(default)]
+    pub conditional_utilities_bb: Option<[f64; 2]>,
     pub action_standard_error_bb: f64,
 }
 
@@ -153,7 +158,9 @@ impl ContinuationCache {
     }
 
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.schema != CONTINUATION_SCHEMA || self.deals.len() < 2 {
+        if ![CONTINUATION_SCHEMA, LEGACY_CONTINUATION_SCHEMA].contains(&self.schema.as_str())
+            || self.deals.len() < 2
+        {
             return Err("preflop continuation cache is incompatible".into());
         }
         if self.game.effective_stack_bb != self.depth_bb || self.rollouts_per_leaf < 2 {
@@ -195,6 +202,11 @@ impl ContinuationCache {
                     || !value.action_standard_error_bb.is_finite()
                     || value.action_standard_error_bb < 0.0
                     || value.mean_utility_p0_bb.abs() > depth + EPSILON
+                    || value.conditional_utilities_bb.is_some_and(|utilities| {
+                        utilities
+                            .iter()
+                            .any(|utility| !utility.is_finite() || utility.abs() > depth + EPSILON)
+                    })
             })
         {
             return Err("preflop continuation cache contains invalid values".into());
@@ -229,9 +241,19 @@ impl ContinuationCache {
         Deal::from_sampled_cards(deal.holes, deal.board)
     }
 
-    fn continuation_value(&self, deal_index: usize, state: &GameState) -> f64 {
+    fn continuation_utility(&self, deal_index: usize, state: &GameState, player: usize) -> f64 {
         let history = history_key(state);
-        self.deals[deal_index].continuations[&history].mean_utility_p0_bb
+        let estimate = &self.deals[deal_index].continuations[&history];
+        estimate
+            .conditional_utilities_bb
+            .map(|utilities| utilities[player])
+            .unwrap_or_else(|| {
+                if player == 0 {
+                    estimate.mean_utility_p0_bb
+                } else {
+                    -estimate.mean_utility_p0_bb
+                }
+            })
     }
 }
 
@@ -337,6 +359,10 @@ pub struct PreflopEvaluation {
     pub schema: String,
     pub corpus_deals: usize,
     pub policy_value_p0_bb: f64,
+    #[serde(default)]
+    pub policy_value_p1_bb: f64,
+    #[serde(default)]
+    pub policy_value_zero_sum_residual_bb: f64,
     pub player_zero_best_response_bb: f64,
     pub player_one_best_response_bb: f64,
     pub nash_conv_bb: f64,
@@ -620,8 +646,9 @@ impl<'a> PreflopDcfrSolver<'a> {
             return if traverser == 0 { utility } else { -utility };
         }
         if state.street != Street::Preflop {
-            let utility = self.cache.continuation_value(deal_index, &state);
-            return if traverser == 0 { utility } else { -utility };
+            return self
+                .cache
+                .continuation_utility(deal_index, &state, traverser);
         }
 
         let actions = state.legal_actions(&self.cache.game);
@@ -932,6 +959,7 @@ pub fn build_continuation_cache(
                 *history,
                 ContinuationEstimate {
                     mean_utility_p0_bb: mean,
+                    conditional_utilities_bb: None,
                     action_standard_error_bb: standard_error,
                 },
             );
@@ -1009,10 +1037,10 @@ pub fn build_continuation_cache(
 }
 
 /// Revalues an existing exact-deal design with the depth-limited public-belief
-/// flop resolver. The per-world scalar is reconstructed from both players'
-/// conditional CFVs, preserving zero-sum utility for the downstream preflop
-/// solve. This is a research bridge; model uncertainty remains attached to
-/// every leaf and therefore fails the precision release gate.
+/// flop resolver. Player-conditional CFVs remain separate for the downstream
+/// information-set solve; the legacy scalar is retained only for cache-format
+/// compatibility. This is a research bridge, and model uncertainty remains
+/// attached to every leaf, so it still fails the precision release gate.
 pub fn build_resolver_continuation_cache(
     base: &ContinuationCache,
     config: ResolverContinuationCacheConfig,
@@ -1028,6 +1056,27 @@ pub fn build_resolver_continuation_cache(
         return Err("resolver continuation configuration is invalid".into());
     }
     let network = super::public_belief::PublicValueNetwork::read(&config.value_network_path)?;
+    let (leaf_ranges, range_policy_sha256) = if let Some(path) = &config.range_policy_path {
+        let policy = PreflopPolicyArtifact::read(path)?;
+        if policy.game != base.game {
+            return Err("range policy and continuation cache use different games".into());
+        }
+        (resolver_leaf_ranges(&policy)?, Some(sha256_file(path)?))
+    } else {
+        (
+            enumerate_flop_leaves(&base.game)
+                .keys()
+                .map(|history| {
+                    (
+                        *history,
+                        std::array::from_fn(|_| vec![1.0; super::public_belief::COMBO_COUNT]),
+                    )
+                })
+                .collect(),
+            None,
+        )
+    };
+    let leaf_ranges = std::sync::Arc::new(leaf_ranges);
     let leaves = enumerate_flop_leaves(&base.game);
     let public_histories = leaves
         .iter()
@@ -1042,39 +1091,33 @@ pub fn build_resolver_continuation_cache(
         .take(config.deals)
         .cloned()
         .collect::<Vec<_>>();
-    let jobs = source_deals
-        .iter()
-        .enumerate()
-        .flat_map(|(deal_index, cached)| {
-            leaves
-                .iter()
-                .map(move |(history, leaf)| (deal_index, *history, cached.clone(), leaf.clone()))
-        })
-        .collect::<Vec<_>>();
-    let worker_count = config.threads.min(jobs.len()).max(1);
+    let worker_count = config.threads.min(source_deals.len()).max(1);
+    let resolver_threads = (config.threads / worker_count).max(1);
     let solved = std::thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
-            let assigned = jobs
+            let assigned = source_deals
                 .iter()
+                .enumerate()
                 .skip(worker)
                 .step_by(worker_count)
-                .cloned()
                 .collect::<Vec<_>>();
             let network = network.clone();
             let game = base.game.clone();
+            let leaf_ranges = leaf_ranges.clone();
+            let leaves = &leaves;
             workers.push(scope.spawn(move || {
-                assigned
-                    .into_iter()
-                    .map(|(deal_index, history, cached, leaf)| {
+                let mut results = Vec::with_capacity(assigned.len() * leaves.len());
+                for (deal_index, cached) in assigned {
+                    for (history, leaf) in leaves {
                         let flop = [cached.board[0], cached.board[1], cached.board[2]];
-                        let ranges =
-                            std::array::from_fn(|_| super::public_belief::uniform_range(&flop));
-                        let mut resolver_game = game.clone();
-                        resolver_game.action_abstraction.include_all_in = false;
-                        let solution = super::public_belief::solve_flop(
+                        let ranges = leaf_ranges
+                            .get(history)
+                            .expect("validated resolver leaf range")
+                            .clone();
+                        let solution = super::public_belief::solve_flop_continuation_values(
                             super::public_belief::FlopResolveConfig {
-                                game: resolver_game,
+                                game: game.clone(),
                                 state: super::public_belief::PublicBeliefState::flop_start(
                                     flop,
                                     leaf.actor,
@@ -1084,7 +1127,7 @@ pub fn build_resolver_continuation_cache(
                                 iterations: config.resolver_iterations,
                                 averaging_delay: config.resolver_averaging_delay,
                                 value_network: network.clone(),
-                                threads: 1,
+                                threads: resolver_threads,
                             },
                         )?;
                         let first = Combo::new(cached.holes[0][0], cached.holes[0][1]).key();
@@ -1092,20 +1135,25 @@ pub fn build_resolver_continuation_cache(
                         let reconstructed = (solution.counterfactual_values_bb[0][first] as f64
                             - solution.counterfactual_values_bb[1][second] as f64)
                             / 2.0;
-                        Ok::<_, String>((
+                        results.push((
                             deal_index,
-                            history,
+                            *history,
                             ContinuationEstimate {
                                 mean_utility_p0_bb: reconstructed
                                     .clamp(-game.effective_stack_bb, game.effective_stack_bb),
+                                conditional_utilities_bb: Some([
+                                    solution.counterfactual_values_bb[0][first] as f64,
+                                    solution.counterfactual_values_bb[1][second] as f64,
+                                ]),
                                 action_standard_error_bb: config.value_uncertainty_bb,
                             },
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()
+                        ));
+                    }
+                }
+                Ok::<_, String>(results)
             }));
         }
-        let mut values = Vec::with_capacity(jobs.len());
+        let mut values = Vec::with_capacity(source_deals.len() * leaves.len());
         for worker in workers {
             values.extend(
                 worker
@@ -1128,6 +1176,10 @@ pub fn build_resolver_continuation_cache(
     }
     let validation = continuation_validation(&deals, &public_histories);
     let network_sha256 = sha256_file(&config.value_network_path)?;
+    let range_method = range_policy_sha256
+        .as_deref()
+        .map(|digest| format!("tabular_preflop_policy_{digest}"))
+        .unwrap_or_else(|| "uniform_range_control".to_owned());
     let cache = ContinuationCache {
         schema: CONTINUATION_SCHEMA.to_owned(),
         depth_bb: base.depth_bb,
@@ -1142,8 +1194,8 @@ pub fn build_resolver_continuation_cache(
         network_sha256: network_sha256.clone(),
         network_sha256s: vec![network_sha256],
         policy_mixture: format!(
-            "turn_cfv_network_plus_{}_iteration_flop_dcfr_no_all_in_research_bridge",
-            config.resolver_iterations
+            "turn_cfv_network_plus_{}_iteration_exact_all_in_flop_dcfr_ranges_from_{}",
+            config.resolver_iterations, range_method
         ),
         game: base.game.clone(),
         public_histories,
@@ -1152,6 +1204,123 @@ pub fn build_resolver_continuation_cache(
     };
     cache.validate()?;
     Ok(cache)
+}
+
+type ResolverRangePolicy = BTreeMap<(usize, String, Vec<String>), (Vec<String>, Vec<f64>)>;
+type ResolverLeafRanges = BTreeMap<u64, [Vec<f64>; 2]>;
+
+fn resolver_leaf_ranges(
+    artifact: &PreflopPolicyArtifact,
+) -> Result<ResolverLeafRanges, Box<dyn Error>> {
+    let policy = artifact
+        .strategies
+        .iter()
+        .map(|entry| {
+            (
+                (
+                    entry.actor,
+                    entry.hand_class.clone(),
+                    entry.public_history.clone(),
+                ),
+                (entry.action_labels.clone(), entry.probabilities.clone()),
+            )
+        })
+        .collect::<ResolverRangePolicy>();
+    let combo_classes = all_combos()
+        .iter()
+        .map(|combo| combo.label())
+        .collect::<Vec<_>>();
+
+    fn visit(
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        game: &BlueprintConfig,
+        policy: &ResolverRangePolicy,
+        combo_classes: &[String],
+        leaves: &mut BTreeMap<u64, [Vec<f64>; 2]>,
+    ) -> Result<(), String> {
+        if state.terminal.is_some() {
+            return Ok(());
+        }
+        if state.street != Street::Preflop {
+            let key = history_key(&state);
+            if let Some(existing) = leaves.insert(key, reaches.clone()) {
+                if existing != reaches {
+                    return Err("public history produced inconsistent range factors".to_owned());
+                }
+            }
+            return Ok(());
+        }
+        let actions = state.legal_actions(game);
+        let labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            condition_range_for_action(
+                &state,
+                &labels,
+                action_index,
+                policy,
+                combo_classes,
+                &mut child_reaches[state.actor],
+            )?;
+            visit(
+                state.apply(action, game),
+                child_reaches,
+                game,
+                policy,
+                combo_classes,
+                leaves,
+            )?;
+        }
+        Ok(())
+    }
+
+    let mut leaves = BTreeMap::new();
+    visit(
+        GameState::initial(&artifact.game),
+        std::array::from_fn(|_| vec![1.0; super::public_belief::COMBO_COUNT]),
+        &artifact.game,
+        &policy,
+        &combo_classes,
+        &mut leaves,
+    )?;
+    let expected = enumerate_flop_leaves(&artifact.game);
+    if leaves.keys().copied().collect::<BTreeSet<_>>()
+        != expected.keys().copied().collect::<BTreeSet<_>>()
+    {
+        return Err("range policy did not cover every preflop continuation leaf".into());
+    }
+    Ok(leaves)
+}
+
+fn condition_range_for_action(
+    state: &GameState,
+    action_labels: &[String],
+    action_index: usize,
+    policy: &ResolverRangePolicy,
+    combo_classes: &[String],
+    range: &mut [f64],
+) -> Result<(), String> {
+    for (combo, class) in combo_classes.iter().enumerate() {
+        let Some((stored_labels, probabilities)) =
+            policy.get(&(state.actor, class.clone(), state.public_history.clone()))
+        else {
+            return Err(format!(
+                "range policy is missing p{} {} at {}",
+                state.actor,
+                class,
+                state.public_history.join("/")
+            ));
+        };
+        if stored_labels != action_labels || probabilities.len() != action_labels.len() {
+            return Err("range policy action labels do not match the resolver game".to_owned());
+        }
+        range[combo] *= probabilities[action_index].max(RESOLVER_RANGE_PROBABILITY_FLOOR);
+    }
+    Ok(())
 }
 
 pub fn solve_preflop(
@@ -1466,12 +1635,14 @@ fn continuation_validation(
         .collect::<Vec<_>>();
     let history_standard_errors = public_histories
         .keys()
-        .map(|history| {
-            let values = deals
-                .iter()
-                .map(|deal| deal.continuations[history].mean_utility_p0_bb)
-                .collect::<Vec<_>>();
-            sample_standard_error(&values)
+        .flat_map(|history| {
+            (0..2).map(move |player| {
+                let values = deals
+                    .iter()
+                    .map(|deal| continuation_estimate_utility(&deal.continuations[history], player))
+                    .collect::<Vec<_>>();
+                sample_standard_error(&values)
+            })
         })
         .collect::<Vec<_>>();
     let information_group_standard_errors = information_group_standard_errors(deals);
@@ -1515,11 +1686,7 @@ fn information_group_standard_errors(deals: &[CachedDeal]) -> Vec<f64> {
         for player in 0..2 {
             let class = hand_class(&deal, player);
             for (history, estimate) in &cached.continuations {
-                let utility = if player == 0 {
-                    estimate.mean_utility_p0_bb
-                } else {
-                    -estimate.mean_utility_p0_bb
-                };
+                let utility = continuation_estimate_utility(estimate, player);
                 let group = groups
                     .entry((player, class.clone(), *history))
                     .or_insert((0, 0.0, 0.0));
@@ -1554,6 +1721,19 @@ fn sample_standard_error(values: &[f64]) -> f64 {
     (squared / ((values.len() - 1) * values.len()) as f64).sqrt()
 }
 
+fn continuation_estimate_utility(estimate: &ContinuationEstimate, player: usize) -> f64 {
+    estimate
+        .conditional_utilities_bb
+        .map(|utilities| utilities[player])
+        .unwrap_or_else(|| {
+            if player == 0 {
+                estimate.mean_utility_p0_bb
+            } else {
+                -estimate.mean_utility_p0_bb
+            }
+        })
+}
+
 fn continuation_groups(
     cache: &ContinuationCache,
     player: usize,
@@ -1563,11 +1743,7 @@ fn continuation_groups(
         let deal = cache.deal(deal_index);
         let class = hand_class(&deal, player);
         for (history, estimate) in &cached.continuations {
-            let utility = if player == 0 {
-                estimate.mean_utility_p0_bb
-            } else {
-                -estimate.mean_utility_p0_bb
-            };
+            let utility = continuation_estimate_utility(estimate, player);
             let group = groups.entry((class.clone(), *history)).or_insert((0.0, 0));
             group.0 += utility;
             group.1 += 1;
@@ -1583,7 +1759,8 @@ pub fn evaluate_policy(
     let policy = ArtifactPolicy::new(artifact);
     let worlds = root_worlds(cache);
     let mut counters = LookupCounters::default();
-    let policy_value = policy_value_worlds(cache, &policy, worlds.clone(), &mut counters);
+    let policy_value = policy_value_worlds(cache, &policy, worlds.clone(), 0, &mut counters);
+    let policy_value_p1 = policy_value_worlds(cache, &policy, worlds.clone(), 1, &mut counters);
     let mut first_stats = ResponseStats::default();
     let first = best_response_worlds(
         cache,
@@ -1595,11 +1772,13 @@ pub fn evaluate_policy(
     );
     let mut second_stats = ResponseStats::default();
     let second = best_response_worlds(cache, &policy, worlds, 1, &mut second_stats, &mut counters);
-    let nash_conv = (first + second).max(0.0);
+    let nash_conv = (first + second - policy_value - policy_value_p1).max(0.0);
     PreflopEvaluation {
         schema: EVALUATION_SCHEMA.to_owned(),
         corpus_deals: cache.deals.len(),
         policy_value_p0_bb: policy_value,
+        policy_value_p1_bb: policy_value_p1,
+        policy_value_zero_sum_residual_bb: (policy_value + policy_value_p1).abs(),
         player_zero_best_response_bb: first,
         player_one_best_response_bb: second,
         nash_conv_bb: nash_conv,
@@ -1610,7 +1789,7 @@ pub fn evaluate_policy(
         } else {
             1.0 - counters.misses as f64 / counters.queries as f64
         },
-        interpretation: "exact information-set best response in the sampled preflop game with frozen cached postflop continuation values; not full-game exploitability".to_owned(),
+        interpretation: "exact information-set best response in the sampled preflop game with player-conditional frozen postflop continuation values when available; not full-game exploitability".to_owned(),
     }
 }
 
@@ -1712,7 +1891,8 @@ pub fn evaluate_neural_policy(
     };
     let worlds = root_worlds(cache);
     let mut counters = LookupCounters::default();
-    let policy_value = policy_value_worlds(cache, &policy, worlds.clone(), &mut counters);
+    let policy_value = policy_value_worlds(cache, &policy, worlds.clone(), 0, &mut counters);
+    let policy_value_p1 = policy_value_worlds(cache, &policy, worlds.clone(), 1, &mut counters);
     let mut first_stats = ResponseStats::default();
     let first = best_response_worlds(
         cache,
@@ -1724,18 +1904,20 @@ pub fn evaluate_neural_policy(
     );
     let mut second_stats = ResponseStats::default();
     let second = best_response_worlds(cache, &policy, worlds, 1, &mut second_stats, &mut counters);
-    let nash_conv = (first + second).max(0.0);
+    let nash_conv = (first + second - policy_value - policy_value_p1).max(0.0);
     Ok(PreflopEvaluation {
         schema: EVALUATION_SCHEMA.to_owned(),
         corpus_deals: cache.deals.len(),
         policy_value_p0_bb: policy_value,
+        policy_value_p1_bb: policy_value_p1,
+        policy_value_zero_sum_residual_bb: (policy_value + policy_value_p1).abs(),
         player_zero_best_response_bb: first,
         player_one_best_response_bb: second,
         nash_conv_bb: nash_conv,
         exploitability_bb_per_hand: nash_conv / 2.0,
         responder_information_sets: [first_stats.information_sets, second_stats.information_sets],
         policy_lookup_coverage: 1.0,
-        interpretation: "exact information-set best response to a neural preflop policy in the sampled preflop game with frozen cached postflop continuation values; not full-game exploitability".to_owned(),
+        interpretation: "exact information-set best response to a neural preflop policy in the sampled preflop game with player-conditional frozen postflop continuation values when available; not full-game exploitability".to_owned(),
     })
 }
 
@@ -1825,6 +2007,8 @@ fn empty_evaluation(deals: usize) -> PreflopEvaluation {
         schema: EVALUATION_SCHEMA.to_owned(),
         corpus_deals: deals,
         policy_value_p0_bb: 0.0,
+        policy_value_p1_bb: 0.0,
+        policy_value_zero_sum_residual_bb: 0.0,
         player_zero_best_response_bb: 0.0,
         player_one_best_response_bb: 0.0,
         nash_conv_bb: 0.0,
@@ -1947,7 +2131,7 @@ fn collect_local_leak_entries<P: Policy>(
         let action_weighted_values = actions
             .iter()
             .map(|action| {
-                let p0_value = policy_value_worlds(
+                policy_value_worlds(
                     cache,
                     policy,
                     group
@@ -1958,13 +2142,9 @@ fn collect_local_leak_entries<P: Policy>(
                             weight: world.weight,
                         })
                         .collect(),
+                    actor,
                     counters,
-                );
-                if actor == 0 {
-                    p0_value
-                } else {
-                    -p0_value
-                }
+                )
             })
             .collect::<Vec<_>>();
         let policy_weighted_value = probabilities
@@ -2032,10 +2212,7 @@ fn best_response_worlds<P: Policy>(
     if worlds[0].state.terminal.is_some() || worlds[0].state.street != Street::Preflop {
         return worlds
             .iter()
-            .map(|world| {
-                let utility = world_utility_p0(cache, world);
-                world.weight * if responder == 0 { utility } else { -utility }
-            })
+            .map(|world| world.weight * world_utility(cache, world, responder))
             .sum();
     }
     let actor = worlds[0].state.actor;
@@ -2106,6 +2283,7 @@ fn policy_value_worlds<P: Policy>(
     cache: &ContinuationCache,
     policy: &P,
     worlds: Vec<WeightedWorld>,
+    player: usize,
     counters: &mut LookupCounters,
 ) -> f64 {
     if worlds.is_empty() {
@@ -2114,7 +2292,7 @@ fn policy_value_worlds<P: Policy>(
     if worlds[0].state.terminal.is_some() || worlds[0].state.street != Street::Preflop {
         return worlds
             .iter()
-            .map(|world| world.weight * world_utility_p0(cache, world))
+            .map(|world| world.weight * world_utility(cache, world, player))
             .sum();
     }
     let actions = worlds[0].state.legal_actions(&cache.game);
@@ -2135,17 +2313,22 @@ fn policy_value_worlds<P: Policy>(
                     })
                 })
                 .collect();
-            policy_value_worlds(cache, policy, branch, counters)
+            policy_value_worlds(cache, policy, branch, player, counters)
         })
         .sum()
 }
 
-fn world_utility_p0(cache: &ContinuationCache, world: &WeightedWorld) -> f64 {
+fn world_utility(cache: &ContinuationCache, world: &WeightedWorld, player: usize) -> f64 {
     let deal = cache.deal(world.deal_index);
     if world.state.terminal.is_some() {
-        realized_utility_p0(&world.state, &deal)
+        let utility_p0 = realized_utility_p0(&world.state, &deal);
+        if player == 0 {
+            utility_p0
+        } else {
+            -utility_p0
+        }
     } else {
-        cache.continuation_value(world.deal_index, &world.state)
+        cache.continuation_utility(world.deal_index, &world.state, player)
     }
 }
 
@@ -2323,6 +2506,7 @@ mod tests {
                             *history,
                             ContinuationEstimate {
                                 mean_utility_p0_bb: if deal_index < 2 { 0.25 } else { -0.25 },
+                                conditional_utilities_bb: None,
                                 action_standard_error_bb: 0.0,
                             },
                         )
@@ -2361,6 +2545,65 @@ mod tests {
                 maximum_information_group_mean_standard_error_bb: 0.25,
             },
         }
+    }
+
+    #[test]
+    fn conditional_continuation_utilities_override_legacy_scalar_fallback() {
+        let mut cache = synthetic_cache(7);
+        let state = enumerate_flop_leaves(&cache.game)
+            .into_values()
+            .next()
+            .unwrap();
+        let history = history_key(&state);
+        assert_eq!(cache.continuation_utility(0, &state, 0), 0.25);
+        assert_eq!(cache.continuation_utility(0, &state, 1), -0.25);
+        cache.deals[0]
+            .continuations
+            .get_mut(&history)
+            .unwrap()
+            .conditional_utilities_bb = Some([0.75, -0.10]);
+        assert_eq!(cache.continuation_utility(0, &state, 0), 0.75);
+        assert_eq!(cache.continuation_utility(0, &state, 1), -0.10);
+    }
+
+    #[test]
+    fn resolver_ranges_follow_only_own_class_and_public_action() {
+        let game = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            ..BlueprintConfig::default()
+        };
+        let state = GameState::initial(&game);
+        let actions = state.legal_actions(&game);
+        let labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        let combo_classes = all_combos()
+            .iter()
+            .map(|combo| combo.label())
+            .collect::<Vec<_>>();
+        let classes = combo_classes.iter().cloned().collect::<BTreeSet<_>>();
+        let mut policy = ResolverRangePolicy::new();
+        for class in classes {
+            let mut probabilities = vec![1.0 / actions.len() as f64; actions.len()];
+            if class == "AA" {
+                probabilities.fill(0.1 / (actions.len() - 1) as f64);
+                probabilities[0] = 0.9;
+            }
+            policy.insert(
+                (state.actor, class, state.public_history.clone()),
+                (labels.clone(), probabilities),
+            );
+        }
+        let mut range = vec![1.0; super::public_belief::COMBO_COUNT];
+        condition_range_for_action(&state, &labels, 0, &policy, &combo_classes, &mut range)
+            .unwrap();
+        let first_aces = Combo::new(51, 50).key();
+        let second_aces = Combo::new(49, 48).key();
+        let kings = Combo::new(47, 46).key();
+        assert_eq!(range[first_aces], 0.9);
+        assert_eq!(range[first_aces], range[second_aces]);
+        assert_eq!(range[kings], 1.0 / actions.len() as f64);
     }
 
     #[test]

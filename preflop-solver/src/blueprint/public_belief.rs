@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
@@ -25,6 +25,12 @@ const SHARED_QUERY_STRUCTURAL_COUNT: usize = 76;
 const SHARED_QUERY_COUNT: usize = 95;
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
+const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
+
+type DenseAllInEquityCell = Arc<OnceLock<Arc<Vec<f32>>>>;
+
+static DENSE_ALL_IN_EQUITY_CACHE: LazyLock<Mutex<BTreeMap<[u8; 3], DenseAllInEquityCell>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PublicBeliefState {
@@ -903,6 +909,7 @@ pub struct FlopResolveConfig {
 pub struct FlopResolveMetrics {
     pub information_sets: usize,
     pub turn_leaf_evaluations: u64,
+    pub exact_all_in_terminal_evaluations: u64,
     pub profile_value_p0_bb: f64,
     pub profile_value_p1_bb: f64,
     pub depth_limited_best_response_value_p0_bb: f64,
@@ -933,12 +940,25 @@ pub struct FlopSolution {
     pub validation: BlueprintValidation,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopContinuationValues {
+    pub schema: String,
+    pub counterfactual_values_bb: [Vec<f32>; 2],
+    pub profile_value_p0_bb: f64,
+    pub profile_value_p1_bb: f64,
+    pub exact_all_in_terminal_evaluations: u64,
+    pub maximum_leaf_zero_sum_residual_before_projection_bb: f64,
+    pub zero_sum_residual_after_projection_bb: f64,
+}
+
 struct FlopSolver {
     config: FlopResolveConfig,
     legal: [Vec<bool>; 2],
     conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
     turn_leaf_evaluations: Cell<u64>,
+    exact_all_in_terminal_evaluations: Cell<u64>,
+    all_in_equities: OnceLock<Arc<Vec<f32>>>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
 }
 
@@ -957,12 +977,6 @@ impl FlopSolver {
     fn new(mut config: FlopResolveConfig) -> Result<Self, String> {
         config.game.validate()?;
         config.value_network.validate()?;
-        if config.game.action_abstraction.include_all_in {
-            return Err(
-                "the pilot flop resolver requires include_all_in=false until exact flop all-in runouts are vectorized"
-                    .to_owned(),
-            );
-        }
         if config.iterations < 2
             || config.averaging_delay >= config.iterations
             || config.threads == 0
@@ -987,6 +1001,8 @@ impl FlopSolver {
             conflicts: combo_conflicts(),
             nodes: BTreeMap::new(),
             turn_leaf_evaluations: Cell::new(0),
+            exact_all_in_terminal_evaluations: Cell::new(0),
+            all_in_equities: OnceLock::new(),
             maximum_leaf_zero_sum_residual: Cell::new(0.0),
         })
     }
@@ -1015,7 +1031,7 @@ impl FlopSolver {
             return self.turn_leaf_values(&state, &reaches);
         }
         if state.terminal.is_some() {
-            return self.fold_terminal_values(&state, &reaches);
+            return self.terminal_values(&state, &reaches);
         }
         let actions = state.legal_actions(&self.config.game);
         let key = state.public_history.clone();
@@ -1076,28 +1092,67 @@ impl FlopSolver {
         values
     }
 
-    fn fold_terminal_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
-        let Terminal::Fold { winner } = state.terminal.as_ref().expect("terminal") else {
-            unreachable!("all-in actions are disabled in the flop pilot")
-        };
-        let utility_p0 = if *winner == 0 {
-            state.invested[1]
-        } else {
-            -state.invested[0]
-        };
-        std::array::from_fn(|player| {
-            let utility = if player == 0 { utility_p0 } else { -utility_p0 };
-            (0..COMBO_COUNT)
-                .map(|combo| {
-                    utility
-                        * compatible_mass_from_conflicts(
-                            &reaches[1 - player],
-                            &self.conflicts,
-                            combo,
-                        )
+    fn terminal_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
+        match state.terminal.as_ref().expect("terminal") {
+            Terminal::Fold { winner } => {
+                let utility_p0 = if *winner == 0 {
+                    state.invested[1]
+                } else {
+                    -state.invested[0]
+                };
+                std::array::from_fn(|player| {
+                    let utility = if player == 0 { utility_p0 } else { -utility_p0 };
+                    (0..COMBO_COUNT)
+                        .map(|combo| {
+                            utility
+                                * compatible_mass_from_conflicts(
+                                    &reaches[1 - player],
+                                    &self.conflicts,
+                                    combo,
+                                )
+                        })
+                        .collect()
                 })
-                .collect()
-        })
+            }
+            Terminal::Showdown => self.exact_all_in_terminal_values(state, reaches),
+        }
+    }
+
+    fn exact_all_in_terminal_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+    ) -> [Vec<f64>; 2] {
+        self.exact_all_in_terminal_evaluations
+            .set(self.exact_all_in_terminal_evaluations.get() + 1);
+        let board: [u8; 3] = self
+            .config
+            .state
+            .board
+            .clone()
+            .try_into()
+            .expect("validated flop board");
+        let equities = self
+            .all_in_equities
+            .get_or_init(|| exact_flop_all_in_equities(board, &self.legal, self.config.threads));
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for player_zero in 0..COMBO_COUNT {
+            if !self.legal[0][player_zero] {
+                continue;
+            }
+            let row = player_zero * COMBO_COUNT;
+            for player_one in 0..COMBO_COUNT {
+                let equity_p0 = equities[row + player_one];
+                if !equity_p0.is_finite() {
+                    continue;
+                }
+                let utility_p0 = equity_p0 as f64 * state.invested[1]
+                    - (1.0 - equity_p0 as f64) * state.invested[0];
+                values[0][player_zero] += reaches[1][player_one] * utility_p0;
+                values[1][player_one] -= reaches[0][player_zero] * utility_p0;
+            }
+        }
+        values
     }
 
     fn turn_leaf_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
@@ -1242,7 +1297,7 @@ impl FlopSolver {
             return self.turn_leaf_values(&state, &reaches);
         }
         if state.terminal.is_some() {
-            return self.fold_terminal_values(&state, &reaches);
+            return self.terminal_values(&state, &reaches);
         }
         let actions = state.legal_actions(&self.config.game);
         let actor = state.actor;
@@ -1297,6 +1352,64 @@ impl FlopSolver {
             }
         }
         values
+    }
+
+    fn finish_continuation_values(self) -> FlopContinuationValues {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let joint = joint_compatibility_mass(&reaches);
+        let mut profile = self.profile_walk(root, reaches.clone(), None, false);
+        let aggregate = |values: &[f64], player: usize| {
+            reaches[player]
+                .iter()
+                .zip(values)
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>()
+                / joint
+        };
+        let root_residual = aggregate(&profile[0], 0) + aggregate(&profile[1], 1);
+        for player in 0..2 {
+            for (combo, value) in profile[player].iter_mut().enumerate() {
+                let mass =
+                    compatible_mass_from_conflicts(&reaches[1 - player], &self.conflicts, combo);
+                *value -= root_residual / 2.0 * mass;
+            }
+        }
+        let profile_value_p0_bb = aggregate(&profile[0], 0);
+        let profile_value_p1_bb = aggregate(&profile[1], 1);
+        let opponent_compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| {
+                    compatible_mass_from_conflicts(&reaches[1 - player], &self.conflicts, combo)
+                        as f32
+                })
+                .collect()
+        });
+        let counterfactual_values_bb = std::array::from_fn(|player| {
+            profile[player]
+                .iter()
+                .zip(&opponent_compatible_mass[player])
+                .map(|(value, mass)| {
+                    if *mass > 0.0 {
+                        (*value / *mass as f64) as f32
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        });
+        FlopContinuationValues {
+            schema: "hu-depth-limited-flop-continuation-values-v1".to_owned(),
+            counterfactual_values_bb,
+            profile_value_p0_bb,
+            profile_value_p1_bb,
+            exact_all_in_terminal_evaluations: self.exact_all_in_terminal_evaluations.get(),
+            maximum_leaf_zero_sum_residual_before_projection_bb: self
+                .maximum_leaf_zero_sum_residual
+                .get(),
+            zero_sum_residual_after_projection_bb: (profile_value_p0_bb + profile_value_p1_bb)
+                .abs(),
+        }
     }
 
     fn finish(self) -> FlopSolution {
@@ -1377,6 +1490,7 @@ impl FlopSolver {
         let metrics = FlopResolveMetrics {
             information_sets: strategies.len(),
             turn_leaf_evaluations: self.turn_leaf_evaluations.get(),
+            exact_all_in_terminal_evaluations: self.exact_all_in_terminal_evaluations.get(),
             profile_value_p0_bb: profile_p0,
             profile_value_p1_bb: profile_p1,
             depth_limited_best_response_value_p0_bb: best_p0,
@@ -1391,10 +1505,7 @@ impl FlopSolver {
                 .get(),
             zero_sum_residual_after_projection_bb: (profile_p0 + profile_p1).abs(),
         };
-        let mut reasons = vec![
-            "pilot flop abstraction omits all-in actions pending vectorized exact flop all-in runouts"
-                .to_owned(),
-        ];
+        let mut reasons = Vec::new();
         if self
             .config
             .value_network
@@ -1424,8 +1535,8 @@ impl FlopSolver {
             ));
         }
         FlopSolution {
-            schema: "hu-depth-limited-flop-public-belief-solution-v1".to_owned(),
-            method: "exact_turn_chance_enumeration_with_full_vector_turn_cfv_network_and_alternating_dcfr"
+            schema: "hu-depth-limited-flop-public-belief-solution-v2".to_owned(),
+            method: "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_alternating_dcfr"
                 .to_owned(),
             approximate: true,
             value_network_seed: self.config.value_network.seed,
@@ -1449,6 +1560,148 @@ impl FlopSolver {
                 reasons,
             },
         }
+    }
+}
+
+fn exact_flop_all_in_equities(
+    flop: [u8; 3],
+    legal: &[Vec<bool>; 2],
+    threads: usize,
+) -> Arc<Vec<f32>> {
+    let relevant_count = (0..COMBO_COUNT)
+        .filter(|key| legal[0][*key] || legal[1][*key])
+        .count();
+    if relevant_count < 100 {
+        return compute_exact_flop_all_in_equities(flop, legal, threads);
+    }
+
+    let mut key = flop;
+    key.sort_unstable();
+    let cell = {
+        let mut cache = DENSE_ALL_IN_EQUITY_CACHE
+            .lock()
+            .expect("dense all-in equity cache poisoned");
+        if !cache.contains_key(&key) && cache.len() >= DENSE_ALL_IN_EQUITY_CACHE_BOARDS {
+            let oldest = *cache.keys().next().expect("non-empty equity cache");
+            cache.remove(&oldest);
+        }
+        cache
+            .entry(key)
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone()
+    };
+    cell.get_or_init(|| {
+        let combos = all_combos();
+        let dense_legal = std::array::from_fn(|_| {
+            combos
+                .iter()
+                .map(|combo| !combo.cards().iter().any(|card| flop.contains(card)))
+                .collect::<Vec<_>>()
+        });
+        compute_exact_flop_all_in_equities(flop, &dense_legal, threads)
+    })
+    .clone()
+}
+
+fn compute_exact_flop_all_in_equities(
+    flop: [u8; 3],
+    legal: &[Vec<bool>; 2],
+    threads: usize,
+) -> Arc<Vec<f32>> {
+    const EQUITY_UNITS: f32 = 1_980.0;
+    let combos = Arc::new(all_combos());
+    let relevant = combos
+        .iter()
+        .enumerate()
+        .filter_map(|(key, combo)| (legal[0][key] || legal[1][key]).then_some((key, *combo)))
+        .collect::<Vec<_>>();
+    let runouts = (0..52u8)
+        .filter(|card| !flop.contains(card))
+        .flat_map(|turn| {
+            ((turn + 1)..52u8)
+                .filter(move |river| !flop.contains(river))
+                .map(move |river| (turn, river))
+        })
+        .collect::<Vec<_>>();
+    let worker_count = threads.min(runouts.len()).max(1);
+    let partials = std::thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for worker in 0..worker_count {
+            let assigned = runouts
+                .iter()
+                .copied()
+                .skip(worker)
+                .step_by(worker_count)
+                .collect::<Vec<_>>();
+            let relevant = &relevant;
+            workers.push(scope.spawn(move || {
+                let mut counts = vec![0u16; COMBO_COUNT * COMBO_COUNT];
+                for (turn, river) in assigned {
+                    let mut ranked = Vec::with_capacity(relevant.len());
+                    for (key, combo) in relevant {
+                        let cards = combo.cards();
+                        if cards.contains(&turn) || cards.contains(&river) {
+                            continue;
+                        }
+                        ranked.push((
+                            *key,
+                            *combo,
+                            evaluate(&[cards[0], cards[1], flop[0], flop[1], flop[2], turn, river]),
+                        ));
+                    }
+                    for left_index in 0..ranked.len() {
+                        let (left_key, left_combo, left_score) = ranked[left_index];
+                        for &(right_key, right_combo, right_score) in &ranked[left_index + 1..] {
+                            if left_combo.overlaps(right_combo) {
+                                continue;
+                            }
+                            if legal[0][left_key] && legal[1][right_key] {
+                                counts[left_key * COMBO_COUNT + right_key] +=
+                                    equity_units(left_score, right_score);
+                            }
+                            if legal[0][right_key] && legal[1][left_key] {
+                                counts[right_key * COMBO_COUNT + left_key] +=
+                                    equity_units(right_score, left_score);
+                            }
+                        }
+                    }
+                }
+                counts
+            }));
+        }
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("all-in equity worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut counts = vec![0u16; COMBO_COUNT * COMBO_COUNT];
+    for partial in partials {
+        for (total, value) in counts.iter_mut().zip(partial) {
+            *total = total
+                .checked_add(value)
+                .expect("exact all-in equity count overflow");
+        }
+    }
+    let mut equities = vec![f32::NAN; COMBO_COUNT * COMBO_COUNT];
+    for (player_zero, first) in combos.iter().enumerate() {
+        if !legal[0][player_zero] {
+            continue;
+        }
+        for (player_one, second) in combos.iter().enumerate() {
+            if legal[1][player_one] && !first.overlaps(*second) {
+                equities[player_zero * COMBO_COUNT + player_one] =
+                    counts[player_zero * COMBO_COUNT + player_one] as f32 / EQUITY_UNITS;
+            }
+        }
+    }
+    Arc::new(equities)
+}
+
+fn equity_units(first: u32, second: u32) -> u16 {
+    match first.cmp(&second) {
+        std::cmp::Ordering::Greater => 2,
+        std::cmp::Ordering::Equal => 1,
+        std::cmp::Ordering::Less => 0,
     }
 }
 
@@ -1532,6 +1785,14 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
     let mut solver = FlopSolver::new(config)?;
     solver.train();
     Ok(solver.finish())
+}
+
+pub fn solve_flop_continuation_values(
+    config: FlopResolveConfig,
+) -> Result<FlopContinuationValues, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.train();
+    Ok(solver.finish_continuation_values())
 }
 
 #[derive(Clone, Debug)]
@@ -2737,10 +2998,9 @@ pub struct ResolverLeafTurnTargetConfig {
 }
 
 pub fn generate_resolver_leaf_turn_targets(
-    mut config: ResolverLeafTurnTargetConfig,
+    config: ResolverLeafTurnTargetConfig,
 ) -> Result<TurnTargetDataset, Box<dyn Error>> {
     config.game.validate()?;
-    config.game.action_abstraction.include_all_in = false;
     let distinct_roots = config.root_boards.iter().copied().collect::<BTreeSet<_>>();
     if config.root_boards.len() < 3
         || distinct_roots.len() != config.root_boards.len()
@@ -3670,19 +3930,42 @@ mod tests {
     }
 
     #[test]
-    fn flop_pilot_refuses_to_silently_drop_all_in() {
+    fn flop_resolver_evaluates_all_in_runouts_exactly() {
         let board = [0, 5, 10];
-        let ranges = std::array::from_fn(|_| uniform_range(&board));
-        let error = solve_flop(FlopResolveConfig {
-            game: BlueprintConfig::default(),
-            state: PublicBeliefState::flop_start(board, 1, [2.0, 2.0], ranges),
+        let first = Combo::new(47, 51);
+        let second = Combo::new(4, 9);
+        let mut sparse = vec![0.0; COMBO_COUNT];
+        sparse[first.key()] = 0.5;
+        sparse[second.key()] = 0.5;
+        let ranges = [sparse.clone(), sparse];
+        let config = FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 2,
             averaging_delay: 0,
             value_network: zero_value_network(),
             threads: 1,
-        })
-        .unwrap_err();
-        assert!(error.contains("include_all_in=false"));
+        };
+        let continuation = solve_flop_continuation_values(config.clone()).unwrap();
+        let solution = solve_flop(config).unwrap();
+        assert_eq!(
+            continuation.counterfactual_values_bb,
+            solution.counterfactual_values_bb
+        );
+        assert!(continuation.exact_all_in_terminal_evaluations > 0);
+        assert!(continuation.zero_sum_residual_after_projection_bb < 1e-8);
+        assert!(solution.metrics.exact_all_in_terminal_evaluations > 0);
+        assert!(solution
+            .strategies
+            .iter()
+            .flat_map(|node| &node.action_labels)
+            .any(|label| label.contains("all_in")));
+        assert!(solution.metrics.zero_sum_residual_after_projection_bb < 1e-8);
+        assert!(!solution
+            .validation
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("all-in")));
     }
 
     #[test]

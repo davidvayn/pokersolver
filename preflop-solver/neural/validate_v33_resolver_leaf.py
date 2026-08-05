@@ -180,10 +180,15 @@ def compose(
         ">=10% on untouched resolver-reach-weighted leaves",
     )
 
+    variants = range_variants(candidate)
+    candidate_seeds = {int(row["seed"]) for row in variants}
     resolver_pairs = []
     for candidate_report, baseline_report in zip(
         candidate_resolvers, baseline_resolvers, strict=True
     ):
+        candidate_seed = candidate_report.get("value_network_seed")
+        if candidate_seed is not None:
+            candidate_seed = int(candidate_seed)
         matched = (
             candidate_report.get("state", {}).get("board")
             == baseline_report.get("state", {}).get("board")
@@ -193,6 +198,7 @@ def compose(
         baseline_value = resolver_exploitability(baseline_report)
         resolver_pairs.append(
             {
+                "candidateSeed": candidate_seed,
                 "board": candidate_report.get("state", {}).get("board"),
                 "iterations": candidate_report.get("iterations"),
                 "matched": matched,
@@ -203,17 +209,69 @@ def compose(
                 ),
             }
         )
-    candidate_resolver_mean = (
-        mean(row["candidateExploitabilityBbPerHand"] for row in resolver_pairs)
-        if resolver_pairs
+    resolver_seed_evaluations = []
+    for seed in sorted(candidate_seeds):
+        rows = [row for row in resolver_pairs if row["candidateSeed"] == seed]
+        distinct_boards = {
+            json.dumps(row["board"], separators=(",", ":")) for row in rows
+        }
+        complete = (
+            len(rows) == 3
+            and len(distinct_boards) == 3
+            and all(row["matched"] for row in rows)
+        )
+        candidate_mean = (
+            mean(row["candidateExploitabilityBbPerHand"] for row in rows)
+            if rows
+            else None
+        )
+        baseline_mean = (
+            mean(row["baselineExploitabilityBbPerHand"] for row in rows)
+            if rows
+            else None
+        )
+        improvement = (
+            relative_improvement(baseline_mean, candidate_mean)
+            if baseline_mean is not None and candidate_mean is not None
+            else None
+        )
+        improved = sum(row["relativeImprovement"] > 0.0 for row in rows)
+        resolver_seed_evaluations.append(
+            {
+                "seed": seed,
+                "complete": complete,
+                "candidateMeanExploitabilityBbPerHand": candidate_mean,
+                "baselineMeanExploitabilityBbPerHand": baseline_mean,
+                "relativeImprovement": improvement,
+                "improvedBoards": improved,
+            }
+        )
+    complete_seed_evaluations = [
+        row for row in resolver_seed_evaluations if row["complete"]
+    ]
+    resolver_winner = (
+        min(
+            complete_seed_evaluations,
+            key=lambda row: (
+                float(row["candidateMeanExploitabilityBbPerHand"]),
+                int(row["seed"]),
+            ),
+        )
+        if complete_seed_evaluations
         else None
     )
-    baseline_resolver_mean = (
-        mean(row["baselineExploitabilityBbPerHand"] for row in resolver_pairs)
-        if resolver_pairs
-        else None
+    all_candidate_seeds_resolved = (
+        len(complete_seed_evaluations) == len(candidate_seeds)
+        and {row["seed"] for row in complete_seed_evaluations} == candidate_seeds
+        and len(resolver_pairs) == 3 * len(candidate_seeds)
+        and {row["candidateSeed"] for row in resolver_pairs} == candidate_seeds
     )
-    improved_boards = sum(row["relativeImprovement"] > 0.0 for row in resolver_pairs)
+    gate(
+        "matchedResolverCoverage",
+        all_candidate_seeds_resolved,
+        resolver_seed_evaluations,
+        "exactly three distinct matched boards for every candidate seed",
+    )
     prediction_prerequisites = all(
         gates[name]["passed"]
         for name in (
@@ -231,21 +289,28 @@ def compose(
             "resolverLeafReachWeightedImprovement",
         )
     )
-    resolver_improvement = (
-        relative_improvement(baseline_resolver_mean, candidate_resolver_mean)
-        if candidate_resolver_mean is not None and baseline_resolver_mean is not None
+    candidate_resolver_mean = (
+        resolver_winner["candidateMeanExploitabilityBbPerHand"]
+        if resolver_winner
         else None
     )
+    baseline_resolver_mean = (
+        resolver_winner["baselineMeanExploitabilityBbPerHand"]
+        if resolver_winner
+        else None
+    )
+    resolver_improvement = (
+        resolver_winner["relativeImprovement"] if resolver_winner else None
+    )
+    improved_boards = resolver_winner["improvedBoards"] if resolver_winner else 0
     gate(
         "matchedResolverImprovement",
-        prediction_prerequisites
-        and bool(resolver_pairs)
-        and all(row["matched"] for row in resolver_pairs)
+        all_candidate_seeds_resolved
         and resolver_improvement is not None
         and resolver_improvement >= 0.02
         and improved_boards >= 2,
         {
-            "eligible": prediction_prerequisites,
+            "winnerSeed": resolver_winner["seed"] if resolver_winner else None,
             "candidate": candidate_resolver_mean,
             "baseline": baseline_resolver_mean,
             "relativeImprovement": resolver_improvement,
@@ -254,16 +319,30 @@ def compose(
         ">=2% mean improvement and improvement on at least two of three matched boards",
     )
     gate(
+        "modelSelectionEligible",
+        prediction_prerequisites and gates["matchedResolverImprovement"]["passed"],
+        {
+            "predictionPrerequisites": prediction_prerequisites,
+            "matchedResolverImprovement": gates["matchedResolverImprovement"]["passed"],
+        },
+        "all prediction-integrity gates and the matched downstream resolver gate pass",
+    )
+    gate(
         "fullGameExploitabilityUpperBound",
         False,
         None,
         "independent one-sided 99% upper bound <=0.10bb/hand",
     )
 
-    selected = selected_seed(candidate)
-    research_preferred = gates["matchedResolverImprovement"]["passed"]
+    tuning_selected = selected_seed(candidate)
+    downstream_seed = resolver_winner["seed"] if resolver_winner else None
+    selected = next(
+        (row for row in variants if int(row["seed"]) == downstream_seed),
+        tuning_selected,
+    )
+    research_preferred = gates["modelSelectionEligible"]["passed"]
     return {
-        "schema": "hu-v33-resolver-leaf-conditioning-sequence-v1",
+        "schema": "hu-v33-resolver-leaf-conditioning-sequence-v2",
         "modelVersion": "20bb-v33-resolver-leaf-candidate",
         "status": "rejected",
         "activationAllowed": False,
@@ -298,8 +377,10 @@ def compose(
             ]["sampledLeafReachMass"],
         },
         "resolverEvaluation": {
-            "eligible": prediction_prerequisites,
+            "eligible": gates["modelSelectionEligible"]["passed"],
             "pairs": resolver_pairs,
+            "seedEvaluations": resolver_seed_evaluations,
+            "selectionBasis": "lowest matched mean downstream resolver exploitability",
             "candidateMeanExploitabilityBbPerHand": candidate_resolver_mean,
             "baselineMeanExploitabilityBbPerHand": baseline_resolver_mean,
             "relativeImprovement": resolver_improvement,
