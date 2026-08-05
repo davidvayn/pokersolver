@@ -1,6 +1,7 @@
 use preflop_solver::blueprint::{self, BlueprintConfig, RecallMode, RunControl};
 use preflop_solver::kuhn;
 use preflop_solver::push_fold::{self, PushFoldConfig};
+use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -37,6 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "flop-pbs-evaluate" => run_flop_pbs_evaluate(&args[1..]),
         "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
+        "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
@@ -150,6 +152,48 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
             "maximumTurnRiverExploitabilityBbPerHand": dataset.targets.iter().map(|target| target.maximum_river_exploitability_bb_per_hand).fold(0.0f64, f64::max),
             "validation": dataset.validation,
             "output": path,
+        }))?
+    );
+    Ok(())
+}
+
+fn run_turn_pbs_merge_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let paths = values(args, "--dataset")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if paths.len() < 2 {
+        return Err("turn-pbs-merge-targets requires at least two --dataset paths".into());
+    }
+    let mut components = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let bytes = fs::read(path)?;
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let dataset: blueprint::public_belief::TurnTargetDataset = serde_json::from_slice(&bytes)?;
+        components.push((dataset, hash));
+    }
+    let merged = blueprint::public_belief::merge_turn_target_datasets(components)?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("turn-pbs-targets-merged.json"));
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = output.with_extension("tmp");
+    fs::write(&temporary, serde_json::to_vec(&merged)?)?;
+    fs::rename(temporary, &output)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": merged.schema,
+            "states": merged.targets.len(),
+            "componentDatasetSha256": merged.component_dataset_sha256,
+            "componentSeeds": merged.component_seeds,
+            "componentTargetCounts": merged.component_target_counts,
+            "validation": merged.validation,
+            "output": output,
         }))?
     );
     Ok(())
@@ -1671,6 +1715,13 @@ fn value(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+fn values(args: &[String], name: &str) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == name)
+        .map(|pair| pair[1].clone())
+        .collect()
+}
+
 fn print_help() {
     println!(
         "Offline preflop solver
@@ -1697,6 +1748,7 @@ Usage:
   preflop-solver turn-pbs-upgrade-targets [options]
   preflop-solver turn-pbs-compose-upgrade [options]
   preflop-solver turn-pbs-self-play-targets [options]
+  preflop-solver turn-pbs-merge-targets --dataset <json> --dataset <json> [options]
   preflop-solver turn-pbs-value-predict [options]
   preflop-solver flop-pbs-resolve [options]
   preflop-solver flop-pbs-leaf-targets [options]
@@ -1831,6 +1883,8 @@ Complete turn/river label options:
   turn-pbs-compose-upgrade --dataset <legacy-v1.json>
     --checkpoint-dir <directory> --output <complete-v2.json>
     [--iterations N] [--averaging-delay N] [--dcfr-alpha 1.5]
-    [--dcfr-beta 0] [--dcfr-gamma 2]"
+    [--dcfr-beta 0] [--dcfr-gamma 2]
+  turn-pbs-merge-targets --dataset <v2.json> --dataset <v2.json>
+    [--dataset <v2.json> ...] --output <merged-v2.json>"
     );
 }

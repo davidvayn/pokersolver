@@ -3980,8 +3980,209 @@ pub struct TurnTargetDataset {
     pub resolver_leaf_population: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolver_leaf_probability_mass: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_dataset_sha256: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_seeds: Option<Vec<u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_target_counts: Option<Vec<usize>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_method: Option<String>,
     pub targets: Vec<TurnValueTarget>,
     pub validation: BlueprintValidation,
+}
+
+/// Merge independently generated deterministic shards without weakening any
+/// target or provenance gate. State identifiers are reassigned only after all
+/// component bytes and source seeds have been recorded.
+pub fn merge_turn_target_datasets(
+    components: Vec<(TurnTargetDataset, String)>,
+) -> Result<TurnTargetDataset, String> {
+    if components.len() < 2 {
+        return Err("turn-target merging requires at least two components".to_owned());
+    }
+    let mut iterator = components.into_iter();
+    let (mut merged, first_hash) = iterator.next().expect("checked component count");
+    if merged.component_dataset_sha256.is_some() {
+        return Err("nested turn-target merges are not supported".to_owned());
+    }
+    let mut hashes = vec![first_hash];
+    let mut seeds = vec![merged.seed];
+    let mut counts = vec![merged.targets.len()];
+    let mut targets = std::mem::take(&mut merged.targets);
+    if merged.validation.status != "accepted" {
+        return Err("every turn-target component must be accepted".to_owned());
+    }
+    for (dataset, hash) in iterator {
+        if dataset.component_dataset_sha256.is_some() {
+            return Err("nested turn-target merges are not supported".to_owned());
+        }
+        if dataset.validation.status != "accepted" {
+            return Err("every turn-target component must be accepted".to_owned());
+        }
+        if dataset.schema != merged.schema
+            || dataset.method != merged.method
+            || dataset.approximate != merged.approximate
+            || dataset.game != merged.game
+            || dataset.river_iterations != merged.river_iterations
+            || dataset.turn_river_iterations != merged.turn_river_iterations
+            || dataset.turn_river_averaging_delay != merged.turn_river_averaging_delay
+            || dataset.state_distribution != merged.state_distribution
+            || dataset.source_policy_sha256 != merged.source_policy_sha256
+            || dataset.sampling_exploration_probability != merged.sampling_exploration_probability
+            || dataset.exploration_method != merged.exploration_method
+            || dataset.minimum_sampled_pot_bb != merged.minimum_sampled_pot_bb
+            || dataset.resolver_source_value_network_sha256
+                != merged.resolver_source_value_network_sha256
+            || dataset.resolver_iterations != merged.resolver_iterations
+            || dataset.resolver_leaf_population != merged.resolver_leaf_population
+            || dataset.resolver_leaf_probability_mass != merged.resolver_leaf_probability_mass
+        {
+            return Err("turn-target components have incompatible provenance".to_owned());
+        }
+        hashes.push(hash);
+        seeds.push(dataset.seed);
+        counts.push(dataset.targets.len());
+        targets.extend(dataset.targets);
+    }
+    if hashes
+        .iter()
+        .any(|hash| hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err("turn-target component hashes must be SHA-256 hex".to_owned());
+    }
+    if merged.schema != "hu-turn-public-belief-cfv-dataset-v2" {
+        return Err("only complete-turn schema-v2 targets may be merged".to_owned());
+    }
+    if targets.len() < 64 {
+        return Err("merged turn-target corpus requires at least 64 states".to_owned());
+    }
+    let distinct_boards = targets
+        .iter()
+        .map(|target| target.board)
+        .collect::<BTreeSet<_>>()
+        .len();
+    if distinct_boards * 100 < targets.len() * 95 {
+        return Err("merged turn-target corpus has fewer than 95% distinct boards".to_owned());
+    }
+    let mut fingerprints = BTreeSet::new();
+    for (index, target) in targets.iter_mut().enumerate() {
+        let exploitability = target
+            .turn_river_exploitability_bb_per_hand
+            .ok_or_else(|| format!("target {index} lacks complete-turn exploitability"))?;
+        let current_exploitability = target
+            .current_turn_river_exploitability_bb_per_hand
+            .ok_or_else(|| format!("target {index} lacks current-policy diagnostics"))?;
+        let probability_error = target
+            .turn_river_maximum_probability_sum_error
+            .ok_or_else(|| format!("target {index} lacks probability diagnostics"))?;
+        let turn_gain = target
+            .turn_only_best_response_gain_bb_per_hand
+            .ok_or_else(|| format!("target {index} lacks turn attribution"))?;
+        let river_gain = target
+            .river_only_best_response_gain_bb_per_hand
+            .ok_or_else(|| format!("target {index} lacks river attribution"))?;
+        let method = target
+            .turn_river_solver_method
+            .as_deref()
+            .ok_or_else(|| format!("target {index} lacks solver provenance"))?;
+        let turn_information_sets = target
+            .turn_information_sets
+            .ok_or_else(|| format!("target {index} lacks turn information sets"))?;
+        let river_information_sets = target
+            .river_information_sets
+            .ok_or_else(|| format!("target {index} lacks river information sets"))?;
+        let information_sets = target
+            .turn_river_information_sets
+            .ok_or_else(|| format!("target {index} lacks total information sets"))?;
+        let particles = target
+            .range_particles
+            .ok_or_else(|| format!("target {index} lacks belief particles"))?;
+        let replicates = target
+            .range_replicates
+            .ok_or_else(|| format!("target {index} lacks belief replicates"))?;
+        let effective_sample_size = target
+            .range_effective_sample_size
+            .ok_or_else(|| format!("target {index} lacks belief ESS"))?;
+        let total_variation = target
+            .range_maximum_total_variation
+            .ok_or_else(|| format!("target {index} lacks belief variation"))?;
+        let fingerprint = target
+            .input_sha256
+            .as_deref()
+            .ok_or_else(|| format!("target {index} lacks an input fingerprint"))?;
+        if !fingerprints.insert(fingerprint.to_owned()) {
+            return Err(format!("target {index} duplicates an input fingerprint"));
+        }
+        if target.actor > 1
+            || target.board.iter().collect::<BTreeSet<_>>().len() != 4
+            || !exploitability.is_finite()
+            || exploitability > 0.05
+            || !current_exploitability.is_finite()
+            || current_exploitability < 0.0
+            || !probability_error.is_finite()
+            || probability_error > 1e-6
+            || !turn_gain.is_finite()
+            || turn_gain < 0.0
+            || turn_gain > exploitability + 1e-8
+            || !river_gain.is_finite()
+            || river_gain < 0.0
+            || river_gain > exploitability + 1e-8
+            || !method.contains("complete_turn_river_betting")
+            || !method.contains("paired_alternating")
+            || target.exact_river_cards != 48
+            || turn_information_sets == 0
+            || river_information_sets == 0
+            || turn_information_sets.checked_add(river_information_sets) != Some(information_sets)
+            || target.zero_sum_residual_bb.abs() > 1e-7
+            || particles < 4_096
+            || replicates < 2
+            || effective_sample_size < particles as f64 * 0.1
+            || total_variation > 0.15
+            || !target
+                .belief_method
+                .as_deref()
+                .is_some_and(|value| value.starts_with("exact_per-player_reach_factors"))
+        {
+            return Err(format!("target {index} fails a complete-turn merge gate"));
+        }
+        for player in 0..2 {
+            if target.ranges[player].len() != COMBO_COUNT
+                || target.counterfactual_values_bb[player].len() != COMBO_COUNT
+                || target.opponent_compatible_mass[player].len() != COMBO_COUNT
+                || target.ranges[player]
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || target.counterfactual_values_bb[player]
+                    .iter()
+                    .any(|value| !value.is_finite())
+                || target.opponent_compatible_mass[player]
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || (target.ranges[player]
+                    .iter()
+                    .map(|value| *value as f64)
+                    .sum::<f64>()
+                    - 1.0)
+                    .abs()
+                    > 1e-5
+            {
+                return Err(format!("target {index} has invalid exact-combo vectors"));
+            }
+        }
+        target.state_id = format!("turn-pbs-{index:06}");
+    }
+    merged.targets = targets;
+    merged.component_dataset_sha256 = Some(hashes);
+    merged.component_seeds = Some(seeds);
+    merged.component_target_counts = Some(counts);
+    merged.merge_method =
+        Some("ordered_accepted_component_concatenation_with_full_target_revalidation".to_owned());
+    merged.validation = BlueprintValidation {
+        status: "accepted".to_owned(),
+        reasons: Vec::new(),
+    };
+    Ok(merged)
 }
 
 /// Generates a small, deterministic pilot corpus. Range shapes deliberately
@@ -4068,6 +4269,10 @@ pub fn generate_turn_targets(
         resolver_iterations: None,
         resolver_leaf_population: None,
         resolver_leaf_probability_mass: None,
+        component_dataset_sha256: None,
+        component_seeds: None,
+        component_target_counts: None,
+        merge_method: None,
         targets,
         validation: BlueprintValidation {
             status: "rejected".to_owned(),
@@ -4665,6 +4870,10 @@ pub fn generate_self_play_turn_targets(
         resolver_iterations: None,
         resolver_leaf_population: None,
         resolver_leaf_probability_mass: None,
+        component_dataset_sha256: None,
+        component_seeds: None,
+        component_target_counts: None,
+        merge_method: None,
         targets,
         validation: BlueprintValidation {
             status: if reasons.is_empty() { "accepted" } else { "rejected" }.to_owned(),
@@ -4899,6 +5108,10 @@ pub fn generate_resolver_leaf_turn_targets(
         resolver_leaf_probability_mass: Some(
             leaf_probability_mass / config.root_boards.len() as f64,
         ),
+        component_dataset_sha256: None,
+        component_seeds: None,
+        component_target_counts: None,
+        merge_method: None,
         targets,
         validation: BlueprintValidation {
             status: if reasons.is_empty() { "accepted" } else { "rejected" }.to_owned(),
@@ -6270,5 +6483,112 @@ mod tests {
                 assert!((left - right).abs() < 1e-5);
             }
         }
+    }
+
+    #[test]
+    fn accepted_turn_target_shards_merge_with_unique_provenance_and_ids() {
+        let boards = (0..52u8)
+            .flat_map(|a| {
+                (a + 1..52).flat_map(move |b| {
+                    (b + 1..52).flat_map(move |c| (c + 1..52).map(move |d| [a, b, c, d]))
+                })
+            })
+            .take(64)
+            .collect::<Vec<_>>();
+        let target = |index: usize, board: [u8; 4]| {
+            let legal = all_combos()
+                .into_iter()
+                .map(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+                .collect::<Vec<_>>();
+            let legal_count = legal.iter().filter(|value| **value).count() as f32;
+            let range = legal
+                .iter()
+                .map(|value| if *value { 1.0 / legal_count } else { 0.0 })
+                .collect::<Vec<_>>();
+            TurnValueTarget {
+                state_id: format!("component-state-{index}"),
+                board,
+                actor: index % 2,
+                invested_bb: [2.0, 2.0],
+                ranges: [range.clone(), range],
+                counterfactual_values_bb: [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]],
+                opponent_compatible_mass: [vec![1.0; COMBO_COUNT], vec![1.0; COMBO_COUNT]],
+                exact_river_cards: 48,
+                maximum_river_exploitability_bb_per_hand: 0.01,
+                turn_river_exploitability_bb_per_hand: Some(0.01),
+                current_turn_river_exploitability_bb_per_hand: Some(0.02),
+                turn_river_maximum_probability_sum_error: Some(1e-12),
+                turn_only_best_response_gain_bb_per_hand: Some(0.005),
+                river_only_best_response_gain_bb_per_hand: Some(0.007),
+                turn_river_solver_method: Some(
+                    "value_only_paired_alternating_complete_turn_river_betting".to_owned(),
+                ),
+                turn_river_information_sets: Some(3),
+                turn_information_sets: Some(1),
+                river_information_sets: Some(2),
+                zero_sum_residual_bb: 0.0,
+                range_particles: Some(4_096),
+                range_replicates: Some(2),
+                range_effective_sample_size: Some(1_000.0),
+                belief_method: Some("exact_per-player_reach_factors_test".to_owned()),
+                range_maximum_total_variation: Some(0.1),
+                input_sha256: Some(format!("{index:064x}")),
+                off_policy_explorer: None,
+                sampling_exploration_probability: None,
+                public_action_line: Some(vec!["test".to_owned()]),
+                resolver_root_board: None,
+                resolver_public_history: None,
+                resolver_leaf_reach_probability: None,
+            }
+        };
+        let dataset = |seed: u64, targets: Vec<TurnValueTarget>| TurnTargetDataset {
+            schema: "hu-turn-public-belief-cfv-dataset-v2".to_owned(),
+            method: "test-complete-turn".to_owned(),
+            approximate: true,
+            game: BlueprintConfig::default(),
+            seed,
+            river_iterations: 200,
+            turn_river_iterations: Some(200),
+            turn_river_averaging_delay: Some(20),
+            state_distribution: "test-authentic".to_owned(),
+            source_policy_sha256: Some("f".repeat(64)),
+            sampling_exploration_probability: None,
+            exploration_method: None,
+            minimum_sampled_pot_bb: None,
+            resolver_source_value_network_sha256: None,
+            resolver_iterations: None,
+            resolver_leaf_population: None,
+            resolver_leaf_probability_mass: None,
+            component_dataset_sha256: None,
+            component_seeds: None,
+            component_target_counts: None,
+            merge_method: None,
+            targets,
+            validation: BlueprintValidation {
+                status: "accepted".to_owned(),
+                reasons: Vec::new(),
+            },
+        };
+        let first = boards[..32]
+            .iter()
+            .enumerate()
+            .map(|(index, board)| target(index, *board))
+            .collect();
+        let second = boards[32..]
+            .iter()
+            .enumerate()
+            .map(|(offset, board)| target(offset + 32, *board))
+            .collect();
+        let merged = merge_turn_target_datasets(vec![
+            (dataset(101, first), "a".repeat(64)),
+            (dataset(102, second), "b".repeat(64)),
+        ])
+        .unwrap();
+        assert_eq!(merged.targets.len(), 64);
+        assert_eq!(merged.component_seeds, Some(vec![101, 102]));
+        assert_eq!(merged.component_target_counts, Some(vec![32, 32]));
+        assert_eq!(merged.targets[0].state_id, "turn-pbs-000000");
+        assert_eq!(merged.targets[63].state_id, "turn-pbs-000063");
+        assert_eq!(merged.validation.status, "accepted");
     }
 }
