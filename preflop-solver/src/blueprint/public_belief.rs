@@ -4646,6 +4646,162 @@ pub struct SelfPlayTurnTargetConfig {
     pub checkpoint_dir: Option<PathBuf>,
 }
 
+struct PreparedSelfPlayTurnTarget {
+    state_index: usize,
+    board: [u8; 4],
+    actor: usize,
+    invested: [f64; 2],
+    ranges: [Vec<f64>; 2],
+    minimum_ess: f64,
+    maximum_total_variation: f64,
+    fingerprint: String,
+    checkpoint_path: Option<PathBuf>,
+    explorer: Option<usize>,
+    exploration_action_line: Option<Vec<String>>,
+}
+
+fn solve_prepared_self_play_turn_target(
+    config: &SelfPlayTurnTargetConfig,
+    prepared: &PreparedSelfPlayTurnTarget,
+) -> Result<TurnValueTarget, String> {
+    let mut target = if let Some(path) = &prepared.checkpoint_path {
+        if path.exists() {
+            let cached: TurnValueTarget =
+                serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                    .map_err(|error| error.to_string())?;
+            if cached.input_sha256.as_deref() != Some(prepared.fingerprint.as_str()) {
+                return Err(format!(
+                    "checkpoint {} has the wrong input fingerprint",
+                    path.display()
+                ));
+            }
+            cached
+        } else {
+            let mut solved = turn_target_from_complete_continuation(
+                &config.game,
+                prepared.board,
+                prepared.actor,
+                prepared.invested,
+                prepared.ranges.clone(),
+                config.river_iterations,
+                config.river_averaging_delay,
+                1,
+                prepared.state_index,
+            )?;
+            solved.input_sha256 = Some(prepared.fingerprint.clone());
+            solved
+        }
+    } else {
+        turn_target_from_complete_continuation(
+            &config.game,
+            prepared.board,
+            prepared.actor,
+            prepared.invested,
+            prepared.ranges.clone(),
+            config.river_iterations,
+            config.river_averaging_delay,
+            1,
+            prepared.state_index,
+        )?
+    };
+    let belief_method =
+        "exact_per-player_reach_factors_with_independent_stratified_resampling_replicates";
+    if let Some(path) = &prepared.checkpoint_path {
+        let diagnostics_match = target.range_particles == Some(config.range_particles)
+            && target.range_replicates == Some(config.belief_replicates)
+            && target.belief_method.as_deref() == Some(belief_method)
+            && target
+                .range_effective_sample_size
+                .is_some_and(|stored| (stored - prepared.minimum_ess).abs() <= 1e-9)
+            && target
+                .range_maximum_total_variation
+                .is_some_and(|stored| (stored - prepared.maximum_total_variation).abs() <= 1e-12)
+            && target.off_policy_explorer == prepared.explorer
+            && target.sampling_exploration_probability
+                == (config.exploration_probability > 0.0).then_some(config.exploration_probability)
+            && target.public_action_line == prepared.exploration_action_line;
+        if !diagnostics_match {
+            target.range_particles = Some(config.range_particles);
+            target.range_replicates = Some(config.belief_replicates);
+            target.range_effective_sample_size = Some(prepared.minimum_ess);
+            target.belief_method = Some(belief_method.to_owned());
+            target.range_maximum_total_variation = Some(prepared.maximum_total_variation);
+            target.input_sha256 = Some(prepared.fingerprint.clone());
+            target.off_policy_explorer = prepared.explorer;
+            target.sampling_exploration_probability =
+                prepared.explorer.map(|_| config.exploration_probability);
+            target.public_action_line = prepared.exploration_action_line.clone();
+            write_target_checkpoint(path, &target).map_err(|error| error.to_string())?;
+            // Normalize a freshly solved or upgraded checkpoint once at the
+            // persistence boundary. Stable cached checkpoints are deliberately
+            // not rewritten: repeated parse/serialize cycles can move diagnostic
+            // f64 values by one ULP.
+            target = serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        }
+    } else {
+        target.range_particles = Some(config.range_particles);
+        target.range_replicates = Some(config.belief_replicates);
+        target.range_effective_sample_size = Some(prepared.minimum_ess);
+        target.belief_method = Some(belief_method.to_owned());
+        target.range_maximum_total_variation = Some(prepared.maximum_total_variation);
+        target.input_sha256 = Some(prepared.fingerprint.clone());
+        target.off_policy_explorer = prepared.explorer;
+        target.sampling_exploration_probability =
+            prepared.explorer.map(|_| config.exploration_probability);
+        target.public_action_line = prepared.exploration_action_line.clone();
+    }
+    Ok(target)
+}
+
+fn solve_prepared_self_play_turn_targets(
+    config: &SelfPlayTurnTargetConfig,
+    prepared: &[PreparedSelfPlayTurnTarget],
+) -> Result<Vec<TurnValueTarget>, String> {
+    let worker_count = config.threads.min(prepared.len()).max(1);
+    let worker_results = std::thread::scope(|scope| {
+        let workers = (0..worker_count)
+            .map(|worker| {
+                scope.spawn(move || {
+                    prepared
+                        .iter()
+                        .skip(worker)
+                        .step_by(worker_count)
+                        .map(|state| {
+                            (
+                                state.state_index,
+                                solve_prepared_self_play_turn_target(config, state),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "self-play turn-target worker panicked".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+    let mut targets = vec![None; prepared.len()];
+    for (state_index, result) in worker_results.into_iter().flatten() {
+        let target = result?;
+        if state_index >= targets.len() || targets[state_index].replace(target).is_some() {
+            return Err("self-play turn-target workers produced invalid indices".to_owned());
+        }
+    }
+    targets
+        .into_iter()
+        .enumerate()
+        .map(|(index, target)| {
+            target.ok_or_else(|| format!("self-play turn-target worker omitted state {index}"))
+        })
+        .collect()
+}
+
 pub fn generate_self_play_turn_targets(
     config: SelfPlayTurnTargetConfig,
 ) -> Result<TurnTargetDataset, Box<dyn Error>> {
@@ -4669,15 +4825,15 @@ pub fn generate_self_play_turn_targets(
     let source_policy_sha256 = format!("{:x}", Sha256::digest(&policy_bytes));
     let policy = FrozenPolicy::load(&config.network_path)?;
     let mut chance = SplitMix64::new(config.seed);
-    let mut targets = Vec::with_capacity(config.states);
+    let mut prepared = Vec::with_capacity(config.states);
     let mut attempts = 0usize;
-    while targets.len() < config.states {
+    while prepared.len() < config.states {
         attempts += 1;
         if attempts > config.states * 1_000 {
             return Err("could not sample enough nonterminal self-play turn states".into());
         }
         let true_deal = Deal::sample(&mut chance);
-        let explorer = (config.exploration_probability > 0.0).then_some(targets.len() % 2);
+        let explorer = (config.exploration_probability > 0.0).then_some(prepared.len() % 2);
         let Some((turn_state, action_line)) = sample_turn_line(
             &policy,
             &config.game,
@@ -4719,7 +4875,7 @@ pub fn generate_self_play_turn_targets(
             let mut particle_rng = SplitMix64::new(
                 config.seed
                     ^ 0xB311_EF00_0000_0000
-                    ^ (targets.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ (prepared.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                     ^ replicate as u64,
             );
             let (estimate, effective_sample_size) = particle_reach_factors_from_exact(
@@ -4737,7 +4893,7 @@ pub fn generate_self_play_turn_targets(
             }
             particle_replicates.push(estimate);
         }
-        let state_index = targets.len();
+        let state_index = prepared.len();
         let exploration_action_line = explorer.map(|_| action_line.clone());
         let fingerprint = turn_target_input_sha256(
             &config.game,
@@ -4752,94 +4908,22 @@ pub fn generate_self_play_turn_targets(
             .checkpoint_dir
             .as_ref()
             .map(|directory| directory.join(format!("turn-{state_index:06}-{fingerprint}.json")));
-        let mut target = if let Some(path) = &checkpoint_path {
-            if path.exists() {
-                let cached: TurnValueTarget = serde_json::from_slice(&fs::read(&path)?)?;
-                if cached.input_sha256.as_deref() != Some(fingerprint.as_str()) {
-                    return Err(format!(
-                        "checkpoint {} has the wrong input fingerprint",
-                        path.display()
-                    )
-                    .into());
-                }
-                cached
-            } else {
-                let mut solved = turn_target_from_complete_continuation(
-                    &config.game,
-                    board,
-                    turn_state.actor,
-                    turn_state.invested,
-                    ranges.clone(),
-                    config.river_iterations,
-                    config.river_averaging_delay,
-                    config.threads,
-                    state_index,
-                )?;
-                solved.input_sha256 = Some(fingerprint.clone());
-                solved
-            }
-        } else {
-            turn_target_from_complete_continuation(
-                &config.game,
-                board,
-                turn_state.actor,
-                turn_state.invested,
-                ranges,
-                config.river_iterations,
-                config.river_averaging_delay,
-                config.threads,
-                state_index,
-            )?
-        };
-        let belief_method =
-            "exact_per-player_reach_factors_with_independent_stratified_resampling_replicates";
-        if let Some(path) = &checkpoint_path {
-            let diagnostics_match = target.range_particles == Some(config.range_particles)
-                && target.range_replicates == Some(config.belief_replicates)
-                && target.belief_method.as_deref() == Some(belief_method)
-                && target
-                    .range_effective_sample_size
-                    .is_some_and(|stored| (stored - minimum_ess).abs() <= 1e-9)
-                && target
-                    .range_maximum_total_variation
-                    .is_some_and(|stored| (stored - maximum_total_variation).abs() <= 1e-12)
-                && target.off_policy_explorer == explorer
-                && target.sampling_exploration_probability
-                    == (config.exploration_probability > 0.0)
-                        .then_some(config.exploration_probability)
-                && target.public_action_line == exploration_action_line;
-            if !diagnostics_match {
-                target.range_particles = Some(config.range_particles);
-                target.range_replicates = Some(config.belief_replicates);
-                target.range_effective_sample_size = Some(minimum_ess);
-                target.belief_method = Some(belief_method.to_owned());
-                target.range_maximum_total_variation = Some(maximum_total_variation);
-                target.input_sha256 = Some(fingerprint);
-                target.off_policy_explorer = explorer;
-                target.sampling_exploration_probability =
-                    explorer.map(|_| config.exploration_probability);
-                target.public_action_line = exploration_action_line.clone();
-                write_target_checkpoint(path, &target)?;
-                // Normalize a freshly solved or upgraded checkpoint once at
-                // the persistence boundary. Stable cached checkpoints are
-                // deliberately not rewritten: repeated parse/serialize
-                // cycles can move diagnostic f64 values by one ULP.
-                target = serde_json::from_slice(&fs::read(path)?)?;
-            }
-        } else {
-            target.range_particles = Some(config.range_particles);
-            target.range_replicates = Some(config.belief_replicates);
-            target.range_effective_sample_size = Some(minimum_ess);
-            target.belief_method = Some(belief_method.to_owned());
-            target.range_maximum_total_variation = Some(maximum_total_variation);
-            target.input_sha256 = Some(fingerprint);
-            target.off_policy_explorer = explorer;
-            target.sampling_exploration_probability =
-                explorer.map(|_| config.exploration_probability);
-            target.public_action_line = exploration_action_line;
-        }
-        targets.push(target);
+        prepared.push(PreparedSelfPlayTurnTarget {
+            state_index,
+            board,
+            actor: turn_state.actor,
+            invested: turn_state.invested,
+            ranges,
+            minimum_ess,
+            maximum_total_variation,
+            fingerprint,
+            checkpoint_path,
+            explorer,
+            exploration_action_line,
+        });
     }
+    let targets = solve_prepared_self_play_turn_targets(&config, &prepared)
+        .map_err(|error| -> Box<dyn Error> { error.into() })?;
     let maximum_river_exploitability = targets
         .iter()
         .map(|target| target.maximum_river_exploitability_bb_per_hand)
@@ -6551,6 +6635,53 @@ mod tests {
                 assert!((left - right).abs() < 1e-5);
             }
         }
+    }
+
+    #[test]
+    fn parallel_self_play_target_solves_match_single_worker_order_and_values() {
+        let game = tiny_game();
+        let boards = [[0, 5, 10, 15], [1, 6, 11, 16]];
+        let prepared = boards
+            .into_iter()
+            .enumerate()
+            .map(|(state_index, board)| PreparedSelfPlayTurnTarget {
+                state_index,
+                board,
+                actor: 1,
+                invested: [1.0, 1.0],
+                ranges: std::array::from_fn(|_| uniform_range(&board)),
+                minimum_ess: 2.0,
+                maximum_total_variation: 0.0,
+                fingerprint: format!("fingerprint-{state_index}"),
+                checkpoint_path: None,
+                explorer: None,
+                exploration_action_line: None,
+            })
+            .collect::<Vec<_>>();
+        let config = |threads| SelfPlayTurnTargetConfig {
+            game: game.clone(),
+            states: prepared.len(),
+            range_particles: 2,
+            river_iterations: 2,
+            river_averaging_delay: 0,
+            seed: 91,
+            threads,
+            network_path: PathBuf::new(),
+            belief_replicates: 2,
+            exploration_probability: 0.0,
+            minimum_pot_bb: 0.0,
+            checkpoint_dir: None,
+        };
+        let single = solve_prepared_self_play_turn_targets(&config(1), &prepared).unwrap();
+        let parallel = solve_prepared_self_play_turn_targets(&config(2), &prepared).unwrap();
+        assert_eq!(single, parallel);
+        assert_eq!(
+            parallel
+                .iter()
+                .map(|target| target.state_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["turn-pbs-000000", "turn-pbs-000001"]
+        );
     }
 
     #[test]
