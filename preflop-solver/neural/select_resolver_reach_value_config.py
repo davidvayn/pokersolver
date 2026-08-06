@@ -179,6 +179,18 @@ def candidate_summary(
         evaluation = fold_diagnostics(repository_root, fold, model_hashes)
         held_out_hash = evaluation["evaluationDatasetSha256"]
         report = json.loads(report_path.read_text())
+        if report.get("holdoutStartIndex") is not None:
+            raise ValueError(
+                "resolver cross-validation cannot reuse a predecessor release holdout"
+            )
+        validation_rmse = [
+            float(entry.get("metrics", {}).get("weightedRmseBb", float("nan")))
+            for entry in report.get("variants", {}).get("range", [])
+        ]
+        if len(validation_rmse) != 2 or any(
+            not np.isfinite(value) for value in validation_rmse
+        ):
+            raise ValueError("resolver cross-validation lacks authentic validation metrics")
         components = set(report.get("componentDatasetSha256", []))
         if held_out_hash == report.get("datasetSha256") or held_out_hash in components:
             raise ValueError("resolver cross-validation evaluation leaked into training")
@@ -187,6 +199,7 @@ def candidate_summary(
             {
                 "name": evaluation["name"],
                 "trainingReport": training,
+                "seedAuthenticValidationRmseBb": validation_rmse,
                 **evaluation,
             }
         )
@@ -217,12 +230,21 @@ def candidate_summary(
         for fold in folds
         for metric in fold["diagnostics"]
     ]
+    validation = [
+        value for fold in folds for value in fold["seedAuthenticValidationRmseBb"]
+    ]
     maximum_authentic = max(authentic)
+    maximum_validation = max(validation)
     maximum_resolver = max(resolver)
     reasons = []
     if maximum_authentic > maximum_authentic_tuning_rmse_bb:
         reasons.append(
             f"maximum authentic tuning RMSE {maximum_authentic:.6f}bb exceeds "
+            f"{maximum_authentic_tuning_rmse_bb:.6f}bb"
+        )
+    if maximum_validation > maximum_authentic_tuning_rmse_bb:
+        reasons.append(
+            f"maximum authentic validation RMSE {maximum_validation:.6f}bb exceeds "
             f"{maximum_authentic_tuning_rmse_bb:.6f}bb"
         )
     if maximum_resolver > maximum_resolver_rmse_bb:
@@ -238,6 +260,8 @@ def candidate_summary(
         "trainingSeeds": sorted(all_seeds),
         "maximumAuthenticTuningRmseBb": maximum_authentic,
         "meanAuthenticTuningRmseBb": float(np.mean(authentic)),
+        "maximumAuthenticValidationRmseBb": maximum_validation,
+        "meanAuthenticValidationRmseBb": float(np.mean(validation)),
         "maximumResolverReachWeightedRmseBb": maximum_resolver,
         "meanResolverReachWeightedRmseBb": float(np.mean(resolver)),
         "status": "accepted" if not reasons else "rejected",
@@ -287,6 +311,8 @@ def select(spec_path: Path, repository_root: Path) -> dict[str, Any]:
             key=lambda entry: (
                 entry["maximumResolverReachWeightedRmseBb"],
                 entry["meanResolverReachWeightedRmseBb"],
+                entry["maximumAuthenticValidationRmseBb"],
+                entry["meanAuthenticValidationRmseBb"],
                 entry["maximumAuthenticTuningRmseBb"],
                 entry["meanAuthenticTuningRmseBb"],
                 entry["configurationSha256"],
@@ -302,7 +328,8 @@ def select(spec_path: Path, repository_root: Path) -> dict[str, Any]:
         "releaseHoldoutMetricsConsulted": False,
         "selectionCriterion": (
             "pass authentic tuning and baseline-relative resolver-reach gates; "
-            "then minimize maximum and mean cross-fit resolver-reach RMSE"
+            "then minimize maximum and mean cross-fit resolver-reach RMSE, "
+            "authentic validation RMSE, and authentic tuning RMSE"
         ),
         "spec": str(spec_path),
         "specSha256": sha256_file(spec_path),

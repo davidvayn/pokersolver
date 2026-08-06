@@ -81,6 +81,7 @@ class ResolverReachValueSelectionTests(unittest.TestCase):
                     "metrics": {
                         "bestTuningRmseBb": rmse,
                         "finalTuningMetrics": {"weightedRmseBb": rmse},
+                        "weightedRmseBb": rmse + 0.01,
                     },
                 }
             )
@@ -261,6 +262,17 @@ class ResolverReachValueSelectionTests(unittest.TestCase):
             self.assertEqual(result["status"], "rejected")
             self.assertIsNone(result["selectedCandidate"])
             self.assertFalse(result["activationAllowed"])
+
+    def test_predecessor_release_holdout_cannot_be_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            path, payload = self.spec(root)
+            report_path = root / payload["candidates"][0]["folds"][0]["trainingReport"]
+            report = json.loads(report_path.read_text())
+            report["holdoutStartIndex"] = 384
+            report_path.write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "predecessor release holdout"):
+                module.select(path, root)
 
 
 if __name__ == "__main__":

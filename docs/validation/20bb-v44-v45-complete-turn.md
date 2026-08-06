@@ -496,3 +496,6 @@ and a resolver-heavy control. Each configuration trains once on each
 per configuration and 16 seeds in total. The plan validator pins every input,
 rejects duplicate configurations or seeds, enforces symmetric fold swapping,
 and forbids treating the already opened V48 holdout as release evidence.
+The cross-fit runner derives all eight paired training commands, four baseline
+diagnostics, 16 candidate diagnostics, and the selector specification from this
+freeze; it refuses to execute until both training shards pass corpus validation.
