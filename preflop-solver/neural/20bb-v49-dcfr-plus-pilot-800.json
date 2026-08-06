@@ -51,5 +51,20 @@
     "strategyArtifactLink": true,
     "algorithmIdentity": true
   },
+  "followupScreens": [
+    {
+      "strategyIterations": 400,
+      "strategyAveragingDelay": 200,
+      "frozenStrategySha256": "391caf6518ab41dbbcc88dd7c0b931995f133ed1a831a2c49b111b67eae84b3f",
+      "responseIterations": 100,
+      "responseGainBbPerHand": 0.043299644606044616,
+      "artifact": {
+        "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay200-iter400-response100-plus-v1.json",
+        "sha256": "691bab05e3d64c3f09af1591a1a786bf91e1b0d89e137f5da6e0c275ef82713a"
+      },
+      "decision": "rejected-before-response-extension",
+      "reason": "The later averaging window did not improve the old 400-round strategy's 0.043345bb/hand 100-round response screen, whose extended response subsequently failed both gain and convergence gates."
+    }
+  ],
   "interpretation": "The strengthened responder converged, but its gain against the 800-round delayed-average DCFR+ strategy reached 0.057392bb/hand. This is 0.007392bb/hand above the frozen release threshold and regresses the 400-round pilot. More iterations with this averaging window are not selected for fresh-root evaluation; activation remains fail-closed."
 }

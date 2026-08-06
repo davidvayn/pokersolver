@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import itertools
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,11 @@ FRESH_AUTHENTIC_RECHECK_SCHEMA = "hu-fresh-authentic-value-recheck-result-v1"
 RANGE_RESPONSE_FREEZE_SCHEMA = "hu-range-response-release-freeze-v1"
 RANKS = "23456789TJQKA"
 SUITS = "cdhs"
+DEFAULT_DCFR = {
+    "positive_regret_exponent": 1.5,
+    "negative_regret_exponent": 0.0,
+    "strategy_exponent": 2.0,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,6 +144,23 @@ def validate_accepted_fresh_authentic_recheck(payload: dict[str, Any]) -> None:
         raise ValueError(
             "range-response successor is not bound to an accepted fresh authentic recheck"
         )
+
+
+def valid_dcfr_controls(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    expected = {
+        "positive_regret_exponent",
+        "negative_regret_exponent",
+        "strategy_exponent",
+    }
+    return set(raw) == expected and all(
+        not isinstance(raw[key], bool)
+        and isinstance(raw[key], (int, float))
+        and math.isfinite(float(raw[key]))
+        and float(raw[key]) >= 0.0
+        for key in expected
+    )
 
 
 def select_roots(
@@ -282,6 +305,8 @@ def validate_protocol(
         or int(controls.get("responseAveragingDelay", -1)) >= response_checkpoints[0]
         or not isinstance(controls.get("strategyRegretMatchingPlus", False), bool)
         or not isinstance(controls.get("responseRegretMatchingPlus", False), bool)
+        or not valid_dcfr_controls(controls.get("strategyDcfr", DEFAULT_DCFR))
+        or not valid_dcfr_controls(controls.get("responseDcfr", DEFAULT_DCFR))
         or int(controls.get("threads", 0)) < 1
         or controls.get("crossEvaluateBothDirections") is not True
     ):

@@ -1447,6 +1447,8 @@ pub struct FlopSolution {
     #[serde(default)]
     pub regret_matching_plus: bool,
     #[serde(default)]
+    pub dcfr: DcfrParameters,
+    #[serde(default)]
     pub threads: usize,
     pub strategies: Vec<PublicBeliefStrategy>,
     pub counterfactual_values_bb: [Vec<f32>; 2],
@@ -1479,6 +1481,8 @@ pub struct FlopConvergenceReport {
     pub averaging_delay: u64,
     #[serde(default)]
     pub regret_matching_plus: bool,
+    #[serde(default)]
+    pub dcfr: DcfrParameters,
     pub threads: usize,
     pub checkpoints: Vec<FlopConvergenceCheckpoint>,
     #[serde(default)]
@@ -1538,6 +1542,8 @@ pub struct FlopRangeResponseReport {
     pub response_averaging_delay: u64,
     #[serde(default)]
     pub response_regret_matching_plus: bool,
+    #[serde(default)]
+    pub response_dcfr: DcfrParameters,
     pub threads: usize,
     pub checkpoints: Vec<FlopRangeResponseCheckpoint>,
     pub validation: BlueprintValidation,
@@ -1548,6 +1554,8 @@ pub struct FlopContinuationValues {
     pub schema: String,
     #[serde(default)]
     pub regret_matching_plus: bool,
+    #[serde(default)]
+    pub dcfr: DcfrParameters,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub profile_value_p0_bb: f64,
     pub profile_value_p1_bb: f64,
@@ -2206,6 +2214,7 @@ impl FlopSolver {
         FlopContinuationValues {
             schema: "hu-depth-limited-flop-continuation-values-v1".to_owned(),
             regret_matching_plus: self.config.regret_matching_plus,
+            dcfr: self.config.game.dcfr.clone(),
             counterfactual_values_bb,
             profile_value_p0_bb,
             profile_value_p1_bb,
@@ -2362,6 +2371,7 @@ impl FlopSolver {
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
             regret_matching_plus: self.config.regret_matching_plus,
+            dcfr: self.config.game.dcfr.clone(),
             threads: self.config.threads,
             strategies,
             counterfactual_values_bb,
@@ -2735,6 +2745,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         state: solver.config.state,
         averaging_delay: solver.config.averaging_delay,
         regret_matching_plus,
+        dcfr: solver.config.game.dcfr.clone(),
         threads: solver.config.threads,
         checkpoints: evidence,
         checkpoint_solutions,
@@ -2891,6 +2902,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         baseline_profile_value_p1_bb: baseline[1],
         response_averaging_delay: averaging_delay,
         response_regret_matching_plus: regret_matching_plus,
+        response_dcfr: base.config.game.dcfr.clone(),
         threads,
         checkpoints: evidence,
         validation: BlueprintValidation {
@@ -7441,8 +7453,10 @@ mod tests {
         resolver_network.seed = 41;
         resolver_network.artifact_sha256 = Some("c".repeat(64));
         resolver_network.source_dataset_sha256 = Some("a".repeat(64));
+        let mut game = tiny_game();
+        game.dcfr.strategy_exponent = 4.0;
         let config = FlopResolveConfig {
-            game: tiny_game(),
+            game,
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 4,
             averaging_delay: 0,
@@ -7466,6 +7480,8 @@ mod tests {
 
         assert_eq!(report.schema, "hu-flop-resolver-convergence-diagnostic-v3");
         assert!(!report.regret_matching_plus);
+        assert_eq!(report.dcfr.strategy_exponent, 4.0);
+        assert_eq!(report.final_solution.dcfr, report.dcfr);
         assert_eq!(report.checkpoints.len(), 2);
         assert_eq!(report.checkpoint_solutions.len(), 2);
         assert_eq!(report.checkpoints[0].iterations, 2);
@@ -7543,7 +7559,8 @@ mod tests {
             threads: 1,
         };
         let frozen = solve_flop(config.clone()).unwrap();
-        let game = config.game.clone();
+        let mut game = config.game.clone();
+        game.dcfr.strategy_exponent = 3.0;
         let mut evaluation_network = zero_value_network();
         evaluation_network.seed = 42;
         evaluation_network.artifact_sha256 = Some("d".repeat(64));
@@ -7572,6 +7589,7 @@ mod tests {
 
         assert_eq!(report, repeated);
         assert_eq!(report.schema, "hu-flop-range-response-diagnostic-v1");
+        assert_eq!(report.response_dcfr.strategy_exponent, 3.0);
         assert_eq!(report.checkpoints.len(), 2);
         assert_eq!(report.frozen_strategy_iterations, 4);
         assert_eq!(

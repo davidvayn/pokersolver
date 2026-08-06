@@ -28,6 +28,29 @@ RESPONSE_METHOD = (
     "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_"
     "public_ranges_cross_scored_by_independent_turn_cfv_network"
 )
+DEFAULT_DCFR = {
+    "positive_regret_exponent": 1.5,
+    "negative_regret_exponent": 0.0,
+    "strategy_exponent": 2.0,
+}
+
+
+def dcfr_controls(controls: dict[str, Any], field: str) -> dict[str, float]:
+    raw = controls.get(field, DEFAULT_DCFR)
+    return {key: float(raw[key]) for key in DEFAULT_DCFR}
+
+
+def append_dcfr_args(command: list[str], dcfr: dict[str, float]) -> None:
+    command.extend(
+        [
+            "--dcfr-alpha",
+            str(dcfr["positive_regret_exponent"]),
+            "--dcfr-beta",
+            str(dcfr["negative_regret_exponent"]),
+            "--dcfr-gamma",
+            str(dcfr["strategy_exponent"]),
+        ]
+    )
 
 
 def convergence_method(controls: dict[str, Any]) -> str:
@@ -110,6 +133,7 @@ def convergence_command(
     ]
     if bool(controls.get("strategyRegretMatchingPlus", False)):
         command.append("--regret-matching-plus")
+    append_dcfr_args(command, dcfr_controls(controls, "strategyDcfr"))
     return command
 
 
@@ -141,6 +165,7 @@ def response_command(
     ]
     if bool(controls.get("responseRegretMatchingPlus", False)):
         command.append("--regret-matching-plus")
+    append_dcfr_args(command, dcfr_controls(controls, "responseDcfr"))
     return command
 
 
@@ -292,6 +317,8 @@ def inspect_convergence(
         and payload.get("approximate") is True
         and bool(payload.get("regret_matching_plus", False))
         == bool(controls.get("strategyRegretMatchingPlus", False))
+        and payload.get("dcfr", DEFAULT_DCFR)
+        == dcfr_controls(controls, "strategyDcfr")
         and int(payload.get("value_network_seed", -1)) == strategy["seed"]
         and payload.get("value_network_sha256") == strategy["sha256"]
         and payload.get("value_network_source_dataset_sha256")
@@ -317,6 +344,8 @@ def inspect_convergence(
         and final.get("approximate") is True
         and bool(final.get("regret_matching_plus", False))
         == bool(controls.get("strategyRegretMatchingPlus", False))
+        and final.get("dcfr", DEFAULT_DCFR)
+        == dcfr_controls(controls, "strategyDcfr")
         and float(final.get("effective_stack_bb", float("nan")))
         == float(controls["effectiveStackBb"])
         and int(final.get("value_network_seed", -1)) == strategy["seed"]
@@ -357,6 +386,8 @@ def inspect_convergence(
         and solution.get("approximate") is True
         and bool(solution.get("regret_matching_plus", False))
         == bool(controls.get("strategyRegretMatchingPlus", False))
+        and solution.get("dcfr", DEFAULT_DCFR)
+        == dcfr_controls(controls, "strategyDcfr")
         and float(solution.get("effective_stack_bb", float("nan")))
         == float(controls["effectiveStackBb"])
         and int(solution.get("value_network_seed", -1)) == strategy["seed"]
@@ -423,6 +454,8 @@ def inspect_response(
         and payload.get("approximate") is True
         and bool(payload.get("response_regret_matching_plus", False))
         == bool(controls.get("responseRegretMatchingPlus", False))
+        and payload.get("response_dcfr", DEFAULT_DCFR)
+        == dcfr_controls(controls, "responseDcfr")
         and "not an exploitability upper bound" in payload.get("interpretation", "")
         and payload.get("frozen_strategy_sha256") == convergence["strategySha256"]
         and int(payload.get("frozen_strategy_iterations", -1))

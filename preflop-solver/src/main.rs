@@ -282,6 +282,7 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     game.iterations = 2;
     game.averaging_delay = 0;
+    apply_dcfr_args(&mut game, args)?;
     let board = parse_board::<3>(
         &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th")?,
     )?;
@@ -342,6 +343,7 @@ fn run_flop_pbs_convergence(args: &[String]) -> Result<(), Box<dyn Error>> {
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     game.iterations = 2;
     game.averaging_delay = 0;
+    apply_dcfr_args(&mut game, args)?;
     let board = parse_board::<3>(
         &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th")?,
     )?;
@@ -431,6 +433,7 @@ fn run_flop_pbs_range_response(args: &[String]) -> Result<(), Box<dyn Error>> {
         .collect::<Result<Vec<_>, _>>()?;
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    apply_dcfr_args(&mut game, args)?;
     let report = blueprint::public_belief::evaluate_frozen_flop_range_response_convergence(
         game,
         &frozen,
@@ -2013,12 +2016,14 @@ Complete turn/river label options:
     --evaluation-value-network <json> --checkpoints <csv>
     [--pot-bb 4] [--actor 1] [--averaging-delay N] [--threads N]
     [--regret-matching-plus]
+    [--dcfr-alpha 1.5] [--dcfr-beta 0] [--dcfr-gamma 2]
     [--output <json>]
   flop-pbs-range-response (--solution <flop-solution.json> |
     --convergence-report <flop-convergence.json>)
     --evaluation-value-network <json> --checkpoints <csv>
     [--strategy-iterations N]
     [--averaging-delay 0] [--regret-matching-plus] [--threads N]
+    [--dcfr-alpha 1.5] [--dcfr-beta 0] [--dcfr-gamma 2]
     [--output <json>]
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
     [--dataset <targets.json> --state-index 0]

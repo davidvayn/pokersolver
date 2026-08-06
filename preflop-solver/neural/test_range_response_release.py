@@ -312,6 +312,16 @@ class RangeResponseReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fresh authentic recheck"):
             freezer.validate_accepted_fresh_authentic_recheck(payload)
 
+    def test_dcfr_controls_require_exact_finite_nonnegative_numeric_fields(self):
+        self.assertTrue(freezer.valid_dcfr_controls(freezer.DEFAULT_DCFR))
+        for invalid in [
+            {**freezer.DEFAULT_DCFR, "strategy_exponent": -1.0},
+            {**freezer.DEFAULT_DCFR, "strategy_exponent": float("inf")},
+            {**freezer.DEFAULT_DCFR, "strategy_exponent": True},
+            {**freezer.DEFAULT_DCFR, "unexpected": 1.0},
+        ]:
+            self.assertFalse(freezer.valid_dcfr_controls(invalid))
+
     def test_strategy_hash_matches_the_rust_binary_fixture(self):
         fixture = [
             {
@@ -330,6 +340,14 @@ class RangeResponseReleaseTests(unittest.TestCase):
         controls = self.controls()
         controls["strategyRegretMatchingPlus"] = True
         controls["responseRegretMatchingPlus"] = True
+        controls["strategyDcfr"] = {
+            **runner.DEFAULT_DCFR,
+            "strategy_exponent": 4.0,
+        }
+        controls["responseDcfr"] = {
+            **runner.DEFAULT_DCFR,
+            "strategy_exponent": 3.0,
+        }
         job = self.job()
         convergence_command = runner.convergence_command(
             controls,
@@ -347,6 +365,14 @@ class RangeResponseReleaseTests(unittest.TestCase):
         self.assertIn("--regret-matching-plus", convergence_command)
         self.assertIn("--regret-matching-plus", response_command)
         self.assertEqual(
+            convergence_command[convergence_command.index("--dcfr-gamma") + 1],
+            "4.0",
+        )
+        self.assertEqual(
+            response_command[response_command.index("--dcfr-gamma") + 1],
+            "3.0",
+        )
+        self.assertEqual(
             response_command[response_command.index("--strategy-iterations") + 1],
             "100",
         )
@@ -354,15 +380,18 @@ class RangeResponseReleaseTests(unittest.TestCase):
         convergence_payload = self.convergence_payload()
         convergence_payload["method"] = runner.convergence_method(controls)
         convergence_payload["regret_matching_plus"] = True
+        convergence_payload["dcfr"] = controls["strategyDcfr"]
         for solution in [
             *convergence_payload["checkpoint_solutions"],
             convergence_payload["final_solution"],
         ]:
             solution["method"] = runner.solution_method(controls)
             solution["regret_matching_plus"] = True
+            solution["dcfr"] = controls["strategyDcfr"]
         response_payload = self.response_payload()
         response_payload["method"] = runner.response_method(controls)
         response_payload["response_regret_matching_plus"] = True
+        response_payload["response_dcfr"] = controls["responseDcfr"]
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)
             convergence_path = root / "convergence.json"
