@@ -1469,6 +1469,7 @@ pub struct FlopConvergenceReport {
     pub averaging_delay: u64,
     pub threads: usize,
     pub checkpoints: Vec<FlopConvergenceCheckpoint>,
+    pub final_strategy_sha256: String,
     pub final_solution: FlopSolution,
 }
 
@@ -2660,6 +2661,8 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         });
         final_solution = Some(solution);
     }
+    let final_solution = final_solution.expect("nonempty convergence checkpoints");
+    let final_strategy_sha256 = flop_strategy_sha256(&final_solution.strategies)?;
     Ok(FlopConvergenceReport {
         schema: "hu-flop-resolver-convergence-diagnostic-v2".to_owned(),
         method: "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned(),
@@ -2676,8 +2679,19 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         averaging_delay: solver.config.averaging_delay,
         threads: solver.config.threads,
         checkpoints: evidence,
-        final_solution: final_solution.expect("nonempty convergence checkpoints"),
+        final_strategy_sha256,
+        final_solution,
     })
+}
+
+fn flop_strategy_sha256(strategies: &[PublicBeliefStrategy]) -> Result<String, String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(strategies)
+                .map_err(|error| format!("failed to hash frozen flop strategy: {error}"))?
+        )
+    ))
 }
 
 /// Approximate an information-set-consistent response while preserving the
@@ -2710,13 +2724,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         );
     }
     let final_iterations = *checkpoints.last().expect("nonempty response checkpoints");
-    let frozen_strategy_sha256 = format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&frozen.strategies)
-                .map_err(|error| format!("failed to hash frozen flop strategy: {error}"))?
-        )
-    );
+    let frozen_strategy_sha256 = flop_strategy_sha256(&frozen.strategies)?;
     let mut base = FlopSolver::new(FlopResolveConfig {
         game,
         state: frozen.state.clone(),
@@ -7346,6 +7354,10 @@ mod tests {
         assert_eq!(report.value_network_seed, 41);
         assert_eq!(report.evaluation_value_network_seed, 42);
         assert_eq!(report.final_solution.strategies, direct.strategies);
+        assert_eq!(
+            report.final_strategy_sha256,
+            flop_strategy_sha256(&direct.strategies).unwrap()
+        );
         assert_eq!(report.final_solution.value_network_seed, 41);
         assert_eq!(
             report.final_solution.evaluation_value_network_seed,
@@ -7419,7 +7431,10 @@ mod tests {
         assert_eq!(report.schema, "hu-flop-range-response-diagnostic-v1");
         assert_eq!(report.checkpoints.len(), 2);
         assert_eq!(report.frozen_strategy_iterations, 4);
-        assert_eq!(report.frozen_strategy_sha256.len(), 64);
+        assert_eq!(
+            report.frozen_strategy_sha256,
+            flop_strategy_sha256(&frozen.strategies).unwrap()
+        );
         assert_eq!(report.checkpoints[1].iterations, 4);
         assert!(report.checkpoints.iter().all(|checkpoint| {
             checkpoint.response_gain_p0_bb >= 0.0
