@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ import run_resolver_reach_crossfit as crossfit
 import select_resolver_reach_value_config as selection
 
 
-PLAN_SCHEMA = "hu-resolver-reach-release-execution-plan-v1"
+PLAN_SCHEMA = "hu-resolver-reach-release-execution-plan-v2"
 
 
 def parse_args() -> argparse.Namespace:
@@ -233,6 +234,7 @@ def build_plan(payload: dict[str, Any], corpus: dict[str, Any]) -> dict[str, Any
                         f"baseline-resolver-seed{shard['seed']}"
                         f"-model{model['trainingSeed']}"
                     ),
+                    "metricKind": "resolver-reach",
                     "command": diagnostic_command(
                         shard["output"],
                         model["path"],
@@ -252,6 +254,7 @@ def build_plan(payload: dict[str, Any], corpus: dict[str, Any]) -> dict[str, Any
             diagnostics.append(
                 {
                     "name": f"resolver-seed{shard['seed']}-model{model['seed']}",
+                    "metricKind": "resolver-reach",
                     "command": diagnostic_command(
                         shard["output"],
                         model["path"],
@@ -269,6 +272,7 @@ def build_plan(payload: dict[str, Any], corpus: dict[str, Any]) -> dict[str, Any
             diagnostics.append(
                 {
                     "name": f"authentic-seed{shard['seed']}-model{model['seed']}",
+                    "metricKind": "authentic",
                     "command": diagnostic_command(
                         shard["output"],
                         model["path"],
@@ -367,18 +371,66 @@ def validate_training_job(plan: dict[str, Any], repository_root: Path) -> None:
         )
 
 
+def validate_authentic_diagnostic(
+    output: Path,
+    dataset_sha256: str,
+    model_seed: int,
+    model_sha256: str,
+) -> None:
+    report = json.loads(output.read_text())
+    if report.get("schema") != selection.DIAGNOSTIC_SCHEMA:
+        raise ValueError(f"authentic diagnostic has the wrong schema: {output}")
+    if report.get("sourceDatasetSha256") != dataset_sha256:
+        raise ValueError(f"authentic diagnostic uses the wrong dataset: {output}")
+    if int(report.get("modelSeed", -1)) != model_seed:
+        raise ValueError(f"authentic diagnostic uses the wrong model seed: {output}")
+    if report.get("modelSha256") != model_sha256:
+        raise ValueError(f"authentic diagnostic model hash mismatch: {output}")
+    mass = float(report.get("weightMass", float("nan")))
+    squared = float(report.get("weightedSquaredErrorBb2Sum", float("nan")))
+    absolute = float(report.get("weightedAbsoluteErrorBbSum", float("nan")))
+    rmse = float(report.get("weightedRmseBb", float("nan")))
+    mae = float(report.get("weightedMaeBb", float("nan")))
+    values = (mass, squared, absolute, rmse, mae)
+    if (
+        not all(math.isfinite(value) for value in values)
+        or mass <= 0.0
+        or min(squared, absolute, rmse, mae) < 0.0
+        or int(report.get("states", 0)) <= 0
+    ):
+        raise ValueError(f"authentic diagnostic lacks valid metrics: {output}")
+    if not math.isclose(rmse, math.sqrt(squared / mass), rel_tol=1e-10, abs_tol=1e-12):
+        raise ValueError(f"authentic diagnostic RMSE is inconsistent: {output}")
+    if not math.isclose(mae, absolute / mass, rel_tol=1e-10, abs_tol=1e-12):
+        raise ValueError(f"authentic diagnostic MAE is inconsistent: {output}")
+
+
 def validate_diagnostic_job(job: dict[str, Any], repository_root: Path) -> None:
     command = job["command"]
     dataset = repository_root / crossfit.option_values(command, "--dataset")[0]
     model = repository_root / crossfit.option_values(command, "--model")[0]
     output = repository_root / job["output"]
     model_payload = json.loads(model.read_text())
-    selection.diagnostic_metric(
-        repository_root,
-        output,
-        release_freeze.sha256_file(dataset),
-        {int(model_payload["seed"]): release_freeze.sha256_file(model)},
-    )
+    model_seed = int(model_payload["seed"])
+    dataset_sha256 = release_freeze.sha256_file(dataset)
+    model_sha256 = release_freeze.sha256_file(model)
+    metric_kind = job.get("metricKind")
+    if metric_kind == "resolver-reach":
+        selection.diagnostic_metric(
+            repository_root,
+            output,
+            dataset_sha256,
+            {model_seed: model_sha256},
+        )
+    elif metric_kind == "authentic":
+        validate_authentic_diagnostic(
+            output,
+            dataset_sha256,
+            model_seed,
+            model_sha256,
+        )
+    else:
+        raise ValueError(f"unknown diagnostic metric kind: {metric_kind!r}")
 
 
 def execute_plan(

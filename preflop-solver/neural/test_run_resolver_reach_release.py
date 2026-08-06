@@ -107,6 +107,22 @@ class RunResolverReachReleaseTests(unittest.TestCase):
         self.assertEqual(len(plan["baselineResolverDiagnosticJobs"]), 4)
         self.assertEqual(len(plan["diagnosticJobs"]), 8)
         self.assertEqual(len(plan["parityJobs"]), 2)
+        self.assertEqual(
+            {job["metricKind"] for job in plan["baselineResolverDiagnosticJobs"]},
+            {"resolver-reach"},
+        )
+        self.assertEqual(
+            [job["metricKind"] for job in plan["diagnosticJobs"]].count(
+                "resolver-reach"
+            ),
+            4,
+        )
+        self.assertEqual(
+            [job["metricKind"] for job in plan["diagnosticJobs"]].count(
+                "authentic"
+            ),
+            4,
+        )
         command = plan["trainingJob"]["command"]
         self.assertEqual(
             module.crossfit.option_values(command, "--supplemental-dataset-weight"),
@@ -116,6 +132,73 @@ class RunResolverReachReleaseTests(unittest.TestCase):
             module.crossfit.option_values(command, "--seeds"), ["15301,15302"]
         )
         self.assertNotIn("--holdout-start-index", command)
+
+    def test_authentic_diagnostic_uses_authentic_metric_not_resolver_reach(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            dataset = root / "authentic.json"
+            dataset.write_text("authentic dataset")
+            model = root / "model.json"
+            model.write_text(json.dumps({"seed": 15301}))
+            output = root / "authentic-diagnostic.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "schema": module.selection.DIAGNOSTIC_SCHEMA,
+                        "sourceDatasetSha256": module.release_freeze.sha256_file(
+                            dataset
+                        ),
+                        "modelSeed": 15301,
+                        "modelSha256": module.release_freeze.sha256_file(model),
+                        "states": 64,
+                        "weightMass": 4.0,
+                        "weightedSquaredErrorBb2Sum": 1.0,
+                        "weightedAbsoluteErrorBbSum": 1.5,
+                        "weightedRmseBb": 0.5,
+                        "weightedMaeBb": 0.375,
+                        "resolverReachEvaluation": None,
+                    }
+                )
+            )
+            job = {
+                "metricKind": "authentic",
+                "command": [
+                    "python",
+                    "diagnose.py",
+                    "--dataset",
+                    dataset.name,
+                    "--model",
+                    model.name,
+                ],
+                "output": output.name,
+            }
+
+            module.validate_diagnostic_job(job, root)
+
+    def test_diagnostic_rejects_an_unknown_metric_kind(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            dataset = root / "dataset.json"
+            dataset.write_text("dataset")
+            model = root / "model.json"
+            model.write_text(json.dumps({"seed": 15301}))
+            output = root / "diagnostic.json"
+            output.write_text("{}")
+            job = {
+                "metricKind": "typo",
+                "command": [
+                    "python",
+                    "diagnose.py",
+                    "--dataset",
+                    dataset.name,
+                    "--model",
+                    model.name,
+                ],
+                "output": output.name,
+            }
+
+            with self.assertRaisesRegex(ValueError, "unknown diagnostic metric kind"):
+                module.validate_diagnostic_job(job, root)
 
     def test_resolver_job_pins_source_model_and_every_solver_control(self):
         command = module.resolver_evaluation_command(

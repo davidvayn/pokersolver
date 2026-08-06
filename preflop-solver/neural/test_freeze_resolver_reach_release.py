@@ -11,8 +11,20 @@ PROTOCOL = ROOT / "neural/20bb-v49-release-evaluation-protocol.json"
 
 
 class FreezeResolverReachReleaseTests(unittest.TestCase):
-    def test_real_protocol_is_frozen_fail_closed_before_crossfit(self) -> None:
-        protocol, experiment, corpus = module.validate_protocol(PROTOCOL, ROOT)
+    def test_real_protocol_is_frozen_and_fail_closed_across_lifecycle(self) -> None:
+        raw_protocol = json.loads(PROTOCOL.read_text())
+        holdout_outputs = [
+            module.resolved(ROOT, shard["output"])
+            for shard in raw_protocol["freshAuthenticHoldout"]["shards"]
+        ]
+        if any(path.exists() for path in holdout_outputs):
+            with self.assertRaisesRegex(ValueError, "generated before release freeze"):
+                module.validate_protocol(PROTOCOL, ROOT)
+        else:
+            module.validate_protocol(PROTOCOL, ROOT)
+        protocol, experiment, corpus = module.validate_protocol(
+            PROTOCOL, ROOT, require_unopened=False
+        )
         self.assertFalse(protocol["activationAllowed"])
         self.assertEqual(experiment["postSelection"]["releaseTrainingSeeds"], [15301, 15302])
         self.assertEqual(
