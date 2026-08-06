@@ -45,6 +45,17 @@ def resolve_path(repository_root: Path, raw_path: str) -> Path:
     return path if path.is_absolute() else repository_root / path
 
 
+def repository_relative_path(repository_root: Path, path: Path) -> str:
+    root = repository_root.resolve()
+    candidate = path.resolve()
+    try:
+        return str(candidate.relative_to(root))
+    except ValueError as error:
+        raise ValueError(
+            f"resolver selection evidence escapes the repository root: {candidate}"
+        ) from error
+
+
 def accepted_dataset(path: Path) -> str:
     payload = json.loads(path.read_text())
     if payload.get("schema") != DATASET_SCHEMA:
@@ -73,6 +84,7 @@ def checked_model_hashes(
 
 
 def diagnostic_metric(
+    repository_root: Path,
     path: Path,
     dataset_sha256: str,
     expected_model_hashes: dict[int, str],
@@ -93,7 +105,7 @@ def diagnostic_metric(
     if not np.isfinite(rmse) or rmse < 0.0 or not np.isfinite(reach_mass) or reach_mass <= 0.0:
         raise ValueError(f"resolver diagnostic lacks a valid reach metric: {path}")
     return {
-        "path": str(path),
+        "path": repository_relative_path(repository_root, path),
         "sha256": sha256_file(path),
         "modelSeed": seed,
         "modelSha256": expected_model_hashes[seed],
@@ -112,6 +124,7 @@ def fold_diagnostics(
     dataset_sha256 = accepted_dataset(dataset_path)
     diagnostics = [
         diagnostic_metric(
+            repository_root,
             resolve_path(repository_root, str(path)),
             dataset_sha256,
             expected_model_hashes,
@@ -124,7 +137,7 @@ def fold_diagnostics(
         raise ValueError("each resolver fold requires one diagnostic per model seed")
     return {
         "name": str(fold["name"]),
-        "evaluationDataset": str(dataset_path),
+        "evaluationDataset": repository_relative_path(repository_root, dataset_path),
         "evaluationDatasetSha256": dataset_sha256,
         "diagnostics": diagnostics,
     }
@@ -148,7 +161,16 @@ def baseline_summary(
         for metric in fold["diagnostics"]
     ]
     return {
-        "models": baseline["models"],
+        "models": [
+            {
+                **entry,
+                "path": repository_relative_path(
+                    repository_root,
+                    resolve_path(repository_root, str(entry["path"])),
+                ),
+            }
+            for entry in baseline["models"]
+        ],
         "folds": folds,
         "maximumResolverReachWeightedRmseBb": max(values),
         "meanResolverReachWeightedRmseBb": float(np.mean(values)),
@@ -171,6 +193,12 @@ def candidate_summary(
         training = value_selection.summarize_candidate(
             report_path, minimum_cross_seed_correlation
         )
+        training["report"] = repository_relative_path(repository_root, report_path)
+        for weight in training["weights"]:
+            weight["path"] = repository_relative_path(
+                repository_root,
+                resolve_path(repository_root, str(weight["path"])),
+            )
         seeds = {entry["seed"] for entry in training["weights"]}
         if all_seeds & seeds:
             raise ValueError("resolver cross-validation folds reuse a training seed")
@@ -270,6 +298,8 @@ def candidate_summary(
 
 
 def select(spec_path: Path, repository_root: Path) -> dict[str, Any]:
+    repository_root = repository_root.resolve()
+    spec_path = resolve_path(repository_root, str(spec_path)).resolve()
     spec = json.loads(spec_path.read_text())
     if spec.get("schema") != SPEC_SCHEMA:
         raise ValueError("resolver-reach selection spec has the wrong schema")
@@ -331,7 +361,7 @@ def select(spec_path: Path, repository_root: Path) -> dict[str, Any]:
             "then minimize maximum and mean cross-fit resolver-reach RMSE, "
             "authentic validation RMSE, and authentic tuning RMSE"
         ),
-        "spec": str(spec_path),
+        "spec": repository_relative_path(repository_root, spec_path),
         "specSha256": sha256_file(spec_path),
         "gates": {
             **gates,

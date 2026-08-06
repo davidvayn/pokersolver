@@ -250,6 +250,7 @@ def validate_diagnostic_job(job: dict[str, Any], repository_root: Path) -> None:
     model_seed = int(model_payload["seed"])
     model_sha256 = selection.sha256_file(model)
     selection.diagnostic_metric(
+        repository_root,
         output,
         selection.sha256_file(dataset),
         {model_seed: model_sha256},

@@ -220,6 +220,30 @@ class ResolverReachValueSelectionTests(unittest.TestCase):
                 0.4,
             )
 
+    def test_selection_is_checkout_location_independent(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as first_raw_directory,
+            tempfile.TemporaryDirectory() as second_raw_directory,
+        ):
+            first_root = Path(first_raw_directory)
+            second_root = Path(second_raw_directory)
+            first_spec, _ = self.spec(first_root)
+            second_spec, _ = self.spec(second_root)
+
+            first = module.select(first_spec, first_root)
+            second = module.select(second_spec, second_root)
+
+            self.assertEqual(first, second)
+            self.assertEqual(first["spec"], "spec.json")
+            self.assertEqual(
+                first["baseline"]["folds"][0]["evaluationDataset"],
+                "fold-first.json",
+            )
+            self.assertEqual(
+                first["selectedCandidate"]["folds"][0]["trainingReport"]["report"],
+                "better-first/report.json",
+            )
+
     def test_rejects_diagnostic_whose_model_bytes_do_not_match(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)

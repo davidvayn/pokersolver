@@ -374,6 +374,7 @@ def validate_diagnostic_job(job: dict[str, Any], repository_root: Path) -> None:
     output = repository_root / job["output"]
     model_payload = json.loads(model.read_text())
     selection.diagnostic_metric(
+        repository_root,
         output,
         release_freeze.sha256_file(dataset),
         {int(model_payload["seed"]): release_freeze.sha256_file(model)},

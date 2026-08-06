@@ -1,0 +1,180 @@
+{
+  "activationAllowed": false,
+  "failurePolicy": {
+    "failedCandidateRequiresNewAuthenticHoldoutSeeds": true,
+    "failedCandidateRequiresNewResolverEvaluationRoots": true,
+    "missingOrInvalidEvidenceFailsClosed": true,
+    "reservedResolverEvaluationGeneratedOnlyForSelectedConfiguration": true
+  },
+  "freshAuthenticHoldout": {
+    "generateOnlyAfterReleaseConfigurationFreeze": true,
+    "generator": {
+      "beliefReplicates": 2,
+      "command": "turn-pbs-self-play-targets",
+      "effectiveStackBb": 20.0,
+      "explorationProbability": 0.0,
+      "minimumPotBb": 0.0,
+      "rangeParticles": 4096,
+      "riverAveragingDelay": 20,
+      "riverIterations": 200,
+      "statesPerShard": 64,
+      "threads": 10
+    },
+    "shards": [
+      {
+        "checkpointDirectory": "neural/runs/v49-resolver-reach/fresh-authentic-seed15401-checkpoints",
+        "output": "neural/runs/v49-resolver-reach/fresh-authentic-holdout-64-seed15401.json",
+        "seed": 15401
+      },
+      {
+        "checkpointDirectory": "neural/runs/v49-resolver-reach/fresh-authentic-seed15402-checkpoints",
+        "output": "neural/runs/v49-resolver-reach/fresh-authentic-holdout-64-seed15402.json",
+        "seed": 15402
+      }
+    ],
+    "sourcePolicy": {
+      "path": "neural/runs/20bb-v26-routed-seed5101.json",
+      "sha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+    },
+    "useForModelSelection": false
+  },
+  "matchedContinualResolver": {
+    "averagingDelay": 10,
+    "crossEvaluateBothReleaseSeeds": true,
+    "effectiveStackBb": 20.0,
+    "iterations": 100,
+    "maximumExploitabilityBbPerHand": 0.05,
+    "rootActor": 1,
+    "rootPotBb": 4.0,
+    "rootSource": "all reservedEvaluationShards boards in the pinned resolver corpus",
+    "runOnlyAfterValueReleaseGatesPass": true,
+    "threads": 10
+  },
+  "minimumPrimaryBatchFraction": 0.5,
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "primaryDataset": {
+    "path": "neural/runs/v48-pooled-release/turn-targets-authentic-merged-512.json",
+    "sha256": "0532dec5f96a79fc42c8beddc54c2a31985f7d383bfe675a9f160a7fcf8d7da6",
+    "stateCount": 512,
+    "status": "opened-for-successor-training-and-tuning"
+  },
+  "protocol": {
+    "path": "neural/20bb-v49-release-evaluation-protocol.json",
+    "sha256": "61631a81373fe1e2fda67200bb3caca4aa4b6330cd0af17a7498d09cfc5b14a3"
+  },
+  "releaseGates": {
+    "activationRequiresEveryFullGameGate": true,
+    "maximumCrossFitLocalResolverExploitabilityBbPerHand": 0.05,
+    "maximumPerSeedAuthenticFreshHoldoutRmseBb": 0.25,
+    "maximumRustPythonParityErrorBb": 0.0001,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "minimumPerSeedResolverReachWeightedRmseImprovementFraction": 0.2
+  },
+  "reservedResolverEvaluation": [
+    {
+      "boards": [
+        "2d,8h,Ks",
+        "7c,9d,Th",
+        "4c,Jc,Ad",
+        "5d,6d,8s",
+        "3s,9s,Ks",
+        "4c,4d,Th"
+      ],
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/eval-seed15103-checkpoints",
+      "expectedStateCount": 18,
+      "output": "neural/runs/v49-resolver-reach/resolver-leaf-eval-18-seed15103.json",
+      "seed": 15103,
+      "sourceTrainingSeed": 14921
+    },
+    {
+      "boards": [
+        "4s,9c,Ah",
+        "Td,Qh,Ks",
+        "8h,Th,Js",
+        "7h,8h,Th",
+        "9c,9h,Kc",
+        "Qc,Qd,Qh"
+      ],
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/eval-seed15104-checkpoints",
+      "expectedStateCount": 18,
+      "output": "neural/runs/v49-resolver-reach/resolver-leaf-eval-18-seed15104.json",
+      "seed": 15104,
+      "sourceTrainingSeed": 14922
+    }
+  ],
+  "schema": "hu-resolver-reach-release-freeze-v1",
+  "selection": {
+    "path": "neural/20bb-v49-crossfit-selection.json",
+    "releaseHoldoutMetricsConsulted": false,
+    "selectedCandidate": "uniform-expanded",
+    "selectedConfigurationSha256": "eb535bae433a53fbde38b7712932deb41bae78a5e4e6f037e36a09c14ecb7abb",
+    "sha256": "93c92c0da05ea9cd36cf73fb2e1fc764a38d19dae60278a6abb6eb7cdcaff5f4"
+  },
+  "status": "frozen-for-fresh-evaluation",
+  "supplementalDatasetSamplingWeights": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.5,
+    0.5
+  ],
+  "supplementalDatasets": [
+    {
+      "path": "neural/runs/v45-complete-turn/turn-targets-complete-paired-200.json",
+      "sha256": "ba41e39d9d4811ef6496f31d817390d3bbe0e9b724d64b1f0660ebc7ad524c84"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-coverage-complete-paired-200.json",
+      "sha256": "49c434eea29c8ce41c91bbf6395200e657a110781f784eb1dbebc1f8e43b033c"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/resolver-leaf-train-complete-paired-200.json",
+      "sha256": "ee72ee272d676d4e60d00f0c8f8c193d3bfcd345be342a3227efca71016a764a"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-large-complete-paired-200.json",
+      "sha256": "02e7694f87244814061f718bb59781ae99b098f4525352d673485ae052a6a188"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-large-only-complete-paired-200.json",
+      "sha256": "e3ac699980b0465d5ea53ff871a6ac448b6902460cc7350a2e5651eea30ec09c"
+    },
+    {
+      "path": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+      "sha256": "8399c5f21ef1468f3c06b81c9a36c068acd2b6eff5b04883f58540d5a2510403"
+    },
+    {
+      "path": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+      "sha256": "9bfc011eed61d9052cb18759fa79d14226407eb860467b795df3537c21e50f9d"
+    }
+  ],
+  "trainer": {
+    "adamBiasCorrection": false,
+    "architecture": "xwide-gelu-pooled",
+    "batchSize": 24,
+    "earlyStoppingPatience": 25,
+    "evaluationInterval": 50,
+    "featureCacheDirectory": "neural/runs/feature-cache",
+    "featureSchema": "rank-suit-invariant-combo-query-v3",
+    "featureWorkers": 8,
+    "holdoutStartIndex": null,
+    "huberDelta": 0.05,
+    "learningRate": 0.0003,
+    "learningRateSchedule": "constant",
+    "outputDirectory": "neural/runs/v49-resolver-reach/release/uniform-expanded",
+    "rawBbAuxiliaryWeight": 0.25,
+    "splitSeed": 10901,
+    "steps": 5000,
+    "suitAugmentationsPerState": 1,
+    "trainingSeeds": [
+      15301,
+      15302
+    ],
+    "tuningFraction": 0.15,
+    "validationFraction": 0.25,
+    "valueNormalization": "pot",
+    "variantSet": "range-only"
+  }
+}

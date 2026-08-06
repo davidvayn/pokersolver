@@ -1,0 +1,134 @@
+{
+  "baseline": {
+    "folds": [
+      {
+        "diagnostics": [
+          "neural/runs/v49-resolver-reach/crossfit/baseline/seed15101-seed14921.json",
+          "neural/runs/v49-resolver-reach/crossfit/baseline/seed15101-seed14922.json"
+        ],
+        "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+        "name": "seed15101"
+      },
+      {
+        "diagnostics": [
+          "neural/runs/v49-resolver-reach/crossfit/baseline/seed15102-seed14921.json",
+          "neural/runs/v49-resolver-reach/crossfit/baseline/seed15102-seed14922.json"
+        ],
+        "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+        "name": "seed15102"
+      }
+    ],
+    "models": [
+      {
+        "path": "neural/runs/v48-pooled-release/frozen-pooled-paired/turn-value-range-seed14921.json",
+        "seed": 14921,
+        "sha256": "fd4b1c471b2df9ed63df2655b8c0397a456e2c29f8c663988443191ba323cb33"
+      },
+      {
+        "path": "neural/runs/v48-pooled-release/frozen-pooled-paired/turn-value-range-seed14922.json",
+        "seed": 14922,
+        "sha256": "528f0ae3408a379a950d95cfd1f740c81aa98c9d086f74cb883d5b2ff1ed93fb"
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "folds": [
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15101/crossfit-seed15102-seed15201.json",
+            "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15101/crossfit-seed15102-seed15202.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+          "name": "seed15102",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15101/turn-value-paired-report.json"
+        },
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15102/crossfit-seed15101-seed15203.json",
+            "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15102/crossfit-seed15101-seed15204.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+          "name": "seed15101",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15102/turn-value-paired-report.json"
+        }
+      ],
+      "name": "uniform-expanded"
+    },
+    {
+      "folds": [
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15101/crossfit-seed15102-seed15211.json",
+            "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15101/crossfit-seed15102-seed15212.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+          "name": "seed15102",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15101/turn-value-paired-report.json"
+        },
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15102/crossfit-seed15101-seed15213.json",
+            "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15102/crossfit-seed15101-seed15214.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+          "name": "seed15101",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15102/turn-value-paired-report.json"
+        }
+      ],
+      "name": "protected-expanded"
+    },
+    {
+      "folds": [
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15101/crossfit-seed15102-seed15221.json",
+            "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15101/crossfit-seed15102-seed15222.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+          "name": "seed15102",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15101/turn-value-paired-report.json"
+        },
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15102/crossfit-seed15101-seed15223.json",
+            "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15102/crossfit-seed15101-seed15224.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+          "name": "seed15101",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15102/turn-value-paired-report.json"
+        }
+      ],
+      "name": "strongly-protected-expanded"
+    },
+    {
+      "folds": [
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15101/crossfit-seed15102-seed15231.json",
+            "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15101/crossfit-seed15102-seed15232.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+          "name": "seed15102",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15101/turn-value-paired-report.json"
+        },
+        {
+          "diagnostics": [
+            "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15102/crossfit-seed15101-seed15233.json",
+            "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15102/crossfit-seed15101-seed15234.json"
+          ],
+          "evaluationDataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+          "name": "seed15101",
+          "trainingReport": "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15102/turn-value-paired-report.json"
+        }
+      ],
+      "name": "resolver-heavy-expanded"
+    }
+  ],
+  "gates": {
+    "maximumAuthenticTuningRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "minimumMaximumResolverReachRmseImprovementFraction": 0.2
+  },
+  "schema": "hu-resolver-reach-crossfit-selection-spec-v1"
+}
