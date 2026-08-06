@@ -383,6 +383,23 @@ or whose policy/provenance/numerical checks fail. Acceptance remains learned-
 response rejection evidence only and cannot activate the model without the
 independent full-game exploitability upper bound.
 
+The failed v2 strategy freeze also triggered a new authentic-value recheck
+under the original failure policy. Seeds 15501 and 15502 are frozen for two new
+64-state shards, are never used for model selection, and must remain disjoint
+from every training, resolver, and earlier holdout fingerprint. Both unchanged
+V49 networks must remain below `0.25bb` RMSE and retain at least `0.95`
+cross-seed prediction correlation.
+
+```bash
+.venv-neural/bin/python neural/run_fresh_authentic_recheck.py \
+  neural/20bb-v49-fresh-authentic-recheck.json --execute --resume \
+  --output-plan neural/runs/v49-resolver-reach/fresh-authentic-recheck-plan.json
+
+.venv-neural/bin/python neural/validate_fresh_authentic_recheck.py \
+  neural/20bb-v49-fresh-authentic-recheck.json \
+  --output neural/runs/v49-resolver-reach/fresh-authentic-recheck-validation.json
+```
+
 See `neural/OPEN_SOURCE_SOFTWARE.md` for the dependency/license inventory.
 
 Stacks include posted blinds. Small-blind payoff is measured relative to the

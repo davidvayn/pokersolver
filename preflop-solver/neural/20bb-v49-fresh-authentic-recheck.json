@@ -1,0 +1,107 @@
+{
+  "schema": "hu-fresh-authentic-value-recheck-protocol-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "frozen-before-successor-authentic-recheck",
+  "activationAllowed": false,
+  "predecessor": {
+    "releaseFreeze": {
+      "path": "neural/20bb-v49-release-freeze.json",
+      "sha256": "aa3f4655ccab9a5575e08ea465973ea361b883f2ceee5d90b6ab36fe5f0532ab"
+    },
+    "acceptedValueValidation": {
+      "path": "neural/runs/v49-resolver-reach/value-release-validation.json",
+      "sha256": "6859625a236d9a9a556bdd6b432a4953b360a610bf92f9fb123dffa234306a6a"
+    },
+    "rangeResponseFailure": {
+      "path": "neural/20bb-v49-range-response-v2-first-root-failure.json",
+      "sha256": "24c75f3c77cbc84bd1953928f606625322888e38ca050d1a3df5466fe93840fa"
+    }
+  },
+  "sourcePolicy": {
+    "path": "neural/runs/20bb-v26-routed-seed5101.json",
+    "sha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+  },
+  "models": [
+    {
+      "seed": 15301,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json",
+      "sha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81"
+    },
+    {
+      "seed": 15302,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json",
+      "sha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1"
+    }
+  ],
+  "implementation": {
+    "commit": "bed5f25ebedfe7a7a7579f9269a56c5c5cb51da9",
+    "files": [
+      {
+        "path": "src/blueprint/public_belief.rs",
+        "sha256": "455c558444e0ca7740de89b730c15bafda06ba4f869fa0b39ccb542869b1ce71"
+      },
+      {
+        "path": "src/main.rs",
+        "sha256": "d2f1b7eb615340d3189cd65acd58d855dc92d4a0dda34e414273d1b07ba619eb"
+      },
+      {
+        "path": "Cargo.lock",
+        "sha256": "e207387ec37c9d7d5035fe3958f50030a4e390269cdac1bb7411cead8548b33a"
+      }
+    ]
+  },
+  "orchestration": {
+    "commit": "bed5f25ebedfe7a7a7579f9269a56c5c5cb51da9",
+    "files": [
+      {
+        "path": "neural/run_fresh_authentic_recheck.py",
+        "sha256": "ec262242afab9fb4cf4df3c4c0fcae870741b0f7677e0866c60dd0bbc44d43dc"
+      },
+      {
+        "path": "neural/validate_fresh_authentic_recheck.py",
+        "sha256": "d8f7088de327463b6544aecae8aa4412a8702f3529635306366ebce522fd234d"
+      },
+      {
+        "path": "neural/test_fresh_authentic_recheck.py",
+        "sha256": "c9d07af10241eff7fda9054c7f45c0b9f29014ed6204dfe0dae7678ea99fa7c3"
+      }
+    ]
+  },
+  "generator": {
+    "command": "turn-pbs-self-play-targets",
+    "effectiveStackBb": 20.0,
+    "statesPerShard": 64,
+    "rangeParticles": 4096,
+    "riverIterations": 200,
+    "riverAveragingDelay": 20,
+    "threads": 10,
+    "beliefReplicates": 2,
+    "explorationProbability": 0.0,
+    "minimumPotBb": 0.0
+  },
+  "shards": [
+    {
+      "seed": 15501,
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-seed15501-checkpoints",
+      "output": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-64-seed15501.json"
+    },
+    {
+      "seed": 15502,
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-seed15502-checkpoints",
+      "output": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-64-seed15502.json"
+    }
+  ],
+  "diagnosticOutputDirectory": "neural/runs/v49-resolver-reach/release/uniform-expanded/fresh-authentic-recheck",
+  "gates": {
+    "maximumPerSeedRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "requireUniqueFingerprints": true,
+    "requireDisjointnessFromEveryPreviouslyOpenedState": true
+  },
+  "failurePolicy": {
+    "useForModelSelection": false,
+    "missingOrInvalidEvidenceFailsClosed": true,
+    "rejectionRequiresNewHoldoutSeeds": true,
+    "activationRequiresEveryStrategyAndFullGameGate": true
+  }
+}
