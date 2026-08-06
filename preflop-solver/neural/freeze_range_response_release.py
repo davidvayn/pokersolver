@@ -35,6 +35,13 @@ def resolved(repository_root: Path, path: str | Path) -> Path:
     return candidate if candidate.is_absolute() else repository_root / candidate
 
 
+def portable_path(repository_root: Path, path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(repository_root.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def checked_reference(repository_root: Path, reference: dict[str, Any]) -> Path:
     path = resolved(repository_root, reference.get("path", ""))
     if not path.is_file() or release_freeze.sha256_file(path) != reference.get("sha256"):
@@ -187,6 +194,14 @@ def validate_protocol(
     if len(implementation.get("files", [])) < 3:
         raise ValueError("range-response implementation sources are not fully pinned")
 
+    orchestration = protocol.get("orchestration", {})
+    if len(str(orchestration.get("commit", ""))) != 40:
+        raise ValueError("range-response orchestration commit is not pinned")
+    for reference in orchestration.get("files", []):
+        checked_reference(repository_root, reference)
+    if len(orchestration.get("files", [])) < 3:
+        raise ValueError("range-response orchestration sources are not fully pinned")
+
     controls = protocol.get("controls", {})
     strategy_checkpoints = [int(value) for value in controls.get("strategyCheckpoints", [])]
     response_checkpoints = [int(value) for value in controls.get("responseCheckpoints", [])]
@@ -267,12 +282,13 @@ def build_freeze(
         "status": "frozen-before-fresh-range-response-evaluation",
         "activationAllowed": False,
         "protocol": {
-            "path": str(protocol_path),
+            "path": portable_path(repository_root, protocol_path),
             "sha256": release_freeze.sha256_file(protocol_path),
         },
         "predecessor": protocol["predecessor"],
         "models": models,
         "implementation": protocol["implementation"],
+        "orchestration": protocol["orchestration"],
         "rootSelection": {
             **selection,
             "excludedSuitIsomorphismKeyCount": len(excluded),

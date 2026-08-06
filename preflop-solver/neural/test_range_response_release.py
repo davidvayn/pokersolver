@@ -247,6 +247,16 @@ class RangeResponseReleaseTests(unittest.TestCase):
             {tuple(root["suitIsomorphismKey"]) for root in first} & excluded
         )
 
+    def test_freeze_paths_are_portable_with_an_absolute_repository_root(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory).resolve()
+            protocol = root / "neural" / "protocol.json"
+            protocol.parent.mkdir()
+            protocol.write_text("{}")
+            self.assertEqual(
+                freezer.portable_path(root, protocol), "neural/protocol.json"
+            )
+
     def test_strategy_hash_matches_the_rust_binary_fixture(self):
         fixture = [
             {
