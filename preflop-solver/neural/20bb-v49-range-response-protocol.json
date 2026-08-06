@@ -47,6 +47,23 @@
       }
     ]
   },
+  "orchestration": {
+    "commit": "025e9bb17d57d662b04f01eadad192c24f418a24",
+    "files": [
+      {
+        "path": "neural/freeze_range_response_release.py",
+        "sha256": "d5b645decf052aef11d66f14ed7289a3628d0d202f68ba32db750a8f9160c3ef"
+      },
+      {
+        "path": "neural/run_range_response_release.py",
+        "sha256": "ea29e883563b0f2ceb04ed2923d8153130730b4003c0e18f33da9aa079a3550b"
+      },
+      {
+        "path": "neural/validate_range_response_release.py",
+        "sha256": "73c9d5af2709603793d8b4a0b7ad2c20de3e6e75709b7f7c90672bf7c5288f83"
+      }
+    ]
+  },
   "rootSelection": {
     "algorithm": "sha256-ranked-suit-canonical-flops-v1",
     "seed": 15601,
