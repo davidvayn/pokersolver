@@ -254,16 +254,32 @@ row, zero-sum residual above `1e-6bb`, nonpositive resolver improvement, or any
 local depth-limited exploitability above `0.05bb/hand`.
 
 ```bash
+.venv-neural/bin/python neural/freeze_resolver_reach_release.py \
+  neural/20bb-v49-release-evaluation-protocol.json \
+  --selection neural/20bb-v49-crossfit-selection.json \
+  --output neural/20bb-v49-release-freeze.json
+
+# Commit and push the reproduced freeze before executing either untouched
+# evaluation corpus. The release runner rejects any field that no longer
+# reproduces from the committed protocol and cross-fit selection.
+.venv-neural/bin/python neural/run_resolver_reach_release.py \
+  neural/20bb-v49-release-freeze.json --execute \
+  --output-plan neural/runs/v49-resolver-reach/release-execution-plan.json
+
+.venv-neural/bin/python neural/validate_resolver_reach_release.py \
+  neural/20bb-v49-release-freeze.json \
+  --output neural/runs/v49-resolver-reach/value-release-validation.json
+
 .venv-neural/bin/python neural/run_matched_continual_resolver.py \
-  neural/runs/v49-resolver-reach/release/<candidate>/release-freeze.json \
-  --value-validation neural/runs/v49-resolver-reach/release/<candidate>/value-validation.json \
+  neural/20bb-v49-release-freeze.json \
+  --value-validation neural/runs/v49-resolver-reach/value-release-validation.json \
   --execute --resume \
-  --output-plan neural/runs/v49-resolver-reach/release/<candidate>/matched-resolver-plan.json
+  --output-plan neural/runs/v49-resolver-reach/matched-resolver-plan.json
 
 .venv-neural/bin/python neural/validate_matched_continual_resolver.py \
-  neural/runs/v49-resolver-reach/release/<candidate>/release-freeze.json \
-  --value-validation neural/runs/v49-resolver-reach/release/<candidate>/value-validation.json \
-  --output neural/runs/v49-resolver-reach/release/<candidate>/matched-resolver-validation.json
+  neural/20bb-v49-release-freeze.json \
+  --value-validation neural/runs/v49-resolver-reach/value-release-validation.json \
+  --output neural/runs/v49-resolver-reach/matched-resolver-validation.json
 ```
 
 Passing this local resolver gate still leaves activation disabled while the
