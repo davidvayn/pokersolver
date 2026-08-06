@@ -1469,8 +1469,28 @@ pub struct FlopConvergenceReport {
     pub averaging_delay: u64,
     pub threads: usize,
     pub checkpoints: Vec<FlopConvergenceCheckpoint>,
+    #[serde(default)]
+    pub checkpoint_solutions: Vec<FlopSolution>,
     pub final_strategy_sha256: String,
     pub final_solution: FlopSolution,
+}
+
+impl FlopConvergenceReport {
+    pub fn solution_at_iterations(&self, iterations: Option<u64>) -> Result<FlopSolution, String> {
+        let Some(iterations) = iterations else {
+            return Ok(self.final_solution.clone());
+        };
+        if self.final_solution.iterations == iterations {
+            return Ok(self.final_solution.clone());
+        }
+        self.checkpoint_solutions
+            .iter()
+            .find(|solution| solution.iterations == iterations)
+            .cloned()
+            .ok_or_else(|| {
+                format!("flop convergence report has no frozen strategy at iteration {iterations}")
+            })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -2628,6 +2648,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     let reaches = solver.config.state.ranges.clone();
     let mut completed = 0;
     let mut evidence = Vec::with_capacity(checkpoints.len());
+    let mut checkpoint_solutions = Vec::with_capacity(checkpoints.len());
     let mut final_solution = None;
     for checkpoint in checkpoints {
         for round in (completed + 1)..=*checkpoint {
@@ -2659,12 +2680,13 @@ pub fn diagnose_flop_cross_evaluated_convergence(
             metrics: solution.metrics.clone(),
             validation: solution.validation.clone(),
         });
+        checkpoint_solutions.push(solution.clone());
         final_solution = Some(solution);
     }
     let final_solution = final_solution.expect("nonempty convergence checkpoints");
     let final_strategy_sha256 = flop_strategy_sha256(&final_solution.strategies);
     Ok(FlopConvergenceReport {
-        schema: "hu-flop-resolver-convergence-diagnostic-v2".to_owned(),
+        schema: "hu-flop-resolver-convergence-diagnostic-v3".to_owned(),
         method: "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned(),
         approximate: true,
         value_network_seed,
@@ -2679,6 +2701,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         averaging_delay: solver.config.averaging_delay,
         threads: solver.config.threads,
         checkpoints: evidence,
+        checkpoint_solutions,
         final_strategy_sha256,
         final_solution,
     })
@@ -7367,13 +7390,20 @@ mod tests {
         let direct =
             solve_flop_cross_evaluated(config.clone(), evaluation_network.clone()).unwrap();
 
-        assert_eq!(report.schema, "hu-flop-resolver-convergence-diagnostic-v2");
+        assert_eq!(report.schema, "hu-flop-resolver-convergence-diagnostic-v3");
         assert_eq!(report.checkpoints.len(), 2);
+        assert_eq!(report.checkpoint_solutions.len(), 2);
         assert_eq!(report.checkpoints[0].iterations, 2);
         assert_eq!(report.checkpoints[1].iterations, 4);
         assert_eq!(report.value_network_seed, 41);
         assert_eq!(report.evaluation_value_network_seed, 42);
         assert_eq!(report.final_solution.strategies, direct.strategies);
+        assert_eq!(report.solution_at_iterations(Some(4)).unwrap(), direct);
+        assert_eq!(
+            report.solution_at_iterations(Some(2)).unwrap().iterations,
+            2
+        );
+        assert!(report.solution_at_iterations(Some(3)).is_err());
         assert_eq!(
             report.final_strategy_sha256,
             flop_strategy_sha256(&direct.strategies)

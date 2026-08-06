@@ -18,7 +18,7 @@ import run_matched_continual_resolver as matched_v1
 
 
 PLAN_SCHEMA = "hu-range-response-release-execution-plan-v1"
-CONVERGENCE_SCHEMA = "hu-flop-resolver-convergence-diagnostic-v2"
+CONVERGENCE_SCHEMA = "hu-flop-resolver-convergence-diagnostic-v3"
 CONVERGENCE_METHOD = (
     "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_"
     "cross_scored_by_independent_turn_cfv_network"
@@ -249,8 +249,14 @@ def inspect_convergence(
     evaluation = job["evaluationModel"]
     final = payload.get("final_solution", {})
     checkpoints = payload.get("checkpoints", [])
+    checkpoint_solutions = payload.get("checkpoint_solutions", [])
     expected_checkpoints = [int(value) for value in controls["strategyCheckpoints"]]
     checkpoint_iterations = [int(value.get("iterations", -1)) for value in checkpoints]
+    solution_iterations = [
+        int(value.get("iterations", -1))
+        for value in checkpoint_solutions
+        if isinstance(value, dict)
+    ]
     structural = (
         payload.get("schema") == CONVERGENCE_SCHEMA
         and payload.get("method") == CONVERGENCE_METHOD
@@ -273,6 +279,8 @@ def inspect_convergence(
         == int(controls["strategyAveragingDelay"])
         and int(payload.get("threads", -1)) == int(controls["threads"])
         and checkpoint_iterations == expected_checkpoints
+        and solution_iterations == expected_checkpoints
+        and checkpoint_solutions[-1] == final
         and final.get("schema") == matched_v1.SOLUTION_SCHEMA
         and final.get("method") == matched_v1.SOLUTION_METHOD
         and final.get("approximate") is True
@@ -310,9 +318,42 @@ def inspect_convergence(
         for checkpoint in checkpoints
     ):
         raise ValueError(f"range-response convergence metrics are invalid: {path}")
-    probabilities_valid, maximum_sum_error = matched_v1.validate_strategy_probabilities(
-        final["strategies"], job["root"]["boardIndices"]
+    solution_structural = all(
+        solution.get("schema") == matched_v1.SOLUTION_SCHEMA
+        and solution.get("method") == matched_v1.SOLUTION_METHOD
+        and solution.get("approximate") is True
+        and float(solution.get("effective_stack_bb", float("nan")))
+        == float(controls["effectiveStackBb"])
+        and int(solution.get("value_network_seed", -1)) == strategy["seed"]
+        and solution.get("value_network_sha256") == strategy["sha256"]
+        and solution.get("value_network_source_dataset_sha256")
+        == strategy["sourceDatasetSha256"]
+        and solution.get("value_network_source_policy_sha256")
+        == strategy["sourcePolicySha256"]
+        and int(solution.get("evaluation_value_network_seed", -1))
+        == evaluation["seed"]
+        and solution.get("evaluation_value_network_sha256") == evaluation["sha256"]
+        and solution.get("evaluation_value_network_source_dataset_sha256")
+        == evaluation["sourceDatasetSha256"]
+        and solution.get("evaluation_value_network_source_policy_sha256")
+        == evaluation["sourcePolicySha256"]
+        and solution.get("uses_exact_ranges") is True
+        and solution.get("state") == payload.get("state")
+        and int(solution.get("averaging_delay", -1))
+        == int(controls["strategyAveragingDelay"])
+        and int(solution.get("threads", -1)) == int(controls["threads"])
+        for solution in checkpoint_solutions
     )
+    if not solution_structural:
+        raise ValueError(f"range-response checkpoint strategy is invalid: {path}")
+    probability_checks = [
+        matched_v1.validate_strategy_probabilities(
+            solution["strategies"], job["root"]["boardIndices"]
+        )
+        for solution in checkpoint_solutions
+    ]
+    probabilities_valid = all(valid for valid, _ in probability_checks)
+    maximum_sum_error = max(error for _, error in probability_checks)
     computed_hash = strategy_sha256(final["strategies"])
     if computed_hash != payload.get("final_strategy_sha256"):
         raise ValueError(f"range-response convergence strategy hash is invalid: {path}")

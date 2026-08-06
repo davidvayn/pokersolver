@@ -404,7 +404,11 @@ fn run_flop_pbs_range_response(args: &[String]) -> Result<(), Box<dyn Error>> {
         } else if let Some(path) = value(args, "--convergence-report").map(PathBuf::from) {
             let report: blueprint::public_belief::FlopConvergenceReport =
                 serde_json::from_slice(&fs::read(path)?)?;
-            report.final_solution
+            report.solution_at_iterations(
+                value(args, "--strategy-iterations")
+                    .map(|raw| raw.parse::<u64>())
+                    .transpose()?,
+            )?
         } else {
             return Err("--solution or --convergence-report is required".into());
         };
@@ -1997,6 +2001,7 @@ Complete turn/river label options:
   flop-pbs-range-response (--solution <flop-solution.json> |
     --convergence-report <flop-convergence.json>)
     --evaluation-value-network <json> --checkpoints <csv>
+    [--strategy-iterations N]
     [--averaging-delay 0] [--threads N] [--output <json>]
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
     [--dataset <targets.json> --state-index 0]

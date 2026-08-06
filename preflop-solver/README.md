@@ -324,8 +324,10 @@ response-conditioned ranges passed to the independent value network. It emits
 deterministic checkpoint gains, zero-sum residuals, model hashes, and a SHA-256
 of the complete frozen strategy. This is learned-response rejection evidence,
 not an exploitability upper bound. `flop-pbs-convergence` reuses one regret
-trajectory across iteration checkpoints and retains the final cross-scored
-strategy so the response diagnostic need not repeat strategy training.
+trajectory across iteration checkpoints and retains every frozen cross-scored
+checkpoint strategy. A diagnostic response can select one with
+`--strategy-iterations N`, so iteration sweeps do not repeat earlier strategy
+training.
 
 On the already-rejected root, a 400-round range-consistent response found
 `0.041081bb/hand` gain against the 100-round resolver strategy, with a final

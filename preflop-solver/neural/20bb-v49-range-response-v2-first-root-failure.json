@@ -32,6 +32,16 @@
       "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-same-seed-response100.json",
       "sha256": "9f6b8a16ffa39c93dc10aaa25f106fb5993c6f86201ed461e19309f9e053295d",
       "releaseEvidence": false
+    },
+    "sameSeedStrategy200ConvergenceDiagnostic": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-iter200-same-seed-convergence.json",
+      "sha256": "b26821d1e6b4a21bc55b4a1a11d2a1128c3159d3dd64d0b37379c426eb4dcc1e",
+      "releaseEvidence": false
+    },
+    "sameSeedStrategy200ResponseDiagnostic": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-iter200-same-seed-response100.json",
+      "sha256": "53c4fa2dd090a0730d99483cbc0ee02a6c6d5a35eefd93a9d72d177b314622a1",
+      "releaseEvidence": false
     }
   },
   "crossSeedResponseCheckpoints": [
@@ -72,7 +82,19 @@
     "sameSeedAverageGainAt100ResponseRoundsBbPerHand": 0.07395459472793066,
     "crossSeedAverageGainAt100ResponseRoundsBbPerHand": 0.06484491440222154,
     "crossSeedContinuationMismatchIsDominant": false,
-    "nextTest": "increase the frozen strategy solve from 100 to 200 rounds on this burned root before changing the solver"
+    "strategyIterationSweep": [
+      {
+        "strategyIterations": 100,
+        "sameSeedAverageGainAt100ResponseRoundsBbPerHand": 0.07395459472793066
+      },
+      {
+        "strategyIterations": 200,
+        "sameSeedAverageGainAt100ResponseRoundsBbPerHand": 0.06718833816881847
+      }
+    ],
+    "doublingStrategyIterationsImprovementBbPerHand": 0.00676625655911219,
+    "iterationDepthImprovesButDoesNotClearGate": true,
+    "nextTest": "retain 400- and 800-round checkpoint policies from one uninterrupted trajectory on this burned root and evaluate each without repeated strategy training"
   },
   "interpretation": "The finite learned response is lower-bound rejection evidence, not an exploitability upper bound. The accepted continuation-value report remains valid, but this frozen strategy configuration cannot be released."
 }

@@ -1,3 +1,4 @@
+import copy
 import json
 import tempfile
 import unittest
@@ -145,6 +146,11 @@ class RangeResponseReleaseTests(unittest.TestCase):
             "threads": 10,
             "strategies": strategies,
         }
+        checkpoint_solutions = []
+        for iterations in (25, 50, 100):
+            solution = copy.deepcopy(final)
+            solution["iterations"] = iterations
+            checkpoint_solutions.append(solution)
         return {
             "schema": runner.CONVERGENCE_SCHEMA,
             "method": runner.CONVERGENCE_METHOD,
@@ -170,6 +176,7 @@ class RangeResponseReleaseTests(unittest.TestCase):
                 {"iterations": value, "metrics": metrics, "validation": {}}
                 for value in (25, 50, 100)
             ],
+            "checkpoint_solutions": checkpoint_solutions,
             "final_strategy_sha256": runner.strategy_sha256(strategies),
             "final_solution": final,
         }
@@ -290,6 +297,9 @@ class RangeResponseReleaseTests(unittest.TestCase):
             self.assertAlmostEqual(response["finalCheckpointIncreaseBbPerHand"], 0.003)
 
             convergence_payload["final_solution"]["strategies"][0][
+                "probabilities"
+            ][0] = 0.5
+            convergence_payload["checkpoint_solutions"][-1]["strategies"][0][
                 "probabilities"
             ][0] = 0.5
             convergence_path.write_text(json.dumps(convergence_payload))
