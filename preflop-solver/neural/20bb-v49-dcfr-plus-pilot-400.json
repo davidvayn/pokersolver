@@ -1,0 +1,89 @@
+{
+  "schema": "hu-flop-dcfr-plus-pilot-result-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "rejected-research-only",
+  "activationAllowed": false,
+  "implementation": {
+    "commit": "b9ad815d8e6549d53572b1121843c97c4b668fb3",
+    "regretMatchingPlus": true,
+    "strategyIterations": 400,
+    "strategyAveragingDelay": 100,
+    "responseIterations": [
+      100,
+      200
+    ],
+    "responseAveragingDelay": 10,
+    "responseRegretMatchingPlus": true
+  },
+  "root": {
+    "board": "8c,Qd,Kh",
+    "texture": "unpairedRainbowDisconnected",
+    "strategySeed": 15301,
+    "evaluationSeed": 15301,
+    "releaseRootSetBurned": true
+  },
+  "artifacts": {
+    "strategyConvergence": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay100-iter400-convergence-v3.json",
+      "sha256": "caf2e8f4390ea41728e46162b3899c7aa6c6e87c0865c98419d425750947ca7e",
+      "frozenStrategySha256": "4ede33f47587ebf9046b32677df99280f3716ccc70066e4d93fb4f338f2c63e9"
+    },
+    "rangeResponse": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay100-iter400-response200-plus-v1.json",
+      "sha256": "facfc9bb127dce9248d37cd3eeb9fd18899164f3c1e203500f4d5b093a63b88d"
+    }
+  },
+  "responseCheckpoints": [
+    {
+      "iterations": 100,
+      "responseGainP0Bb": 0.08668984292747045,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.043344921463735225,
+      "maximumZeroSumResidualBb": 2.942091015256665e-15
+    },
+    {
+      "iterations": 200,
+      "responseGainP0Bb": 0.10033517239283707,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.050167586196418534,
+      "maximumZeroSumResidualBb": 1.6930901125533637e-15
+    }
+  ],
+  "declaredGates": {
+    "maximumRangeConsistentResponseGainBbPerHand": 0.05,
+    "maximumFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumZeroSumResidualBb": 0.000001
+  },
+  "observed": {
+    "finalResponseGainBbPerHand": 0.050167586196418534,
+    "amountAboveResponseGainGateBbPerHand": 0.00016758619641853156,
+    "finalCheckpointIncreaseBbPerHand": 0.006822664732683309,
+    "amountAboveConvergenceGateBbPerHand": 0.001822664732683309,
+    "maximumZeroSumResidualBb": 2.942091015256665e-15,
+    "unilateralLeakPlayer": 0
+  },
+  "gates": {
+    "maximumRangeConsistentResponseGain": false,
+    "finalCheckpointConvergence": false,
+    "zeroSumResidual": true,
+    "strategyArtifactLink": true,
+    "algorithmIdentity": true
+  },
+  "comparison": {
+    "priorDcfrStrategy400GainAt100ResponseIterationsBbPerHand": 0.06636021443976364,
+    "dcfrPlusStrategy400GainAt100ResponseIterationsBbPerHand": 0.043344921463735225,
+    "improvementAt100ResponseIterationsBbPerHand": 0.023015292976028414
+  },
+  "nextExperiment": {
+    "strategyIterations": 800,
+    "strategyAveragingDelay": 200,
+    "strategyRegretMatchingPlus": true,
+    "responseRegretMatchingPlus": true,
+    "minimumResponseCheckpoints": [
+      100,
+      200
+    ],
+    "promotionRequiresComfortableMarginBeforeFreshRoots": true
+  },
+  "interpretation": "DCFR+ with delayed averaging materially reduced the unilateral learned-response gain, but the 200-round response is 0.000167586bb/hand above the release threshold and the final checkpoint is still changing too quickly. This burned-root pilot is rejected; activation remains fail-closed."
+}
