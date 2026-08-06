@@ -1390,6 +1390,7 @@ pub struct FlopResolveConfig {
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub averaging_delay: u64,
+    pub regret_matching_plus: bool,
     pub value_network: PublicValueNetwork,
     pub threads: usize,
 }
@@ -1437,6 +1438,8 @@ pub struct FlopSolution {
     #[serde(default)]
     pub averaging_delay: u64,
     #[serde(default)]
+    pub regret_matching_plus: bool,
+    #[serde(default)]
     pub threads: usize,
     pub strategies: Vec<PublicBeliefStrategy>,
     pub counterfactual_values_bb: [Vec<f32>; 2],
@@ -1467,6 +1470,8 @@ pub struct FlopConvergenceReport {
     pub evaluation_value_network_source_policy_sha256: Option<String>,
     pub state: PublicBeliefState,
     pub averaging_delay: u64,
+    #[serde(default)]
+    pub regret_matching_plus: bool,
     pub threads: usize,
     pub checkpoints: Vec<FlopConvergenceCheckpoint>,
     #[serde(default)]
@@ -1524,6 +1529,8 @@ pub struct FlopRangeResponseReport {
     pub baseline_profile_value_p0_bb: f64,
     pub baseline_profile_value_p1_bb: f64,
     pub response_averaging_delay: u64,
+    #[serde(default)]
+    pub response_regret_matching_plus: bool,
     pub threads: usize,
     pub checkpoints: Vec<FlopRangeResponseCheckpoint>,
     pub validation: BlueprintValidation,
@@ -1532,6 +1539,8 @@ pub struct FlopRangeResponseReport {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct FlopContinuationValues {
     pub schema: String,
+    #[serde(default)]
+    pub regret_matching_plus: bool,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub profile_value_p0_bb: f64,
     pub profile_value_p1_bb: f64,
@@ -1757,6 +1766,9 @@ impl FlopSolver {
                 for action in 0..action_count {
                     node.regrets[offset + action] +=
                         children[action][actor][combo] - values[actor][combo];
+                    if self.config.regret_matching_plus {
+                        node.regrets[offset + action] = node.regrets[offset + action].max(0.0);
+                    }
                 }
             }
         }
@@ -1789,6 +1801,7 @@ impl FlopSolver {
         reaches: [Vec<f64>; 2],
         responder: usize,
         round: u64,
+        regret_matching_plus: bool,
     ) -> [Vec<f64>; 2] {
         if state.street == Street::Turn && state.terminal.is_none() {
             return self.turn_leaf_values(&state, &reaches);
@@ -1821,6 +1834,7 @@ impl FlopSolver {
                 child_reaches,
                 responder,
                 round,
+                regret_matching_plus,
             ));
         }
         let opponent = 1 - actor;
@@ -1842,6 +1856,9 @@ impl FlopSolver {
                 for action in 0..action_count {
                     node.regrets[offset + action] +=
                         children[action][actor][combo] - values[actor][combo];
+                    if regret_matching_plus {
+                        node.regrets[offset + action] = node.regrets[offset + action].max(0.0);
+                    }
                 }
                 if round > self.config.averaging_delay {
                     for action in 0..action_count {
@@ -2181,6 +2198,7 @@ impl FlopSolver {
         });
         FlopContinuationValues {
             schema: "hu-depth-limited-flop-continuation-values-v1".to_owned(),
+            regret_matching_plus: self.config.regret_matching_plus,
             counterfactual_values_bb,
             profile_value_p0_bb,
             profile_value_p1_bb,
@@ -2315,23 +2333,20 @@ impl FlopSolver {
                 metrics.zero_sum_residual_after_projection_bb
             ));
         }
+        let mut method = "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_paired_alternating_dcfr".to_owned();
+        if self.config.regret_matching_plus {
+            method.push_str("_regret_matching_plus");
+        }
         FlopSolution {
             schema: "hu-depth-limited-flop-public-belief-solution-v2".to_owned(),
-            method: "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_paired_alternating_dcfr"
-                .to_owned(),
+            method,
             approximate: true,
             effective_stack_bb: self.config.game.effective_stack_bb,
             value_network_seed: self.config.value_network.seed,
             value_network_sha256: self.config.value_network.artifact_sha256,
             uses_exact_ranges: self.config.value_network.uses_exact_ranges,
-            value_network_source_dataset_sha256: self
-                .config
-                .value_network
-                .source_dataset_sha256,
-            value_network_source_policy_sha256: self
-                .config
-                .value_network
-                .source_policy_sha256,
+            value_network_source_dataset_sha256: self.config.value_network.source_dataset_sha256,
+            value_network_source_policy_sha256: self.config.value_network.source_policy_sha256,
             evaluation_value_network_seed: None,
             evaluation_value_network_sha256: None,
             evaluation_value_network_source_dataset_sha256: None,
@@ -2339,6 +2354,7 @@ impl FlopSolver {
             state: self.config.state,
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
+            regret_matching_plus: self.config.regret_matching_plus,
             threads: self.config.threads,
             strategies,
             counterfactual_values_bb,
@@ -2593,6 +2609,7 @@ pub fn solve_flop_cross_evaluated(
     let evaluation_sha256 = evaluation_value_network.artifact_sha256.clone();
     let evaluation_source_dataset = evaluation_value_network.source_dataset_sha256.clone();
     let evaluation_source_policy = evaluation_value_network.source_policy_sha256.clone();
+    let regret_matching_plus = config.regret_matching_plus;
     let mut solver = FlopSolver::new(config)?;
     solver.train();
     solver.config.value_network = evaluation_value_network;
@@ -2601,6 +2618,9 @@ pub fn solve_flop_cross_evaluated(
     solver.maximum_leaf_zero_sum_residual.set(0.0);
     let mut solution = solver.finish();
     solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+    if regret_matching_plus {
+        solution.method.push_str("_regret_matching_plus");
+    }
     solution.value_network_seed = resolver_seed;
     solution.value_network_sha256 = resolver_sha256;
     solution.uses_exact_ranges = resolver_uses_exact_ranges;
@@ -2632,6 +2652,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
                 .to_owned(),
         );
     }
+    let regret_matching_plus = config.regret_matching_plus;
     let value_network_seed = config.value_network.seed;
     let value_network_sha256 = config.value_network.artifact_sha256.clone();
     let value_network_uses_exact_ranges = config.value_network.uses_exact_ranges;
@@ -2664,6 +2685,9 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         evaluator.maximum_leaf_zero_sum_residual.set(0.0);
         let mut solution = evaluator.finish();
         solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+        if regret_matching_plus {
+            solution.method.push_str("_regret_matching_plus");
+        }
         solution.value_network_seed = value_network_seed;
         solution.value_network_sha256 = value_network_sha256.clone();
         solution.uses_exact_ranges = value_network_uses_exact_ranges;
@@ -2685,9 +2709,13 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     }
     let final_solution = final_solution.expect("nonempty convergence checkpoints");
     let final_strategy_sha256 = flop_strategy_sha256(&final_solution.strategies);
+    let mut method = "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned();
+    if regret_matching_plus {
+        method.push_str("_regret_matching_plus");
+    }
     Ok(FlopConvergenceReport {
         schema: "hu-flop-resolver-convergence-diagnostic-v3".to_owned(),
-        method: "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned(),
+        method,
         approximate: true,
         value_network_seed,
         value_network_sha256,
@@ -2699,6 +2727,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         evaluation_value_network_source_policy_sha256,
         state: solver.config.state,
         averaging_delay: solver.config.averaging_delay,
+        regret_matching_plus,
         threads: solver.config.threads,
         checkpoints: evidence,
         checkpoint_solutions,
@@ -2747,6 +2776,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
     evaluation_value_network: PublicValueNetwork,
     checkpoints: &[u64],
     averaging_delay: u64,
+    regret_matching_plus: bool,
     threads: usize,
 ) -> Result<FlopRangeResponseReport, String> {
     evaluation_value_network.validate()?;
@@ -2773,6 +2803,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         state: frozen.state.clone(),
         iterations: final_iterations,
         averaging_delay,
+        regret_matching_plus: false,
         value_network: evaluation_value_network.clone(),
         threads,
     })?;
@@ -2790,7 +2821,13 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         let mut completed = 0;
         for checkpoint in checkpoints {
             for round in (completed + 1)..=*checkpoint {
-                solver.range_response_walk(root.clone(), reaches.clone(), responder, round);
+                solver.range_response_walk(
+                    root.clone(),
+                    reaches.clone(),
+                    responder,
+                    round,
+                    regret_matching_plus,
+                );
             }
             completed = *checkpoint;
             let (profile, residual) = solver.projected_profile_values();
@@ -2817,9 +2854,13 @@ pub fn evaluate_frozen_flop_range_response_convergence(
             }
         })
         .collect();
+    let mut method = "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_public_ranges_cross_scored_by_independent_turn_cfv_network".to_owned();
+    if regret_matching_plus {
+        method.push_str("_regret_matching_plus");
+    }
     Ok(FlopRangeResponseReport {
         schema: "hu-flop-range-response-diagnostic-v1".to_owned(),
-        method: "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_public_ranges_cross_scored_by_independent_turn_cfv_network".to_owned(),
+        method,
         approximate: true,
         interpretation: "information-set-consistent learned-response rejection evidence; finite response iterations and an approximate leaf network make this a lower-bound search signal, not an exploitability upper bound".to_owned(),
         frozen_strategy_sha256,
@@ -2842,6 +2883,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         baseline_profile_value_p0_bb: baseline[0],
         baseline_profile_value_p1_bb: baseline[1],
         response_averaging_delay: averaging_delay,
+        response_regret_matching_plus: regret_matching_plus,
         threads,
         checkpoints: evidence,
         validation: BlueprintValidation {
@@ -2872,14 +2914,19 @@ pub fn evaluate_frozen_flop_solution(
         state: frozen.state.clone(),
         iterations: frozen.iterations.max(2),
         averaging_delay: 0,
+        regret_matching_plus: false,
         value_network: evaluation_value_network.clone(),
         threads,
     })?;
     solver.load_frozen_average_strategies(&frozen.strategies)?;
     let mut solution = solver.finish();
     solution.method = "serialized_frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+    if frozen.regret_matching_plus {
+        solution.method.push_str("_regret_matching_plus");
+    }
     solution.value_network_seed = frozen.value_network_seed;
     solution.averaging_delay = frozen.averaging_delay;
+    solution.regret_matching_plus = frozen.regret_matching_plus;
     solution.value_network_sha256 = frozen.value_network_sha256.clone();
     solution.uses_exact_ranges = frozen.uses_exact_ranges;
     solution.value_network_source_dataset_sha256 =
@@ -5932,6 +5979,7 @@ fn solve_resolver_root_leaf_checkpoint(
         ),
         iterations: config.resolver_iterations,
         averaging_delay: config.resolver_averaging_delay,
+        regret_matching_plus: false,
         value_network: network.clone(),
         threads: config.threads,
     })?;
@@ -7271,6 +7319,7 @@ mod tests {
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 2,
             averaging_delay: 0,
+            regret_matching_plus: false,
             value_network: zero_value_network(),
             threads: 1,
         };
@@ -7309,6 +7358,7 @@ mod tests {
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 2,
             averaging_delay: 0,
+            regret_matching_plus: false,
             value_network: resolver_network.clone(),
             threads: 1,
         };
@@ -7373,6 +7423,7 @@ mod tests {
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 4,
             averaging_delay: 0,
+            regret_matching_plus: false,
             value_network: resolver_network,
             threads: 1,
         };
@@ -7391,6 +7442,7 @@ mod tests {
             solve_flop_cross_evaluated(config.clone(), evaluation_network.clone()).unwrap();
 
         assert_eq!(report.schema, "hu-flop-resolver-convergence-diagnostic-v3");
+        assert!(!report.regret_matching_plus);
         assert_eq!(report.checkpoints.len(), 2);
         assert_eq!(report.checkpoint_solutions.len(), 2);
         assert_eq!(report.checkpoints[0].iterations, 2);
@@ -7429,6 +7481,21 @@ mod tests {
                 .abs()
                 < 1e-10
         );
+        let mut plus_config = config.clone();
+        plus_config.regret_matching_plus = true;
+        let plus = diagnose_flop_cross_evaluated_convergence(
+            plus_config,
+            evaluation_network.clone(),
+            &[2, 4],
+        )
+        .unwrap();
+        assert!(plus.regret_matching_plus);
+        assert!(plus.method.ends_with("_regret_matching_plus"));
+        assert!(plus.final_solution.regret_matching_plus);
+        assert!(plus
+            .final_solution
+            .method
+            .ends_with("_regret_matching_plus"));
         assert!(
             diagnose_flop_cross_evaluated_convergence(config, evaluation_network, &[4, 2],)
                 .is_err()
@@ -7448,6 +7515,7 @@ mod tests {
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 4,
             averaging_delay: 0,
+            regret_matching_plus: false,
             value_network: resolver_network,
             threads: 1,
         };
@@ -7464,6 +7532,7 @@ mod tests {
             evaluation_network.clone(),
             &[2, 4],
             0,
+            false,
             1,
         )
         .unwrap();
@@ -7473,6 +7542,7 @@ mod tests {
             evaluation_network.clone(),
             &[2, 4],
             0,
+            false,
             1,
         )
         .unwrap();
@@ -7494,12 +7564,26 @@ mod tests {
         assert!(report
             .interpretation
             .contains("not an exploitability upper bound"));
+        assert!(!report.response_regret_matching_plus);
+        let strengthened = evaluate_frozen_flop_range_response_convergence(
+            game.clone(),
+            &frozen,
+            evaluation_network.clone(),
+            &[2, 4],
+            0,
+            true,
+            1,
+        )
+        .unwrap();
+        assert!(strengthened.response_regret_matching_plus);
+        assert!(strengthened.method.ends_with("_regret_matching_plus"));
         assert!(evaluate_frozen_flop_range_response_convergence(
             game,
             &frozen,
             evaluation_network,
             &[4, 2],
             0,
+            false,
             1,
         )
         .is_err());
@@ -7530,6 +7614,7 @@ mod tests {
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
             iterations: 4,
             averaging_delay: 0,
+            regret_matching_plus: false,
             value_network: zero_shared_value_network(),
             threads: 1,
         })
@@ -7687,6 +7772,7 @@ mod tests {
             state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges.clone()),
             iterations: 2,
             averaging_delay: 0,
+            regret_matching_plus: false,
             value_network: zero_shared_value_network(),
             threads,
         };

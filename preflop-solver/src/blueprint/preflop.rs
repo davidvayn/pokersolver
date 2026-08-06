@@ -1178,6 +1178,7 @@ pub fn build_resolver_continuation_cache(
                                 ),
                                 iterations: config.resolver_iterations,
                                 averaging_delay: config.resolver_averaging_delay,
+                                regret_matching_plus: false,
                                 value_network: network.clone(),
                                 threads: resolver_threads,
                             },

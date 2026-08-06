@@ -297,6 +297,9 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
         ),
         iterations,
         averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
+        regret_matching_plus: args
+            .iter()
+            .any(|argument| argument == "--regret-matching-plus"),
         value_network: network,
         threads: parse_or(
             args,
@@ -367,6 +370,9 @@ fn run_flop_pbs_convergence(args: &[String]) -> Result<(), Box<dyn Error>> {
             ),
             iterations,
             averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
+            regret_matching_plus: args
+                .iter()
+                .any(|argument| argument == "--regret-matching-plus"),
             value_network: blueprint::public_belief::PublicValueNetwork::read(&network_path)?,
             threads: parse_or(
                 args,
@@ -426,6 +432,8 @@ fn run_flop_pbs_range_response(args: &[String]) -> Result<(), Box<dyn Error>> {
         evaluation,
         &checkpoints,
         parse_or(args, "--averaging-delay", 0u64)?,
+        args.iter()
+            .any(|argument| argument == "--regret-matching-plus"),
         parse_or(
             args,
             "--threads",
@@ -1997,12 +2005,14 @@ Complete turn/river label options:
   flop-pbs-convergence --board <3-card-csv> --value-network <json>
     --evaluation-value-network <json> --checkpoints <csv>
     [--pot-bb 4] [--actor 1] [--averaging-delay N] [--threads N]
+    [--regret-matching-plus]
     [--output <json>]
   flop-pbs-range-response (--solution <flop-solution.json> |
     --convergence-report <flop-convergence.json>)
     --evaluation-value-network <json> --checkpoints <csv>
     [--strategy-iterations N]
-    [--averaging-delay 0] [--threads N] [--output <json>]
+    [--averaging-delay 0] [--regret-matching-plus] [--threads N]
+    [--output <json>]
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
     [--dataset <targets.json> --state-index 0]
     [--iterations 500] [--averaging-delay 50] [--export-strategies]
