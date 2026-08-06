@@ -490,7 +490,11 @@ frame before every lookup, so exact blockers and showdown values are unchanged.
 This reduces the 49 possible turns of a monotone root to 23 distinct matrix
 builds; a suit-equivariance regression test checks every shared feature and
 value after a nontrivial suit permutation. The optimization changes neither
-the frozen roots nor any training or evaluation label semantics.
+the frozen roots nor any training or evaluation label semantics. The bounded
+matrix cache now also uses actual last-use order. Its previous ordered-map
+eviction removed the lexicographically smallest board rather than the oldest
+entry, which could force the same low-key matrices to be rebuilt across flop
+solver passes; a capacity-bound regression pins the corrected behavior.
 
 Configuration selection uses the two 36-label training shards as opposite
 cross-validation folds before the reserved evaluation labels are generated.

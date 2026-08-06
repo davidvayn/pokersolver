@@ -38,10 +38,38 @@ const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARD
 type DenseAllInEquityCell = Arc<OnceLock<Arc<Vec<f32>>>>;
 type DenseTurnEquityCell = Arc<OnceLock<Arc<Vec<u8>>>>;
 
+#[derive(Default)]
+struct DenseTurnEquityCache {
+    clock: u64,
+    entries: BTreeMap<[u8; 4], (u64, DenseTurnEquityCell)>,
+}
+
+impl DenseTurnEquityCache {
+    fn cell(&mut self, key: [u8; 4]) -> DenseTurnEquityCell {
+        self.clock = self.clock.saturating_add(1);
+        if let Some((last_used, cell)) = self.entries.get_mut(&key) {
+            *last_used = self.clock;
+            return cell.clone();
+        }
+        if self.entries.len() >= DENSE_TURN_EQUITY_CACHE_BOARDS {
+            let least_recent = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (last_used, _))| *last_used)
+                .map(|(board, _)| *board)
+                .expect("non-empty turn equity cache");
+            self.entries.remove(&least_recent);
+        }
+        let cell = Arc::new(OnceLock::new());
+        self.entries.insert(key, (self.clock, cell.clone()));
+        cell
+    }
+}
+
 static DENSE_ALL_IN_EQUITY_CACHE: LazyLock<Mutex<BTreeMap<[u8; 3], DenseAllInEquityCell>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
-static DENSE_TURN_EQUITY_CACHE: LazyLock<Mutex<BTreeMap<[u8; 4], DenseTurnEquityCell>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static DENSE_TURN_EQUITY_CACHE: LazyLock<Mutex<DenseTurnEquityCache>> =
+    LazyLock::new(|| Mutex::new(DenseTurnEquityCache::default()));
 
 fn shared_feature_sizes(schema: &str) -> Option<(usize, usize)> {
     match schema {
@@ -1234,14 +1262,7 @@ fn exact_turn_range_equities(
         let mut cache = DENSE_TURN_EQUITY_CACHE
             .lock()
             .expect("dense turn equity cache poisoned");
-        if !cache.contains_key(&key) && cache.len() >= DENSE_TURN_EQUITY_CACHE_BOARDS {
-            let oldest = *cache.keys().next().expect("non-empty turn equity cache");
-            cache.remove(&oldest);
-        }
-        cache
-            .entry(key)
-            .or_insert_with(|| Arc::new(OnceLock::new()))
-            .clone()
+        cache.cell(key)
     };
     let matrix = cell
         .get_or_init(|| compute_exact_turn_equity_units(key))
@@ -6734,6 +6755,22 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(canonical_turns.len(), 23);
+    }
+
+    #[test]
+    fn dense_turn_equity_cache_evicts_the_least_recently_used_board() {
+        let mut cache = DenseTurnEquityCache::default();
+        let keys = (0..=DENSE_TURN_EQUITY_CACHE_BOARDS)
+            .map(|index| [0, 1, (index / 52) as u8 + 2, (index % 52) as u8])
+            .collect::<Vec<_>>();
+        for key in &keys[..DENSE_TURN_EQUITY_CACHE_BOARDS] {
+            cache.cell(*key);
+        }
+        cache.cell(keys[0]);
+        cache.cell(keys[DENSE_TURN_EQUITY_CACHE_BOARDS]);
+        assert!(cache.entries.contains_key(&keys[0]));
+        assert!(!cache.entries.contains_key(&keys[1]));
+        assert_eq!(cache.entries.len(), DENSE_TURN_EQUITY_CACHE_BOARDS);
     }
 
     #[test]
