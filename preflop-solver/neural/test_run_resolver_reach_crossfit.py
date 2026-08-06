@@ -28,6 +28,14 @@ class ResolverReachCrossfitRunnerTests(unittest.TestCase):
             16,
         )
         self.assertEqual(len(self.plan["selectorSpec"]["candidates"]), 4)
+        self.assertEqual(
+            self.plan["selectorSpecOutput"],
+            "neural/20bb-v49-crossfit-selection-spec.json",
+        )
+        self.assertEqual(
+            self.plan["selectionOutput"],
+            "neural/20bb-v49-crossfit-selection.json",
+        )
 
     def test_training_commands_use_six_weighted_supplements_without_old_holdout(self) -> None:
         seeds = set()

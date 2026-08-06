@@ -216,8 +216,8 @@ def build_plan(payload: dict[str, Any], corpus: dict[str, Any]) -> dict[str, Any
         "baselineJobs": baseline_jobs,
         "candidateJobs": candidate_jobs,
         "selectorSpec": selector_spec,
-        "selectorSpecOutput": "neural/runs/v49-resolver-reach/crossfit-selection-spec.json",
-        "selectionOutput": "neural/runs/v49-resolver-reach/crossfit-selection.json",
+        "selectorSpecOutput": "neural/20bb-v49-crossfit-selection-spec.json",
+        "selectionOutput": "neural/20bb-v49-crossfit-selection.json",
     }
 
 
