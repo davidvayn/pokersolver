@@ -74,6 +74,34 @@ class ResolverReachCorpusValidationTests(unittest.TestCase):
         path.write_text(json.dumps(payload))
         return path, payload
 
+    def completed_training_shard(self, root: Path, payload: dict) -> Path:
+        shard = payload["trainingShards"][0]
+        targets = []
+        for board in shard["boards"]:
+            root_board = list(module.parse_board(board))
+            for invested in ([2.0, 2.0], [4.0, 4.0], [8.0, 8.0]):
+                targets.append(
+                    {
+                        "resolver_root_board": root_board,
+                        "invested_bb": invested,
+                    }
+                )
+        output = root / shard["output"]
+        output.write_text(
+            json.dumps(
+                {
+                    "schema": module.DATASET_SCHEMA,
+                    "validation": {"status": "accepted", "reasons": []},
+                    "seed": shard["seed"],
+                    "resolver_source_value_network_sha256": payload[
+                        "sourceValueNetworks"
+                    ][0]["sha256"],
+                    "targets": targets,
+                }
+            )
+        )
+        return output
+
     def test_suit_isomorphism_ignores_suit_names_and_card_order(self) -> None:
         first = module.parse_board("2c,7d,Jh")
         second = module.parse_board("Js,2h,7c")
@@ -108,6 +136,20 @@ class ResolverReachCorpusValidationTests(unittest.TestCase):
             )
             path.write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "suit-isomorphic"):
+                module.validate_config(path, root)
+
+    def test_completed_shard_requires_exact_roots_and_all_pot_bands(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            path, payload = self.config(root)
+            output = self.completed_training_shard(root, payload)
+            result = module.validate_config(path, root)
+            self.assertEqual(len(result["completedShards"]["training"]), 1)
+
+            shard = json.loads(output.read_text())
+            shard["targets"][2]["invested_bb"] = [4.0, 4.0]
+            output.write_text(json.dumps(shard))
+            with self.assertRaisesRegex(ValueError, "one leaf per pot band"):
                 module.validate_config(path, root)
 
 

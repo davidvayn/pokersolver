@@ -114,6 +114,19 @@ def legacy_roots(path: Path) -> set[tuple[int, ...]]:
     return roots
 
 
+def resolver_leaf_pot_band(invested: list[float]) -> int:
+    if len(invested) != 2 or any(
+        not isinstance(value, (int, float)) for value in invested
+    ):
+        raise ValueError("resolver leaf investments must contain two numbers")
+    maximum = max(float(value) for value in invested)
+    if maximum <= 3.5:
+        return 0
+    if maximum <= 7.5:
+        return 1
+    return 2
+
+
 def validate_completed_shard(
     repository_root: Path,
     shard: dict[str, Any],
@@ -135,12 +148,26 @@ def validate_completed_shard(
     targets = payload.get("targets", [])
     if len(targets) != int(shard["expectedStateCount"]):
         raise ValueError(f"completed shard has the wrong state count: {path}")
-    actual_keys = {
-        suit_isomorphism_key(tuple(int(card) for card in target["resolver_root_board"]))
-        for target in targets
+    planned_exact_roots = {
+        tuple(sorted(parse_board(board))) for board in shard.get("boards", [])
     }
+    actual_exact_roots: dict[tuple[int, ...], list[int]] = {}
+    for target in targets:
+        root = tuple(sorted(int(card) for card in target["resolver_root_board"]))
+        actual_exact_roots.setdefault(root, []).append(
+            resolver_leaf_pot_band(target["invested_bb"])
+        )
+    actual_keys = {suit_isomorphism_key(root) for root in actual_exact_roots}
     if actual_keys != planned_keys:
         raise ValueError(f"completed shard roots differ from the frozen plan: {path}")
+    if set(actual_exact_roots) != planned_exact_roots:
+        raise ValueError(f"completed shard exact roots differ from the frozen plan: {path}")
+    states_per_board = int(shard["expectedStateCount"]) // len(planned_exact_roots)
+    for root, bands in actual_exact_roots.items():
+        if len(bands) != states_per_board or set(bands) != {0, 1, 2}:
+            raise ValueError(
+                f"completed shard root {root} does not contain one leaf per pot band: {path}"
+            )
     return {
         "path": str(path),
         "sha256": sha256_file(path),

@@ -5109,11 +5109,22 @@ pub fn generate_resolver_leaf_turn_targets(
             .iter()
             .map(|leaf| leaf.reach_probability)
             .sum::<f64>();
-        selected_leaves.extend(sample_resolver_turn_leaves(
+        let sampled = sample_resolver_turn_leaves(
             &leaves,
             config.states_per_board,
             config.seed ^ (root_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-        )?);
+        )?;
+        let sampled_bands = sampled
+            .iter()
+            .map(|leaf| resolver_leaf_pot_band(leaf.invested))
+            .collect::<BTreeSet<_>>();
+        if ![0usize, 1, 2].into_iter().all(|band| sampled_bands.contains(&band)) {
+            return Err(format!(
+                "resolver root {root_index} does not produce one sampled leaf in every pot band"
+            )
+            .into());
+        }
+        selected_leaves.extend(sampled);
     }
 
     let mut targets = Vec::with_capacity(selected_leaves.len());
