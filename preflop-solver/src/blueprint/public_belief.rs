@@ -2662,7 +2662,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         final_solution = Some(solution);
     }
     let final_solution = final_solution.expect("nonempty convergence checkpoints");
-    let final_strategy_sha256 = flop_strategy_sha256(&final_solution.strategies)?;
+    let final_strategy_sha256 = flop_strategy_sha256(&final_solution.strategies);
     Ok(FlopConvergenceReport {
         schema: "hu-flop-resolver-convergence-diagnostic-v2".to_owned(),
         method: "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned(),
@@ -2684,14 +2684,34 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     })
 }
 
-fn flop_strategy_sha256(strategies: &[PublicBeliefStrategy]) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(strategies)
-                .map_err(|error| format!("failed to hash frozen flop strategy: {error}"))?
-        )
-    ))
+fn flop_strategy_sha256(strategies: &[PublicBeliefStrategy]) -> String {
+    fn update_u64(digest: &mut Sha256, value: usize) {
+        digest.update((value as u64).to_le_bytes());
+    }
+    fn update_string(digest: &mut Sha256, value: &str) {
+        update_u64(digest, value.len());
+        digest.update(value.as_bytes());
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(b"hu-flop-strategy-v1\0");
+    update_u64(&mut digest, strategies.len());
+    for strategy in strategies {
+        update_u64(&mut digest, strategy.public_history.len());
+        for history in &strategy.public_history {
+            update_string(&mut digest, history);
+        }
+        update_u64(&mut digest, strategy.actor);
+        update_u64(&mut digest, strategy.action_labels.len());
+        for label in &strategy.action_labels {
+            update_string(&mut digest, label);
+        }
+        update_u64(&mut digest, strategy.probabilities.len());
+        for probability in &strategy.probabilities {
+            digest.update(probability.to_bits().to_le_bytes());
+        }
+    }
+    format!("{:x}", digest.finalize())
 }
 
 /// Approximate an information-set-consistent response while preserving the
@@ -2724,7 +2744,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         );
     }
     let final_iterations = *checkpoints.last().expect("nonempty response checkpoints");
-    let frozen_strategy_sha256 = flop_strategy_sha256(&frozen.strategies)?;
+    let frozen_strategy_sha256 = flop_strategy_sha256(&frozen.strategies);
     let mut base = FlopSolver::new(FlopResolveConfig {
         game,
         state: frozen.state.clone(),
@@ -7356,7 +7376,7 @@ mod tests {
         assert_eq!(report.final_solution.strategies, direct.strategies);
         assert_eq!(
             report.final_strategy_sha256,
-            flop_strategy_sha256(&direct.strategies).unwrap()
+            flop_strategy_sha256(&direct.strategies)
         );
         assert_eq!(report.final_solution.value_network_seed, 41);
         assert_eq!(
@@ -7433,7 +7453,7 @@ mod tests {
         assert_eq!(report.frozen_strategy_iterations, 4);
         assert_eq!(
             report.frozen_strategy_sha256,
-            flop_strategy_sha256(&frozen.strategies).unwrap()
+            flop_strategy_sha256(&frozen.strategies)
         );
         assert_eq!(report.checkpoints[1].iterations, 4);
         assert!(report.checkpoints.iter().all(|checkpoint| {
