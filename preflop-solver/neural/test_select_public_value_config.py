@@ -99,6 +99,25 @@ class PublicValueConfigSelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "reuse a training seed"):
                 module.select_candidate([first, second])
 
+    def test_per_dataset_replay_weights_are_part_of_configuration_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            first = self.report(directory, "first", [0.20, 0.21], 0.3)
+            second = self.report(directory, "second", [0.19, 0.20], 0.3)
+            for path, weights in ((first, [1.0, 0.5]), (second, [0.5, 1.0])):
+                payload = json.loads(path.read_text())
+                payload["architecture"] = "pooled"
+                payload["supplementalDatasetSamplingWeights"] = weights
+                path.write_text(json.dumps(payload))
+
+            result = module.select_candidate([first, second])
+
+            self.assertEqual(len(result["configurationGroups"]), 2)
+            self.assertEqual(
+                result["selectedConfiguration"]["supplementalDatasetSamplingWeights"],
+                [0.5, 1.0],
+            )
+
     def test_selection_rejects_mismatched_split_or_unrestored_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             directory = Path(raw_directory)

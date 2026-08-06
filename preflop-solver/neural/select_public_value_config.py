@@ -120,6 +120,9 @@ def summarize_candidate(
         ),
         "minimumPrimaryBatchFraction": report.get("minimumPrimaryBatchFraction"),
         "supplementalSamplingWeight": report.get("supplementalSamplingWeight"),
+        "supplementalDatasetSamplingWeights": report.get(
+            "supplementalDatasetSamplingWeights"
+        ),
     }
     training_seeds = sorted(entry["seed"] for entry in weights)
     return {

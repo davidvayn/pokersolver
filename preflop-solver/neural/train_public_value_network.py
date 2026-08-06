@@ -497,6 +497,17 @@ def parse_args() -> argparse.Namespace:
         help="relative within-pot-band draw weight for supplemental training states",
     )
     parser.add_argument(
+        "--supplemental-dataset-weight",
+        type=float,
+        action="append",
+        default=[],
+        help=(
+            "relative within-pot-band draw weight for one supplemental dataset; "
+            "repeat once per --supplemental-dataset in the same order to override "
+            "the shared --supplemental-sampling-weight"
+        ),
+    )
+    parser.add_argument(
         "--minimum-primary-batch-fraction",
         type=float,
         default=0.0,
@@ -1500,6 +1511,38 @@ def primary_replay_batch_rows(
     return np.asarray(selected, dtype=np.int64)
 
 
+def supplemental_row_sampling_weights(
+    groups: np.ndarray,
+    primary_state_count: int,
+    supplemental_state_counts: list[int],
+    shared_weight: float,
+    dataset_weights: list[float] | None = None,
+) -> tuple[np.ndarray, list[float]]:
+    """Assign auditable per-corpus replay weights without changing data splits."""
+    overrides = list(dataset_weights or [])
+    if overrides and len(overrides) != len(supplemental_state_counts):
+        raise ValueError(
+            "supplemental dataset weights must match supplemental dataset count"
+        )
+    resolved = overrides or [shared_weight] * len(supplemental_state_counts)
+    if any(not np.isfinite(weight) or weight <= 0.0 for weight in resolved):
+        raise ValueError("supplemental dataset weights must be positive and finite")
+    weights = np.ones(len(groups), dtype=np.float64)
+    start = primary_state_count
+    for state_count, weight in zip(supplemental_state_counts, resolved, strict=True):
+        if state_count <= 0:
+            raise ValueError("supplemental datasets must contain at least one state")
+        end = start + state_count
+        selected = (groups >= start) & (groups < end)
+        if not np.any(selected):
+            raise ValueError("supplemental dataset has no training rows")
+        weights[selected] = weight
+        start = end
+    if len(groups) and int(np.max(groups)) >= start:
+        raise ValueError("supplemental state counts do not cover every combined group")
+    return weights, resolved
+
+
 def pot_band_metrics(
     dataset: Dataset,
     rows: np.ndarray,
@@ -1913,6 +1956,10 @@ def main() -> None:
         or args.raw_bb_auxiliary_weight < 0
         or args.feature_workers <= 0
         or not 0.0 < args.supplemental_sampling_weight <= 1.0
+        or any(
+            not np.isfinite(weight) or weight <= 0.0
+            for weight in args.supplemental_dataset_weight
+        )
         or not 0.0 <= args.minimum_primary_batch_fraction <= 1.0
         or not -1.0 <= args.minimum_cross_seed_correlation <= 1.0
         or not -1.0 <= args.minimum_tuning_cross_seed_correlation <= 1.0
@@ -1927,6 +1974,12 @@ def main() -> None:
         load_dataset(path, args.suit_augmentations, args.value_normalization)
         for path in args.supplemental_dataset
     ]
+    if args.supplemental_dataset_weight and len(
+        args.supplemental_dataset_weight
+    ) != len(supplemental_datasets):
+        raise ValueError(
+            "--supplemental-dataset-weight must be repeated once per supplemental dataset"
+        )
     source_inputs = list(
         zip(
             [args.dataset, *args.supplemental_dataset],
@@ -1978,11 +2031,15 @@ def main() -> None:
     )
     tuning_rows = np.flatnonzero(np.isin(dataset.groups, tuning_states))
     validation_rows = np.flatnonzero(np.isin(dataset.groups, validation_states))
-    row_sampling_weights = np.ones(len(dataset.boards), dtype=np.float64)
-    if len(supplemental_states):
-        row_sampling_weights[np.isin(dataset.groups, supplemental_states)] = (
-            args.supplemental_sampling_weight
+    row_sampling_weights, supplemental_dataset_sampling_weights = (
+        supplemental_row_sampling_weights(
+            dataset.groups,
+            primary_state_count,
+            [len(source.source["targets"]) for source in supplemental_datasets],
+            args.supplemental_sampling_weight,
+            args.supplemental_dataset_weight,
         )
+    )
     variant_specs = (
         (("range", True), ("noRange", False))
         if args.variant_set == "both"
@@ -2192,6 +2249,7 @@ def main() -> None:
         "primaryStates": primary_state_count,
         "supplementalTrainingStates": supplemental_states.tolist(),
         "supplementalSamplingWeight": args.supplemental_sampling_weight,
+        "supplementalDatasetSamplingWeights": supplemental_dataset_sampling_weights,
         "minimumPrimaryBatchFraction": args.minimum_primary_batch_fraction,
         "primaryTrainingRows": int(len(primary_train_rows)),
         "supplementalTrainingRows": int(len(supplemental_train_rows)),

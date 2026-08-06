@@ -420,3 +420,60 @@ outer game) measured `0.962029bb/hand`. An eight-game pilot measured
 correctly cap at 20bb because the sample counts are tiny. These are diagnostic
 only: the new evaluator closes the future-information defect, but v26 and the
 pilot sample size remain far from the release gate.
+
+## V48 fresh holdout and continual-resolver rejection
+
+After the V48 freeze was committed, two independent 64-state authentic shards
+from seeds 14901 and 14902 were generated and reserved exclusively as the
+128-state holdout. The merged 512-state dataset has SHA-256
+`0532dec5f96a79fc42c8beddc54c2a31985f7d383bfe675a9f160a7fcf8d7da6`.
+All 512 input fingerprints are unique; every component is accepted, has valid
+probability sums and zero-sum settlement, and remains below the target-label
+exploitability ceiling.
+
+The frozen release pair passed the value-only gates. Seeds 14921 and 14922
+measured fresh holdout RMSE of `0.227714bb` and `0.245569bb`, respectively,
+with prediction correlation `0.999481`. Their tuning RMSE values are
+`0.203753bb` and `0.218561bb` with correlation `0.999473`. Report SHA-256 is
+`2935b92570024c8515cd53438f09f6ec2ffa00eeb98119b9436dddaa4772d280`.
+Six-state Python/Rust checks for each seed measured maximum absolute errors of
+`0.0000055874bb` and `0.0000053585bb`, below the `0.0001bb` parity gate.
+
+Passing the value-only gate did not pass the strategy gate. On the dry-low
+`2c,7d,Th` root, 100-iteration cross-fit resolvers measured
+`0.292119bb/hand` and `0.280040bb/hand` depth-limited exploitability. This is
+an 87--88% reduction from the unresolved uniform strategy, but remains more
+than five times the declared `0.05bb/hand` local ceiling. One failed root is
+sufficient to reject the maximum-over-roots gate, so the other reserved roots
+were not spent on the same candidate.
+
+The disjoint nine-state legacy resolver-leaf evaluation explains the gap.
+V48's resolver-reach-weighted RMSE is `0.459101bb` and `0.479159bb`; its
+large-pot RMSE is `0.694966bb` and `0.661119bb`. The authentic holdout is
+dominated by small pots and therefore cannot by itself certify the leaf
+distribution induced by continual solving. V48 remains inactive.
+
+## Resolver replay pilots and V49 corpus freeze
+
+The trainer now accepts one explicit sampling weight per supplemental corpus.
+This keeps authentic states, coverage states, large-pot states, and
+resolver-leaf states in separate auditable replay strata instead of forcing a
+single shared weight. A 10x resolver-leaf pilot improved legacy
+resolver-reach-weighted RMSE to `0.441636bb` and `0.415193bb`, but degraded the
+opened authentic holdout to `0.271980bb` and `0.291413bb`. A moderate 3x pilot
+measured `0.433478bb` and `0.408794bb` on resolver reach while also failing the
+opened authentic holdout at `0.270423bb` and `0.280363bb`. Its report SHA-256
+is `7fb793b53de34cf1a93be0af7e531633c9d75cd3bd67f247681edec5d60333a5`.
+Both experiments show that resolver replay has leverage, but oversampling the
+same 18 leaves from six roots is not a valid substitute for broader coverage.
+
+`neural/20bb-v49-resolver-reach-corpus.json` therefore freezes 24 disjoint
+training roots across dry, connected, two-tone, monotone, paired, and trips
+textures. The roots are split across both V48 source seeds and sample one
+small-, medium-, and large-pot leaf per root, producing 72 exact complete
+turn/river labels. Twelve additional roots are reserved for a 36-state
+evaluation corpus whose labels may only be generated after the next candidate
+configuration is frozen. The validator checks pinned source hashes, declared
+texture counts, exact and suit-isomorphic separation from training,
+evaluation, and legacy roots, completed shard provenance, and fail-closed
+activation. Any failed successor requires new independent evaluation roots.

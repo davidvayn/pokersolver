@@ -1,0 +1,158 @@
+{
+  "schema": "hu-resolver-reach-corpus-freeze-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "training-corpus-frozen-evaluation-labels-reserved",
+  "activationAllowed": false,
+  "purpose": "Correct the V48 value model's resolver-reach generalization failure without training on resolver evaluation labels.",
+  "generator": {
+    "command": "flop-pbs-leaf-targets",
+    "effectiveStackBb": 20.0,
+    "statesPerBoard": 3,
+    "rootPotBb": 4.0,
+    "rootActor": 1,
+    "resolverIterations": 20,
+    "resolverAveragingDelay": 2,
+    "riverIterations": 200,
+    "riverAveragingDelay": 20,
+    "threads": 10
+  },
+  "sourceValueNetworks": [
+    {
+      "trainingSeed": 14921,
+      "path": "neural/runs/v48-pooled-release/frozen-pooled-paired/turn-value-range-seed14921.json",
+      "sha256": "fd4b1c471b2df9ed63df2655b8c0397a456e2c29f8c663988443191ba323cb33"
+    },
+    {
+      "trainingSeed": 14922,
+      "path": "neural/runs/v48-pooled-release/frozen-pooled-paired/turn-value-range-seed14922.json",
+      "sha256": "528f0ae3408a379a950d95cfd1f740c81aa98c9d086f74cb883d5b2ff1ed93fb"
+    }
+  ],
+  "trainingShards": [
+    {
+      "seed": 15101,
+      "sourceTrainingSeed": 14921,
+      "boards": [
+        "2c,7d,Jh",
+        "3d,9h,Ac",
+        "2c,4d,5h",
+        "4c,6d,7s",
+        "2c,8c,Kh",
+        "3c,4c,6h",
+        "6d,8d,9s",
+        "2c,7c,Qc",
+        "2s,3s,5s",
+        "2c,2d,9h",
+        "3c,3d,7c",
+        "Jc,Jd,Jh"
+      ],
+      "expectedStateCount": 36,
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/train-seed15101-checkpoints",
+      "output": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json"
+    },
+    {
+      "seed": 15102,
+      "sourceTrainingSeed": 14922,
+      "boards": [
+        "4h,Tc,Ks",
+        "5s,Jd,Ah",
+        "8d,Tc,Jh",
+        "9c,Jd,Qh",
+        "3d,9d,As",
+        "5h,Th,Qs",
+        "9h,Jh,Qs",
+        "4h,Th,Ah",
+        "5c,7c,8c",
+        "Th,Qh,Kh",
+        "5c,5h,Js",
+        "8h,8s,Jh"
+      ],
+      "expectedStateCount": 36,
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/train-seed15102-checkpoints",
+      "output": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json"
+    }
+  ],
+  "reservedEvaluationShards": [
+    {
+      "seed": 15103,
+      "sourceTrainingSeed": 14921,
+      "boards": [
+        "2d,8h,Ks",
+        "7c,9d,Th",
+        "4c,Jc,Ad",
+        "5d,6d,8s",
+        "3s,9s,Ks",
+        "4c,4d,Th"
+      ],
+      "expectedStateCount": 18,
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/eval-seed15103-checkpoints",
+      "output": "neural/runs/v49-resolver-reach/resolver-leaf-eval-18-seed15103.json"
+    },
+    {
+      "seed": 15104,
+      "sourceTrainingSeed": 14922,
+      "boards": [
+        "4s,9c,Ah",
+        "Td,Qh,Ks",
+        "8h,Th,Js",
+        "7h,8h,Th",
+        "9c,9h,Kc",
+        "Qc,Qd,Qh"
+      ],
+      "expectedStateCount": 18,
+      "checkpointDirectory": "neural/runs/v49-resolver-reach/eval-seed15104-checkpoints",
+      "output": "neural/runs/v49-resolver-reach/resolver-leaf-eval-18-seed15104.json"
+    }
+  ],
+  "legacyDiagnosticDatasets": [
+    {
+      "path": "neural/runs/v45-complete-turn/resolver-leaf-train-complete-paired-200.json",
+      "sha256": "ee72ee272d676d4e60d00f0c8f8c193d3bfcd345be342a3227efca71016a764a"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/resolver-leaf-eval-complete-paired-200.json",
+      "sha256": "a3cf71e79da92e37cf02f6b0f2156df9392070122f80be5b226d471afeed05a4"
+    }
+  ],
+  "separationPolicy": {
+    "trainingRootCount": 24,
+    "reservedEvaluationRootCount": 12,
+    "suitIsomorphicOverlapAllowed": false,
+    "evaluationLabelsGeneratedOnlyAfterCandidateConfigurationFreeze": true,
+    "evaluationLabelsUsedForModelSelection": false,
+    "failedCandidateRequiresNewIndependentEvaluationRoots": true,
+    "legacyResolverLeafEvaluationIsDiagnosticOnly": true
+  },
+  "coverage": {
+    "training": {
+      "unpairedRainbowDisconnected": 4,
+      "unpairedRainbowConnected": 4,
+      "unpairedTwoToneDisconnected": 3,
+      "unpairedTwoToneConnected": 3,
+      "unpairedMonotoneDisconnected": 2,
+      "unpairedMonotoneConnected": 3,
+      "pairedRainbow": 2,
+      "pairedTwoTone": 2,
+      "trips": 1
+    },
+    "reservedEvaluation": {
+      "unpairedRainbowDisconnected": 2,
+      "unpairedRainbowConnected": 2,
+      "unpairedTwoToneDisconnected": 1,
+      "unpairedTwoToneConnected": 2,
+      "unpairedMonotoneDisconnected": 1,
+      "unpairedMonotoneConnected": 1,
+      "pairedRainbow": 1,
+      "pairedTwoTone": 1,
+      "trips": 1
+    }
+  },
+  "releasePolicy": {
+    "minimumPerSeedResolverReachWeightedRmseImprovementFraction": 0.2,
+    "maximumPerSeedAuthenticFreshHoldoutRmseBb": 0.25,
+    "maximumCrossFitLocalResolverExploitabilityBbPerHand": 0.05,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "maximumRustPythonParityErrorBb": 0.0001,
+    "activationRequiresEveryFullGameGate": true
+  }
+}

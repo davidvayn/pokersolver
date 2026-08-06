@@ -280,6 +280,30 @@ class PublicValueNetworkTests(unittest.TestCase):
         )
         self.assertGreater(int(np.sum(selected == 0)), 950)
 
+    def test_supplemental_row_weights_preserve_corpus_boundaries(self) -> None:
+        groups = np.asarray([0, 0, 1, 2, 2, 3, 4, 4], dtype=np.int64)
+        weights, resolved = module.supplemental_row_sampling_weights(
+            groups,
+            primary_state_count=2,
+            supplemental_state_counts=[2, 1],
+            shared_weight=0.5,
+            dataset_weights=[0.25, 2.0],
+        )
+        np.testing.assert_array_equal(
+            weights, [1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 2.0, 2.0]
+        )
+        self.assertEqual(resolved, [0.25, 2.0])
+
+    def test_supplemental_row_weights_reject_mismatched_override_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must match"):
+            module.supplemental_row_sampling_weights(
+                np.asarray([0, 1, 2]),
+                primary_state_count=1,
+                supplemental_state_counts=[1, 1],
+                shared_weight=1.0,
+                dataset_weights=[0.5],
+            )
+
     def test_primary_replay_guarantees_authentic_row_in_every_pot_band(self) -> None:
         invested = np.asarray(
             [
