@@ -1,4 +1,8 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import run_resolver_reach_release as module
 
@@ -141,6 +145,45 @@ class RunResolverReachReleaseTests(unittest.TestCase):
         self.assertEqual(
             module.crossfit.option_values(command, "--networks"), ["policy.json"]
         )
+
+    def test_release_freeze_must_reproduce_every_derived_field(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            protocol = root / "protocol.json"
+            protocol.write_text("protocol")
+            selection = root / "selection.json"
+            selection.write_text("selection")
+            payload = {
+                "schema": module.release_freeze.RELEASE_SCHEMA,
+                "status": "frozen-for-fresh-evaluation",
+                "activationAllowed": False,
+                "protocol": {
+                    "path": str(protocol),
+                    "sha256": module.release_freeze.sha256_file(protocol),
+                },
+                "selection": {
+                    "path": str(selection),
+                    "sha256": module.release_freeze.sha256_file(selection),
+                },
+                "trainer": {"steps": 5000},
+            }
+            release = root / "release.json"
+            release.write_text(json.dumps(payload))
+            expected = json.loads(json.dumps(payload))
+            with mock.patch.object(
+                module.release_freeze,
+                "build_release_freeze",
+                return_value=expected,
+            ):
+                module.validate_release_freeze(release, root)
+            payload["trainer"]["steps"] = 1
+            release.write_text(json.dumps(payload))
+            with mock.patch.object(
+                module.release_freeze,
+                "build_release_freeze",
+                return_value=expected,
+            ), self.assertRaisesRegex(ValueError, "does not reproduce"):
+                module.validate_release_freeze(release, root)
 
 
 if __name__ == "__main__":

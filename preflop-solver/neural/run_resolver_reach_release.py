@@ -426,9 +426,20 @@ def validate_release_freeze(path: Path, repository_root: Path) -> dict[str, Any]
         raise ValueError("release protocol hash mismatch")
     if release_freeze.sha256_file(selection_path) != payload["selection"]["sha256"]:
         raise ValueError("release selection hash mismatch")
-    for source in [payload["primaryDataset"], *payload["supplementalDatasets"]]:
-        if release_freeze.sha256_file(repository_root / source["path"]) != source["sha256"]:
-            raise ValueError(f"release source hash mismatch: {source['path']}")
+    expected = release_freeze.build_release_freeze(
+        protocol_path,
+        selection_path,
+        repository_root,
+        require_unopened=False,
+    )
+    # The stored references may be repository-relative while recomputation uses
+    # resolved paths. Path spelling is not semantic; their exact hashes are.
+    expected["protocol"]["path"] = payload["protocol"]["path"]
+    expected["selection"]["path"] = payload["selection"]["path"]
+    if expected != payload:
+        raise ValueError(
+            "release freeze does not reproduce from its pinned protocol and selection"
+        )
     return payload
 
 

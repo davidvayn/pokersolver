@@ -166,9 +166,10 @@ def build_release_freeze(
     protocol_path: Path,
     selection_path: Path,
     repository_root: Path,
+    require_unopened: bool = True,
 ) -> dict[str, Any]:
     protocol, experiment, corpus = validate_protocol(
-        protocol_path, repository_root, require_unopened=True
+        protocol_path, repository_root, require_unopened=require_unopened
     )
     selection = json.loads(selection_path.read_text())
     if (
