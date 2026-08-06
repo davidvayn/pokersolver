@@ -7476,6 +7476,20 @@ mod tests {
     }
 
     #[test]
+    fn flop_strategy_hash_has_a_cross_language_binary_fixture() {
+        let strategies = vec![PublicBeliefStrategy {
+            public_history: vec!["root".to_owned(), "check".to_owned()],
+            actor: 1,
+            action_labels: vec!["fold".to_owned(), "call".to_owned()],
+            probabilities: vec![0.25, 0.75],
+        }];
+        assert_eq!(
+            flop_strategy_sha256(&strategies),
+            "caa0399fc945c99975cf5d3466dcd84f395f1fa19d9149622efd07e567e75983"
+        );
+    }
+
+    #[test]
     fn resolver_leaf_capture_uses_frozen_average_reach_and_exact_turn_blockers() {
         let board = [0, 5, 10];
         let ranges = std::array::from_fn(|_| uniform_range(&board));
