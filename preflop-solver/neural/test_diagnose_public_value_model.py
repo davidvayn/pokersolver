@@ -42,6 +42,30 @@ class PublicValueDiagnosticsTests(unittest.TestCase):
         self.assertAlmostEqual(rmse, (1.8**0.5))
         self.assertAlmostEqual(mae, 1.2)
 
+    def test_sufficient_statistics_combine_shards_exactly(self) -> None:
+        truth = np.zeros((4, 1))
+        prediction = np.asarray([[1.0], [2.0], [3.0], [4.0]])
+        weights = np.asarray([[1.0], [2.0], [3.0], [4.0]])
+        whole = module.weighted_error_sufficient_statistics(
+            truth, prediction, weights
+        )
+        shards = [
+            module.weighted_error_sufficient_statistics(
+                truth[offset : offset + 2],
+                prediction[offset : offset + 2],
+                weights[offset : offset + 2],
+            )
+            for offset in (0, 2)
+        ]
+        for key in whole:
+            self.assertAlmostEqual(whole[key], sum(shard[key] for shard in shards))
+        combined_rmse = (
+            sum(shard["weightedSquaredErrorBb2Sum"] for shard in shards)
+            / sum(shard["weightMass"] for shard in shards)
+        ) ** 0.5
+        direct_rmse, _ = module.weighted_error_bb(truth, prediction, weights)
+        self.assertAlmostEqual(combined_rmse, direct_rmse)
+
 
 if __name__ == "__main__":
     unittest.main()

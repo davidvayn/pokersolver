@@ -530,3 +530,17 @@ selected fold weight so their combined replay mass is identical to the
 cross-fit experiment. `freeze_resolver_reach_release.py` replays the selector
 from its pinned spec, verifies every protocol/input hash and seed separation,
 and emits only a fail-closed release freeze; it cannot activate a model.
+
+The derived release runner trains the paired 5,000-step release models before
+it is allowed to open either fresh corpus. It then generates both reserved
+resolver shards and both authentic shards, runs both V48 baselines and both
+release seeds on every resolver shard, diagnoses both release seeds on every
+authentic shard, and checks six-state Rust/Python parity for each model. Every
+diagnostic now records error mass, weighted squared-error sum, and weighted
+absolute-error sum (plus the resolver-reach equivalents), allowing the two
+shards to be pooled exactly instead of averaging their RMSE values. Parity
+reports pin both model and dataset SHA-256 values. The value-release validator
+requires every release seed to beat the stronger V48 baseline by 20%, remain
+at or below `0.25bb` on the fresh authentic corpus, agree at correlation
+`0.95`, and pass `0.0001bb` runtime parity. Even a complete value-gate pass
+remains inactive pending the continual-resolver and full-game gates.

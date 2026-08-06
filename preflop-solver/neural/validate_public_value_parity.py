@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -12,6 +13,14 @@ from typing import Any
 import numpy as np
 
 import train_public_value_network as training
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def parse_args() -> argparse.Namespace:
@@ -175,7 +184,9 @@ def main() -> None:
     report = {
         "schema": "hu-public-belief-value-parity-v1",
         "model": str(args.model),
+        "modelSha256": sha256_file(args.model),
         "dataset": str(args.dataset),
+        "datasetSha256": sha256_file(args.dataset),
         "stateIndices": state_indices,
         "perState": per_state,
         "maximumAbsoluteErrorBb": maximum_error,

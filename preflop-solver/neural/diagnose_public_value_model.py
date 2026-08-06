@@ -35,12 +35,30 @@ def selected_indices(raw: str) -> list[int]:
 def weighted_error_bb(
     truth_bb: np.ndarray, prediction_bb: np.ndarray, weights: np.ndarray
 ) -> tuple[float, float]:
-    normalized = weights / max(float(weights.sum()), 1e-12)
-    error = prediction_bb - truth_bb
-    return (
-        float(np.sqrt(np.sum(normalized * error * error))),
-        float(np.sum(normalized * np.abs(error))),
+    statistics = weighted_error_sufficient_statistics(
+        truth_bb, prediction_bb, weights
     )
+    return (
+        float(
+            np.sqrt(
+                statistics["weightedSquaredErrorBb2Sum"]
+                / statistics["weightMass"]
+            )
+        ),
+        statistics["weightedAbsoluteErrorBbSum"] / statistics["weightMass"],
+    )
+
+
+def weighted_error_sufficient_statistics(
+    truth_bb: np.ndarray, prediction_bb: np.ndarray, weights: np.ndarray
+) -> dict[str, float]:
+    error = prediction_bb - truth_bb
+    mass = max(float(weights.sum()), 1e-12)
+    return {
+        "weightMass": mass,
+        "weightedSquaredErrorBb2Sum": float(np.sum(weights * error * error)),
+        "weightedAbsoluteErrorBbSum": float(np.sum(weights * np.abs(error))),
+    }
 
 
 def player_weighted_signed_error_bb(
@@ -159,6 +177,9 @@ def compose(
     overall_rmse, overall_mae = weighted_error_bb(
         truth_array, prediction_array, weight_array
     )
+    overall_statistics = weighted_error_sufficient_statistics(
+        truth_array, prediction_array, weight_array
+    )
     overall_player_bias = player_weighted_signed_error_bb(
         truth_array, prediction_array, weight_array
     )
@@ -174,22 +195,33 @@ def compose(
         dtype=np.float64,
     )
     if np.all(np.isfinite(resolver_reaches)) and np.all(resolver_reaches > 0.0):
+        reach_shape = (len(resolver_reaches),) + (1,) * (weight_array.ndim - 1)
+        resolver_weights = weight_array * resolver_reaches.reshape(reach_shape)
         resolver_rmse, resolver_mae = resolver_reach_weighted_error_bb(
             truth_array,
             prediction_array,
             weight_array,
             resolver_reaches,
         )
-        reach_shape = (len(resolver_reaches),) + (1,) * (weight_array.ndim - 1)
+        resolver_statistics = weighted_error_sufficient_statistics(
+            truth_array, prediction_array, resolver_weights
+        )
         resolver_bias = player_weighted_signed_error_bb(
             truth_array,
             prediction_array,
-            weight_array * resolver_reaches.reshape(reach_shape),
+            resolver_weights,
         )
         resolver_evaluation: dict[str, Any] | None = {
             "sampledLeafReachMass": float(resolver_reaches.sum()),
             "reachWeightedRmseBb": resolver_rmse,
             "reachWeightedMaeBb": resolver_mae,
+            "reachWeightMass": resolver_statistics["weightMass"],
+            "reachWeightedSquaredErrorBb2Sum": resolver_statistics[
+                "weightedSquaredErrorBb2Sum"
+            ],
+            "reachWeightedAbsoluteErrorBbSum": resolver_statistics[
+                "weightedAbsoluteErrorBbSum"
+            ],
             "playerWeightedMeanErrorBb": resolver_bias,
             "maximumAbsolutePlayerWeightedMeanErrorBb": max(
                 abs(value) for value in resolver_bias
@@ -210,6 +242,7 @@ def compose(
         "states": len(rows),
         "weightedRmseBb": overall_rmse,
         "weightedMaeBb": overall_mae,
+        **overall_statistics,
         "playerWeightedMeanErrorBb": overall_player_bias,
         "maximumAbsolutePlayerWeightedMeanErrorBb": max(
             abs(value) for value in overall_player_bias
