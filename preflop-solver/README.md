@@ -242,16 +242,18 @@ The short 20bb paired-pilot evidence and rejected alternatives are recorded in
 The dedicated v27 preflop and learned-response sequence is recorded in
 `docs/validation/20bb-v27-preflop-resolver.md`.
 
-The frozen V49 release path remains fail-closed after its value-network gates.
-Only an accepted `hu-resolver-reach-value-release-validation-v1` report can
-unseal the matched continual-resolver runner. It then solves every one of the
+The original frozen V49 v1 path remained fail-closed after its value-network
+gates. Only an accepted `hu-resolver-reach-value-release-validation-v1` report
+could unseal its matched continual-resolver runner. It then solved every one of the
 12 precommitted reserved flops in both cross-seed directions (24 jobs total):
 one release network supplies the frozen average resolver strategy and the other
 independently scores its continuation values and best response. Each solution
 records SHA-256 hashes of the exact strategy and evaluation weight files, and
 the validator rejects a substituted same-seed artifact, invalid probability
 row, zero-sum residual above `1e-6bb`, nonpositive resolver improvement, or any
-local depth-limited exploitability above `0.05bb/hand`.
+local depth-limited exploitability above `0.05bb/hand`. The commands below
+preserve that historical contract for audit; its matched-response evaluator is
+permanently rejected and is not the current release path.
 
 ```bash
 .venv-neural/bin/python neural/freeze_resolver_reach_release.py \
@@ -349,6 +351,35 @@ target/release/preflop-solver flop-pbs-range-response \
   --checkpoints 100,200,400 --averaging-delay 10 \
   --output /tmp/range-response.json
 ```
+
+The successor release gate is frozen separately so no failed v1 root can be
+reused. Its deterministic selector derives 12 texture-balanced flops that are
+suit-isomorphically disjoint from the V49 training, reserved, and legacy
+resolver corpora. Each root is evaluated in both cross-seed directions. The
+runner independently recomputes a binary SHA-256 over the complete frozen
+strategy before accepting the linked response artifact.
+
+```bash
+# Commit and push the protocol, selector, runner, and validator first.
+.venv-neural/bin/python neural/freeze_range_response_release.py \
+  neural/20bb-v49-range-response-protocol.json \
+  --output neural/20bb-v49-range-response-freeze.json
+
+# Commit and push the reproduced freeze before executing any selected root.
+.venv-neural/bin/python neural/run_range_response_release.py \
+  neural/20bb-v49-range-response-freeze.json --execute --resume \
+  --output-plan neural/runs/v49-resolver-reach/range-response-v2-plan.json
+
+.venv-neural/bin/python neural/validate_range_response_release.py \
+  neural/20bb-v49-range-response-freeze.json \
+  --output neural/runs/v49-resolver-reach/range-response-v2-validation.json
+```
+
+This gate rejects any directional root whose maximum observed response gain
+exceeds `0.05bb/hand`, whose 200-to-400-round gain increase exceeds `0.005bb`,
+or whose policy/provenance/numerical checks fail. Acceptance remains learned-
+response rejection evidence only and cannot activate the model without the
+independent full-game exploitability upper bound.
 
 See `neural/OPEN_SOURCE_SOFTWARE.md` for the dependency/license inventory.
 

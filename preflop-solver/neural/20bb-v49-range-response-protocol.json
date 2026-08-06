@@ -1,0 +1,107 @@
+{
+  "schema": "hu-range-response-release-protocol-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "frozen-before-fresh-range-response-evaluation",
+  "activationAllowed": false,
+  "predecessor": {
+    "releaseFreeze": {
+      "path": "neural/20bb-v49-release-freeze.json",
+      "sha256": "aa3f4655ccab9a5575e08ea465973ea361b883f2ceee5d90b6ab36fe5f0532ab"
+    },
+    "acceptedValueValidation": {
+      "path": "neural/runs/v49-resolver-reach/value-release-validation.json",
+      "sha256": "6859625a236d9a9a556bdd6b432a4953b360a610bf92f9fb123dffa234306a6a"
+    },
+    "rejectedMatchedEvaluator": {
+      "schema": "hu-matched-continual-resolver-execution-plan-v1",
+      "reason": "pointwise private-hand maximization was not a realizable range-consistent response",
+      "burnEveryPreviouslyReservedRoot": true
+    }
+  },
+  "models": [
+    {
+      "seed": 15301,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json",
+      "sha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81"
+    },
+    {
+      "seed": 15302,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json",
+      "sha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1"
+    }
+  ],
+  "implementation": {
+    "commit": "6f84b14412293437dc5841333a0d6963a11e1602",
+    "files": [
+      {
+        "path": "src/blueprint/public_belief.rs",
+        "sha256": "c68499344ef5939a031e6d8d760e11265d5a52a37862171cd38dafe174cd8bcd"
+      },
+      {
+        "path": "src/main.rs",
+        "sha256": "5d47aa7923998b37f801948f31eb958cf86f60d3ac929160c0e31fce38c07b6e"
+      },
+      {
+        "path": "Cargo.lock",
+        "sha256": "e207387ec37c9d7d5035fe3958f50030a4e390269cdac1bb7411cead8548b33a"
+      }
+    ]
+  },
+  "rootSelection": {
+    "algorithm": "sha256-ranked-suit-canonical-flops-v1",
+    "seed": 15601,
+    "excludedCorpus": {
+      "path": "neural/20bb-v49-resolver-reach-corpus.json",
+      "sha256": "c7467e2e3f6d09e023975e48931ab1ea60df3b542e36da721b63ddc459ad4405"
+    },
+    "textureCounts": {
+      "unpairedRainbowDisconnected": 2,
+      "unpairedRainbowConnected": 2,
+      "unpairedTwoToneDisconnected": 1,
+      "unpairedTwoToneConnected": 2,
+      "unpairedMonotoneDisconnected": 1,
+      "unpairedMonotoneConnected": 1,
+      "pairedRainbow": 1,
+      "pairedTwoTone": 1,
+      "trips": 1
+    },
+    "requireSuitIsomorphicDisjointness": true,
+    "freezeBeforeAnyOutputExists": true
+  },
+  "controls": {
+    "effectiveStackBb": 20.0,
+    "rootPotBb": 4.0,
+    "rootActor": 1,
+    "strategyIterations": 100,
+    "strategyCheckpoints": [25, 50, 100],
+    "strategyAveragingDelay": 10,
+    "responseCheckpoints": [100, 200, 400],
+    "responseAveragingDelay": 10,
+    "threads": 10,
+    "crossEvaluateBothDirections": true,
+    "outputDirectory": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2"
+  },
+  "gates": {
+    "maximumRangeConsistentResponseGainBbPerHand": 0.05,
+    "maximumFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumZeroSumResidualBb": 0.000001,
+    "maximumProbabilitySumError": 0.00001,
+    "requireEveryRootAndDirection": true,
+    "interpretAsExploitabilityUpperBound": false,
+    "activationRequiresIndependentFullGameUpperBound": true
+  },
+  "freshAuthenticRecheck": {
+    "requiredBeforeRoutedPolicyPromotion": true,
+    "useForModelSelection": false,
+    "seeds": [15501, 15502],
+    "statesPerSeed": 64,
+    "maximumPerSeedRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95
+  },
+  "failurePolicy": {
+    "missingOrInvalidEvidenceFailsClosed": true,
+    "rejectedRootBurnsTheEntireFrozenRootSet": true,
+    "modelOrControlChangeRequiresAnotherFreshFreeze": true,
+    "activationRemainsFalseUntilEveryFullGameGatePasses": true
+  }
+}
