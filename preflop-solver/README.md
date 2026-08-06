@@ -286,6 +286,70 @@ Passing this local resolver gate still leaves activation disabled while the
 preflop regeneration, full-game coverage/stability, action-EV uncertainty,
 learned-response, independent exploitability-bound, and storage gates remain.
 
+### V49 frozen release result and corrected range response
+
+The frozen V49 value pair passed every precommitted value gate. On two fresh
+64-state authentic shards, seeds 15301 and 15302 measured `0.209803bb` and
+`0.210008bb` RMSE with `0.999471` cross-seed prediction correlation. Their
+reserved resolver-reach RMSE improved by `35.19%` and `32.21%` over the
+strongest frozen baseline, and maximum Rust/Python inference disagreement was
+`5.80e-6bb`. The accepted report remains explicitly
+`accepted-awaiting-strategy-and-full-game-gates`; activation is false.
+
+The V49 matched-resolver v1 protocol then rejected its first untouched root.
+Its old pointwise response metric was `0.297991bb/hand`, above the `0.05bb`
+ceiling. A single-trajectory iteration diagnostic showed that metric plateauing
+at `0.387576`, `0.323358`, `0.297991`, and `0.299973bb/hand` after 25, 50, 100,
+and 200 resolver rounds. Same-seed rescoring was still `0.288972bb/hand`, so
+cross-seed value disagreement was not the dominant cause.
+
+The failure was in the evaluator contract. A range-conditioned leaf value
+changes when the responding trunk policy changes its public range, but the v1
+pointwise evaluator sent the responder's complete range down every action and
+then independently maximized each private hand. That is not one realizable
+behavioral response. The depth-limited value-function literature calls the
+related fixed-value construction a *naive best response* and explains that a
+true response must account for the coupling between the trunk strategy and the
+value-function input ([Kovařík et al.](https://arxiv.org/abs/1906.06412)); work
+on multi-valued depth-limited states likewise warns that a single continuation
+value does not represent opponent adaptation
+([Brown, Sandholm, and Amos](https://arxiv.org/abs/1805.08195)). The v1 result
+remains permanently rejected and its inspected root cannot be reused.
+
+`flop-pbs-range-response` now fixes every opponent action row and runs
+one-player depth-limited DCFR for the responder, preserving the exact
+response-conditioned ranges passed to the independent value network. It emits
+deterministic checkpoint gains, zero-sum residuals, model hashes, and a SHA-256
+of the complete frozen strategy. This is learned-response rejection evidence,
+not an exploitability upper bound. `flop-pbs-convergence` reuses one regret
+trajectory across iteration checkpoints and retains the final cross-scored
+strategy so the response diagnostic need not repeat strategy training.
+
+On the already-rejected root, a 400-round range-consistent response found
+`0.041081bb/hand` gain against the 100-round resolver strategy, with a final
+200-to-400 increase of `0.003322bb`. Increasing strategy training to 200 rounds
+regressed the identical response test to `0.047399bb/hand` with a `0.004299bb`
+final increase. The candidate controls selected for the next fresh-root
+protocol are therefore a protected 100-round strategy and precommitted
+100/200/400 response checkpoints. That protocol is not frozen by this pilot: it
+must use new, disjoint roots and reject any root above `0.05bb/hand` or with a
+final checkpoint increase above `0.005bb`. Passing those checks is only a
+red-team prerequisite; the separate one-sided 99% full-game exploitability
+upper bound remains mandatory.
+
+```bash
+target/release/preflop-solver flop-pbs-convergence \
+  --board 2d,8h,Ks --value-network /path/to/strategy-value.json \
+  --evaluation-value-network /path/to/independent-value.json \
+  --checkpoints 25,50,100 --averaging-delay 10 --output /tmp/convergence.json
+
+target/release/preflop-solver flop-pbs-range-response \
+  --convergence-report /tmp/convergence.json \
+  --evaluation-value-network /path/to/independent-value.json \
+  --checkpoints 100,200,400 --averaging-delay 10 \
+  --output /tmp/range-response.json
+```
+
 See `neural/OPEN_SOURCE_SOFTWARE.md` for the dependency/license inventory.
 
 Stacks include posted blinds. Small-blind payoff is measured relative to the

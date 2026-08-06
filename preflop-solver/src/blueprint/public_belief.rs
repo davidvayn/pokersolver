@@ -1446,6 +1446,69 @@ pub struct FlopSolution {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopConvergenceCheckpoint {
+    pub iterations: u64,
+    pub metrics: FlopResolveMetrics,
+    pub validation: BlueprintValidation,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopConvergenceReport {
+    pub schema: String,
+    pub method: String,
+    pub approximate: bool,
+    pub value_network_seed: u64,
+    pub value_network_sha256: Option<String>,
+    pub value_network_source_dataset_sha256: Option<String>,
+    pub value_network_source_policy_sha256: Option<String>,
+    pub evaluation_value_network_seed: u64,
+    pub evaluation_value_network_sha256: Option<String>,
+    pub evaluation_value_network_source_dataset_sha256: Option<String>,
+    pub evaluation_value_network_source_policy_sha256: Option<String>,
+    pub state: PublicBeliefState,
+    pub averaging_delay: u64,
+    pub threads: usize,
+    pub checkpoints: Vec<FlopConvergenceCheckpoint>,
+    pub final_solution: FlopSolution,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopRangeResponseCheckpoint {
+    pub iterations: u64,
+    pub response_value_p0_bb: f64,
+    pub response_value_p1_bb: f64,
+    pub response_gain_p0_bb: f64,
+    pub response_gain_p1_bb: f64,
+    pub range_consistent_response_gain_bb_per_hand: f64,
+    pub maximum_zero_sum_residual_bb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopRangeResponseReport {
+    pub schema: String,
+    pub method: String,
+    pub approximate: bool,
+    pub interpretation: String,
+    pub frozen_strategy_sha256: String,
+    pub frozen_strategy_iterations: u64,
+    pub strategy_value_network_seed: u64,
+    pub strategy_value_network_sha256: Option<String>,
+    pub strategy_value_network_source_dataset_sha256: Option<String>,
+    pub strategy_value_network_source_policy_sha256: Option<String>,
+    pub evaluation_value_network_seed: u64,
+    pub evaluation_value_network_sha256: Option<String>,
+    pub evaluation_value_network_source_dataset_sha256: Option<String>,
+    pub evaluation_value_network_source_policy_sha256: Option<String>,
+    pub state: PublicBeliefState,
+    pub baseline_profile_value_p0_bb: f64,
+    pub baseline_profile_value_p1_bb: f64,
+    pub response_averaging_delay: u64,
+    pub threads: usize,
+    pub checkpoints: Vec<FlopRangeResponseCheckpoint>,
+    pub validation: BlueprintValidation,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct FlopContinuationValues {
     pub schema: String,
     pub counterfactual_values_bb: [Vec<f32>; 2],
@@ -1456,6 +1519,7 @@ pub struct FlopContinuationValues {
     pub zero_sum_residual_after_projection_bb: f64,
 }
 
+#[derive(Clone)]
 struct FlopSolver {
     config: FlopResolveConfig,
     legal: [Vec<bool>; 2],
@@ -1685,6 +1749,107 @@ impl FlopSolver {
             }
         }
         values
+    }
+
+    fn reset_player_for_range_response(&mut self, responder: usize) {
+        for node in self.nodes.values_mut() {
+            if node.actor == responder {
+                node.regrets.fill(0.0);
+                node.strategy_sum.fill(0.0);
+                node.last_regret_discount_round = 0;
+                node.last_strategy_discount_round = 0;
+            }
+        }
+    }
+
+    fn range_response_walk(
+        &mut self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        responder: usize,
+        round: u64,
+    ) -> [Vec<f64>; 2] {
+        if state.street == Street::Turn && state.terminal.is_none() {
+            return self.turn_leaf_values(&state, &reaches);
+        }
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches);
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let key = state.public_history.clone();
+        let actor = state.actor;
+        let strategy = {
+            let node = self.nodes.get_mut(&key).expect("frozen flop response node");
+            if actor == responder {
+                node.discount_regrets(round, &self.config.game.dcfr);
+                node.discount_strategy_sum(round, &self.config.game.dcfr);
+                node.strategy(&self.legal[actor])
+            } else {
+                node.average_strategy(&self.legal[actor])
+            }
+        };
+        let action_count = actions.len();
+        let mut children = Vec::with_capacity(action_count);
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * action_count + action_index];
+            }
+            children.push(self.range_response_walk(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                responder,
+                round,
+            ));
+        }
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            for action in 0..action_count {
+                values[actor][combo] +=
+                    strategy[combo * action_count + action] * children[action][actor][combo];
+                values[opponent][combo] += children[action][opponent][combo];
+            }
+        }
+        if actor == responder {
+            let node = self.nodes.get_mut(&key).expect("flop response node");
+            for combo in 0..COMBO_COUNT {
+                if !self.legal[actor][combo] {
+                    continue;
+                }
+                let offset = combo * action_count;
+                for action in 0..action_count {
+                    node.regrets[offset + action] +=
+                        children[action][actor][combo] - values[actor][combo];
+                }
+                if round > self.config.averaging_delay {
+                    for action in 0..action_count {
+                        node.strategy_sum[offset + action] +=
+                            reaches[actor][combo] * strategy[offset + action];
+                    }
+                }
+            }
+        }
+        values
+    }
+
+    fn projected_profile_values(&self) -> ([f64; 2], f64) {
+        let reaches = self.config.state.ranges.clone();
+        let joint = joint_compatibility_mass(&reaches);
+        let profile =
+            self.profile_walk(self.config.state.game_state(), reaches.clone(), None, false);
+        let aggregate = |values: &[f64], player: usize| {
+            reaches[player]
+                .iter()
+                .zip(values)
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>()
+                / joint
+        };
+        let raw = [aggregate(&profile[0], 0), aggregate(&profile[1], 1)];
+        let residual = (raw[0] + raw[1]).abs();
+        let midpoint = (raw[0] - raw[1]) / 2.0;
+        ([midpoint, -midpoint], residual)
     }
 
     fn terminal_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
@@ -2400,6 +2565,7 @@ pub fn solve_flop_cross_evaluated(
     evaluation_value_network.validate()?;
     let resolver_seed = config.value_network.seed;
     let resolver_sha256 = config.value_network.artifact_sha256.clone();
+    let resolver_uses_exact_ranges = config.value_network.uses_exact_ranges;
     let resolver_source_dataset = config.value_network.source_dataset_sha256.clone();
     let resolver_source_policy = config.value_network.source_policy_sha256.clone();
     let evaluation_seed = evaluation_value_network.seed;
@@ -2416,6 +2582,7 @@ pub fn solve_flop_cross_evaluated(
     solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
     solution.value_network_seed = resolver_seed;
     solution.value_network_sha256 = resolver_sha256;
+    solution.uses_exact_ranges = resolver_uses_exact_ranges;
     solution.value_network_source_dataset_sha256 = resolver_source_dataset;
     solution.value_network_source_policy_sha256 = resolver_source_policy;
     solution.evaluation_value_network_seed = Some(evaluation_seed);
@@ -2423,6 +2590,217 @@ pub fn solve_flop_cross_evaluated(
     solution.evaluation_value_network_source_dataset_sha256 = evaluation_source_dataset;
     solution.evaluation_value_network_source_policy_sha256 = evaluation_source_policy;
     Ok(solution)
+}
+
+/// Measure a single resolver trajectory at multiple iteration counts without
+/// restarting its regrets. The diagnostic board is research evidence only;
+/// release roots must remain independently precommitted and unopened.
+pub fn diagnose_flop_cross_evaluated_convergence(
+    config: FlopResolveConfig,
+    evaluation_value_network: PublicValueNetwork,
+    checkpoints: &[u64],
+) -> Result<FlopConvergenceReport, String> {
+    evaluation_value_network.validate()?;
+    if checkpoints.is_empty()
+        || checkpoints.iter().any(|checkpoint| *checkpoint < 2)
+        || checkpoints.windows(2).any(|pair| pair[0] >= pair[1])
+        || checkpoints.last().copied() != Some(config.iterations)
+    {
+        return Err(
+            "flop convergence checkpoints must be strictly increasing from at least two through the configured final iteration"
+                .to_owned(),
+        );
+    }
+    let value_network_seed = config.value_network.seed;
+    let value_network_sha256 = config.value_network.artifact_sha256.clone();
+    let value_network_uses_exact_ranges = config.value_network.uses_exact_ranges;
+    let value_network_source_dataset_sha256 = config.value_network.source_dataset_sha256.clone();
+    let value_network_source_policy_sha256 = config.value_network.source_policy_sha256.clone();
+    let evaluation_value_network_seed = evaluation_value_network.seed;
+    let evaluation_value_network_sha256 = evaluation_value_network.artifact_sha256.clone();
+    let evaluation_value_network_source_dataset_sha256 =
+        evaluation_value_network.source_dataset_sha256.clone();
+    let evaluation_value_network_source_policy_sha256 =
+        evaluation_value_network.source_policy_sha256.clone();
+    let mut solver = FlopSolver::new(config)?;
+    let root = solver.config.state.game_state();
+    let reaches = solver.config.state.ranges.clone();
+    let mut completed = 0;
+    let mut evidence = Vec::with_capacity(checkpoints.len());
+    let mut final_solution = None;
+    for checkpoint in checkpoints {
+        for round in (completed + 1)..=*checkpoint {
+            solver.walk(root.clone(), reaches.clone(), 0, round, false);
+            solver.walk(root.clone(), reaches.clone(), 1, round, true);
+        }
+        completed = *checkpoint;
+        let mut evaluator = solver.clone();
+        evaluator.config.iterations = *checkpoint;
+        evaluator.config.value_network = evaluation_value_network.clone();
+        evaluator.turn_leaf_evaluations.set(0);
+        evaluator.exact_all_in_terminal_evaluations.set(0);
+        evaluator.maximum_leaf_zero_sum_residual.set(0.0);
+        let mut solution = evaluator.finish();
+        solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+        solution.value_network_seed = value_network_seed;
+        solution.value_network_sha256 = value_network_sha256.clone();
+        solution.uses_exact_ranges = value_network_uses_exact_ranges;
+        solution.value_network_source_dataset_sha256 = value_network_source_dataset_sha256.clone();
+        solution.value_network_source_policy_sha256 = value_network_source_policy_sha256.clone();
+        solution.evaluation_value_network_seed = Some(evaluation_value_network_seed);
+        solution.evaluation_value_network_sha256 = evaluation_value_network_sha256.clone();
+        solution.evaluation_value_network_source_dataset_sha256 =
+            evaluation_value_network_source_dataset_sha256.clone();
+        solution.evaluation_value_network_source_policy_sha256 =
+            evaluation_value_network_source_policy_sha256.clone();
+        evidence.push(FlopConvergenceCheckpoint {
+            iterations: *checkpoint,
+            metrics: solution.metrics.clone(),
+            validation: solution.validation.clone(),
+        });
+        final_solution = Some(solution);
+    }
+    Ok(FlopConvergenceReport {
+        schema: "hu-flop-resolver-convergence-diagnostic-v2".to_owned(),
+        method: "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned(),
+        approximate: true,
+        value_network_seed,
+        value_network_sha256,
+        value_network_source_dataset_sha256,
+        value_network_source_policy_sha256,
+        evaluation_value_network_seed,
+        evaluation_value_network_sha256,
+        evaluation_value_network_source_dataset_sha256,
+        evaluation_value_network_source_policy_sha256,
+        state: solver.config.state,
+        averaging_delay: solver.config.averaging_delay,
+        threads: solver.config.threads,
+        checkpoints: evidence,
+        final_solution: final_solution.expect("nonempty convergence checkpoints"),
+    })
+}
+
+/// Approximate an information-set-consistent response while preserving the
+/// responder-induced range passed to the value network. The opponent's frozen
+/// average strategy is never updated. This is red-team evidence and not an
+/// exploitability upper bound for either the depth-limited or full game.
+pub fn evaluate_frozen_flop_range_response_convergence(
+    game: BlueprintConfig,
+    frozen: &FlopSolution,
+    evaluation_value_network: PublicValueNetwork,
+    checkpoints: &[u64],
+    averaging_delay: u64,
+    threads: usize,
+) -> Result<FlopRangeResponseReport, String> {
+    evaluation_value_network.validate()?;
+    if frozen.effective_stack_bb > 0.0
+        && (frozen.effective_stack_bb - game.effective_stack_bb).abs() > EPSILON
+    {
+        return Err("frozen resolver effective stack does not match response game".to_owned());
+    }
+    if checkpoints.is_empty()
+        || checkpoints.iter().any(|checkpoint| *checkpoint < 2)
+        || checkpoints.windows(2).any(|pair| pair[0] >= pair[1])
+        || averaging_delay >= checkpoints[0]
+        || threads == 0
+    {
+        return Err(
+            "range-response checkpoints must be strictly increasing from at least two and begin after the averaging delay"
+                .to_owned(),
+        );
+    }
+    let final_iterations = *checkpoints.last().expect("nonempty response checkpoints");
+    let frozen_strategy_sha256 = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&frozen.strategies)
+                .map_err(|error| format!("failed to hash frozen flop strategy: {error}"))?
+        )
+    );
+    let mut base = FlopSolver::new(FlopResolveConfig {
+        game,
+        state: frozen.state.clone(),
+        iterations: final_iterations,
+        averaging_delay,
+        value_network: evaluation_value_network.clone(),
+        threads,
+    })?;
+    base.load_frozen_average_strategies(&frozen.strategies)?;
+    let (baseline, baseline_residual) = base.projected_profile_values();
+    let mut response_values: [Vec<f64>; 2] =
+        std::array::from_fn(|_| Vec::with_capacity(checkpoints.len()));
+    let mut response_residuals: [Vec<f64>; 2] =
+        std::array::from_fn(|_| Vec::with_capacity(checkpoints.len()));
+    for responder in 0..2 {
+        let mut solver = base.clone();
+        solver.reset_player_for_range_response(responder);
+        let root = solver.config.state.game_state();
+        let reaches = solver.config.state.ranges.clone();
+        let mut completed = 0;
+        for checkpoint in checkpoints {
+            for round in (completed + 1)..=*checkpoint {
+                solver.range_response_walk(root.clone(), reaches.clone(), responder, round);
+            }
+            completed = *checkpoint;
+            let (profile, residual) = solver.projected_profile_values();
+            response_values[responder].push(profile[responder].max(baseline[responder]));
+            response_residuals[responder].push(residual);
+        }
+    }
+    let evidence = checkpoints
+        .iter()
+        .enumerate()
+        .map(|(index, iterations)| {
+            let gain_p0 = (response_values[0][index] - baseline[0]).max(0.0);
+            let gain_p1 = (response_values[1][index] - baseline[1]).max(0.0);
+            FlopRangeResponseCheckpoint {
+                iterations: *iterations,
+                response_value_p0_bb: response_values[0][index],
+                response_value_p1_bb: response_values[1][index],
+                response_gain_p0_bb: gain_p0,
+                response_gain_p1_bb: gain_p1,
+                range_consistent_response_gain_bb_per_hand: (gain_p0 + gain_p1) / 2.0,
+                maximum_zero_sum_residual_bb: baseline_residual
+                    .max(response_residuals[0][index])
+                    .max(response_residuals[1][index]),
+            }
+        })
+        .collect();
+    Ok(FlopRangeResponseReport {
+        schema: "hu-flop-range-response-diagnostic-v1".to_owned(),
+        method: "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_public_ranges_cross_scored_by_independent_turn_cfv_network".to_owned(),
+        approximate: true,
+        interpretation: "information-set-consistent learned-response rejection evidence; finite response iterations and an approximate leaf network make this a lower-bound search signal, not an exploitability upper bound".to_owned(),
+        frozen_strategy_sha256,
+        frozen_strategy_iterations: frozen.iterations,
+        strategy_value_network_seed: frozen.value_network_seed,
+        strategy_value_network_sha256: frozen.value_network_sha256.clone(),
+        strategy_value_network_source_dataset_sha256: frozen
+            .value_network_source_dataset_sha256
+            .clone(),
+        strategy_value_network_source_policy_sha256: frozen
+            .value_network_source_policy_sha256
+            .clone(),
+        evaluation_value_network_seed: evaluation_value_network.seed,
+        evaluation_value_network_sha256: evaluation_value_network.artifact_sha256,
+        evaluation_value_network_source_dataset_sha256: evaluation_value_network
+            .source_dataset_sha256,
+        evaluation_value_network_source_policy_sha256: evaluation_value_network
+            .source_policy_sha256,
+        state: frozen.state.clone(),
+        baseline_profile_value_p0_bb: baseline[0],
+        baseline_profile_value_p1_bb: baseline[1],
+        response_averaging_delay: averaging_delay,
+        threads,
+        checkpoints: evidence,
+        validation: BlueprintValidation {
+            status: "diagnostic_only".to_owned(),
+            reasons: vec![
+                "range-consistent finite learned response cannot establish an exploitability upper bound"
+                    .to_owned(),
+            ],
+        },
+    })
 }
 
 /// Re-score a serialized frozen resolver strategy without retraining it.
@@ -6929,6 +7307,137 @@ mod tests {
                 .abs()
                 < 1e-6
         );
+    }
+
+    #[test]
+    fn flop_convergence_diagnostic_reuses_training_across_checkpoints() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut resolver_network = zero_value_network();
+        resolver_network.seed = 41;
+        resolver_network.artifact_sha256 = Some("c".repeat(64));
+        resolver_network.source_dataset_sha256 = Some("a".repeat(64));
+        let config = FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 4,
+            averaging_delay: 0,
+            value_network: resolver_network,
+            threads: 1,
+        };
+        let mut evaluation_network = zero_value_network();
+        evaluation_network.seed = 42;
+        evaluation_network.artifact_sha256 = Some("d".repeat(64));
+        evaluation_network.source_dataset_sha256 = Some("b".repeat(64));
+
+        let report = diagnose_flop_cross_evaluated_convergence(
+            config.clone(),
+            evaluation_network.clone(),
+            &[2, 4],
+        )
+        .unwrap();
+        let direct =
+            solve_flop_cross_evaluated(config.clone(), evaluation_network.clone()).unwrap();
+
+        assert_eq!(report.schema, "hu-flop-resolver-convergence-diagnostic-v2");
+        assert_eq!(report.checkpoints.len(), 2);
+        assert_eq!(report.checkpoints[0].iterations, 2);
+        assert_eq!(report.checkpoints[1].iterations, 4);
+        assert_eq!(report.value_network_seed, 41);
+        assert_eq!(report.evaluation_value_network_seed, 42);
+        assert_eq!(report.final_solution.strategies, direct.strategies);
+        assert_eq!(report.final_solution.value_network_seed, 41);
+        assert_eq!(
+            report.final_solution.evaluation_value_network_seed,
+            Some(42)
+        );
+        assert_eq!(
+            report.final_solution.value_network_sha256,
+            Some("c".repeat(64))
+        );
+        assert_eq!(
+            report.final_solution.evaluation_value_network_sha256,
+            Some("d".repeat(64))
+        );
+        assert!(
+            (report.checkpoints[1]
+                .metrics
+                .depth_limited_exploitability_bb_per_hand
+                - direct.metrics.depth_limited_exploitability_bb_per_hand)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            diagnose_flop_cross_evaluated_convergence(config, evaluation_network, &[4, 2],)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn flop_range_response_keeps_the_opponent_frozen_and_ranges_consistent() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut resolver_network = zero_value_network();
+        resolver_network.seed = 41;
+        resolver_network.artifact_sha256 = Some("c".repeat(64));
+        resolver_network.source_dataset_sha256 = Some("a".repeat(64));
+        let config = FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 4,
+            averaging_delay: 0,
+            value_network: resolver_network,
+            threads: 1,
+        };
+        let frozen = solve_flop(config.clone()).unwrap();
+        let game = config.game.clone();
+        let mut evaluation_network = zero_value_network();
+        evaluation_network.seed = 42;
+        evaluation_network.artifact_sha256 = Some("d".repeat(64));
+        evaluation_network.source_dataset_sha256 = Some("b".repeat(64));
+
+        let report = evaluate_frozen_flop_range_response_convergence(
+            game.clone(),
+            &frozen,
+            evaluation_network.clone(),
+            &[2, 4],
+            0,
+            1,
+        )
+        .unwrap();
+        let repeated = evaluate_frozen_flop_range_response_convergence(
+            game.clone(),
+            &frozen,
+            evaluation_network.clone(),
+            &[2, 4],
+            0,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(report, repeated);
+        assert_eq!(report.schema, "hu-flop-range-response-diagnostic-v1");
+        assert_eq!(report.checkpoints.len(), 2);
+        assert_eq!(report.frozen_strategy_iterations, 4);
+        assert_eq!(report.frozen_strategy_sha256.len(), 64);
+        assert_eq!(report.checkpoints[1].iterations, 4);
+        assert!(report.checkpoints.iter().all(|checkpoint| {
+            checkpoint.response_gain_p0_bb >= 0.0
+                && checkpoint.response_gain_p1_bb >= 0.0
+                && checkpoint.range_consistent_response_gain_bb_per_hand >= 0.0
+        }));
+        assert!(report
+            .interpretation
+            .contains("not an exploitability upper bound"));
+        assert!(evaluate_frozen_flop_range_response_convergence(
+            game,
+            &frozen,
+            evaluation_network,
+            &[4, 2],
+            0,
+            1,
+        )
+        .is_err());
     }
 
     #[test]

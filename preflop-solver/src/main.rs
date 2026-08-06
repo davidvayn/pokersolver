@@ -35,7 +35,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         "turn-pbs-upgrade-targets" => run_turn_pbs_upgrade_targets(&args[1..]),
         "turn-pbs-compose-upgrade" => run_turn_pbs_compose_upgrade(&args[1..]),
         "flop-pbs-resolve" => run_flop_pbs_resolve(&args[1..]),
+        "flop-pbs-convergence" => run_flop_pbs_convergence(&args[1..]),
         "flop-pbs-evaluate" => run_flop_pbs_evaluate(&args[1..]),
+        "flop-pbs-range-response" => run_flop_pbs_range_response(&args[1..]),
         "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
@@ -321,6 +323,122 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
         fs::write(&path, format!("{output}\n"))?;
         println!("{}", serde_json::to_string_pretty(&solution.metrics)?);
         eprintln!("wrote depth-limited flop pilot {}", path.display());
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn run_flop_pbs_convergence(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    let board = parse_board::<3>(
+        &value(args, "--board").ok_or("--board is required, for example 2c,7d,Th")?,
+    )?;
+    let network_path = value(args, "--value-network")
+        .map(PathBuf::from)
+        .ok_or("--value-network is required")?;
+    let evaluation_path = value(args, "--evaluation-value-network")
+        .map(PathBuf::from)
+        .ok_or("--evaluation-value-network is required")?;
+    let checkpoints = value(args, "--checkpoints")
+        .ok_or("--checkpoints is required, for example 100,200,400")?
+        .split(',')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let iterations = checkpoints
+        .last()
+        .copied()
+        .ok_or("--checkpoints must not be empty")?;
+    let ranges = std::array::from_fn(|_| blueprint::public_belief::uniform_range(&board));
+    let report = blueprint::public_belief::diagnose_flop_cross_evaluated_convergence(
+        blueprint::public_belief::FlopResolveConfig {
+            game,
+            state: blueprint::public_belief::PublicBeliefState::flop_start(
+                board,
+                parse_or(args, "--actor", 1usize)?,
+                {
+                    let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
+                    [pot_bb / 2.0, pot_bb / 2.0]
+                },
+                ranges,
+            ),
+            iterations,
+            averaging_delay: parse_or(args, "--averaging-delay", iterations / 10)?,
+            value_network: blueprint::public_belief::PublicValueNetwork::read(&network_path)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+        },
+        blueprint::public_belief::PublicValueNetwork::read(&evaluation_path)?,
+        &checkpoints,
+    )?;
+    let output = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{output}\n"))?;
+        eprintln!("wrote flop convergence diagnostic {}", path.display());
+    } else {
+        println!("{output}");
+    }
+    Ok(())
+}
+
+fn run_flop_pbs_range_response(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let evaluation_path = value(args, "--evaluation-value-network")
+        .map(PathBuf::from)
+        .ok_or("--evaluation-value-network is required")?;
+    let frozen: blueprint::public_belief::FlopSolution =
+        if let Some(path) = value(args, "--solution").map(PathBuf::from) {
+            serde_json::from_slice(&fs::read(path)?)?
+        } else if let Some(path) = value(args, "--convergence-report").map(PathBuf::from) {
+            let report: blueprint::public_belief::FlopConvergenceReport =
+                serde_json::from_slice(&fs::read(path)?)?;
+            report.final_solution
+        } else {
+            return Err("--solution or --convergence-report is required".into());
+        };
+    let evaluation = blueprint::public_belief::PublicValueNetwork::read(&evaluation_path)?;
+    let checkpoints = value(args, "--checkpoints")
+        .ok_or("--checkpoints is required, for example 25,50,100")?
+        .split(',')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    let report = blueprint::public_belief::evaluate_frozen_flop_range_response_convergence(
+        game,
+        &frozen,
+        evaluation,
+        &checkpoints,
+        parse_or(args, "--averaging-delay", 0u64)?,
+        parse_or(
+            args,
+            "--threads",
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
+        )?,
+    )?;
+    let output = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{output}\n"))?;
+        eprintln!("wrote flop range-response diagnostic {}", path.display());
     } else {
         println!("{output}");
     }
@@ -1751,6 +1869,8 @@ Usage:
   preflop-solver turn-pbs-merge-targets --dataset <json> --dataset <json> [options]
   preflop-solver turn-pbs-value-predict [options]
   preflop-solver flop-pbs-resolve [options]
+  preflop-solver flop-pbs-convergence [options]
+  preflop-solver flop-pbs-range-response [options]
   preflop-solver flop-pbs-leaf-targets [options]
 
 Solve options:
@@ -1870,6 +1990,14 @@ Neural exploitability-certificate options:
                                   when their street is reached
 
 Complete turn/river label options:
+  flop-pbs-convergence --board <3-card-csv> --value-network <json>
+    --evaluation-value-network <json> --checkpoints <csv>
+    [--pot-bb 4] [--actor 1] [--averaging-delay N] [--threads N]
+    [--output <json>]
+  flop-pbs-range-response (--solution <flop-solution.json> |
+    --convergence-report <flop-convergence.json>)
+    --evaluation-value-network <json> --checkpoints <csv>
+    [--averaging-delay 0] [--threads N] [--output <json>]
   turn-river-pbs-solve --board <4-card-csv> [--pot-bb 4] [--actor 1]
     [--dataset <targets.json> --state-index 0]
     [--iterations 500] [--averaging-delay 50] [--export-strategies]
