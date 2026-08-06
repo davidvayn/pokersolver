@@ -203,18 +203,21 @@ def validate_protocol(
         raise ValueError("range-response orchestration sources are not fully pinned")
 
     controls = protocol.get("controls", {})
+    strategy_iterations = int(controls.get("strategyIterations", -1))
     strategy_checkpoints = [int(value) for value in controls.get("strategyCheckpoints", [])]
     response_checkpoints = [int(value) for value in controls.get("responseCheckpoints", [])]
     if (
         float(controls.get("effectiveStackBb", 0.0)) != 20.0
-        or int(controls.get("strategyIterations", -1)) != 100
+        or strategy_iterations < 100
         or strategy_checkpoints != sorted(set(strategy_checkpoints))
-        or not strategy_checkpoints
-        or strategy_checkpoints[-1] != 100
+        or len(strategy_checkpoints) < 2
+        or strategy_checkpoints[-1] != strategy_iterations
         or response_checkpoints != sorted(set(response_checkpoints))
         or len(response_checkpoints) < 3
         or int(controls.get("strategyAveragingDelay", -1)) >= strategy_checkpoints[0]
         or int(controls.get("responseAveragingDelay", -1)) >= response_checkpoints[0]
+        or not isinstance(controls.get("strategyRegretMatchingPlus", False), bool)
+        or not isinstance(controls.get("responseRegretMatchingPlus", False), bool)
         or int(controls.get("threads", 0)) < 1
         or controls.get("crossEvaluateBothDirections") is not True
     ):

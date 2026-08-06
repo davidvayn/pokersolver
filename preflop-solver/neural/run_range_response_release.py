@@ -30,6 +30,27 @@ RESPONSE_METHOD = (
 )
 
 
+def convergence_method(controls: dict[str, Any]) -> str:
+    method = CONVERGENCE_METHOD
+    if bool(controls.get("strategyRegretMatchingPlus", False)):
+        method += "_regret_matching_plus"
+    return method
+
+
+def solution_method(controls: dict[str, Any]) -> str:
+    method = matched_v1.SOLUTION_METHOD
+    if bool(controls.get("strategyRegretMatchingPlus", False)):
+        method += "_regret_matching_plus"
+    return method
+
+
+def response_method(controls: dict[str, Any]) -> str:
+    method = RESPONSE_METHOD
+    if bool(controls.get("responseRegretMatchingPlus", False)):
+        method += "_regret_matching_plus"
+    return method
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("freeze", type=Path)
@@ -63,7 +84,7 @@ def convergence_command(
     evaluation: dict[str, Any],
     output: str,
 ) -> list[str]:
-    return [
+    command = [
         "target/release/preflop-solver",
         "flop-pbs-convergence",
         "--effective-stack-bb",
@@ -87,6 +108,9 @@ def convergence_command(
         "--output",
         output,
     ]
+    if bool(controls.get("strategyRegretMatchingPlus", False)):
+        command.append("--regret-matching-plus")
+    return command
 
 
 def response_command(
@@ -95,13 +119,15 @@ def response_command(
     evaluation: dict[str, Any],
     output: str,
 ) -> list[str]:
-    return [
+    command = [
         "target/release/preflop-solver",
         "flop-pbs-range-response",
         "--effective-stack-bb",
         str(controls["effectiveStackBb"]),
         "--convergence-report",
         convergence_output,
+        "--strategy-iterations",
+        str(controls["strategyIterations"]),
         "--evaluation-value-network",
         evaluation["path"],
         "--checkpoints",
@@ -113,6 +139,9 @@ def response_command(
         "--output",
         output,
     ]
+    if bool(controls.get("responseRegretMatchingPlus", False)):
+        command.append("--regret-matching-plus")
+    return command
 
 
 def build_plan(
@@ -259,8 +288,10 @@ def inspect_convergence(
     ]
     structural = (
         payload.get("schema") == CONVERGENCE_SCHEMA
-        and payload.get("method") == CONVERGENCE_METHOD
+        and payload.get("method") == convergence_method(controls)
         and payload.get("approximate") is True
+        and bool(payload.get("regret_matching_plus", False))
+        == bool(controls.get("strategyRegretMatchingPlus", False))
         and int(payload.get("value_network_seed", -1)) == strategy["seed"]
         and payload.get("value_network_sha256") == strategy["sha256"]
         and payload.get("value_network_source_dataset_sha256")
@@ -282,8 +313,10 @@ def inspect_convergence(
         and solution_iterations == expected_checkpoints
         and checkpoint_solutions[-1] == final
         and final.get("schema") == matched_v1.SOLUTION_SCHEMA
-        and final.get("method") == matched_v1.SOLUTION_METHOD
+        and final.get("method") == solution_method(controls)
         and final.get("approximate") is True
+        and bool(final.get("regret_matching_plus", False))
+        == bool(controls.get("strategyRegretMatchingPlus", False))
         and float(final.get("effective_stack_bb", float("nan")))
         == float(controls["effectiveStackBb"])
         and int(final.get("value_network_seed", -1)) == strategy["seed"]
@@ -320,8 +353,10 @@ def inspect_convergence(
         raise ValueError(f"range-response convergence metrics are invalid: {path}")
     solution_structural = all(
         solution.get("schema") == matched_v1.SOLUTION_SCHEMA
-        and solution.get("method") == matched_v1.SOLUTION_METHOD
+        and solution.get("method") == solution_method(controls)
         and solution.get("approximate") is True
+        and bool(solution.get("regret_matching_plus", False))
+        == bool(controls.get("strategyRegretMatchingPlus", False))
         and float(solution.get("effective_stack_bb", float("nan")))
         == float(controls["effectiveStackBb"])
         and int(solution.get("value_network_seed", -1)) == strategy["seed"]
@@ -384,8 +419,10 @@ def inspect_response(
     iterations = [int(value.get("iterations", -1)) for value in checkpoints]
     structural = (
         payload.get("schema") == RESPONSE_SCHEMA
-        and payload.get("method") == RESPONSE_METHOD
+        and payload.get("method") == response_method(controls)
         and payload.get("approximate") is True
+        and bool(payload.get("response_regret_matching_plus", False))
+        == bool(controls.get("responseRegretMatchingPlus", False))
         and "not an exploitability upper bound" in payload.get("interpretation", "")
         and payload.get("frozen_strategy_sha256") == convergence["strategySha256"]
         and int(payload.get("frozen_strategy_iterations", -1))

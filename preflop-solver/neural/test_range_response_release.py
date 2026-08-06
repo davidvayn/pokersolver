@@ -278,6 +278,58 @@ class RangeResponseReleaseTests(unittest.TestCase):
             "caa0399fc945c99975cf5d3466dcd84f395f1fa19d9149622efd07e567e75983",
         )
 
+    def test_strengthened_algorithms_are_pinned_in_commands_and_artifacts(self):
+        controls = self.controls()
+        controls["strategyRegretMatchingPlus"] = True
+        controls["responseRegretMatchingPlus"] = True
+        job = self.job()
+        convergence_command = runner.convergence_command(
+            controls,
+            job["root"],
+            job["strategyModel"],
+            job["evaluationModel"],
+            job["convergenceOutput"],
+        )
+        response_command = runner.response_command(
+            controls,
+            job["convergenceOutput"],
+            job["evaluationModel"],
+            job["responseOutput"],
+        )
+        self.assertIn("--regret-matching-plus", convergence_command)
+        self.assertIn("--regret-matching-plus", response_command)
+        self.assertEqual(
+            response_command[response_command.index("--strategy-iterations") + 1],
+            "100",
+        )
+
+        convergence_payload = self.convergence_payload()
+        convergence_payload["method"] = runner.convergence_method(controls)
+        convergence_payload["regret_matching_plus"] = True
+        for solution in [
+            *convergence_payload["checkpoint_solutions"],
+            convergence_payload["final_solution"],
+        ]:
+            solution["method"] = runner.solution_method(controls)
+            solution["regret_matching_plus"] = True
+        response_payload = self.response_payload()
+        response_payload["method"] = runner.response_method(controls)
+        response_payload["response_regret_matching_plus"] = True
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            convergence_path = root / "convergence.json"
+            response_path = root / "response.json"
+            convergence_path.write_text(json.dumps(convergence_payload))
+            response_path.write_text(json.dumps(response_payload))
+            convergence = runner.inspect_convergence(
+                job, controls, self.gates(), convergence_path
+            )
+            response = runner.inspect_response(
+                job, controls, self.gates(), convergence, response_path
+            )
+        self.assertTrue(convergence["accepted"])
+        self.assertTrue(response["accepted"])
+
     def test_artifacts_require_exact_policy_link_and_response_bounds(self):
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)
