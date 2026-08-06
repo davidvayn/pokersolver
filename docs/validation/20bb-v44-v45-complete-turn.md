@@ -484,6 +484,14 @@ Reload independently revalidates exact card removal, normalized f32 ranges,
 distinct turn boards, reach mass, provenance, and all three pot bands before
 the expensive complete turn/river labels resume.
 
+Exact turn-equity matrices are now cached by exhaustive global-suit canonical
+board keys. Hole-combo rows and columns are permuted into the same canonical
+frame before every lookup, so exact blockers and showdown values are unchanged.
+This reduces the 49 possible turns of a monotone root to 23 distinct matrix
+builds; a suit-equivariance regression test checks every shared feature and
+value after a nontrivial suit permutation. The optimization changes neither
+the frozen roots nor any training or evaluation label semantics.
+
 Configuration selection uses the two 36-label training shards as opposite
 cross-validation folds before the reserved evaluation labels are generated.
 Every diagnostic now records the exact model SHA-256, and the selector verifies

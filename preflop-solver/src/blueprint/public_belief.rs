@@ -1217,8 +1217,19 @@ fn exact_turn_range_equities(
         4,
         "exact turn equity requires four board cards"
     );
-    let mut key: [u8; 4] = board.try_into().expect("validated turn board");
-    key.sort_unstable();
+    let original: [u8; 4] = board.try_into().expect("validated turn board");
+    let (key, suit_permutation) = canonical_turn_board_suits(original);
+    let canonical_combo_keys = all_combos()
+        .into_iter()
+        .map(|combo| {
+            let [first, second] = combo.cards();
+            Combo::new(
+                permute_card_suit(first, suit_permutation),
+                permute_card_suit(second, suit_permutation),
+            )
+            .key()
+        })
+        .collect::<Vec<_>>();
     let cell = {
         let mut cache = DENSE_TURN_EQUITY_CACHE
             .lock()
@@ -1241,11 +1252,13 @@ fn exact_turn_range_equities(
                 let compatible =
                     compatible_mass_from_conflicts(&ranges[1 - player], conflicts, own);
                 if compatible > EPSILON {
-                    let row = own * COMBO_COUNT;
+                    let row = canonical_combo_keys[own] * COMBO_COUNT;
                     let numerator = ranges[1 - player]
                         .iter()
                         .enumerate()
-                        .map(|(opponent, weight)| weight * f64::from(matrix[row + opponent]) / 88.0)
+                        .map(|(opponent, weight)| {
+                            weight * f64::from(matrix[row + canonical_combo_keys[opponent]]) / 88.0
+                        })
                         .sum::<f64>();
                     (numerator / compatible).clamp(0.0, 1.0) as f32
                 } else {
@@ -1254,6 +1267,40 @@ fn exact_turn_range_equities(
             })
             .collect()
     })
+}
+
+fn permute_card_suit(card: u8, permutation: [u8; 4]) -> u8 {
+    (card & !3) | permutation[(card & 3) as usize]
+}
+
+/// Returns the lexicographically smallest suit-isomorphic turn board and the
+/// original-to-canonical suit permutation. Exact equity is invariant under a
+/// global suit relabeling, so canonical matrices can be shared without
+/// changing any card-removal or showdown result.
+fn canonical_turn_board_suits(board: [u8; 4]) -> ([u8; 4], [u8; 4]) {
+    let mut best_board = [u8::MAX; 4];
+    let mut best_permutation = [0, 1, 2, 3];
+    for first in 0..4u8 {
+        for second in 0..4u8 {
+            if second == first {
+                continue;
+            }
+            for third in 0..4u8 {
+                if third == first || third == second {
+                    continue;
+                }
+                let fourth = 6 - first - second - third;
+                let permutation = [first, second, third, fourth];
+                let mut candidate = board.map(|card| permute_card_suit(card, permutation));
+                candidate.sort_unstable();
+                if candidate < best_board {
+                    best_board = candidate;
+                    best_permutation = permutation;
+                }
+            }
+        }
+    }
+    (best_board, best_permutation)
 }
 
 fn compute_exact_turn_equity_units(board: [u8; 4]) -> Arc<Vec<u8>> {
@@ -5093,9 +5140,7 @@ pub fn generate_resolver_leaf_turn_targets(
             &source_value_network_sha256,
         )?;
         let checkpoint_path = config.checkpoint_dir.as_ref().map(|directory| {
-            directory.join(format!(
-                "resolver-root-{root_index:06}-{fingerprint}.json"
-            ))
+            directory.join(format!("resolver-root-{root_index:06}-{fingerprint}.json"))
         });
         let (checkpoint, reused) = if let Some(path) = &checkpoint_path {
             if path.exists() {
@@ -5518,9 +5563,10 @@ fn validate_resolver_root_checkpoint(
             || leaf.reach_probability
                 != (leaf.reach_probability * RESOLVER_REACH_CANONICAL_SCALE).round()
                     / RESOLVER_REACH_CANONICAL_SCALE
-            || leaf.invested.iter().any(|value| {
-                !value.is_finite() || *value < 0.0 || *value > effective_stack_bb
-            })
+            || leaf
+                .invested
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0 || *value > effective_stack_bb)
         {
             return Err("resolver root checkpoint contains an invalid leaf".to_owned());
         }
@@ -5531,9 +5577,7 @@ fn validate_resolver_root_checkpoint(
         for range in &leaf.ranges {
             if range.len() != COMBO_COUNT
                 || range.iter().any(|weight| {
-                    !weight.is_finite()
-                        || *weight < 0.0
-                        || *weight != (*weight as f32) as f64
+                    !weight.is_finite() || *weight < 0.0 || *weight != (*weight as f32) as f64
                 })
                 || (range.iter().sum::<f64>() - 1.0).abs() > 1e-5
             {
@@ -5544,7 +5588,7 @@ fn validate_resolver_root_checkpoint(
                     && range[combo.key()] != 0.0
                 {
                     return Err(
-                        "resolver root checkpoint range violates exact card removal".to_owned(),
+                        "resolver root checkpoint range violates exact card removal".to_owned()
                     );
                 }
             }
@@ -6662,6 +6706,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn exact_turn_equity_cache_key_is_suit_canonical() {
+        let board = [0u8, 20, 40, 47];
+        let permutation = [2u8, 0, 3, 1];
+        let permuted = board.map(|card| permute_card_suit(card, permutation));
+        let (canonical, canonical_permutation) = canonical_turn_board_suits(board);
+        let (permuted_canonical, _) = canonical_turn_board_suits(permuted);
+        assert_eq!(canonical, permuted_canonical);
+        let mut mapped = board.map(|card| permute_card_suit(card, canonical_permutation));
+        mapped.sort_unstable();
+        assert_eq!(mapped, canonical);
+
+        let monotone_flop = [0u8, 20, 40];
+        let canonical_turns = (0..52u8)
+            .filter(|card| !monotone_flop.contains(card))
+            .map(|card| {
+                canonical_turn_board_suits([
+                    monotone_flop[0],
+                    monotone_flop[1],
+                    monotone_flop[2],
+                    card,
+                ])
+                .0
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(canonical_turns.len(), 23);
     }
 
     #[test]
