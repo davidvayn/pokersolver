@@ -477,6 +477,12 @@ configuration is frozen. The validator checks pinned source hashes, declared
 texture counts, exact and suit-isomorphic separation from training,
 evaluation, and legacy roots, completed shard provenance, and fail-closed
 activation. Any failed successor requires new independent evaluation roots.
+Root-policy capture is also resumable now. After each flop solve, the generator
+atomically checkpoints only the three selected canonical leaves with the exact
+source-network hash and a fingerprint of every root solve and sampling control.
+Reload independently revalidates exact card removal, normalized f32 ranges,
+distinct turn boards, reach mass, provenance, and all three pot bands before
+the expensive complete turn/river labels resume.
 
 Configuration selection uses the two 36-label training shards as opposite
 cross-validation folds before the reserved evaluation labels are generated.

@@ -30,6 +30,7 @@ const SHARED_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-query-v2";
 const SHARED_FEATURE_SCHEMA_V3: &str = "rank-suit-invariant-combo-query-v3";
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
+const RESOLVER_ROOT_CHECKPOINT_SCHEMA: &str = "hu-resolver-root-leaf-checkpoint-v1";
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
 const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
 const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARDS * 49;
@@ -1384,7 +1385,7 @@ struct FlopSolver {
     maximum_leaf_zero_sum_residual: Cell<f64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 struct ResolverTurnLeaf {
     root_board: [u8; 3],
     public_history: Vec<String>,
@@ -1393,6 +1394,18 @@ struct ResolverTurnLeaf {
     invested: [f64; 2],
     ranges: [Vec<f64>; 2],
     reach_probability: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct ResolverRootLeafCheckpoint {
+    schema: String,
+    input_sha256: String,
+    source_value_network_sha256: String,
+    root_index: usize,
+    root_board: [u8; 3],
+    leaf_population: usize,
+    leaf_probability_mass: f64,
+    selected_leaves: Vec<ResolverTurnLeaf>,
 }
 
 impl FlopSolver {
@@ -5073,58 +5086,76 @@ pub fn generate_resolver_leaf_turn_targets(
     let mut leaf_population = 0usize;
     let mut leaf_probability_mass = 0.0f64;
     for (root_index, board) in config.root_boards.iter().copied().enumerate() {
-        let ranges = std::array::from_fn(|_| uniform_range(&board));
-        let mut solver = FlopSolver::new(FlopResolveConfig {
-            game: config.game.clone(),
-            state: PublicBeliefState::flop_start(
-                board,
-                config.root_actor,
-                [config.root_pot_bb / 2.0, config.root_pot_bb / 2.0],
-                ranges,
-            ),
-            iterations: config.resolver_iterations,
-            averaging_delay: config.resolver_averaging_delay,
-            value_network: network.clone(),
-            threads: config.threads,
-        })?;
-        solver.train();
-        // Resolver inference runs across worker threads. Platform math can
-        // differ below persisted f32 precision, so canonicalize at the data
-        // boundary before hashing, sampling, or solving labels. Otherwise a
-        // numerically identical replay can miss every resumable checkpoint.
-        let leaves = solver
-            .capture_average_turn_leaves()
-            .into_iter()
-            .filter_map(canonicalize_resolver_turn_leaf)
-            .collect::<Vec<_>>();
-        if leaves.len() < config.states_per_board {
-            return Err(format!(
-                "resolver root {root_index} produced only {} positive-reach leaves",
-                leaves.len()
-            )
-            .into());
-        }
-        leaf_population += leaves.len();
-        leaf_probability_mass += leaves
-            .iter()
-            .map(|leaf| leaf.reach_probability)
-            .sum::<f64>();
-        let sampled = sample_resolver_turn_leaves(
-            &leaves,
-            config.states_per_board,
-            config.seed ^ (root_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        let fingerprint = resolver_root_checkpoint_input_sha256(
+            &config,
+            root_index,
+            board,
+            &source_value_network_sha256,
         )?;
-        let sampled_bands = sampled
-            .iter()
-            .map(|leaf| resolver_leaf_pot_band(leaf.invested))
-            .collect::<BTreeSet<_>>();
-        if ![0usize, 1, 2].into_iter().all(|band| sampled_bands.contains(&band)) {
-            return Err(format!(
-                "resolver root {root_index} does not produce one sampled leaf in every pot band"
+        let checkpoint_path = config.checkpoint_dir.as_ref().map(|directory| {
+            directory.join(format!(
+                "resolver-root-{root_index:06}-{fingerprint}.json"
+            ))
+        });
+        let (checkpoint, reused) = if let Some(path) = &checkpoint_path {
+            if path.exists() {
+                (
+                    serde_json::from_slice::<ResolverRootLeafCheckpoint>(&fs::read(path)?)?,
+                    true,
+                )
+            } else {
+                (
+                    solve_resolver_root_leaf_checkpoint(
+                        &config,
+                        &network,
+                        root_index,
+                        board,
+                        &source_value_network_sha256,
+                        fingerprint.clone(),
+                    )?,
+                    false,
+                )
+            }
+        } else {
+            (
+                solve_resolver_root_leaf_checkpoint(
+                    &config,
+                    &network,
+                    root_index,
+                    board,
+                    &source_value_network_sha256,
+                    fingerprint.clone(),
+                )?,
+                false,
             )
-            .into());
+        };
+        validate_resolver_root_checkpoint(
+            &checkpoint,
+            &fingerprint,
+            &source_value_network_sha256,
+            root_index,
+            board,
+            config.states_per_board,
+            config.game.effective_stack_bb,
+        )?;
+        if !reused {
+            if let Some(path) = &checkpoint_path {
+                write_resolver_root_checkpoint(path, &checkpoint)?;
+            }
         }
-        selected_leaves.extend(sampled);
+        eprintln!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "event": "resolver-root-leaves-ready",
+                "rootIndex": root_index,
+                "roots": config.root_boards.len(),
+                "selectedLeaves": checkpoint.selected_leaves.len(),
+                "reusedCheckpoint": reused,
+            }))?
+        );
+        leaf_population += checkpoint.leaf_population;
+        leaf_probability_mass += checkpoint.leaf_probability_mass;
+        selected_leaves.extend(checkpoint.selected_leaves);
     }
 
     let mut targets = Vec::with_capacity(selected_leaves.len());
@@ -5354,6 +5385,185 @@ fn resolver_leaf_pot_band(invested: [f64; 2]) -> usize {
     } else {
         2
     }
+}
+
+fn solve_resolver_root_leaf_checkpoint(
+    config: &ResolverLeafTurnTargetConfig,
+    network: &PublicValueNetwork,
+    root_index: usize,
+    board: [u8; 3],
+    source_value_network_sha256: &str,
+    input_sha256: String,
+) -> Result<ResolverRootLeafCheckpoint, Box<dyn Error>> {
+    let ranges = std::array::from_fn(|_| uniform_range(&board));
+    let mut solver = FlopSolver::new(FlopResolveConfig {
+        game: config.game.clone(),
+        state: PublicBeliefState::flop_start(
+            board,
+            config.root_actor,
+            [config.root_pot_bb / 2.0, config.root_pot_bb / 2.0],
+            ranges,
+        ),
+        iterations: config.resolver_iterations,
+        averaging_delay: config.resolver_averaging_delay,
+        value_network: network.clone(),
+        threads: config.threads,
+    })?;
+    solver.train();
+    // Resolver inference runs across worker threads. Platform math can differ
+    // below persisted f32 precision, so canonicalize before checkpointing,
+    // hashing, sampling, or solving labels.
+    let leaves = solver
+        .capture_average_turn_leaves()
+        .into_iter()
+        .filter_map(canonicalize_resolver_turn_leaf)
+        .collect::<Vec<_>>();
+    if leaves.len() < config.states_per_board {
+        return Err(format!(
+            "resolver root {root_index} produced only {} positive-reach leaves",
+            leaves.len()
+        )
+        .into());
+    }
+    let leaf_probability_mass = leaves
+        .iter()
+        .map(|leaf| leaf.reach_probability)
+        .sum::<f64>();
+    let sampled = sample_resolver_turn_leaves(
+        &leaves,
+        config.states_per_board,
+        config.seed ^ (root_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    )?;
+    let sampled_bands = sampled
+        .iter()
+        .map(|leaf| resolver_leaf_pot_band(leaf.invested))
+        .collect::<BTreeSet<_>>();
+    if ![0usize, 1, 2]
+        .into_iter()
+        .all(|band| sampled_bands.contains(&band))
+    {
+        return Err(format!(
+            "resolver root {root_index} does not produce one sampled leaf in every pot band"
+        )
+        .into());
+    }
+    Ok(ResolverRootLeafCheckpoint {
+        schema: RESOLVER_ROOT_CHECKPOINT_SCHEMA.to_owned(),
+        input_sha256,
+        source_value_network_sha256: source_value_network_sha256.to_owned(),
+        root_index,
+        root_board: board,
+        leaf_population: leaves.len(),
+        leaf_probability_mass,
+        selected_leaves: sampled,
+    })
+}
+
+fn resolver_root_checkpoint_input_sha256(
+    config: &ResolverLeafTurnTargetConfig,
+    root_index: usize,
+    root_board: [u8; 3],
+    source_value_network_sha256: &str,
+) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "schema": RESOLVER_ROOT_CHECKPOINT_SCHEMA,
+        "game": config.game,
+        "rootIndex": root_index,
+        "rootBoard": root_board,
+        "statesPerBoard": config.states_per_board,
+        "rootPotBb": config.root_pot_bb,
+        "rootActor": config.root_actor,
+        "resolverIterations": config.resolver_iterations,
+        "resolverAveragingDelay": config.resolver_averaging_delay,
+        "seed": config.seed,
+        "sourceValueNetworkSha256": source_value_network_sha256,
+    }))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn validate_resolver_root_checkpoint(
+    checkpoint: &ResolverRootLeafCheckpoint,
+    expected_fingerprint: &str,
+    source_value_network_sha256: &str,
+    root_index: usize,
+    root_board: [u8; 3],
+    states_per_board: usize,
+    effective_stack_bb: f64,
+) -> Result<(), String> {
+    if checkpoint.schema != RESOLVER_ROOT_CHECKPOINT_SCHEMA
+        || checkpoint.input_sha256 != expected_fingerprint
+        || checkpoint.source_value_network_sha256 != source_value_network_sha256
+        || checkpoint.root_index != root_index
+        || checkpoint.root_board != root_board
+        || checkpoint.leaf_population < states_per_board
+        || !checkpoint.leaf_probability_mass.is_finite()
+        || checkpoint.leaf_probability_mass <= 0.0
+        || checkpoint.leaf_probability_mass > 1.0 + 1e-6
+        || checkpoint.selected_leaves.len() != states_per_board
+    {
+        return Err("resolver root checkpoint provenance does not match".to_owned());
+    }
+    let root_cards = root_board.into_iter().collect::<BTreeSet<_>>();
+    let mut boards = BTreeSet::new();
+    let mut bands = BTreeSet::new();
+    for leaf in &checkpoint.selected_leaves {
+        if leaf.root_board != root_board
+            || leaf.board[..3] != root_board
+            || leaf.board.iter().copied().collect::<BTreeSet<_>>().len() != 4
+            || !root_cards.iter().all(|card| leaf.board.contains(card))
+            || leaf.actor > 1
+            || leaf.public_history.is_empty()
+            || !leaf.reach_probability.is_finite()
+            || leaf.reach_probability <= 0.0
+            || leaf.reach_probability
+                != (leaf.reach_probability * RESOLVER_REACH_CANONICAL_SCALE).round()
+                    / RESOLVER_REACH_CANONICAL_SCALE
+            || leaf.invested.iter().any(|value| {
+                !value.is_finite() || *value < 0.0 || *value > effective_stack_bb
+            })
+        {
+            return Err("resolver root checkpoint contains an invalid leaf".to_owned());
+        }
+        if !boards.insert(leaf.board) {
+            return Err("resolver root checkpoint repeats a turn board".to_owned());
+        }
+        bands.insert(resolver_leaf_pot_band(leaf.invested));
+        for range in &leaf.ranges {
+            if range.len() != COMBO_COUNT
+                || range.iter().any(|weight| {
+                    !weight.is_finite()
+                        || *weight < 0.0
+                        || *weight != (*weight as f32) as f64
+                })
+                || (range.iter().sum::<f64>() - 1.0).abs() > 1e-5
+            {
+                return Err("resolver root checkpoint contains an invalid range".to_owned());
+            }
+            for combo in all_combos() {
+                if combo.cards().iter().any(|card| leaf.board.contains(card))
+                    && range[combo.key()] != 0.0
+                {
+                    return Err(
+                        "resolver root checkpoint range violates exact card removal".to_owned(),
+                    );
+                }
+            }
+        }
+    }
+    if ![0usize, 1, 2].into_iter().all(|band| bands.contains(&band)) {
+        return Err("resolver root checkpoint does not cover every pot band".to_owned());
+    }
+    Ok(())
+}
+
+fn write_resolver_root_checkpoint(
+    path: &Path,
+    checkpoint: &ResolverRootLeafCheckpoint,
+) -> Result<(), Box<dyn Error>> {
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec(checkpoint)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn sample_turn_line(
@@ -6623,6 +6833,81 @@ mod tests {
         let perturbed = canonicalize_resolver_turn_leaf(perturbed).unwrap();
         assert_eq!(canonical.reach_probability, perturbed.reach_probability);
         assert_eq!(canonical.ranges, perturbed.ranges);
+    }
+
+    #[test]
+    fn resolver_root_checkpoint_validates_provenance_ranges_and_pot_bands() {
+        let root_board = [0, 5, 10];
+        let investments = [[2.0, 2.0], [4.0, 4.0], [8.0, 8.0]];
+        let selected_leaves = [15u8, 16, 17]
+            .into_iter()
+            .zip(investments)
+            .enumerate()
+            .map(|(index, (turn, invested))| {
+                let board = [root_board[0], root_board[1], root_board[2], turn];
+                canonicalize_resolver_turn_leaf(ResolverTurnLeaf {
+                    root_board,
+                    public_history: vec![format!("leaf-{index}")],
+                    board,
+                    actor: index % 2,
+                    invested,
+                    ranges: std::array::from_fn(|_| uniform_range(&board)),
+                    reach_probability: (index + 1) as f64 / 10.0,
+                })
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let checkpoint = ResolverRootLeafCheckpoint {
+            schema: RESOLVER_ROOT_CHECKPOINT_SCHEMA.to_owned(),
+            input_sha256: "fingerprint".to_owned(),
+            source_value_network_sha256: "network".to_owned(),
+            root_index: 2,
+            root_board,
+            leaf_population: 30,
+            leaf_probability_mass: 0.9,
+            selected_leaves,
+        };
+        validate_resolver_root_checkpoint(
+            &checkpoint,
+            "fingerprint",
+            "network",
+            2,
+            root_board,
+            3,
+            20.0,
+        )
+        .unwrap();
+        let round_trip: ResolverRootLeafCheckpoint =
+            serde_json::from_slice(&serde_json::to_vec(&checkpoint).unwrap()).unwrap();
+        assert_eq!(checkpoint, round_trip);
+
+        let mut missing_band = checkpoint.clone();
+        missing_band.selected_leaves[2].invested = [4.0, 4.0];
+        assert!(validate_resolver_root_checkpoint(
+            &missing_band,
+            "fingerprint",
+            "network",
+            2,
+            root_board,
+            3,
+            20.0,
+        )
+        .unwrap_err()
+        .contains("pot band"));
+
+        let mut wrong_provenance = checkpoint;
+        wrong_provenance.source_value_network_sha256 = "other".to_owned();
+        assert!(validate_resolver_root_checkpoint(
+            &wrong_provenance,
+            "fingerprint",
+            "network",
+            2,
+            root_board,
+            3,
+            20.0,
+        )
+        .unwrap_err()
+        .contains("provenance"));
     }
 
     #[test]
