@@ -264,6 +264,54 @@ class RangeResponseReleaseTests(unittest.TestCase):
                 freezer.portable_path(root, protocol), "neural/protocol.json"
             )
 
+    def test_burned_freeze_roots_are_explicitly_excluded(self):
+        first = self.root()
+        second_board = "3c,4c,Ac"
+        second = {
+            "board": second_board,
+            "boardIndices": matched_v1.board_indices(second_board),
+            "texture": "unpairedMonotoneConnected",
+            "suitIsomorphismKey": list(
+                corpus_validator.suit_isomorphism_key(
+                    tuple(matched_v1.board_indices(second_board))
+                )
+            ),
+        }
+        payload = {
+            "schema": freezer.RANGE_RESPONSE_FREEZE_SCHEMA,
+            "activationAllowed": False,
+            "rootSelection": {"roots": [first, second]},
+        }
+        expected = {
+            tuple(first["suitIsomorphismKey"]),
+            tuple(second["suitIsomorphismKey"]),
+        }
+        self.assertEqual(freezer.frozen_root_keys(payload), expected)
+
+        payload["activationAllowed"] = True
+        with self.assertRaisesRegex(ValueError, "fail-closed"):
+            freezer.frozen_root_keys(payload)
+
+    def test_fresh_authentic_recheck_must_be_fully_accepted(self):
+        payload = {
+            "schema": freezer.FRESH_AUTHENTIC_RECHECK_SCHEMA,
+            "status": "accepted-awaiting-strategy-preflop-and-full-game-gates",
+            "activationAllowed": False,
+            "gates": {
+                "maximumPerSeedRmseBb": 0.25,
+                "minimumCrossSeedPredictionCorrelation": 0.95,
+                "freshAuthenticPerSeedRmse": True,
+                "freshAuthenticCrossSeedCorrelation": True,
+                "uniqueAndDisjointStateFingerprints": True,
+                "completeArtifactProvenance": True,
+            },
+        }
+        freezer.validate_accepted_fresh_authentic_recheck(payload)
+
+        payload["gates"]["completeArtifactProvenance"] = False
+        with self.assertRaisesRegex(ValueError, "fresh authentic recheck"):
+            freezer.validate_accepted_fresh_authentic_recheck(payload)
+
     def test_strategy_hash_matches_the_rust_binary_fixture(self):
         fixture = [
             {

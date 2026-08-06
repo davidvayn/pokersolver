@@ -18,6 +18,8 @@ import validate_resolver_reach_corpus as corpus_validator
 PROTOCOL_SCHEMA = "hu-range-response-release-protocol-v1"
 FREEZE_SCHEMA = "hu-range-response-release-freeze-v1"
 VALUE_SCHEMA = "hu-resolver-reach-value-release-validation-v1"
+FRESH_AUTHENTIC_RECHECK_SCHEMA = "hu-fresh-authentic-value-recheck-result-v1"
+RANGE_RESPONSE_FREEZE_SCHEMA = "hu-range-response-release-freeze-v1"
 RANKS = "23456789TJQKA"
 SUITS = "cdhs"
 
@@ -82,6 +84,60 @@ def excluded_root_keys(
     if not keys:
         raise ValueError("range-response root exclusion set is empty")
     return keys
+
+
+def frozen_root_keys(payload: dict[str, Any]) -> set[tuple[int, ...]]:
+    if (
+        payload.get("schema") != RANGE_RESPONSE_FREEZE_SCHEMA
+        or payload.get("activationAllowed") is not False
+    ):
+        raise ValueError("burned range-response root source is not a fail-closed freeze")
+    roots = payload.get("rootSelection", {}).get("roots", [])
+    keys: set[tuple[int, ...]] = set()
+    for root in roots:
+        board = tuple(int(card) for card in root.get("boardIndices", []))
+        declared = tuple(int(card) for card in root.get("suitIsomorphismKey", []))
+        if (
+            len(board) != 3
+            or len(set(board)) != 3
+            or any(card < 0 or card >= 52 for card in board)
+            or declared != corpus_validator.suit_isomorphism_key(board)
+        ):
+            raise ValueError("burned range-response freeze contains an invalid root")
+        keys.add(declared)
+    if not keys or len(keys) != len(roots):
+        raise ValueError("burned range-response freeze has missing or duplicate roots")
+    return keys
+
+
+def burned_root_keys(
+    repository_root: Path, references: list[dict[str, Any]]
+) -> set[tuple[int, ...]]:
+    keys: set[tuple[int, ...]] = set()
+    for reference in references:
+        path = checked_reference(repository_root, reference)
+        keys |= frozen_root_keys(json.loads(path.read_text()))
+    return keys
+
+
+def validate_accepted_fresh_authentic_recheck(payload: dict[str, Any]) -> None:
+    gates = payload.get("gates", {})
+    boolean_gates = [value for value in gates.values() if isinstance(value, bool)]
+    if (
+        payload.get("schema") != FRESH_AUTHENTIC_RECHECK_SCHEMA
+        or payload.get("status")
+        != "accepted-awaiting-strategy-preflop-and-full-game-gates"
+        or payload.get("activationAllowed") is not False
+        or not boolean_gates
+        or not all(boolean_gates)
+        or gates.get("freshAuthenticPerSeedRmse") is not True
+        or gates.get("freshAuthenticCrossSeedCorrelation") is not True
+        or gates.get("uniqueAndDisjointStateFingerprints") is not True
+        or gates.get("completeArtifactProvenance") is not True
+    ):
+        raise ValueError(
+            "range-response successor is not bound to an accepted fresh authentic recheck"
+        )
 
 
 def select_roots(
@@ -157,6 +213,14 @@ def validate_protocol(
         or release.get("activationAllowed") is not False
     ):
         raise ValueError("range-response protocol is not bound to accepted V49 value gates")
+
+    fresh_recheck_reference = predecessor.get("acceptedFreshAuthenticRecheck")
+    if fresh_recheck_reference is not None:
+        fresh_recheck_path = checked_reference(
+            repository_root, fresh_recheck_reference
+        )
+        fresh_recheck = json.loads(fresh_recheck_path.read_text())
+        validate_accepted_fresh_authentic_recheck(fresh_recheck)
     rejected = predecessor.get("rejectedMatchedEvaluator", {})
     if rejected.get("burnEveryPreviouslyReservedRoot") is not True:
         raise ValueError("range-response successor must burn the rejected v1 roots")
@@ -240,6 +304,10 @@ def validate_protocol(
     corpus_path = checked_reference(repository_root, selection["excludedCorpus"])
     corpus_validator.validate_config(corpus_path, repository_root)
     excluded = excluded_root_keys(repository_root, corpus_path)
+    burned_references = selection.get("burnedRootFreezes", [])
+    if not isinstance(burned_references, list):
+        raise ValueError("range-response burned-root references are invalid")
+    excluded |= burned_root_keys(repository_root, burned_references)
     roots = select_roots(
         int(selection["seed"]), selection.get("textureCounts", {}), excluded
     )
