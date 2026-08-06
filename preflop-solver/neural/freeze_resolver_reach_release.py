@@ -118,6 +118,19 @@ def validate_protocol(
         "generateOnlyAfterReleaseConfigurationFreeze"
     ):
         raise ValueError("fresh authentic holdout controls are invalid")
+    if protocol.get("matchedContinualResolver") != {
+        "runOnlyAfterValueReleaseGatesPass": True,
+        "rootSource": "all reservedEvaluationShards boards in the pinned resolver corpus",
+        "crossEvaluateBothReleaseSeeds": True,
+        "effectiveStackBb": 20.0,
+        "rootPotBb": 4.0,
+        "rootActor": 1,
+        "iterations": 100,
+        "averagingDelay": 10,
+        "threads": 10,
+        "maximumExploitabilityBbPerHand": 0.05,
+    }:
+        raise ValueError("matched continual-resolver controls are invalid")
     shards = holdout.get("shards", [])
     holdout_seeds = [int(shard["seed"]) for shard in shards]
     if len(shards) != 2 or len(set(holdout_seeds)) != 2:
@@ -217,6 +230,7 @@ def build_release_freeze(
         },
         "reservedResolverEvaluation": corpus["reservedEvaluationShards"],
         "freshAuthenticHoldout": protocol["freshAuthenticHoldout"],
+        "matchedContinualResolver": protocol["matchedContinualResolver"],
         "releaseGates": protocol["releaseGates"],
         "failurePolicy": protocol["failurePolicy"],
     }

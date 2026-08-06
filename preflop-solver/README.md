@@ -242,6 +242,34 @@ The short 20bb paired-pilot evidence and rejected alternatives are recorded in
 The dedicated v27 preflop and learned-response sequence is recorded in
 `docs/validation/20bb-v27-preflop-resolver.md`.
 
+The frozen V49 release path remains fail-closed after its value-network gates.
+Only an accepted `hu-resolver-reach-value-release-validation-v1` report can
+unseal the matched continual-resolver runner. It then solves every one of the
+12 precommitted reserved flops in both cross-seed directions (24 jobs total):
+one release network supplies the frozen average resolver strategy and the other
+independently scores its continuation values and best response. Each solution
+records SHA-256 hashes of the exact strategy and evaluation weight files, and
+the validator rejects a substituted same-seed artifact, invalid probability
+row, zero-sum residual above `1e-6bb`, nonpositive resolver improvement, or any
+local depth-limited exploitability above `0.05bb/hand`.
+
+```bash
+.venv-neural/bin/python neural/run_matched_continual_resolver.py \
+  neural/runs/v49-resolver-reach/release/<candidate>/release-freeze.json \
+  --value-validation neural/runs/v49-resolver-reach/release/<candidate>/value-validation.json \
+  --execute --resume \
+  --output-plan neural/runs/v49-resolver-reach/release/<candidate>/matched-resolver-plan.json
+
+.venv-neural/bin/python neural/validate_matched_continual_resolver.py \
+  neural/runs/v49-resolver-reach/release/<candidate>/release-freeze.json \
+  --value-validation neural/runs/v49-resolver-reach/release/<candidate>/value-validation.json \
+  --output neural/runs/v49-resolver-reach/release/<candidate>/matched-resolver-validation.json
+```
+
+Passing this local resolver gate still leaves activation disabled while the
+preflop regeneration, full-game coverage/stability, action-EV uncertainty,
+learned-response, independent exploitability-bound, and storage gates remain.
+
 See `neural/OPEN_SOURCE_SOFTWARE.md` for the dependency/license inventory.
 
 Stacks include posted blinds. Small-blind payoff is measured relative to the

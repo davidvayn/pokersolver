@@ -51,6 +51,18 @@
       }
     ]
   },
+  "matchedContinualResolver": {
+    "runOnlyAfterValueReleaseGatesPass": true,
+    "rootSource": "all reservedEvaluationShards boards in the pinned resolver corpus",
+    "crossEvaluateBothReleaseSeeds": true,
+    "effectiveStackBb": 20.0,
+    "rootPotBb": 4.0,
+    "rootActor": 1,
+    "iterations": 100,
+    "averagingDelay": 10,
+    "threads": 10,
+    "maximumExploitabilityBbPerHand": 0.05
+  },
   "releaseGates": {
     "minimumPerSeedResolverReachWeightedRmseImprovementFraction": 0.2,
     "maximumPerSeedAuthenticFreshHoldoutRmseBb": 0.25,

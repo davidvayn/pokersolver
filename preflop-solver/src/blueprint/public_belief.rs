@@ -252,7 +252,7 @@ impl PublicBeliefState {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ValueNetworkLayer {
     input_size: usize,
@@ -435,9 +435,11 @@ fn forward_batch_head(
     std::mem::take(&mut scratch[(layers.len() - 1) % 2])
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicValueNetwork {
+    #[serde(skip)]
+    artifact_sha256: Option<String>,
     schema: String,
     seed: u64,
     uses_exact_ranges: bool,
@@ -477,7 +479,9 @@ pub struct PublicValueNetwork {
 
 impl PublicValueNetwork {
     pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let network: Self = serde_json::from_slice(&fs::read(path)?)?;
+        let bytes = fs::read(path)?;
+        let mut network: Self = serde_json::from_slice(&bytes)?;
+        network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
         network.validate()?;
         Ok(network)
     }
@@ -1411,7 +1415,11 @@ pub struct FlopSolution {
     pub schema: String,
     pub method: String,
     pub approximate: bool,
+    #[serde(default)]
+    pub effective_stack_bb: f64,
     pub value_network_seed: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_network_sha256: Option<String>,
     pub uses_exact_ranges: bool,
     pub value_network_source_dataset_sha256: Option<String>,
     #[serde(default)]
@@ -1419,11 +1427,17 @@ pub struct FlopSolution {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_seed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_value_network_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_source_dataset_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_source_policy_sha256: Option<String>,
     pub state: PublicBeliefState,
     pub iterations: u64,
+    #[serde(default)]
+    pub averaging_delay: u64,
+    #[serde(default)]
+    pub threads: usize,
     pub strategies: Vec<PublicBeliefStrategy>,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub opponent_compatible_mass: [Vec<f32>; 2],
@@ -2120,7 +2134,9 @@ impl FlopSolver {
             method: "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_paired_alternating_dcfr"
                 .to_owned(),
             approximate: true,
+            effective_stack_bb: self.config.game.effective_stack_bb,
             value_network_seed: self.config.value_network.seed,
+            value_network_sha256: self.config.value_network.artifact_sha256,
             uses_exact_ranges: self.config.value_network.uses_exact_ranges,
             value_network_source_dataset_sha256: self
                 .config
@@ -2131,10 +2147,13 @@ impl FlopSolver {
                 .value_network
                 .source_policy_sha256,
             evaluation_value_network_seed: None,
+            evaluation_value_network_sha256: None,
             evaluation_value_network_source_dataset_sha256: None,
             evaluation_value_network_source_policy_sha256: None,
             state: self.config.state,
             iterations: self.config.iterations,
+            averaging_delay: self.config.averaging_delay,
+            threads: self.config.threads,
             strategies,
             counterfactual_values_bb,
             opponent_compatible_mass,
@@ -2380,9 +2399,11 @@ pub fn solve_flop_cross_evaluated(
 ) -> Result<FlopSolution, String> {
     evaluation_value_network.validate()?;
     let resolver_seed = config.value_network.seed;
+    let resolver_sha256 = config.value_network.artifact_sha256.clone();
     let resolver_source_dataset = config.value_network.source_dataset_sha256.clone();
     let resolver_source_policy = config.value_network.source_policy_sha256.clone();
     let evaluation_seed = evaluation_value_network.seed;
+    let evaluation_sha256 = evaluation_value_network.artifact_sha256.clone();
     let evaluation_source_dataset = evaluation_value_network.source_dataset_sha256.clone();
     let evaluation_source_policy = evaluation_value_network.source_policy_sha256.clone();
     let mut solver = FlopSolver::new(config)?;
@@ -2394,9 +2415,11 @@ pub fn solve_flop_cross_evaluated(
     let mut solution = solver.finish();
     solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
     solution.value_network_seed = resolver_seed;
+    solution.value_network_sha256 = resolver_sha256;
     solution.value_network_source_dataset_sha256 = resolver_source_dataset;
     solution.value_network_source_policy_sha256 = resolver_source_policy;
     solution.evaluation_value_network_seed = Some(evaluation_seed);
+    solution.evaluation_value_network_sha256 = evaluation_sha256;
     solution.evaluation_value_network_source_dataset_sha256 = evaluation_source_dataset;
     solution.evaluation_value_network_source_policy_sha256 = evaluation_source_policy;
     Ok(solution)
@@ -2410,6 +2433,11 @@ pub fn evaluate_frozen_flop_solution(
     threads: usize,
 ) -> Result<FlopSolution, String> {
     evaluation_value_network.validate()?;
+    if frozen.effective_stack_bb > 0.0
+        && (frozen.effective_stack_bb - game.effective_stack_bb).abs() > EPSILON
+    {
+        return Err("frozen resolver effective stack does not match evaluation game".to_owned());
+    }
     let mut solver = FlopSolver::new(FlopResolveConfig {
         game,
         state: frozen.state.clone(),
@@ -2422,11 +2450,14 @@ pub fn evaluate_frozen_flop_solution(
     let mut solution = solver.finish();
     solution.method = "serialized_frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
     solution.value_network_seed = frozen.value_network_seed;
+    solution.averaging_delay = frozen.averaging_delay;
+    solution.value_network_sha256 = frozen.value_network_sha256.clone();
     solution.uses_exact_ranges = frozen.uses_exact_ranges;
     solution.value_network_source_dataset_sha256 =
         frozen.value_network_source_dataset_sha256.clone();
     solution.value_network_source_policy_sha256 = frozen.value_network_source_policy_sha256.clone();
     solution.evaluation_value_network_seed = Some(evaluation_value_network.seed);
+    solution.evaluation_value_network_sha256 = evaluation_value_network.artifact_sha256.clone();
     solution.evaluation_value_network_source_dataset_sha256 =
         evaluation_value_network.source_dataset_sha256;
     solution.evaluation_value_network_source_policy_sha256 =
@@ -6021,6 +6052,7 @@ mod tests {
             biases: vec![0.0; output_size],
         };
         PublicValueNetwork {
+            artifact_sha256: None,
             schema: "hu-public-belief-value-network-v2".to_owned(),
             seed: 1,
             uses_exact_ranges: true,
@@ -6053,6 +6085,7 @@ mod tests {
             biases: vec![0.0; output_size],
         };
         PublicValueNetwork {
+            artifact_sha256: None,
             schema: "hu-public-belief-combo-value-network-v3".to_owned(),
             seed: 2,
             uses_exact_ranges: true,
@@ -6074,6 +6107,28 @@ mod tests {
             query_tower: vec![layer(SHARED_QUERY_COUNT, 1, "linear")],
             head: vec![layer(2, 1, "tanh")],
         }
+    }
+
+    #[test]
+    fn value_network_read_records_the_exact_artifact_hash() {
+        let network = zero_value_network();
+        let bytes = serde_json::to_vec(&network).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "public-value-network-hash-{}-{}.json",
+            std::process::id(),
+            Sha256::digest(&bytes)
+                .iter()
+                .take(4)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
+        fs::write(&path, &bytes).unwrap();
+        let loaded = PublicValueNetwork::read(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(
+            loaded.artifact_sha256,
+            Some(format!("{:x}", Sha256::digest(&bytes)))
+        );
     }
 
     #[test]
@@ -6818,6 +6873,7 @@ mod tests {
         let ranges = std::array::from_fn(|_| uniform_range(&board));
         let mut resolver_network = zero_value_network();
         resolver_network.seed = 41;
+        resolver_network.artifact_sha256 = Some("c".repeat(64));
         resolver_network.source_dataset_sha256 = Some("a".repeat(64));
         let config = FlopResolveConfig {
             game: tiny_game(),
@@ -6830,6 +6886,7 @@ mod tests {
         let ordinary = solve_flop(config.clone()).unwrap();
         let mut evaluation_network = resolver_network;
         evaluation_network.seed = 42;
+        evaluation_network.artifact_sha256 = Some("d".repeat(64));
         evaluation_network.source_dataset_sha256 = Some("b".repeat(64));
         let cross = solve_flop_cross_evaluated(config, evaluation_network.clone()).unwrap();
         let rescored =
@@ -6837,17 +6894,29 @@ mod tests {
         assert_eq!(cross.strategies, ordinary.strategies);
         assert_eq!(rescored.strategies, ordinary.strategies);
         assert_eq!(cross.value_network_seed, 41);
+        assert_eq!(cross.effective_stack_bb, 4.0);
+        assert_eq!(cross.averaging_delay, 0);
+        assert_eq!(cross.threads, 1);
+        assert_eq!(rescored.effective_stack_bb, ordinary.effective_stack_bb);
+        assert_eq!(rescored.averaging_delay, ordinary.averaging_delay);
+        assert_eq!(cross.value_network_sha256, Some("c".repeat(64)));
         assert_eq!(
             cross.value_network_source_dataset_sha256,
             Some("a".repeat(64))
         );
         assert_eq!(cross.evaluation_value_network_seed, Some(42));
+        assert_eq!(cross.evaluation_value_network_sha256, Some("d".repeat(64)));
         assert_eq!(
             cross.evaluation_value_network_source_dataset_sha256,
             Some("b".repeat(64))
         );
         assert!(cross.method.contains("scored_by_independent"));
         assert!(rescored.method.contains("serialized_frozen"));
+        assert_eq!(rescored.value_network_sha256, Some("c".repeat(64)));
+        assert_eq!(
+            rescored.evaluation_value_network_sha256,
+            Some("d".repeat(64))
+        );
         assert!(
             (cross.metrics.depth_limited_exploitability_bb_per_hand
                 - ordinary.metrics.depth_limited_exploitability_bb_per_hand)

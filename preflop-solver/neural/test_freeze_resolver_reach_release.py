@@ -23,6 +23,15 @@ class FreezeResolverReachReleaseTests(unittest.TestCase):
             [15401, 15402],
         )
         self.assertEqual(len(corpus["reservedEvaluationShards"]), 2)
+        self.assertEqual(
+            protocol["matchedContinualResolver"][
+                "maximumExploitabilityBbPerHand"
+            ],
+            0.05,
+        )
+        self.assertTrue(
+            protocol["matchedContinualResolver"]["crossEvaluateBothReleaseSeeds"]
+        )
 
     def test_holdout_seed_overlap_is_rejected(self) -> None:
         payload = json.loads(PROTOCOL.read_text())
