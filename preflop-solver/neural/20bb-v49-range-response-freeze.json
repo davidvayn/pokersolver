@@ -81,6 +81,23 @@
       "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
     }
   ],
+  "orchestration": {
+    "commit": "025e9bb17d57d662b04f01eadad192c24f418a24",
+    "files": [
+      {
+        "path": "neural/freeze_range_response_release.py",
+        "sha256": "d5b645decf052aef11d66f14ed7289a3628d0d202f68ba32db750a8f9160c3ef"
+      },
+      {
+        "path": "neural/run_range_response_release.py",
+        "sha256": "ea29e883563b0f2ceb04ed2923d8153130730b4003c0e18f33da9aa079a3550b"
+      },
+      {
+        "path": "neural/validate_range_response_release.py",
+        "sha256": "73c9d5af2709603793d8b4a0b7ad2c20de3e6e75709b7f7c90672bf7c5288f83"
+      }
+    ]
+  },
   "predecessor": {
     "acceptedValueValidation": {
       "path": "neural/runs/v49-resolver-reach/value-release-validation.json",
@@ -98,7 +115,7 @@
   },
   "protocol": {
     "path": "neural/20bb-v49-range-response-protocol.json",
-    "sha256": "f33da339a74c015e1aab3e424bd654ed4660107a8ce45774f76c7c5d6b5f6a2c"
+    "sha256": "149c377d4ee8feaffa0ddd37f8069a802c5f8af5827fb253ed749a6c895cc155"
   },
   "rootSelection": {
     "algorithm": "sha256-ranked-suit-canonical-flops-v1",
