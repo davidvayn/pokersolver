@@ -1,0 +1,300 @@
+{
+  "activationAllowed": false,
+  "controls": {
+    "crossEvaluateBothDirections": true,
+    "effectiveStackBb": 20.0,
+    "outputDirectory": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2",
+    "responseAveragingDelay": 10,
+    "responseCheckpoints": [
+      100,
+      200,
+      400
+    ],
+    "rootActor": 1,
+    "rootPotBb": 4.0,
+    "strategyAveragingDelay": 10,
+    "strategyCheckpoints": [
+      25,
+      50,
+      100
+    ],
+    "strategyIterations": 100,
+    "threads": 10
+  },
+  "failurePolicy": {
+    "activationRemainsFalseUntilEveryFullGameGatePasses": true,
+    "missingOrInvalidEvidenceFailsClosed": true,
+    "modelOrControlChangeRequiresAnotherFreshFreeze": true,
+    "rejectedRootBurnsTheEntireFrozenRootSet": true
+  },
+  "freshAuthenticRecheck": {
+    "maximumPerSeedRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "requiredBeforeRoutedPolicyPromotion": true,
+    "seeds": [
+      15501,
+      15502
+    ],
+    "statesPerSeed": 64,
+    "useForModelSelection": false
+  },
+  "gates": {
+    "activationRequiresIndependentFullGameUpperBound": true,
+    "interpretAsExploitabilityUpperBound": false,
+    "maximumFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumProbabilitySumError": 1e-05,
+    "maximumRangeConsistentResponseGainBbPerHand": 0.05,
+    "maximumZeroSumResidualBb": 1e-06,
+    "requireEveryRootAndDirection": true
+  },
+  "implementation": {
+    "commit": "6f84b14412293437dc5841333a0d6963a11e1602",
+    "files": [
+      {
+        "path": "src/blueprint/public_belief.rs",
+        "sha256": "c68499344ef5939a031e6d8d760e11265d5a52a37862171cd38dafe174cd8bcd"
+      },
+      {
+        "path": "src/main.rs",
+        "sha256": "5d47aa7923998b37f801948f31eb958cf86f60d3ac929160c0e31fce38c07b6e"
+      },
+      {
+        "path": "Cargo.lock",
+        "sha256": "e207387ec37c9d7d5035fe3958f50030a4e390269cdac1bb7411cead8548b33a"
+      }
+    ]
+  },
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "models": [
+    {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json",
+      "seed": 15301,
+      "sha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81",
+      "sourceDatasetSha256": "856d688f82c870855f676120b7c67b9979e005974369a942d47f288923989c57",
+      "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+    },
+    {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json",
+      "seed": 15302,
+      "sha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1",
+      "sourceDatasetSha256": "856d688f82c870855f676120b7c67b9979e005974369a942d47f288923989c57",
+      "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+    }
+  ],
+  "predecessor": {
+    "acceptedValueValidation": {
+      "path": "neural/runs/v49-resolver-reach/value-release-validation.json",
+      "sha256": "6859625a236d9a9a556bdd6b432a4953b360a610bf92f9fb123dffa234306a6a"
+    },
+    "rejectedMatchedEvaluator": {
+      "burnEveryPreviouslyReservedRoot": true,
+      "reason": "pointwise private-hand maximization was not a realizable range-consistent response",
+      "schema": "hu-matched-continual-resolver-execution-plan-v1"
+    },
+    "releaseFreeze": {
+      "path": "neural/20bb-v49-release-freeze.json",
+      "sha256": "aa3f4655ccab9a5575e08ea465973ea361b883f2ceee5d90b6ab36fe5f0532ab"
+    }
+  },
+  "protocol": {
+    "path": "neural/20bb-v49-range-response-protocol.json",
+    "sha256": "f33da339a74c015e1aab3e424bd654ed4660107a8ce45774f76c7c5d6b5f6a2c"
+  },
+  "rootSelection": {
+    "algorithm": "sha256-ranked-suit-canonical-flops-v1",
+    "excludedCorpus": {
+      "path": "neural/20bb-v49-resolver-reach-corpus.json",
+      "sha256": "c7467e2e3f6d09e023975e48931ab1ea60df3b542e36da721b63ddc459ad4405"
+    },
+    "excludedSuitIsomorphismKeyCount": 45,
+    "excludedSuitIsomorphismKeysSha256": "c4f2d6d5e94c474ee03cb66597ecbe0022f53d4a57cd0b39106a80bbaf2d627a",
+    "freezeBeforeAnyOutputExists": true,
+    "requireSuitIsomorphicDisjointness": true,
+    "roots": [
+      {
+        "board": "8c,Qd,Kh",
+        "boardIndices": [
+          24,
+          41,
+          46
+        ],
+        "suitIsomorphismKey": [
+          24,
+          41,
+          46
+        ],
+        "texture": "unpairedRainbowDisconnected"
+      },
+      {
+        "board": "5c,9d,Kh",
+        "boardIndices": [
+          12,
+          29,
+          46
+        ],
+        "suitIsomorphismKey": [
+          12,
+          29,
+          46
+        ],
+        "texture": "unpairedRainbowDisconnected"
+      },
+      {
+        "board": "7c,8d,9h",
+        "boardIndices": [
+          20,
+          25,
+          30
+        ],
+        "suitIsomorphismKey": [
+          20,
+          25,
+          30
+        ],
+        "texture": "unpairedRainbowConnected"
+      },
+      {
+        "board": "2c,3d,Ah",
+        "boardIndices": [
+          0,
+          5,
+          50
+        ],
+        "suitIsomorphismKey": [
+          0,
+          5,
+          50
+        ],
+        "texture": "unpairedRainbowConnected"
+      },
+      {
+        "board": "9c,Td,Ac",
+        "boardIndices": [
+          28,
+          33,
+          48
+        ],
+        "suitIsomorphismKey": [
+          28,
+          33,
+          48
+        ],
+        "texture": "unpairedTwoToneDisconnected"
+      },
+      {
+        "board": "4c,6d,8c",
+        "boardIndices": [
+          8,
+          17,
+          24
+        ],
+        "suitIsomorphismKey": [
+          8,
+          17,
+          24
+        ],
+        "texture": "unpairedTwoToneConnected"
+      },
+      {
+        "board": "4c,6c,8d",
+        "boardIndices": [
+          8,
+          16,
+          25
+        ],
+        "suitIsomorphismKey": [
+          8,
+          16,
+          25
+        ],
+        "texture": "unpairedTwoToneConnected"
+      },
+      {
+        "board": "5c,6c,Tc",
+        "boardIndices": [
+          12,
+          16,
+          32
+        ],
+        "suitIsomorphismKey": [
+          12,
+          16,
+          32
+        ],
+        "texture": "unpairedMonotoneDisconnected"
+      },
+      {
+        "board": "3c,4c,Ac",
+        "boardIndices": [
+          4,
+          8,
+          48
+        ],
+        "suitIsomorphismKey": [
+          4,
+          8,
+          48
+        ],
+        "texture": "unpairedMonotoneConnected"
+      },
+      {
+        "board": "Kc,Ad,Ah",
+        "boardIndices": [
+          44,
+          49,
+          50
+        ],
+        "suitIsomorphismKey": [
+          44,
+          49,
+          50
+        ],
+        "texture": "pairedRainbow"
+      },
+      {
+        "board": "2c,2d,Kc",
+        "boardIndices": [
+          0,
+          1,
+          44
+        ],
+        "suitIsomorphismKey": [
+          0,
+          1,
+          44
+        ],
+        "texture": "pairedTwoTone"
+      },
+      {
+        "board": "6c,6d,6h",
+        "boardIndices": [
+          16,
+          17,
+          18
+        ],
+        "suitIsomorphismKey": [
+          16,
+          17,
+          18
+        ],
+        "texture": "trips"
+      }
+    ],
+    "seed": 15601,
+    "selectedRootCount": 12,
+    "selectedRootsSha256": "398db5b1838feb41023fcfbb2518daaca06b9f3de620caf33baeb75dd1f6090a",
+    "textureCounts": {
+      "pairedRainbow": 1,
+      "pairedTwoTone": 1,
+      "trips": 1,
+      "unpairedMonotoneConnected": 1,
+      "unpairedMonotoneDisconnected": 1,
+      "unpairedRainbowConnected": 2,
+      "unpairedRainbowDisconnected": 2,
+      "unpairedTwoToneConnected": 2,
+      "unpairedTwoToneDisconnected": 1
+    }
+  },
+  "schema": "hu-range-response-release-freeze-v1",
+  "status": "frozen-before-fresh-range-response-evaluation"
+}
