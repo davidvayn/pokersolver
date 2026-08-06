@@ -1,0 +1,68 @@
+{
+  "schema": "hu-resolver-reach-release-evaluation-protocol-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "frozen-before-crossfit-completion",
+  "activationAllowed": false,
+  "crossfitExperiment": {
+    "path": "neural/20bb-v49-resolver-reach-experiments.json",
+    "sha256": "cc0ddc5dc96e7b2c257a3fa94e7ac3e7f8f3cd0479e8b7090dcb06ea029b2f92"
+  },
+  "resolverCorpus": {
+    "path": "neural/20bb-v49-resolver-reach-corpus.json",
+    "sha256": "c7467e2e3f6d09e023975e48931ab1ea60df3b542e36da721b63ddc459ad4405"
+  },
+  "releaseTraining": {
+    "mergeBothResolverTrainingFolds": true,
+    "preserveSelectedResolverReplayMass": true,
+    "perFoldResolverWeightMultiplier": 0.5,
+    "trainingSeeds": [15301, 15302],
+    "steps": 5000,
+    "outputDirectoryRoot": "neural/runs/v49-resolver-reach/release"
+  },
+  "freshAuthenticHoldout": {
+    "generateOnlyAfterReleaseConfigurationFreeze": true,
+    "useForModelSelection": false,
+    "sourcePolicy": {
+      "path": "neural/runs/20bb-v26-routed-seed5101.json",
+      "sha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+    },
+    "generator": {
+      "command": "turn-pbs-self-play-targets",
+      "effectiveStackBb": 20.0,
+      "statesPerShard": 64,
+      "rangeParticles": 4096,
+      "riverIterations": 200,
+      "riverAveragingDelay": 20,
+      "threads": 10,
+      "beliefReplicates": 2,
+      "explorationProbability": 0.0,
+      "minimumPotBb": 0.0
+    },
+    "shards": [
+      {
+        "seed": 15401,
+        "checkpointDirectory": "neural/runs/v49-resolver-reach/fresh-authentic-seed15401-checkpoints",
+        "output": "neural/runs/v49-resolver-reach/fresh-authentic-holdout-64-seed15401.json"
+      },
+      {
+        "seed": 15402,
+        "checkpointDirectory": "neural/runs/v49-resolver-reach/fresh-authentic-seed15402-checkpoints",
+        "output": "neural/runs/v49-resolver-reach/fresh-authentic-holdout-64-seed15402.json"
+      }
+    ]
+  },
+  "releaseGates": {
+    "minimumPerSeedResolverReachWeightedRmseImprovementFraction": 0.2,
+    "maximumPerSeedAuthenticFreshHoldoutRmseBb": 0.25,
+    "maximumCrossFitLocalResolverExploitabilityBbPerHand": 0.05,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "maximumRustPythonParityErrorBb": 0.0001,
+    "activationRequiresEveryFullGameGate": true
+  },
+  "failurePolicy": {
+    "reservedResolverEvaluationGeneratedOnlyForSelectedConfiguration": true,
+    "failedCandidateRequiresNewResolverEvaluationRoots": true,
+    "failedCandidateRequiresNewAuthenticHoldoutSeeds": true,
+    "missingOrInvalidEvidenceFailsClosed": true
+  }
+}

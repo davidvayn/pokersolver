@@ -520,3 +520,13 @@ freeze; it refuses to execute until both training shards pass corpus validation.
 Its explicit resume mode rehashes each dataset and model, revalidates restored
 training seeds, supplemental paths and replay weights, and checks diagnostic
 state counts before reusing any partial result.
+
+The release evaluation protocol is also frozen before cross-fit completion.
+It reserves authentic self-play seeds 15401 and 15402, pins the exact v26
+source-policy bytes and 4,096-particle complete-turn generator controls, and
+forbids generating those 128 labels before a release configuration is frozen.
+When both resolver folds are used for final training, each receives half the
+selected fold weight so their combined replay mass is identical to the
+cross-fit experiment. `freeze_resolver_reach_release.py` replays the selector
+from its pinned spec, verifies every protocol/input hash and seed separation,
+and emits only a fail-closed release freeze; it cannot activate a model.
