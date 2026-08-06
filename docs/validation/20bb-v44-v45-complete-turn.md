@@ -477,3 +477,13 @@ configuration is frozen. The validator checks pinned source hashes, declared
 texture counts, exact and suit-isomorphic separation from training,
 evaluation, and legacy roots, completed shard provenance, and fail-closed
 activation. Any failed successor requires new independent evaluation roots.
+
+Configuration selection uses the two 36-label training shards as opposite
+cross-validation folds before the reserved evaluation labels are generated.
+Every diagnostic now records the exact model SHA-256, and the selector verifies
+that the evaluated bytes are the corresponding report's restored checkpoint,
+that neither held-out fold appears in its training components, and that the
+candidate and V48 baseline use identical folds. A candidate must retain
+authentic tuning RMSE at or below `0.25bb` and improve the worst cross-fit
+resolver-reach RMSE by at least 20%. If none does, selection is rejected and no
+fresh release holdout is spent.

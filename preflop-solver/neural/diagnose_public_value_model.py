@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -76,6 +77,7 @@ def compose(
     dataset: training.Dataset,
     model: dict[str, Any],
     indices: list[int],
+    model_sha256: str | None = None,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     predictions: list[np.ndarray] = []
@@ -204,6 +206,7 @@ def compose(
         ),
         "modelSchema": model["schema"],
         "modelSeed": model["seed"],
+        "modelSha256": model_sha256,
         "states": len(rows),
         "weightedRmseBb": overall_rmse,
         "weightedMaeBb": overall_mae,
@@ -219,10 +222,16 @@ def compose(
 
 def main() -> None:
     args = parse_args()
-    model = json.loads(args.model.read_text())
+    model_bytes = args.model.read_bytes()
+    model = json.loads(model_bytes)
     normalization = model.get("valueNormalization", "depth")
     dataset = training.load_dataset(args.dataset, 1, normalization)
-    report = compose(dataset, model, selected_indices(args.state_indices))
+    report = compose(
+        dataset,
+        model,
+        selected_indices(args.state_indices),
+        hashlib.sha256(model_bytes).hexdigest(),
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report, indent=2, sort_keys=True))
