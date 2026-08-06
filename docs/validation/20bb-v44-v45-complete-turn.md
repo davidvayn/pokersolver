@@ -505,3 +505,6 @@ and forbids treating the already opened V48 holdout as release evidence.
 The cross-fit runner derives all eight paired training commands, four baseline
 diagnostics, 16 candidate diagnostics, and the selector specification from this
 freeze; it refuses to execute until both training shards pass corpus validation.
+Its explicit resume mode rehashes each dataset and model, revalidates restored
+training seeds, supplemental paths and replay weights, and checks diagnostic
+state counts before reusing any partial result.

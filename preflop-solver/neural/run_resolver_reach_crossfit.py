@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import select_resolver_reach_value_config as selection
+import select_public_value_config as value_selection
 import validate_resolver_reach_experiments as experiment_validation
 
 
@@ -22,6 +23,7 @@ def parse_args() -> argparse.Namespace:
         help="preflop-solver directory; defaults to the config's parent directory",
     )
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output-plan", type=Path)
     return parser.parse_args()
 
@@ -231,34 +233,110 @@ def run_command(command: list[str], repository_root: Path, log_path: Path) -> No
         )
 
 
-def execute_plan(plan: dict[str, Any], repository_root: Path) -> dict[str, Any]:
+def option_values(command: list[str], option: str) -> list[str]:
+    return [
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == option
+    ]
+
+
+def validate_diagnostic_job(job: dict[str, Any], repository_root: Path) -> None:
+    command = job["command"]
+    dataset = repository_root / option_values(command, "--dataset")[0]
+    model = repository_root / option_values(command, "--model")[0]
+    output = repository_root / job["output"]
+    model_payload = json.loads(model.read_text())
+    model_seed = int(model_payload["seed"])
+    model_sha256 = selection.sha256_file(model)
+    selection.diagnostic_metric(
+        output,
+        selection.sha256_file(dataset),
+        {model_seed: model_sha256},
+    )
+    expected_states = len(option_values(command, "--state-indices")[0].split(","))
+    if int(json.loads(output.read_text()).get("states", -1)) != expected_states:
+        raise ValueError(f"diagnostic has the wrong state count: {output}")
+
+
+def validate_training_job(job: dict[str, Any], repository_root: Path) -> None:
+    report_path = repository_root / job["trainingReport"]
+    report = json.loads(report_path.read_text())
+    if report.get("holdoutStartIndex") is not None:
+        raise ValueError(f"training report reused a predecessor holdout: {report_path}")
+    expected_seeds = {
+        int(seed)
+        for seed in option_values(job["trainingCommand"], "--seeds")[0].split(",")
+    }
+    actual_seeds = {
+        int(entry["seed"])
+        for entry in report.get("variants", {}).get("range", [])
+    }
+    if actual_seeds != expected_seeds:
+        raise ValueError(f"training report has the wrong seeds: {report_path}")
+    expected_supplements = option_values(
+        job["trainingCommand"], "--supplemental-dataset"
+    )
+    if report.get("supplementalDatasets") != expected_supplements:
+        raise ValueError(f"training report has the wrong supplemental datasets: {report_path}")
+    expected_weights = [
+        float(value)
+        for value in option_values(
+            job["trainingCommand"], "--supplemental-dataset-weight"
+        )
+    ]
+    if report.get("supplementalDatasetSamplingWeights") != expected_weights:
+        raise ValueError(f"training report has the wrong replay weights: {report_path}")
+    minimum_correlation = float(
+        option_values(job["trainingCommand"], "--minimum-tuning-cross-seed-correlation")[0]
+    )
+    value_selection.summarize_candidate(report_path, minimum_correlation)
+
+
+def execute_plan(
+    plan: dict[str, Any], repository_root: Path, resume: bool = False
+) -> dict[str, Any]:
     for job in plan["baselineJobs"]:
         output = repository_root / job["output"]
         if output.exists():
-            raise ValueError(f"refusing to overwrite an existing diagnostic: {output}")
-        print(json.dumps({"event": "crossfit-job-start", "name": job["name"]}), flush=True)
-        run_command(
-            job["command"], repository_root, output.with_suffix(".log")
-        )
+            if not resume:
+                raise ValueError(f"refusing to overwrite an existing diagnostic: {output}")
+            validate_diagnostic_job(job, repository_root)
+            print(json.dumps({"event": "crossfit-job-reused", "name": job["name"]}), flush=True)
+        else:
+            print(json.dumps({"event": "crossfit-job-start", "name": job["name"]}), flush=True)
+            run_command(
+                job["command"], repository_root, output.with_suffix(".log")
+            )
+            validate_diagnostic_job(job, repository_root)
     for job in plan["candidateJobs"]:
         report = repository_root / job["trainingReport"]
         if report.exists():
-            raise ValueError(f"refusing to overwrite an existing training report: {report}")
-        print(json.dumps({"event": "crossfit-job-start", "name": job["name"]}), flush=True)
-        run_command(
-            job["trainingCommand"],
-            repository_root,
-            report.with_name("training.log"),
-        )
-        if not report.is_file():
-            raise ValueError(f"training job did not create its report: {report}")
+            if not resume:
+                raise ValueError(f"refusing to overwrite an existing training report: {report}")
+            validate_training_job(job, repository_root)
+            print(json.dumps({"event": "crossfit-job-reused", "name": job["name"]}), flush=True)
+        else:
+            print(json.dumps({"event": "crossfit-job-start", "name": job["name"]}), flush=True)
+            run_command(
+                job["trainingCommand"],
+                repository_root,
+                report.with_name("training.log"),
+            )
+            if not report.is_file():
+                raise ValueError(f"training job did not create its report: {report}")
+            validate_training_job(job, repository_root)
         for diagnostic in job["diagnosticJobs"]:
             output = repository_root / diagnostic["output"]
             if output.exists():
-                raise ValueError(f"refusing to overwrite an existing diagnostic: {output}")
-            run_command(
-                diagnostic["command"], repository_root, output.with_suffix(".log")
-            )
+                if not resume:
+                    raise ValueError(f"refusing to overwrite an existing diagnostic: {output}")
+                validate_diagnostic_job(diagnostic, repository_root)
+            else:
+                run_command(
+                    diagnostic["command"], repository_root, output.with_suffix(".log")
+                )
+                validate_diagnostic_job(diagnostic, repository_root)
         print(json.dumps({"event": "crossfit-job-complete", "name": job["name"]}), flush=True)
 
     spec_path = repository_root / plan["selectorSpecOutput"]
@@ -290,7 +368,7 @@ def main() -> None:
     if not args.execute:
         print(encoded, end="")
         return
-    result = execute_plan(plan, repository_root)
+    result = execute_plan(plan, repository_root, args.resume)
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

@@ -1,4 +1,6 @@
+import hashlib
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +53,44 @@ class ResolverReachCrossfitRunnerTests(unittest.TestCase):
         for job in jobs:
             command = job["command"]
             self.assertEqual(command[command.index("--state-indices") + 1], expected)
+
+    def test_resume_diagnostic_is_bound_to_model_dataset_and_state_count(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            dataset = root / "dataset.json"
+            model = root / "model.json"
+            output = root / "diagnostic.json"
+            dataset.write_text('{"dataset":1}\n')
+            model.write_text('{"seed":7}\n')
+            dataset_sha = hashlib.sha256(dataset.read_bytes()).hexdigest()
+            model_sha = hashlib.sha256(model.read_bytes()).hexdigest()
+            output.write_text(
+                json.dumps(
+                    {
+                        "schema": module.selection.DIAGNOSTIC_SCHEMA,
+                        "sourceDatasetSha256": dataset_sha,
+                        "modelSeed": 7,
+                        "modelSha256": model_sha,
+                        "states": 2,
+                        "resolverReachEvaluation": {
+                            "reachWeightedRmseBb": 0.2,
+                            "sampledLeafReachMass": 0.1,
+                        },
+                    }
+                )
+            )
+            job = {
+                "output": output.name,
+                "command": module.diagnostic_command(
+                    dataset.name, model.name, output.name, 2
+                ),
+            }
+            module.validate_diagnostic_job(job, root)
+            payload = json.loads(output.read_text())
+            payload["states"] = 1
+            output.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "state count"):
+                module.validate_diagnostic_job(job, root)
 
 
 if __name__ == "__main__":
