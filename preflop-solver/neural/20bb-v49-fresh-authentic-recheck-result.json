@@ -1,0 +1,88 @@
+{
+  "schema": "hu-fresh-authentic-value-recheck-result-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "accepted-awaiting-strategy-preflop-and-full-game-gates",
+  "activationAllowed": false,
+  "protocol": {
+    "path": "neural/20bb-v49-fresh-authentic-recheck.json",
+    "sha256": "bd9ff0335d03bd164a1ef07776f541018ab3ef3b93de04b5828e0e9ee2938fec"
+  },
+  "validation": {
+    "path": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-validation.json",
+    "sha256": "2e98016951472855f4e3f859af58ffbb5fb94bb8710eeff5fb243a67c66223d1"
+  },
+  "gates": {
+    "maximumPerSeedRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "freshAuthenticPerSeedRmse": true,
+    "freshAuthenticCrossSeedCorrelation": true,
+    "uniqueAndDisjointStateFingerprints": true,
+    "completeArtifactProvenance": true
+  },
+  "perSeed": {
+    "15301": {
+      "weightedMaeBb": 0.12807412241019456,
+      "weightedRmseBb": 0.22761359837478323,
+      "weightMass": 339456.0
+    },
+    "15302": {
+      "weightedMaeBb": 0.12873258058481807,
+      "weightedRmseBb": 0.2322323386269928,
+      "weightMass": 339456.0
+    }
+  },
+  "crossSeedPredictionCorrelation": 0.9995063485586533,
+  "uniqueStateFingerprints": 128,
+  "openedStateFingerprintsExcluded": 1162,
+  "artifacts": [
+    {
+      "kind": "holdout",
+      "seed": 15501,
+      "path": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-64-seed15501.json",
+      "sha256": "2182a07a1cc53b87f06ee1f4c3707cb4dedebe6a1169c65160e791326a6a82f7"
+    },
+    {
+      "kind": "holdout",
+      "seed": 15502,
+      "path": "neural/runs/v49-resolver-reach/fresh-authentic-recheck-64-seed15502.json",
+      "sha256": "79c4a16f7a347bc772dc4aac42a8221c0d7e82460a2f26de97e615f06bbdc97a"
+    },
+    {
+      "kind": "diagnostic",
+      "datasetSeed": 15501,
+      "modelSeed": 15301,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/fresh-authentic-recheck/holdout-seed15501-model15301.json",
+      "sha256": "a396585b5bf3e85e5c645b8cc021962053e2f13e56fe4ac26d686218066e65a1"
+    },
+    {
+      "kind": "diagnostic",
+      "datasetSeed": 15502,
+      "modelSeed": 15301,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/fresh-authentic-recheck/holdout-seed15502-model15301.json",
+      "sha256": "5d3b381f9575f2764bc99a4f46400a7b1ee2d70dbf2753faa64a18f4cdc0b312"
+    },
+    {
+      "kind": "diagnostic",
+      "datasetSeed": 15501,
+      "modelSeed": 15302,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/fresh-authentic-recheck/holdout-seed15501-model15302.json",
+      "sha256": "b8185ec51d901ef7f0f3aa890e0a3f95b97b2213d72e2442fa35201cc4717e97"
+    },
+    {
+      "kind": "diagnostic",
+      "datasetSeed": 15502,
+      "modelSeed": 15302,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/fresh-authentic-recheck/holdout-seed15502-model15302.json",
+      "sha256": "8db63d4a012c88aa7edfbc360bd3b1f43924060d1bb85aa6d00cdb1662e59b7d"
+    }
+  ],
+  "remainingRequiredGates": [
+    "fresh range-consistent postflop response gate",
+    "preflop continuation-cache and tabular DCFR regeneration",
+    "full-game lookup coverage and probability validation",
+    "reach-weighted action-EV standard-error coverage",
+    "cross-seed action-frequency stability",
+    "independent one-sided 99% full-game exploitability upper bound at or below 0.10bb/hand",
+    "hosted-policy storage projection at or below 20GB"
+  ]
+}
