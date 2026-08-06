@@ -66,6 +66,35 @@ class ValidateResolverReachReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "repeats"):
                 module.validate_fresh_holdout_dataset(path, 15401, 2, "a" * 64)
 
+    def test_dataset_fingerprints_require_unique_exact_state_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            path = Path(raw_directory) / "dataset.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "targets": [
+                            {"input_sha256": "a" * 64},
+                            {"input_sha256": "b" * 64},
+                        ]
+                    }
+                )
+            )
+            self.assertEqual(
+                module.dataset_fingerprints(path), {"a" * 64, "b" * 64}
+            )
+            path.write_text(
+                json.dumps(
+                    {
+                        "targets": [
+                            {"input_sha256": "a" * 64},
+                            {"input_sha256": "a" * 64},
+                        ]
+                    }
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "repeated"):
+                module.dataset_fingerprints(path)
+
 
 if __name__ == "__main__":
     unittest.main()

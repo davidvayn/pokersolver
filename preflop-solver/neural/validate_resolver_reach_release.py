@@ -90,6 +90,20 @@ def validate_fresh_holdout_dataset(
     return payload
 
 
+def dataset_fingerprints(path: Path) -> set[str]:
+    payload = json.loads(path.read_text())
+    targets = payload.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError(f"release dataset has no fingerprinted targets: {path}")
+    fingerprints = [target.get("input_sha256") for target in targets]
+    if (
+        any(not isinstance(value, str) or len(value) != 64 for value in fingerprints)
+        or len(fingerprints) != len(set(fingerprints))
+    ):
+        raise ValueError(f"release dataset fingerprints are invalid or repeated: {path}")
+    return set(fingerprints)
+
+
 def cross_seed_prediction_correlation(
     dataset_paths: list[Path], model_paths: list[Path]
 ) -> float:
@@ -143,6 +157,16 @@ def validate(release_path: Path, repository_root: Path) -> dict[str, Any]:
         raise ValueError("resolver release validation requires every frozen shard")
 
     holdout = release["freshAuthenticHoldout"]
+    opened_fingerprints: set[str] = set()
+    opened_sources = [
+        release["primaryDataset"],
+        *release["supplementalDatasets"],
+        *release["reservedResolverEvaluation"],
+    ]
+    for source in opened_sources:
+        opened_fingerprints.update(
+            dataset_fingerprints(repository_root / source.get("path", source.get("output")))
+        )
     holdout_paths = []
     holdout_fingerprints: set[str] = set()
     for shard in holdout["shards"]:
@@ -154,6 +178,8 @@ def validate(release_path: Path, repository_root: Path) -> dict[str, Any]:
             holdout["sourcePolicy"]["sha256"],
         )
         fingerprints = {target["input_sha256"] for target in payload["targets"]}
+        if opened_fingerprints & fingerprints:
+            raise ValueError("fresh authentic holdout overlaps opened release evidence")
         if holdout_fingerprints & fingerprints:
             raise ValueError("fresh authentic holdout shards overlap")
         holdout_fingerprints.update(fingerprints)
@@ -288,6 +314,8 @@ def validate(release_path: Path, repository_root: Path) -> dict[str, Any]:
         "freshAuthentic": {
             "perSeed": authentic_metrics,
             "crossSeedPredictionCorrelation": fresh_correlation,
+            "uniqueStateFingerprints": len(holdout_fingerprints),
+            "openedStateFingerprintsExcluded": len(opened_fingerprints),
         },
         "reservedResolver": {
             "baselinePerSeed": baseline_metrics,
