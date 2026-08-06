@@ -1,0 +1,55 @@
+{
+  "schema": "hu-flop-dcfr-plus-pilot-result-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "rejected-research-only",
+  "activationAllowed": false,
+  "configurationSelectedForFreshRoots": false,
+  "root": {
+    "board": "8c,Qd,Kh",
+    "releaseEvidence": false,
+    "releaseRootSetBurned": true
+  },
+  "controls": {
+    "strategyIterations": 800,
+    "strategyCheckpoints": [400, 800],
+    "strategyAveragingDelay": 200,
+    "strategyRegretMatchingPlus": true,
+    "responseCheckpoints": [100, 200, 400],
+    "responseAveragingDelay": 10,
+    "responseRegretMatchingPlus": true,
+    "threads": 10
+  },
+  "artifacts": {
+    "strategyConvergence": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay200-iter800-convergence-v3.json",
+      "sha256": "b62dd6f5dbb96d292d9c3acbeb7bb1c91139397557214832ec08ae832a9a903d",
+      "frozenStrategySha256": "433d38a7e5530a165f1805bf7e8a26ec9967fb6c5709469f2034a5dc355281eb",
+      "maximumProbabilitySumError": 7.000000001866624e-8
+    },
+    "rangeResponse": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay200-iter800-response400-plus-v1.json",
+      "sha256": "1ff10ba3ce0605acb8e7ae5fffa6cb31f6e26ef4437d13a536b46479217f3737"
+    }
+  },
+  "measurements": {
+    "responseGainBbPerHandByCheckpoint": {
+      "100": 0.04684571060590256,
+      "200": 0.053721144724797526,
+      "400": 0.057392102256400665
+    },
+    "maximumResponseGainBbPerHand": 0.057392102256400665,
+    "maximumAllowedResponseGainBbPerHand": 0.05,
+    "finalCheckpointIncreaseBbPerHand": 0.003670957531603139,
+    "maximumAllowedFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumZeroSumResidualBb": 1.4849232954361469e-15
+  },
+  "gates": {
+    "maximumRangeConsistentResponseGain": false,
+    "finalCheckpointConvergence": true,
+    "zeroSumResidual": true,
+    "validProbabilitySums": true,
+    "strategyArtifactLink": true,
+    "algorithmIdentity": true
+  },
+  "interpretation": "The strengthened responder converged, but its gain against the 800-round delayed-average DCFR+ strategy reached 0.057392bb/hand. This is 0.007392bb/hand above the frozen release threshold and regresses the 400-round pilot. More iterations with this averaging window are not selected for fresh-root evaluation; activation remains fail-closed."
+}

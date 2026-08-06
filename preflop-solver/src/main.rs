@@ -70,8 +70,13 @@ fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
                 "--resolver-averaging-delay",
                 iterations / 10,
             )?,
+            resolver_regret_matching_plus: args
+                .iter()
+                .any(|argument| argument == "--regret-matching-plus"),
             value_uncertainty_bb: parse_or(args, "--value-uncertainty-bb", 1.0f64)?,
             value_network_path: network_path,
+            evaluation_value_network_path: value(args, "--evaluation-value-network")
+                .map(PathBuf::from),
             range_policy_path: value(args, "--range-policy").map(PathBuf::from),
             source_cache_path: base_path,
             threads: parse_or(
@@ -1964,8 +1969,10 @@ Neural certificate options:
 Preflop continuation/solve options:
   preflop-cache --networks <json> [--networks-b <json>] [--deals 2652] [--rollouts-per-leaf 8]
   preflop-cache-resolver --base-cache <json.gz> --value-network <json>
+    [--evaluation-value-network <independent-json>]
     [--range-policy <tabular-policy.json>] [--deal-offset 0] [--deals 2]
-    [--resolver-iterations 10]
+    [--resolver-iterations 10] [--resolver-averaging-delay 1]
+    [--regret-matching-plus]
   preflop-cache-compare --cache-a <json.gz> --cache-b <json.gz> [--output <json>]
   preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
   preflop-cache-refresh --cache <json.gz> --output <json.gz>

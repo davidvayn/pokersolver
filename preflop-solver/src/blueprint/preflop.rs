@@ -63,8 +63,10 @@ pub struct ResolverContinuationCacheConfig {
     pub deals: usize,
     pub resolver_iterations: u64,
     pub resolver_averaging_delay: u64,
+    pub resolver_regret_matching_plus: bool,
     pub value_uncertainty_bb: f64,
     pub value_network_path: PathBuf,
+    pub evaluation_value_network_path: Option<PathBuf>,
     pub range_policy_path: Option<PathBuf>,
     pub source_cache_path: PathBuf,
     pub threads: usize,
@@ -1105,6 +1107,19 @@ pub fn build_resolver_continuation_cache(
         return Err("resolver continuation configuration is invalid".into());
     }
     let network = super::public_belief::PublicValueNetwork::read(&config.value_network_path)?;
+    let evaluation_network = config
+        .evaluation_value_network_path
+        .as_ref()
+        .map(|path| super::public_belief::PublicValueNetwork::read(path))
+        .transpose()?;
+    if evaluation_network
+        .as_ref()
+        .is_some_and(|evaluation| !network.has_distinct_training_identity(evaluation))
+    {
+        return Err(
+            "resolver continuation cross-scoring requires an independent value network".into(),
+        );
+    }
     let (leaf_ranges, range_policy_sha256) = if let Some(path) = &config.range_policy_path {
         let policy = PreflopPolicyArtifact::read(path)?;
         if policy.game != base.game {
@@ -1155,6 +1170,7 @@ pub fn build_resolver_continuation_cache(
                 .step_by(worker_count)
                 .collect::<Vec<_>>();
             let network = network.clone();
+            let evaluation_network = evaluation_network.clone();
             let game = base.game.clone();
             let leaf_ranges = leaf_ranges.clone();
             let leaves = &leaves;
@@ -1167,26 +1183,35 @@ pub fn build_resolver_continuation_cache(
                             .get(history)
                             .expect("validated resolver leaf range")
                             .clone();
-                        let solution = super::public_belief::solve_flop_continuation_values(
-                            super::public_belief::FlopResolveConfig {
-                                game: game.clone(),
-                                state: super::public_belief::PublicBeliefState::flop_start(
-                                    flop,
-                                    leaf.actor,
-                                    leaf.invested,
-                                    ranges,
-                                ),
-                                iterations: config.resolver_iterations,
-                                averaging_delay: config.resolver_averaging_delay,
-                                regret_matching_plus: false,
-                                value_network: network.clone(),
-                                threads: resolver_threads,
-                            },
-                        )?;
+                        let resolver_config = super::public_belief::FlopResolveConfig {
+                            game: game.clone(),
+                            state: super::public_belief::PublicBeliefState::flop_start(
+                                flop,
+                                leaf.actor,
+                                leaf.invested,
+                                ranges,
+                            ),
+                            iterations: config.resolver_iterations,
+                            averaging_delay: config.resolver_averaging_delay,
+                            regret_matching_plus: config.resolver_regret_matching_plus,
+                            value_network: network.clone(),
+                            threads: resolver_threads,
+                        };
+                        let counterfactual_values_bb = if let Some(evaluation) = &evaluation_network
+                        {
+                            super::public_belief::solve_flop_cross_evaluated(
+                                resolver_config,
+                                evaluation.clone(),
+                            )?
+                            .counterfactual_values_bb
+                        } else {
+                            super::public_belief::solve_flop_continuation_values(resolver_config)?
+                                .counterfactual_values_bb
+                        };
                         let first = Combo::new(cached.holes[0][0], cached.holes[0][1]).key();
                         let second = Combo::new(cached.holes[1][0], cached.holes[1][1]).key();
-                        let reconstructed = (solution.counterfactual_values_bb[0][first] as f64
-                            - solution.counterfactual_values_bb[1][second] as f64)
+                        let reconstructed = (counterfactual_values_bb[0][first] as f64
+                            - counterfactual_values_bb[1][second] as f64)
                             / 2.0;
                         results.push((
                             deal_index,
@@ -1195,8 +1220,8 @@ pub fn build_resolver_continuation_cache(
                                 mean_utility_p0_bb: reconstructed
                                     .clamp(-game.effective_stack_bb, game.effective_stack_bb),
                                 conditional_utilities_bb: Some([
-                                    solution.counterfactual_values_bb[0][first] as f64,
-                                    solution.counterfactual_values_bb[1][second] as f64,
+                                    counterfactual_values_bb[0][first] as f64,
+                                    counterfactual_values_bb[1][second] as f64,
                                 ]),
                                 action_standard_error_bb: config.value_uncertainty_bb,
                             },
@@ -1229,6 +1254,11 @@ pub fn build_resolver_continuation_cache(
     }
     let validation = continuation_validation(&deals, &public_histories);
     let network_sha256 = sha256_file(&config.value_network_path)?;
+    let evaluation_network_sha256 = config
+        .evaluation_value_network_path
+        .as_ref()
+        .map(|path| sha256_file(path))
+        .transpose()?;
     let source_cache_sha256 = sha256_file(&config.source_cache_path)?;
     let range_method = range_policy_sha256
         .as_deref()
@@ -1246,10 +1276,23 @@ pub fn build_resolver_continuation_cache(
         complete_exact_combo_cycles: complete_source_deal_cycles(&source_deal_indices),
         balanced_exact_combo_marginals: balanced_source_deal_indices(&source_deal_indices),
         network_sha256: network_sha256.clone(),
-        network_sha256s: vec![network_sha256],
+        network_sha256s: std::iter::once(network_sha256.clone())
+            .chain(evaluation_network_sha256.clone())
+            .collect(),
         policy_mixture: format!(
-            "turn_cfv_network_plus_{}_iteration_exact_all_in_flop_dcfr_ranges_from_{}",
-            config.resolver_iterations, range_method
+            "turn_cfv_network_{}_plus_{}_iteration_exact_all_in_flop_{}_ranges_from_{}",
+            if evaluation_network_sha256.is_some() {
+                "cross_scored"
+            } else {
+                "self_scored"
+            },
+            config.resolver_iterations,
+            if config.resolver_regret_matching_plus {
+                "dcfr_plus"
+            } else {
+                "dcfr"
+            },
+            range_method
         ),
         source_cache_sha256: Some(source_cache_sha256),
         source_deal_indices: Some(source_deal_indices),

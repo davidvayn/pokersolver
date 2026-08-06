@@ -486,6 +486,13 @@ impl PublicValueNetwork {
         Ok(network)
     }
 
+    pub(crate) fn has_distinct_training_identity(&self, other: &Self) -> bool {
+        self.seed != other.seed
+            && self.artifact_sha256.is_some()
+            && other.artifact_sha256.is_some()
+            && self.artifact_sha256 != other.artifact_sha256
+    }
+
     fn validate(&self) -> Result<(), String> {
         if !self.target_scale_bb.is_finite()
             || self.target_scale_bb <= 0.0
@@ -6606,6 +6613,22 @@ mod tests {
             loaded.artifact_sha256,
             Some(format!("{:x}", Sha256::digest(&bytes)))
         );
+    }
+
+    #[test]
+    fn independent_value_network_identity_requires_distinct_seed_and_artifact() {
+        let mut first = zero_value_network();
+        first.artifact_sha256 = Some("a".repeat(64));
+        let mut second = first.clone();
+        second.seed = 2;
+        second.artifact_sha256 = Some("b".repeat(64));
+        assert!(first.has_distinct_training_identity(&second));
+
+        second.seed = first.seed;
+        assert!(!first.has_distinct_training_identity(&second));
+        second.seed = 2;
+        second.artifact_sha256 = first.artifact_sha256.clone();
+        assert!(!first.has_distinct_training_identity(&second));
     }
 
     #[test]
