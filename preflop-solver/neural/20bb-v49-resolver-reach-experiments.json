@@ -1,0 +1,167 @@
+{
+  "schema": "hu-resolver-reach-crossfit-experiment-freeze-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "frozen-before-training-label-completion",
+  "activationAllowed": false,
+  "releaseHoldoutMetricsConsulted": false,
+  "corpusFreeze": {
+    "path": "neural/20bb-v49-resolver-reach-corpus.json",
+    "sha256": "c7467e2e3f6d09e023975e48931ab1ea60df3b542e36da721b63ddc459ad4405"
+  },
+  "primaryDataset": {
+    "path": "neural/runs/v48-pooled-release/turn-targets-authentic-merged-512.json",
+    "sha256": "0532dec5f96a79fc42c8beddc54c2a31985f7d383bfe675a9f160a7fcf8d7da6",
+    "stateCount": 512,
+    "status": "opened-for-successor-training-and-tuning"
+  },
+  "baseSupplementalDatasets": [
+    {
+      "path": "neural/runs/v45-complete-turn/turn-targets-complete-paired-200.json",
+      "sha256": "ba41e39d9d4811ef6496f31d817390d3bbe0e9b724d64b1f0660ebc7ad524c84"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-coverage-complete-paired-200.json",
+      "sha256": "49c434eea29c8ce41c91bbf6395200e657a110781f784eb1dbebc1f8e43b033c"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/resolver-leaf-train-complete-paired-200.json",
+      "sha256": "ee72ee272d676d4e60d00f0c8f8c193d3bfcd345be342a3227efca71016a764a"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-large-complete-paired-200.json",
+      "sha256": "02e7694f87244814061f718bb59781ae99b098f4525352d673485ae052a6a188"
+    },
+    {
+      "path": "neural/runs/v45-complete-turn/off-policy-large-only-complete-paired-200.json",
+      "sha256": "e3ac699980b0465d5ea53ff871a6ac448b6902460cc7350a2e5651eea30ec09c"
+    }
+  ],
+  "resolverFolds": [
+    {
+      "name": "seed15101",
+      "dataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15101.json",
+      "expectedStateCount": 36,
+      "oppositeFold": "seed15102"
+    },
+    {
+      "name": "seed15102",
+      "dataset": "neural/runs/v49-resolver-reach/resolver-leaf-train-36-seed15102.json",
+      "expectedStateCount": 36,
+      "oppositeFold": "seed15101"
+    }
+  ],
+  "commonTrainer": {
+    "architecture": "xwide-gelu-pooled",
+    "featureSchema": "rank-suit-invariant-combo-query-v3",
+    "featureWorkers": 8,
+    "featureCacheDirectory": "neural/runs/feature-cache",
+    "valueNormalization": "pot",
+    "variantSet": "range-only",
+    "steps": 3000,
+    "batchSize": 24,
+    "evaluationInterval": 50,
+    "learningRate": 0.0003,
+    "learningRateSchedule": "constant",
+    "adamBiasCorrection": false,
+    "earlyStoppingPatience": 25,
+    "huberDelta": 0.05,
+    "rawBbAuxiliaryWeight": 0.25,
+    "suitAugmentationsPerState": 1,
+    "splitSeed": 10901,
+    "validationFraction": 0.25,
+    "tuningFraction": 0.15,
+    "holdoutStartIndex": null
+  },
+  "candidates": [
+    {
+      "name": "uniform-expanded",
+      "minimumPrimaryBatchFraction": 0.5,
+      "supplementalDatasetSamplingWeights": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      "folds": [
+        {
+          "trainingFold": "seed15101",
+          "evaluationFold": "seed15102",
+          "trainingSeeds": [15201, 15202],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15101"
+        },
+        {
+          "trainingFold": "seed15102",
+          "evaluationFold": "seed15101",
+          "trainingSeeds": [15203, 15204],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/uniform-expanded/train15102"
+        }
+      ]
+    },
+    {
+      "name": "protected-expanded",
+      "minimumPrimaryBatchFraction": 0.67,
+      "supplementalDatasetSamplingWeights": [1.0, 1.0, 1.0, 1.0, 1.0, 2.0],
+      "folds": [
+        {
+          "trainingFold": "seed15101",
+          "evaluationFold": "seed15102",
+          "trainingSeeds": [15211, 15212],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15101"
+        },
+        {
+          "trainingFold": "seed15102",
+          "evaluationFold": "seed15101",
+          "trainingSeeds": [15213, 15214],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/protected-expanded/train15102"
+        }
+      ]
+    },
+    {
+      "name": "strongly-protected-expanded",
+      "minimumPrimaryBatchFraction": 0.75,
+      "supplementalDatasetSamplingWeights": [1.0, 1.0, 1.0, 1.0, 1.0, 3.0],
+      "folds": [
+        {
+          "trainingFold": "seed15101",
+          "evaluationFold": "seed15102",
+          "trainingSeeds": [15221, 15222],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15101"
+        },
+        {
+          "trainingFold": "seed15102",
+          "evaluationFold": "seed15101",
+          "trainingSeeds": [15223, 15224],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/strongly-protected-expanded/train15102"
+        }
+      ]
+    },
+    {
+      "name": "resolver-heavy-expanded",
+      "minimumPrimaryBatchFraction": 0.5,
+      "supplementalDatasetSamplingWeights": [1.0, 1.0, 1.0, 1.0, 1.0, 2.0],
+      "folds": [
+        {
+          "trainingFold": "seed15101",
+          "evaluationFold": "seed15102",
+          "trainingSeeds": [15231, 15232],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15101"
+        },
+        {
+          "trainingFold": "seed15102",
+          "evaluationFold": "seed15101",
+          "trainingSeeds": [15233, 15234],
+          "outputDirectory": "neural/runs/v49-resolver-reach/crossfit/resolver-heavy-expanded/train15102"
+        }
+      ]
+    }
+  ],
+  "selectionGates": {
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "maximumAuthenticTuningRmseBb": 0.25,
+    "minimumMaximumResolverReachRmseImprovementFraction": 0.2,
+    "selectionMetric": "minimum maximum cross-fit resolver-reach-weighted RMSE, then mean resolver RMSE, then maximum and mean authentic tuning RMSE"
+  },
+  "postSelection": {
+    "mergeBothResolverTrainingFolds": true,
+    "releaseTrainingSeeds": [15301, 15302],
+    "releaseTrainingSteps": 5000,
+    "generateReservedResolverEvaluationOnlyAfterFreeze": true,
+    "generateNewIndependentAuthenticHoldoutOnlyAfterFreeze": true,
+    "failedReleaseCandidateRequiresNewResolverEvaluationAndAuthenticHoldout": true
+  }
+}

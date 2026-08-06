@@ -487,3 +487,12 @@ candidate and V48 baseline use identical folds. A candidate must retain
 authentic tuning RMSE at or below `0.25bb` and improve the worst cross-fit
 resolver-reach RMSE by at least 20%. If none does, selection is rejected and no
 fresh release holdout is spent.
+
+The cross-fit experiment itself was frozen before either new training shard
+completed. Four paired configurations compare uniform replay, increased
+authentic protection with compensating resolver weight, stronger protection,
+and a resolver-heavy control. Each configuration trains once on each
+36-label fold and evaluates only on the opposite fold, using four unique seeds
+per configuration and 16 seeds in total. The plan validator pins every input,
+rejects duplicate configurations or seeds, enforces symmetric fold swapping,
+and forbids treating the already opened V48 holdout as release evidence.
