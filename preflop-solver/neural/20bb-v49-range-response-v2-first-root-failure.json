@@ -1,0 +1,78 @@
+{
+  "schema": "hu-range-response-first-root-failure-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "rejected",
+  "activationAllowed": false,
+  "freeze": {
+    "path": "neural/20bb-v49-range-response-freeze.json",
+    "sha256": "087a83f0224cd6a6c5aab788328bb70b02d76b25057cd5119f02b3976c970b15",
+    "selectedRootsSha256": "398db5b1838feb41023fcfbb2518daaca06b9f3de620caf33baeb75dd1f6090a",
+    "entireRootSetBurned": true
+  },
+  "failedDirection": {
+    "board": "8c,Qd,Kh",
+    "texture": "unpairedRainbowDisconnected",
+    "strategySeed": 15301,
+    "evaluationSeed": 15302,
+    "strategyIterations": 100,
+    "strategyAveragingDelay": 10,
+    "responseAveragingDelay": 10
+  },
+  "artifacts": {
+    "convergence": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/flop-8cQdKh-strategy15301-evaluation15302-convergence.json",
+      "sha256": "03f6aba618429612a0777b0bfcdc45e8091c66edc874edca43d5310a26b77081",
+      "frozenStrategySha256": "cea1736629b7beb735baea503cf6cb62de59a601869305872e77afc15bd0ebcd"
+    },
+    "rangeResponse": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/flop-8cQdKh-strategy15301-evaluation15302-range-response.json",
+      "sha256": "bf09d4ecb1c446aba084f9a9cefa2252371ca3476b1c8cdc1df06eeb79401a44"
+    },
+    "sameSeedDiagnostic": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-same-seed-response100.json",
+      "sha256": "9f6b8a16ffa39c93dc10aaa25f106fb5993c6f86201ed461e19309f9e053295d",
+      "releaseEvidence": false
+    }
+  },
+  "crossSeedResponseCheckpoints": [
+    {
+      "iterations": 100,
+      "responseGainP0Bb": 0.12968982880444307,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.06484491440222154
+    },
+    {
+      "iterations": 200,
+      "responseGainP0Bb": 0.14172303005396625,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.07086151502698312
+    },
+    {
+      "iterations": 400,
+      "responseGainP0Bb": 0.15047833856104598,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.07523916928052299
+    }
+  ],
+  "observed": {
+    "maximumRangeConsistentResponseGainBbPerHand": 0.07523916928052299,
+    "maximumAllowedResponseGainBbPerHand": 0.05,
+    "finalCheckpointIncreaseBbPerHand": 0.004377654253539864,
+    "maximumAllowedFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumZeroSumResidualBb": 6.022959908591474e-15
+  },
+  "gates": {
+    "maximumRangeConsistentResponseGain": false,
+    "finalCheckpointConvergence": true,
+    "zeroSumResidual": true,
+    "strategyArtifactLink": true,
+    "probabilitySums": true
+  },
+  "diagnosis": {
+    "sameSeedAverageGainAt100ResponseRoundsBbPerHand": 0.07395459472793066,
+    "crossSeedAverageGainAt100ResponseRoundsBbPerHand": 0.06484491440222154,
+    "crossSeedContinuationMismatchIsDominant": false,
+    "nextTest": "increase the frozen strategy solve from 100 to 200 rounds on this burned root before changing the solver"
+  },
+  "interpretation": "The finite learned response is lower-bound rejection evidence, not an exploitability upper bound. The accepted continuation-value report remains valid, but this frozen strategy configuration cannot be released."
+}
