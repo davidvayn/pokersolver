@@ -1,0 +1,98 @@
+{
+  "schema": "hu-range-response-iteration-sweep-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "rejected-research-only",
+  "activationAllowed": false,
+  "root": {
+    "board": "8c,Qd,Kh",
+    "texture": "unpairedRainbowDisconnected",
+    "strategySeed": 15301,
+    "evaluationSeed": 15301,
+    "releaseRootSetBurned": true
+  },
+  "controls": {
+    "singleUninterruptedStrategyTrajectory": true,
+    "responseAveragingDelay": 10,
+    "maximumAllowedResponseGainBbPerHand": 0.05,
+    "maximumAllowedFinalCheckpointIncreaseBbPerHand": 0.005,
+    "sameSeedContinuationNetwork": true,
+    "releaseEvidence": false
+  },
+  "artifacts": {
+    "strategyConvergence": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-iter800-same-seed-convergence-v3.json",
+      "sha256": "5fe338c4699344ab1af80436bb64f320004fa10bf3ad4ad42c2df1bb54dc15a5"
+    },
+    "strategy100Response": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-same-seed-response100.json",
+      "sha256": "9f6b8a16ffa39c93dc10aaa25f106fb5993c6f86201ed461e19309f9e053295d"
+    },
+    "strategy200Response": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-iter200-same-seed-response100.json",
+      "sha256": "53c4fa2dd090a0730d99483cbc0ee02a6c6d5a35eefd93a9d72d177b314622a1"
+    },
+    "strategy400Response": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-iter400-same-seed-response100-v3.json",
+      "sha256": "dabcc3075acfd99e80aad46ac2ad49b49fc3d6ad457d21978622f79363b0b204"
+    },
+    "strategy800Response": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-iter800-same-seed-response200-v3.json",
+      "sha256": "9b4e8edb82f1da368906114b71a04bfbc679cfffebfaf1f862baf9c26612d3fa"
+    }
+  },
+  "strategySweepAt100ResponseIterations": [
+    {
+      "strategyIterations": 100,
+      "responseGainP0Bb": 0.14790918945586132,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.07395459472793066
+    },
+    {
+      "strategyIterations": 200,
+      "responseGainP0Bb": 0.13437667633763695,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.06718833816881847
+    },
+    {
+      "strategyIterations": 400,
+      "responseGainP0Bb": 0.13272042887952729,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.06636021443976364
+    },
+    {
+      "strategyIterations": 800,
+      "responseGainP0Bb": 0.09884171907421159,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.049420859537105795
+    }
+  ],
+  "strategy800ResponseConvergence": [
+    {
+      "responseIterations": 100,
+      "responseGainP0Bb": 0.09884171907421159,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.049420859537105795,
+      "maximumZeroSumResidualBb": 3.497202527569243e-15
+    },
+    {
+      "responseIterations": 200,
+      "responseGainP0Bb": 0.11072656919734285,
+      "responseGainP1Bb": 0.0,
+      "averageGainBbPerHand": 0.055363284598671424,
+      "maximumZeroSumResidualBb": 3.747002708109903e-15
+    }
+  ],
+  "gates": {
+    "maximumRangeConsistentResponseGain": false,
+    "finalCheckpointConvergence": false,
+    "zeroSumResidual": true,
+    "artifactIntegrity": true
+  },
+  "observed": {
+    "strategy100To800ImprovementAt100ResponseIterationsBbPerHand": 0.024533735190824865,
+    "strategy800FinalResponseGainBbPerHand": 0.055363284598671424,
+    "strategy800FinalCheckpointIncreaseBbPerHand": 0.005942425061565629,
+    "unilateralLeakPlayer": 0
+  },
+  "interpretation": "Increasing the frozen resolver trajectory from 100 to 800 rounds materially reduced the learned-response gain, but the apparent 100-response pass disappeared at 200 response rounds. The final gain and convergence-delta gates both fail. Iteration-only scaling is therefore not sufficient evidence for release; the next candidate must change the resolver strategy construction and be evaluated on newly frozen disjoint roots."
+}
