@@ -1,0 +1,150 @@
+{
+  "schema": "hu-range-response-release-protocol-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "frozen-before-fresh-range-response-evaluation",
+  "activationAllowed": false,
+  "predecessor": {
+    "releaseFreeze": {
+      "path": "neural/20bb-v49-release-freeze.json",
+      "sha256": "aa3f4655ccab9a5575e08ea465973ea361b883f2ceee5d90b6ab36fe5f0532ab"
+    },
+    "acceptedValueValidation": {
+      "path": "neural/runs/v49-resolver-reach/value-release-validation.json",
+      "sha256": "6859625a236d9a9a556bdd6b432a4953b360a610bf92f9fb123dffa234306a6a"
+    },
+    "acceptedFreshAuthenticRecheck": {
+      "path": "neural/20bb-v49-fresh-authentic-recheck-result.json",
+      "sha256": "2bafbf24e6a1cee961690e9f9daceb821d18c550a607379b3b4a9bdcec4399cf"
+    },
+    "rejectedMatchedEvaluator": {
+      "schema": "hu-matched-continual-resolver-execution-plan-v1",
+      "reason": "pointwise private-hand maximization was not a realizable range-consistent response",
+      "burnEveryPreviouslyReservedRoot": true
+    },
+    "selectedDiagnostic": {
+      "path": "neural/20bb-v49-dcfr-plus-delay200-cross-seed-pilot-400.json",
+      "sha256": "a0bcb7a725ca89c9de49f6b9ecb9a2c6376d1bbd9ec5ebad14c989af957c1302"
+    }
+  },
+  "models": [
+    {
+      "seed": 15301,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json",
+      "sha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81"
+    },
+    {
+      "seed": 15302,
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json",
+      "sha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1"
+    }
+  ],
+  "implementation": {
+    "commit": "447af20cd549405208edc094fe667316d39af4bc",
+    "files": [
+      {
+        "path": "src/blueprint/public_belief.rs",
+        "sha256": "38f39bd08462ca622464eb498f8a0b83f969d740b22cc0950ec2ca80122dd62f"
+      },
+      {
+        "path": "src/main.rs",
+        "sha256": "326eace9043b34eeb022fe0008154fb19cfe1f7c5320ab88b34cc07d4a9bd6c3"
+      },
+      {
+        "path": "Cargo.lock",
+        "sha256": "e207387ec37c9d7d5035fe3958f50030a4e390269cdac1bb7411cead8548b33a"
+      }
+    ]
+  },
+  "orchestration": {
+    "commit": "447af20cd549405208edc094fe667316d39af4bc",
+    "files": [
+      {
+        "path": "neural/freeze_range_response_release.py",
+        "sha256": "0975e936ce8fa3017043881e01fe8cc111883a116a92a902319ffb47dcd83bf2"
+      },
+      {
+        "path": "neural/run_range_response_release.py",
+        "sha256": "06cbbcc58e2d2897b0ae6ea47818d92e1701c233ee7c76e4284fc9fdcf50d881"
+      },
+      {
+        "path": "neural/validate_range_response_release.py",
+        "sha256": "57062ef601e242b9244c855a938dd7cba23fc3d29c56ae6ad8ef1c6049a92a62"
+      }
+    ]
+  },
+  "rootSelection": {
+    "algorithm": "sha256-ranked-suit-canonical-flops-v1",
+    "seed": 15701,
+    "excludedCorpus": {
+      "path": "neural/20bb-v49-resolver-reach-corpus.json",
+      "sha256": "c7467e2e3f6d09e023975e48931ab1ea60df3b542e36da721b63ddc459ad4405"
+    },
+    "burnedRootFreezes": [
+      {
+        "path": "neural/20bb-v49-range-response-freeze.json",
+        "sha256": "087a83f0224cd6a6c5aab788328bb70b02d76b25057cd5119f02b3976c970b15"
+      }
+    ],
+    "textureCounts": {
+      "unpairedRainbowDisconnected": 2,
+      "unpairedRainbowConnected": 2,
+      "unpairedTwoToneDisconnected": 1,
+      "unpairedTwoToneConnected": 2,
+      "unpairedMonotoneDisconnected": 1,
+      "unpairedMonotoneConnected": 1,
+      "pairedRainbow": 1,
+      "pairedTwoTone": 1,
+      "trips": 1
+    },
+    "requireSuitIsomorphicDisjointness": true,
+    "freezeBeforeAnyOutputExists": true
+  },
+  "controls": {
+    "effectiveStackBb": 20.0,
+    "rootPotBb": 4.0,
+    "rootActor": 1,
+    "strategyIterations": 400,
+    "strategyCheckpoints": [300, 400],
+    "strategyAveragingDelay": 200,
+    "strategyRegretMatchingPlus": true,
+    "strategyDcfr": {
+      "positive_regret_exponent": 1.5,
+      "negative_regret_exponent": 0.0,
+      "strategy_exponent": 2.0
+    },
+    "responseCheckpoints": [100, 200, 400],
+    "responseAveragingDelay": 10,
+    "responseRegretMatchingPlus": true,
+    "responseDcfr": {
+      "positive_regret_exponent": 1.5,
+      "negative_regret_exponent": 0.0,
+      "strategy_exponent": 2.0
+    },
+    "threads": 10,
+    "crossEvaluateBothDirections": true,
+    "outputDirectory": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v3"
+  },
+  "gates": {
+    "maximumRangeConsistentResponseGainBbPerHand": 0.05,
+    "maximumFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumZeroSumResidualBb": 0.000001,
+    "maximumProbabilitySumError": 0.00001,
+    "requireEveryRootAndDirection": true,
+    "interpretAsExploitabilityUpperBound": false,
+    "activationRequiresIndependentFullGameUpperBound": true
+  },
+  "freshAuthenticRecheck": {
+    "requiredBeforeRoutedPolicyPromotion": true,
+    "useForModelSelection": false,
+    "seeds": [15501, 15502],
+    "statesPerSeed": 64,
+    "maximumPerSeedRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95
+  },
+  "failurePolicy": {
+    "missingOrInvalidEvidenceFailsClosed": true,
+    "rejectedRootBurnsTheEntireFrozenRootSet": true,
+    "modelOrControlChangeRequiresAnotherFreshFreeze": true,
+    "activationRemainsFalseUntilEveryFullGameGatePasses": true
+  }
+}
