@@ -1,0 +1,104 @@
+{
+  "schema": "hu-routed-full-hand-candidate-freeze-v1",
+  "modelVersion": "hu-20bb-v50-v27-preflop-v26-postflop-routed-candidate",
+  "depthBb": 20,
+  "status": "frozen-for-full-game-release-evaluation",
+  "activationAllowed": false,
+  "policyLineage": {
+    "preflop": "v27 distilled paired tabular DCFR average policies",
+    "postflop": "v26 frozen paired probability students",
+    "routing": "preflop student before the flop and postflop student on flop, turn, and river",
+    "valueModelRole": "V49 continuation networks remain evaluation and resolver diagnostics; they are not action-policy payloads"
+  },
+  "exporter": {
+    "path": "neural/export_routed_bundle.py",
+    "sha256": "1d9e0c9682cb30defb2dba29defee88043e79e3d65740ecc5a75cc5f6f1e5511",
+    "schema": "hu-neural-training-networks-v4",
+    "inputSize": 725,
+    "strategyTransform": "softmax"
+  },
+  "candidates": [
+    {
+      "candidateSeed": 7601,
+      "preflop": {
+        "run": "neural/runs/20bb-long-v1-narrow-seed5101",
+        "runStateSha256": "abb1e3cf83c265ab08a498d3e72b155ff0119c888956cec8fdb5878aee6e3b71",
+        "round": 250,
+        "weights": "neural/runs/20bb-v27-tabular-distilled-s5000/seed-0.safetensors",
+        "weightsSha256": "151fc1d90a5c03f105e543c54d02d097df51c66a422d01e696731b9c83b409dd",
+        "weightsBytes": 876050
+      },
+      "postflop": {
+        "run": "neural/runs/20bb-long-v1-wide-seed5101",
+        "runStateSha256": "25079ae1c47e7527ad7eca15d08e198f96596a6cd8ea7cf301ad8151302caa97",
+        "round": 100,
+        "weights": "neural/runs/20bb-v26-probability-combined-distilled/seed-0.safetensors",
+        "weightsSha256": "cbc7135f6c4aa38232d511a71d05db1c0f6c5aa0fcd8b58e799c1fbc311eb427",
+        "weightsBytes": 2013717
+      },
+      "servingPayloadBytes": 2889767,
+      "evaluationBundle": {
+        "path": "neural/runs/20bb-v27-routed-seed7601-s5000.json",
+        "sha256": "c5dba74744d817423c94803c2a1c92dc8a3acacd3b5f58094c700704c0fcbf92",
+        "bytes": 30417460,
+        "servingPayload": false
+      }
+    },
+    {
+      "candidateSeed": 7602,
+      "preflop": {
+        "run": "neural/runs/20bb-long-v1-narrow-seed5102",
+        "runStateSha256": "429d4d1685a3719dacc98e7ee11c42fad7a893f51d5ed75f4e2781c62a4e5e4a",
+        "round": 250,
+        "weights": "neural/runs/20bb-v27-tabular-distilled-s5000/seed-1.safetensors",
+        "weightsSha256": "fcb3c62aad24a86bd04b4bdd1be8a1cbe0522a6f6552f830a4a3101965e00a9e",
+        "weightsBytes": 876050
+      },
+      "postflop": {
+        "run": "neural/runs/20bb-long-v1-wide-seed5102",
+        "runStateSha256": "b58e29b4ce9b7de4fda1f2e47d2c10f64f390a19af57bd2a8c13cb5a9572b936",
+        "round": 100,
+        "weights": "neural/runs/20bb-v26-probability-combined-distilled/seed-1.safetensors",
+        "weightsSha256": "fba9ae94b3af651a0057cd0e20c91de0c1be0985821b33db5470f2a95c97d07f",
+        "weightsBytes": 2013717
+      },
+      "servingPayloadBytes": 2889767,
+      "evaluationBundle": {
+        "path": "neural/runs/20bb-v27-routed-seed7602-s5000.json",
+        "sha256": "bf6a303459f2c853baaef8b62045119ba1a58332792c8e29f0fff6a8cfb0922f",
+        "bytes": 30427454,
+        "servingPayload": false
+      }
+    }
+  ],
+  "reproducibility": {
+    "status": "byte-identical",
+    "method": "re-export each routed bundle from the pinned run round and frozen preflop/postflop weights, then require an exact byte comparison",
+    "candidateCount": 2
+  },
+  "releaseGates": {
+    "maximumEstimatedExploitabilityBbPerHand": 0.05,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": 0.1,
+    "maximumReachWeightedCrossSeedActionFrequencyMae": 0.05,
+    "minimumPrimaryActionAgreement": 0.85,
+    "maximumAggregateActionDelta": 0.03,
+    "minimumLookupCoverage": 0.9999,
+    "maximumActionEvStandardErrorBb": 0.02,
+    "minimumDecisionCoverageAtActionEvStandardError": 0.95,
+    "requireValidProbabilitySums": true,
+    "requireArtifactIntegrity": true,
+    "maximumProjectedHostedPolicyBytes": 20000000000
+  },
+  "diagnosticEvidence": {
+    "freshRangeResponse": {
+      "path": "neural/20bb-v49-range-response-v3-first-root-pass.json",
+      "sha256": "dd7c0271b2e2d4e3d0fbb832d4d167fc2303d7e5a09e22afcda85867c03d475c",
+      "completedRoots": 1,
+      "plannedRoots": 12,
+      "releaseBlocking": false,
+      "reason": "local finite learned-response evidence is retained but does not replace or strengthen the required full-game exploitability certificate"
+    }
+  },
+  "selectionPolicy": "evaluate both frozen candidates independently and select the lower qualifying exploitability upper bound only after both candidates pass every normal release gate",
+  "interpretation": "This freezes the exact full-hand action policies to evaluate. It makes no equilibrium claim and cannot activate either candidate before the full-game exploitability and normal release gates pass."
+}
