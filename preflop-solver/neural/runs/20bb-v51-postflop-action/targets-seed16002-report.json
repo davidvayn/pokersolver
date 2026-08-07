@@ -1,0 +1,24 @@
+{
+  "schema": "hu-range-conditioned-postflop-action-target-report-v1",
+  "method": "authentic_preflop_reach_conditioning_v49_depth_limited_flop_resolver_and_exact_complete_turn_river_dcfr_action_export",
+  "seed": 16002,
+  "sourcePolicySha256": "bf6a303459f2c853baaef8b62045119ba1a58332792c8e29f0fff6a8cfb0922f",
+  "valueNetworkSha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1",
+  "roots": 1,
+  "turnLeaves": 1,
+  "flopRecords": 7058,
+  "turnRiverRecords": 50681,
+  "totalRecords": 57739,
+  "candidateRecords": 370892,
+  "truncated": false,
+  "maximumFlopExploitabilityBbPerHand": 0.08761636893532748,
+  "maximumTurnRiverExploitabilityBbPerHand": 0.023052852436432597,
+  "output": "neural/runs/20bb-v51-postflop-action/targets-seed16002.jsonl.gz",
+  "validation": {
+    "status": "accepted_for_training",
+    "reasons": [
+      "local postflop teachers are successor-training targets, not release-qualified policies; activation still requires the unchanged full-game exploitability gate",
+      "deterministic street-stratified reservoir with inverse-inclusion weight correction retained 57739 of 370892 complete-tree action rows"
+    ]
+  }
+}
