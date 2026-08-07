@@ -925,6 +925,7 @@ pub(super) fn average_strategy_record_bytes(
     deal: &Deal,
     actions: &[LegalAction],
     targets: Vec<f64>,
+    action_values_bb: Vec<f64>,
     weight: f32,
     config: &BlueprintConfig,
 ) -> Vec<u8> {
@@ -937,7 +938,7 @@ pub(super) fn average_strategy_record_bytes(
         deal,
         actions,
         targets,
-        None,
+        Some(action_values_bb),
         None,
         config,
     ))
@@ -980,7 +981,8 @@ pub(super) fn write_average_strategy_dataset(
         "truncated": false,
         "sampling_mode": "range_conditioned_solver_average_policy",
         "value_rollouts_per_action": 0,
-        "evaluates_trajectory_action_values": false,
+        "evaluates_trajectory_action_values": true,
+        "action_value_method": "exact_solver_average_profile_counterfactual_values",
         "enumerates_turn_river_chance": true,
         "action_abstraction": game.action_abstraction,
         "teacher": teacher,

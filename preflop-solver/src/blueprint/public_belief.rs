@@ -1976,6 +1976,7 @@ impl FlopSolver {
                     .into_iter()
                     .map(|value| value as f32)
                     .collect(),
+                action_values_bb: None,
             })
             .collect()
     }
@@ -2634,7 +2635,33 @@ impl FlopSolver {
         let unresolved_best_p1 = aggregate(&unresolved_br1[1], 1);
         let unresolved_exploitability =
             ((unresolved_best_p0 - unresolved_p0) + (unresolved_best_p1 - unresolved_p1)) / 2.0;
-        let strategies = self.average_strategies(None);
+        let mut diagnostic_reaches = BTreeMap::new();
+        let mut diagnostic_action_values = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            reaches.clone(),
+            &mut diagnostic_reaches,
+            &mut diagnostic_action_values,
+        );
+        let mut strategies = self.average_strategies(None);
+        for strategy in &mut strategies {
+            let node_reaches = diagnostic_reaches
+                .get(&strategy.public_history)
+                .expect("flop action-value pass contains every strategy node");
+            let action_values = diagnostic_action_values
+                .get(&strategy.public_history)
+                .expect("flop action-value pass contains every strategy action");
+            strategy.action_values_bb = Some(
+                normalized_action_values_bb(
+                    strategy.actor,
+                    strategy.action_labels.len(),
+                    node_reaches,
+                    action_values,
+                    &self.conflicts,
+                )
+                .expect("trained flop action values are finite and compatible"),
+            );
+        }
         let opponent_compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
             (0..COMBO_COUNT)
                 .map(|combo| {
@@ -3385,6 +3412,41 @@ pub struct PublicBeliefStrategy {
     pub action_labels: Vec<String>,
     /// Row-major `[combo][action]` frozen average policy.
     pub probabilities: Vec<f32>,
+    /// Row-major `[combo][action]` counterfactual action EVs in big blinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_values_bb: Option<Vec<f32>>,
+}
+
+fn normalized_action_values_bb(
+    actor: usize,
+    action_count: usize,
+    reaches: &[Vec<f64>; 2],
+    action_values: &[Vec<f64>],
+    conflicts: &[Vec<usize>],
+) -> Result<Vec<f32>, String> {
+    if actor > 1
+        || action_values.len() != action_count
+        || action_values
+            .iter()
+            .any(|values| values.len() != COMBO_COUNT)
+    {
+        return Err("counterfactual action values have incompatible dimensions".to_owned());
+    }
+    let mut normalized = vec![0.0f32; COMBO_COUNT * action_count];
+    for combo in 0..COMBO_COUNT {
+        let opponent_mass = compatible_mass_from_conflicts(&reaches[1 - actor], conflicts, combo);
+        if opponent_mass <= 0.0 {
+            continue;
+        }
+        for action in 0..action_count {
+            let value = action_values[action][combo] / opponent_mass;
+            if !value.is_finite() || value.abs() > 1e6 {
+                return Err("counterfactual action values are non-finite or unbounded".to_owned());
+            }
+            normalized[combo * action_count + action] = value as f32;
+        }
+    }
+    Ok(normalized)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3935,6 +3997,7 @@ impl RiverSolver {
                         .into_iter()
                         .map(|value| value as f32)
                         .collect(),
+                    action_values_bb: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -4579,6 +4642,74 @@ impl TurnRiverSolver {
         values
     }
 
+    fn collect_average_profile_diagnostics(
+        &self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        river: Option<u8>,
+        reach_output: &mut BTreeMap<Vec<String>, [Vec<f64>; 2]>,
+        action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
+    ) -> [Vec<f64>; 2] {
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches, river);
+        }
+        if state.street == Street::River && river.is_none() {
+            let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+            for card in &self.river_cards {
+                let mut masked = reaches.clone();
+                for player in 0..2 {
+                    for combo in &self.river_blocked_combos[*card as usize] {
+                        masked[player][*combo] = 0.0;
+                    }
+                }
+                let child = self.collect_average_profile_diagnostics(
+                    state.clone(),
+                    masked,
+                    Some(*card),
+                    reach_output,
+                    action_value_output,
+                );
+                self.accumulate_compatible_river_child(&mut values, &child, *card);
+            }
+            return values;
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let actor = state.actor;
+        let key = Self::node_key(&state, river);
+        let legal = self.legal_for(river, actor);
+        let node = self.nodes.get(&key).expect("trained turn-river node");
+        let strategy = node.average_strategy(legal);
+        reach_output.insert(key.clone(), reaches.clone());
+        let mut children = Vec::with_capacity(actions.len());
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * actions.len() + action_index];
+            }
+            children.push(self.collect_average_profile_diagnostics(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                river,
+                reach_output,
+                action_value_output,
+            ));
+        }
+        action_value_output.insert(
+            key,
+            children.iter().map(|child| child[actor].clone()).collect(),
+        );
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            for action in 0..actions.len() {
+                values[actor][combo] +=
+                    strategy[combo * actions.len() + action] * children[action][actor][combo];
+                values[opponent][combo] += children[action][opponent][combo];
+            }
+        }
+        values
+    }
+
     fn finish_continuation_values(self) -> TurnRiverContinuationValues {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
@@ -4815,6 +4946,16 @@ impl TurnRiverSolver {
                 })
                 .collect()
         });
+        let mut diagnostic_reaches = BTreeMap::new();
+        let mut diagnostic_action_values = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            reaches.clone(),
+            None,
+            &mut diagnostic_reaches,
+            &mut diagnostic_action_values,
+        );
+        let conflicts = combo_conflicts();
         let mut maximum_probability_sum_error = 0.0f64;
         let mut turn_information_sets = 0usize;
         let mut river_information_sets = 0usize;
@@ -4848,6 +4989,20 @@ impl TurnRiverSolver {
                         .into_iter()
                         .map(|value| value as f32)
                         .collect(),
+                    action_values_bb: Some(
+                        normalized_action_values_bb(
+                            node.actor,
+                            action_count,
+                            diagnostic_reaches
+                                .get(history)
+                                .expect("turn-river action-value pass contains every node"),
+                            diagnostic_action_values
+                                .get(history)
+                                .expect("turn-river action-value pass contains every action"),
+                            &conflicts,
+                        )
+                        .expect("trained turn-river action values are finite and compatible"),
+                    ),
                 }
             })
             .collect::<Vec<_>>();
@@ -5147,6 +5302,14 @@ fn append_public_belief_policy_records(
             }
             let actor = state.actor;
             let action_count = actions.len();
+            let action_values = strategy.action_values_bb.as_ref().ok_or_else(|| {
+                "solver strategy is missing counterfactual action values".to_owned()
+            })?;
+            if action_values.len() != COMBO_COUNT * action_count {
+                return Err(
+                    "solver counterfactual action values have incompatible dimensions".to_owned(),
+                );
+            }
             for combo in all_combos() {
                 let key = combo.key();
                 if combo.cards().iter().any(|card| board.contains(card)) {
@@ -5164,6 +5327,13 @@ fn append_public_belief_policy_records(
                 if (probability_sum - 1.0).abs() > 1e-5 {
                     return Err("solver action probabilities do not sum to one".to_owned());
                 }
+                let action_values_bb = action_values[offset..offset + action_count]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect::<Vec<_>>();
+                if action_values_bb.iter().any(|value| !value.is_finite()) {
+                    return Err("solver counterfactual action values are non-finite".to_owned());
+                }
                 let opponent_mass =
                     compatible_mass_from_conflicts(&reaches[1 - actor], self.conflicts, key);
                 let weight = self.root_weight * chance_weight * reaches[actor][key] * opponent_mass;
@@ -5178,6 +5348,7 @@ fn append_public_belief_policy_records(
                         &deal,
                         &actions,
                         targets,
+                        action_values_bb,
                         weight as f32,
                         self.game,
                     ),
@@ -7983,6 +8154,42 @@ mod tests {
             .iter()
             .flatten()
             .all(|value| value.is_finite()));
+        assert!(solution.strategies.iter().all(|node| {
+            node.action_values_bb.as_ref().is_some_and(|values| {
+                values.len() == COMBO_COUNT * node.action_labels.len()
+                    && values.iter().all(|value| value.is_finite())
+            })
+        }));
+        let root_history = solution.state.game_state().public_history;
+        let root = solution
+            .strategies
+            .iter()
+            .find(|node| node.public_history == root_history)
+            .unwrap();
+        let action_count = root.action_labels.len();
+        let action_values = root.action_values_bb.as_ref().unwrap();
+        let joint_mass = joint_compatibility_mass(&solution.state.ranges);
+        let reconstructed = (0..COMBO_COUNT)
+            .map(|combo| {
+                let offset = combo * action_count;
+                let row_ev = (0..action_count)
+                    .map(|action| {
+                        f64::from(root.probabilities[offset + action])
+                            * f64::from(action_values[offset + action])
+                    })
+                    .sum::<f64>();
+                solution.state.ranges[root.actor][combo]
+                    * f64::from(solution.opponent_compatible_mass[root.actor][combo])
+                    * row_ev
+            })
+            .sum::<f64>()
+            / joint_mass;
+        let expected = if root.actor == 0 {
+            solution.metrics.profile_value_p0_bb
+        } else {
+            solution.metrics.profile_value_p1_bb
+        };
+        assert!((reconstructed - expected).abs() < 1e-5);
     }
 
     #[test]
@@ -8387,6 +8594,12 @@ mod tests {
             .iter()
             .flat_map(|node| &node.action_labels)
             .any(|label| label.contains("all_in")));
+        assert!(solution.strategies.iter().all(|node| {
+            node.action_values_bb.as_ref().is_some_and(|values| {
+                values.len() == COMBO_COUNT * node.action_labels.len()
+                    && values.iter().all(|value| value.is_finite())
+            })
+        }));
         assert!(solution.metrics.zero_sum_residual_after_projection_bb < 1e-8);
         assert!(!solution
             .validation
@@ -8789,6 +9002,7 @@ mod tests {
             actor: 1,
             action_labels: vec!["fold".to_owned(), "call".to_owned()],
             probabilities: vec![0.25, 0.75],
+            action_values_bb: None,
         }];
         assert_eq!(
             flop_strategy_sha256(&strategies),
@@ -9168,6 +9382,7 @@ mod tests {
             actor: state.actor,
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             probabilities: vec![1.0 / action_count as f32; COMBO_COUNT * action_count],
+            action_values_bb: Some(vec![0.0; COMBO_COUNT * action_count]),
         };
         let mut records = BoundedActionRecordCollector::new(3, 7);
         let added = append_public_belief_policy_records(
@@ -9189,6 +9404,42 @@ mod tests {
         assert_eq!(
             record["feature_sha256"].as_array().unwrap().len(),
             action_count
+        );
+        assert_eq!(
+            record["action_values_bb"].as_array().unwrap().len(),
+            action_count
+        );
+    }
+
+    #[test]
+    fn action_target_export_rejects_missing_action_values() {
+        let game = tiny_game();
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let state =
+            PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges.clone()).game_state();
+        let actions = state.legal_actions(&game);
+        let strategy = PublicBeliefStrategy {
+            public_history: state.public_history.clone(),
+            actor: state.actor,
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities: vec![1.0 / actions.len() as f32; COMBO_COUNT * actions.len()],
+            action_values_bb: None,
+        };
+        let mut records = BoundedActionRecordCollector::new(3, 7);
+        let error = append_public_belief_policy_records(
+            &game,
+            state,
+            &board,
+            ranges,
+            &[strategy],
+            1.0,
+            &mut records,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "solver strategy is missing counterfactual action values"
         );
     }
 
@@ -9253,6 +9504,7 @@ mod tests {
                 actor: state.actor,
                 action_labels: actions.iter().map(|action| action.label.clone()).collect(),
                 probabilities: vec![1.0 / actions.len() as f32; COMBO_COUNT * actions.len()],
+                action_values_bb: Some(vec![0.0; COMBO_COUNT * actions.len()]),
             }
         };
         let strategies = vec![

@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from distill_postflop_policy import corpus_groups, split_indices
+import numpy as np
+
+from distill_postflop_policy import (
+    bounded_expected_regret_bb,
+    corpus_groups,
+    split_indices,
+)
 
 
 class PostflopPolicyDistillationTest(unittest.TestCase):
@@ -57,6 +63,26 @@ class PostflopPolicyDistillationTest(unittest.TestCase):
                 )
             with self.assertRaisesRegex(ValueError, "preflop or unknown"):
                 corpus_groups(path)
+
+    def test_bounded_expected_regret_ignores_masks_and_caps_losses(self) -> None:
+        predicted = np.asarray([[0.25, 0.25, 0.5], [0.5, 0.5, 0.0]])
+        values = np.asarray([[1.0, -9.0, 0.0], [2.0, 2.0, -100.0]])
+        masks = np.asarray([[1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+        np.testing.assert_allclose(
+            bounded_expected_regret_bb(predicted, values, masks, 0.4),
+            [0.2, 0.0],
+        )
+
+    def test_dominated_action_mass_increases_expected_regret(self) -> None:
+        values = np.asarray([[1.0, 0.0]])
+        masks = np.ones_like(values)
+        low = bounded_expected_regret_bb(
+            np.asarray([[0.9, 0.1]]), values, masks, 5.0
+        )
+        high = bounded_expected_regret_bb(
+            np.asarray([[0.1, 0.9]]), values, masks, 5.0
+        )
+        self.assertGreater(float(high[0]), float(low[0]))
 
 
 if __name__ == "__main__":

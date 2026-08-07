@@ -65,6 +65,53 @@ class DistillTabularPreflopTests(unittest.TestCase):
         self.assertEqual(loaded_metadata["records"], 1)
         self.assertEqual(data["states"].shape, (1, STATE_FEATURE_COUNT))
         self.assertEqual(float(data["weights"][0, 0]), 2.0)
+        self.assertFalse(np.any(data["action_value_masks"]))
+
+    def test_dataset_arrays_requires_declared_action_values(self):
+        metadata = {
+            "schema": "hu-neural-traversal-jsonl-v7",
+            "state_feature_count": STATE_FEATURE_COUNT,
+            "state_feature_schema": STATE_FEATURE_SCHEMA,
+            "action_feature_count": ACTION_FEATURE_COUNT,
+            "depth_bb": 20,
+            "records": 1,
+            "evaluates_trajectory_action_values": True,
+        }
+        record = {
+            "actions": [{"kind": "fold", "amount_to_bb": None}],
+            "targets": [1.0],
+            "weight": 1.0,
+            "state": {
+                "actor": 0,
+                "street": "preflop",
+                "button": 0,
+                "private_cards": [51, 50],
+                "board": [],
+                "pot_bb": 1.5,
+                "stacks_bb": [19.5, 19.0],
+                "street_bets_bb": [0.5, 1.0],
+                "total_committed_bb": [0.5, 1.0],
+                "to_call_bb": 0.5,
+                "last_full_raise_bb": 1.0,
+                "raise_reopened": True,
+                "trajectory": [],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "teacher.jsonl.gz"
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                stream.write(json.dumps(metadata) + "\n")
+                stream.write(json.dumps(record) + "\n")
+            with self.assertRaisesRegex(ValueError, "incompatible dimensions"):
+                dataset_arrays(path)
+
+            record["action_values_bb"] = [0.25]
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                stream.write(json.dumps(metadata) + "\n")
+                stream.write(json.dumps(record) + "\n")
+            _, data = dataset_arrays(path)
+        self.assertEqual(float(data["action_values_bb"][0, 0]), 0.25)
+        self.assertEqual(float(data["action_value_masks"][0, 0]), 1.0)
 
 
 if __name__ == "__main__":

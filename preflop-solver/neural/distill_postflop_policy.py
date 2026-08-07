@@ -19,6 +19,7 @@ from distill_tabular_preflop import batch_features, dataset_arrays, metrics, pro
 from train import (
     INPUT_FEATURE_COUNT,
     ActionScorer,
+    make_compiled_ev_policy_step,
     make_compiled_policy_step,
     save_model,
 )
@@ -36,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=3e-5)
     parser.add_argument("--cross-seed-replay-probability", type=float, default=0.0)
+    parser.add_argument("--ev-regret-scale", type=float, default=0.0)
+    parser.add_argument("--ev-regret-cap-bb", type=float, default=5.0)
     parser.add_argument("--seed", type=int, default=16_101)
     return parser.parse_args()
 
@@ -117,6 +120,22 @@ def aggregate_action_delta(
     return max(deltas, default=0.0)
 
 
+def bounded_expected_regret_bb(
+    predicted: np.ndarray,
+    action_values_bb: np.ndarray,
+    masks: np.ndarray,
+    cap_bb: float,
+) -> np.ndarray:
+    """Return per-decision expected regret over legal actions only."""
+    if cap_bb <= 0:
+        raise ValueError("EV-regret cap must be positive")
+    best = np.max(np.where(masks > 0, action_values_bb, -np.inf), axis=1)
+    regrets = np.minimum(
+        np.maximum(best[:, None] - action_values_bb, 0.0), cap_bb
+    ) * masks
+    return np.sum(predicted * regrets, axis=1)
+
+
 def fit(
     data: dict[str, np.ndarray],
     training: np.ndarray,
@@ -128,6 +147,8 @@ def fit(
     steps: int,
     batch_size: int,
     learning_rate: float,
+    ev_regret_scale: float,
+    ev_regret_cap_bb: float,
     seed: int,
 ) -> tuple[ActionScorer, list[float]]:
     mx.random.seed(seed)
@@ -136,7 +157,12 @@ def fit(
     model.load_weights(str(initial))
     mx.eval(model.parameters())
     optimizer = optim.Adam(learning_rate=learning_rate)
-    step = make_compiled_policy_step(model, optimizer)
+    if ev_regret_scale > 0:
+        step = make_compiled_ev_policy_step(
+            model, optimizer, ev_regret_scale, ev_regret_cap_bb
+        )
+    else:
+        step = make_compiled_policy_step(model, optimizer)
     losses: list[float] = []
     for _ in range(steps):
         batch_data = data
@@ -152,12 +178,19 @@ def fit(
             size=min(batch_size, len(batch_training)),
             replace=True,
         )
-        loss = step(
+        arguments = (
             batch_features(batch_data, indices),
             mx.array(batch_data["targets"][indices]),
             mx.array(batch_data["masks"][indices]),
             mx.array(batch_data["weights"][indices]),
         )
+        if ev_regret_scale > 0:
+            loss = step(
+                *arguments,
+                mx.array(batch_data["action_values_bb"][indices]),
+            )
+        else:
+            loss = step(*arguments)
         mx.eval(loss, model.parameters(), optimizer.state)
         losses.append(float(loss.item()))
     return model, losses
@@ -170,6 +203,19 @@ def evaluated_metrics(
 ) -> dict[str, float]:
     result = metrics(model, data, indices)
     result["maximumAggregateActionDelta"] = aggregate_action_delta(model, data, indices)
+    selected = subset(data, indices)
+    if np.all(np.sum(selected["action_value_masks"], axis=1) > 0):
+        predicted = probabilities(model, selected)
+        masks = selected["action_value_masks"]
+        values = selected["action_values_bb"]
+        weights = selected["weights"].reshape(-1)
+        normalized = weights / np.sum(weights)
+        result["weightedExpectedEvLossBb"] = float(
+            np.sum(
+                normalized
+                * bounded_expected_regret_bb(predicted, values, masks, np.inf)
+            )
+        )
     return result
 
 
@@ -182,12 +228,18 @@ def main() -> None:
         raise ValueError("distillation optimization settings must be positive")
     if not 0 <= args.cross_seed_replay_probability <= 1:
         raise ValueError("--cross-seed-replay-probability must be between zero and one")
+    if args.ev_regret_scale < 0 or args.ev_regret_cap_bb <= 0:
+        raise ValueError("EV-regret scale must be nonnegative and its cap positive")
     hidden = (hidden_values[0], hidden_values[1])
     args.output_dir.mkdir(parents=True, exist_ok=True)
     loaded: list[tuple[dict[str, Any], dict[str, np.ndarray], np.ndarray, np.ndarray]] = []
     descriptions: list[dict[str, Any]] = []
     for path in (args.dataset_a, args.dataset_b):
         metadata, data = dataset_arrays(path)
+        if args.ev_regret_scale > 0 and not metadata.get(
+            "evaluates_trajectory_action_values", False
+        ):
+            raise ValueError("EV-aware distillation requires per-action value labels")
         groups, street_counts = corpus_groups(path)
         if len(groups) != len(data["states"]):
             raise ValueError("postflop group scan disagrees with dataset record count")
@@ -239,6 +291,8 @@ def main() -> None:
             args.steps,
             args.batch_size,
             args.learning_rate,
+            args.ev_regret_scale,
+            args.ev_regret_cap_bb,
             args.seed + index,
         )
         output = args.output_dir / f"seed-{index}.safetensors"
@@ -274,6 +328,8 @@ def main() -> None:
         "batchSize": args.batch_size,
         "learningRate": args.learning_rate,
         "crossSeedReplayProbability": args.cross_seed_replay_probability,
+        "evRegretScale": args.ev_regret_scale,
+        "evRegretCapBb": args.ev_regret_cap_bb,
         "seed": args.seed,
         "datasets": descriptions,
         "students": reports,

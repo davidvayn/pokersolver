@@ -7,6 +7,19 @@
 - The mixed-replay v51 student pilot has now been distilled and evaluated. Its complete evidence is pinned in `neural/20bb-v51-postflop-action-pilot.json`.
 - `activationAllowed` remains `false`. Both full-game means improved, but the required exploitability gates still fail by a wide margin.
 - Continue only the served action-policy correction. Do not add value-oracle, untouched-root, or unrelated diagnostic work.
+- No training or evaluation job is running at this handoff.
+
+## 2026-08-07 wrap-up checkpoint
+
+The EV-aware policy objective is now implemented but has not yet produced a candidate:
+
+- Flop and joint turn/river average strategies carry optional row-major `[combo][action]` counterfactual action EVs. Existing serialized strategy artifacts remain readable through the serde default, and the standalone river solver continues to omit this training-only field.
+- The joint turn/river diagnostic walk preserves observed river chance keys and exact card removal. Every exported value is normalized by compatible opponent mass, finite-checked, and dimension-checked.
+- Postflop action records now require and serialize one EV per legal action. Their metadata declares `evaluates_trajectory_action_values: true` and identifies the exact solver average-profile method. Missing values fail closed.
+- The Python loader enforces declared EV label dimensions and finiteness. `distill_postflop_policy.py` adds `--ev-regret-scale` (default `0`) and `--ev-regret-cap-bb` (default `5`). A positive scale combines reach-weighted cross-entropy with bounded expected action regret; scale zero calls the original compiled frequency-only step unchanged.
+- Reports now include `weightedExpectedEvLossBb` whenever EV labels are present. Tests cover masked actions, equal-EV support, dominated-action penalties, caps, both compiled objective paths, solved-policy finiteness, root EV reconstruction, river chance export, and missing labels.
+
+This checkpoint deliberately did not regenerate corpora, train students, route a full-hand model, or change activation. V51 remains the best measured candidate.
 
 The current routed v50 candidate is frozen in `neural/20bb-v50-full-hand-candidate-freeze.json`. Its controlled certificate is recorded in `neural/20bb-v50-full-hand-certificate-pilot.json`: paired relaxed means are 2.2582742976 and 2.2056883553 bb/hand, and both one-sided 99% upper bounds are 20 bb/hand. The v26 postflop action student is therefore the measured policy gap this experiment addresses. The v27 preflop students stay frozen.
 
@@ -69,22 +82,21 @@ This closes the root-count, solver-iteration, and student-step ladders. Frequenc
 
 ## Exact next sequence
 
-Implement EV-aware action-policy distillation without changing the game, evaluator, or frozen v27 preflop policy:
+Continue only the EV-aware action-policy experiment; implementation is complete enough for a smoke, not for release:
 
-1. Extend `PublicBeliefStrategy` in `src/blueprint/public_belief.rs` with an optional flattened `[combo][action]` `action_values_bb` field using a serde default so existing artifacts remain readable.
-2. For `FlopSolver`, reuse `collect_average_profile_diagnostics` to attach exact per-action counterfactual values to each exported average-strategy node. Normalize each combo row by its compatible opponent mass, matching the existing response-attribution calculation.
-3. Add the analogous average-profile diagnostic walk to `TurnRiverSolver`, including observed-river chance branches, and attach finite normalized per-action values to turn and river strategies.
-4. Pass the combo row into `average_strategy_record_bytes`; set `action_values_bb` in each record and change dataset metadata `evaluates_trajectory_action_values` to `true`. Reject missing, non-finite, or action-count-mismatched values.
-5. Add Rust tests that reconstruct each node's average-policy EV from its action EVs, preserve zero-sum/chip invariants, cover river chance keys, and verify deterministic byte-identical export.
-6. Extend `neural/distill_postflop_policy.py` with an opt-in bounded expected-regret loss term: `sum(student_probability * (best_action_ev - action_ev))`, combined with the existing reach-weighted policy cross-entropy. Keep `--ev-regret-scale 0` byte-compatible with current behavior.
-7. Add Python tests for masked actions, equal-EV mixed support, dominated-action penalties, finite scaling, and the zero-scale compatibility path.
-8. Run a tiny paired smoke export first. Then regenerate the existing one-root paired targets with 200 iterations, run a short paired regret-scale pilot, and route only if both normal held-out metrics remain sane. The unchanged full-game certificate remains decisive.
+1. Build release and generate two tiny deterministic target corpora (one root, one turn leaf, 2 flop and 2 turn/river iterations, averaging delays 0, at most 10,000 records) from the pinned seed A/B routed sources and value networks above.
+2. Independently stream both gzip files. Require metadata `evaluates_trajectory_action_values: true`; every retained record must have equal nonzero lengths for actions, targets, feature hashes, and `action_values_bb`, with finite EVs and valid target sums. Repeat each export once and compare SHA-256 for determinism.
+3. Run a zero-scale tiny distillation twice from identical inputs and require byte-identical weights/reports to establish the compatibility path. Then run a very small paired EV-aware smoke, initially `--ev-regret-scale 0.25 --ev-regret-cap-bb 5`, and require finite loss plus lower held-out `weightedExpectedEvLossBb` without nonsensical frequency metrics.
+4. Only if both smokes pass, regenerate paired one-root targets using the proven v54 200-iteration settings and the same pinned sources. Do not add roots or increase solver iterations.
+5. Run a short paired scale comparison using the same batches/seeds, select only a scale that improves held-out expected EV loss for both students while keeping action-frequency MAE, primary agreement, and aggregate action deltas sane.
+6. Route that pair through the unchanged full-hand causal certificate. Retain it only if both routed means improve over v51. Activation remains false unless every existing release gate passes.
 
 Do not resume more roots, higher DCFR iterations, or longer frequency-only distillation; v52–v54 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
 
-## Verification already completed
+## Verification at handoff
 
-- `cargo test --release`: 98 library tests and 3 CLI tests passed after the implementation change.
-- Relevant Python suite: 9 tests passed.
-- One-step end-to-end smoke test loaded the exact features and slightly improved held-out teacher MAE for both seeds.
-- `git diff --check` passed before the implementation commit.
+- `cargo test --release`: 99 library tests and 3 CLI tests passed after the action-EV implementation and root reconstruction test.
+- Full neural unittest discovery: 185 tests passed after adding the EV-aware objective tests.
+- A direct positive-scale compiled-step smoke returned a finite loss.
+- `cargo fmt`, Python byte compilation, and `git diff --check` passed.
+- No new corpus or weights have been generated; the next agent must start at the tiny paired export above.

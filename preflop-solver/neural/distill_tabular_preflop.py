@@ -70,7 +70,12 @@ def dataset_arrays(path: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     )
     targets = np.zeros((count, MAX_POLICY_ACTIONS), dtype=np.float32)
     masks = np.zeros((count, MAX_POLICY_ACTIONS), dtype=np.float32)
+    action_values_bb = np.zeros((count, MAX_POLICY_ACTIONS), dtype=np.float32)
+    action_value_masks = np.zeros((count, MAX_POLICY_ACTIONS), dtype=np.float32)
     weights = np.zeros((count, 1), dtype=np.float32)
+    evaluates_action_values = bool(
+        metadata.get("evaluates_trajectory_action_values", False)
+    )
     observed = 0
     with gzip.open(path, "rt", encoding="utf-8") as stream:
         next(stream)
@@ -90,6 +95,16 @@ def dataset_arrays(path: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
                 np.sum(probabilities), 1.0
             ):
                 raise ValueError("tabular teacher probabilities are invalid")
+            if evaluates_action_values:
+                values = np.asarray(record.get("action_values_bb"), dtype=np.float32)
+                if values.shape != probabilities.shape:
+                    raise ValueError(
+                        "tabular teacher action values have incompatible dimensions"
+                    )
+                if not np.all(np.isfinite(values)):
+                    raise ValueError("tabular teacher action values are non-finite")
+                action_values_bb[index, : len(legal)] = values
+                action_value_masks[index, : len(legal)] = 1.0
             states[index] = expand_state(record["state"], depth)
             actions[index, : len(legal)] = np.stack(
                 [expand_action(record["state"], action, depth) for action in legal]
@@ -105,6 +120,8 @@ def dataset_arrays(path: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         "actions": actions,
         "targets": targets,
         "masks": masks,
+        "action_values_bb": action_values_bb,
+        "action_value_masks": action_value_masks,
         "weights": weights,
     }
 

@@ -27,6 +27,7 @@ from train import (
     load_optimizer,
     linear_layers,
     make_compiled_step,
+    make_compiled_ev_policy_step,
     migrate_legacy_resume_state,
     parse_args,
     save_optimizer,
@@ -455,6 +456,40 @@ class NeuralTrainerTests(unittest.TestCase):
             restored.init(model.trainable_parameters())
             load_optimizer(restored, path)
             self.assertEqual(int(restored.state["step"].item()), 1)
+
+    def test_zero_scale_ev_policy_step_keeps_frequency_only_signature(self):
+        model = ActionScorer(INPUT_FEATURE_COUNT, (8, 4))
+        optimizer = optim.Adam(learning_rate=1e-3)
+        step = make_compiled_ev_policy_step(model, optimizer, 0.0, 5.0)
+        features = mx.zeros((2, MAX_POLICY_ACTIONS, INPUT_FEATURE_COUNT))
+        targets = mx.zeros((2, MAX_POLICY_ACTIONS))
+        targets[:, 0] = 1.0
+        masks = mx.zeros((2, MAX_POLICY_ACTIONS))
+        masks[:, :2] = 1.0
+        loss = step(features, targets, masks, mx.ones((2, 1)))
+        mx.eval(loss, model.parameters(), optimizer.state)
+        self.assertTrue(np.isfinite(float(loss.item())))
+
+    def test_ev_policy_step_accepts_finite_action_values(self):
+        model = ActionScorer(INPUT_FEATURE_COUNT, (8, 4))
+        optimizer = optim.Adam(learning_rate=1e-3)
+        step = make_compiled_ev_policy_step(model, optimizer, 0.25, 5.0)
+        features = mx.zeros((2, MAX_POLICY_ACTIONS, INPUT_FEATURE_COUNT))
+        targets = mx.zeros((2, MAX_POLICY_ACTIONS))
+        targets[:, 0] = 1.0
+        masks = mx.zeros((2, MAX_POLICY_ACTIONS))
+        masks[:, :2] = 1.0
+        action_values = mx.zeros((2, MAX_POLICY_ACTIONS))
+        action_values[:, 0] = 1.0
+        loss = step(
+            features,
+            targets,
+            masks,
+            mx.ones((2, 1)),
+            action_values,
+        )
+        mx.eval(loss, model.parameters(), optimizer.state)
+        self.assertTrue(np.isfinite(float(loss.item())))
 
 
 if __name__ == "__main__":

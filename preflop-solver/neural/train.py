@@ -932,6 +932,73 @@ def make_compiled_policy_step(model: ActionScorer, optimizer: optim.Optimizer):
     return step
 
 
+def make_compiled_ev_policy_step(
+    model: ActionScorer,
+    optimizer: optim.Optimizer,
+    ev_regret_scale: float,
+    ev_regret_cap_bb: float,
+):
+    """Add bounded expected action regret without changing the scale-zero path."""
+    if ev_regret_scale == 0:
+        return make_compiled_policy_step(model, optimizer)
+    if ev_regret_scale < 0 or ev_regret_cap_bb <= 0:
+        raise ValueError("EV-regret scale must be nonnegative and its cap positive")
+
+    def loss_fn(
+        active_model: ActionScorer,
+        features: mx.array,
+        targets: mx.array,
+        masks: mx.array,
+        weights: mx.array,
+        action_values_bb: mx.array,
+    ) -> mx.array:
+        batch_size = features.shape[0]
+        logits = active_model(features.reshape((-1, INPUT_FEATURE_COUNT))).reshape(
+            (batch_size, MAX_POLICY_ACTIONS)
+        )
+        masked_logits = mx.where(masks > 0, logits, mx.array(-1e9))
+        log_probabilities = masked_logits - mx.logsumexp(
+            masked_logits,
+            axis=1,
+            keepdims=True,
+        )
+        probabilities = mx.exp(log_probabilities) * masks
+        cross_entropy = -mx.sum(
+            targets * log_probabilities * masks, axis=1, keepdims=True
+        )
+        masked_action_values = mx.where(
+            masks > 0, action_values_bb, mx.array(-1e9)
+        )
+        best_action_values = mx.max(masked_action_values, axis=1, keepdims=True)
+        regrets = mx.minimum(
+            mx.maximum(best_action_values - action_values_bb, mx.array(0.0)),
+            mx.array(ev_regret_cap_bb),
+        ) * masks
+        expected_regret = mx.sum(probabilities * regrets, axis=1, keepdims=True)
+        per_decision = cross_entropy + ev_regret_scale * expected_regret
+        normalized_weights = weights / mx.maximum(mx.mean(weights), mx.array(1e-8))
+        return mx.mean(per_decision * normalized_weights)
+
+    value_and_grad = nn.value_and_grad(model, loss_fn)
+    state = [model.state, optimizer.state]
+
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(
+        features: mx.array,
+        targets: mx.array,
+        masks: mx.array,
+        weights: mx.array,
+        action_values_bb: mx.array,
+    ) -> mx.array:
+        loss, gradients = value_and_grad(
+            model, features, targets, masks, weights, action_values_bb
+        )
+        optimizer.update(model, gradients)
+        return loss
+
+    return step
+
+
 def make_compiled_group_regression_step(model: ActionScorer, optimizer: optim.Optimizer):
     def loss_fn(
         active_model: ActionScorer,
