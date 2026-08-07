@@ -1,0 +1,342 @@
+{
+  "activationAllowed": false,
+  "controls": {
+    "crossEvaluateBothDirections": true,
+    "effectiveStackBb": 20.0,
+    "outputDirectory": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v3",
+    "responseAveragingDelay": 10,
+    "responseCheckpoints": [
+      100,
+      200,
+      400
+    ],
+    "responseDcfr": {
+      "negative_regret_exponent": 0.0,
+      "positive_regret_exponent": 1.5,
+      "strategy_exponent": 2.0
+    },
+    "responseRegretMatchingPlus": true,
+    "rootActor": 1,
+    "rootPotBb": 4.0,
+    "strategyAveragingDelay": 200,
+    "strategyCheckpoints": [
+      300,
+      400
+    ],
+    "strategyDcfr": {
+      "negative_regret_exponent": 0.0,
+      "positive_regret_exponent": 1.5,
+      "strategy_exponent": 2.0
+    },
+    "strategyIterations": 400,
+    "strategyRegretMatchingPlus": true,
+    "threads": 10
+  },
+  "failurePolicy": {
+    "activationRemainsFalseUntilEveryFullGameGatePasses": true,
+    "missingOrInvalidEvidenceFailsClosed": true,
+    "modelOrControlChangeRequiresAnotherFreshFreeze": true,
+    "rejectedRootBurnsTheEntireFrozenRootSet": true
+  },
+  "freshAuthenticRecheck": {
+    "maximumPerSeedRmseBb": 0.25,
+    "minimumCrossSeedPredictionCorrelation": 0.95,
+    "requiredBeforeRoutedPolicyPromotion": true,
+    "seeds": [
+      15501,
+      15502
+    ],
+    "statesPerSeed": 64,
+    "useForModelSelection": false
+  },
+  "gates": {
+    "activationRequiresIndependentFullGameUpperBound": true,
+    "interpretAsExploitabilityUpperBound": false,
+    "maximumFinalCheckpointIncreaseBbPerHand": 0.005,
+    "maximumProbabilitySumError": 1e-05,
+    "maximumRangeConsistentResponseGainBbPerHand": 0.05,
+    "maximumZeroSumResidualBb": 1e-06,
+    "requireEveryRootAndDirection": true
+  },
+  "implementation": {
+    "commit": "447af20cd549405208edc094fe667316d39af4bc",
+    "files": [
+      {
+        "path": "src/blueprint/public_belief.rs",
+        "sha256": "38f39bd08462ca622464eb498f8a0b83f969d740b22cc0950ec2ca80122dd62f"
+      },
+      {
+        "path": "src/main.rs",
+        "sha256": "326eace9043b34eeb022fe0008154fb19cfe1f7c5320ab88b34cc07d4a9bd6c3"
+      },
+      {
+        "path": "Cargo.lock",
+        "sha256": "e207387ec37c9d7d5035fe3958f50030a4e390269cdac1bb7411cead8548b33a"
+      }
+    ]
+  },
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "models": [
+    {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json",
+      "seed": 15301,
+      "sha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81",
+      "sourceDatasetSha256": "856d688f82c870855f676120b7c67b9979e005974369a942d47f288923989c57",
+      "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+    },
+    {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json",
+      "seed": 15302,
+      "sha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1",
+      "sourceDatasetSha256": "856d688f82c870855f676120b7c67b9979e005974369a942d47f288923989c57",
+      "sourcePolicySha256": "c78397af5900b3409d3dfc911fce56075cb54ce860c38fc2a1459fe5d56df948"
+    }
+  ],
+  "orchestration": {
+    "commit": "447af20cd549405208edc094fe667316d39af4bc",
+    "files": [
+      {
+        "path": "neural/freeze_range_response_release.py",
+        "sha256": "0975e936ce8fa3017043881e01fe8cc111883a116a92a902319ffb47dcd83bf2"
+      },
+      {
+        "path": "neural/run_range_response_release.py",
+        "sha256": "06cbbcc58e2d2897b0ae6ea47818d92e1701c233ee7c76e4284fc9fdcf50d881"
+      },
+      {
+        "path": "neural/validate_range_response_release.py",
+        "sha256": "57062ef601e242b9244c855a938dd7cba23fc3d29c56ae6ad8ef1c6049a92a62"
+      }
+    ]
+  },
+  "predecessor": {
+    "acceptedFreshAuthenticRecheck": {
+      "path": "neural/20bb-v49-fresh-authentic-recheck-result.json",
+      "sha256": "2bafbf24e6a1cee961690e9f9daceb821d18c550a607379b3b4a9bdcec4399cf"
+    },
+    "acceptedValueValidation": {
+      "path": "neural/runs/v49-resolver-reach/value-release-validation.json",
+      "sha256": "6859625a236d9a9a556bdd6b432a4953b360a610bf92f9fb123dffa234306a6a"
+    },
+    "rejectedMatchedEvaluator": {
+      "burnEveryPreviouslyReservedRoot": true,
+      "reason": "pointwise private-hand maximization was not a realizable range-consistent response",
+      "schema": "hu-matched-continual-resolver-execution-plan-v1"
+    },
+    "releaseFreeze": {
+      "path": "neural/20bb-v49-release-freeze.json",
+      "sha256": "aa3f4655ccab9a5575e08ea465973ea361b883f2ceee5d90b6ab36fe5f0532ab"
+    },
+    "selectedDiagnostic": {
+      "path": "neural/20bb-v49-dcfr-plus-delay200-cross-seed-pilot-400.json",
+      "sha256": "a0bcb7a725ca89c9de49f6b9ecb9a2c6376d1bbd9ec5ebad14c989af957c1302"
+    }
+  },
+  "protocol": {
+    "path": "neural/20bb-v49-range-response-v3-protocol.json",
+    "sha256": "ca5c4c0d4495fcec7c05d6a6ed74906c69f7e2505f253cc6fe8526d2370160dc"
+  },
+  "rootSelection": {
+    "algorithm": "sha256-ranked-suit-canonical-flops-v1",
+    "burnedRootFreezes": [
+      {
+        "path": "neural/20bb-v49-range-response-freeze.json",
+        "sha256": "087a83f0224cd6a6c5aab788328bb70b02d76b25057cd5119f02b3976c970b15"
+      }
+    ],
+    "excludedCorpus": {
+      "path": "neural/20bb-v49-resolver-reach-corpus.json",
+      "sha256": "c7467e2e3f6d09e023975e48931ab1ea60df3b542e36da721b63ddc459ad4405"
+    },
+    "excludedSuitIsomorphismKeyCount": 57,
+    "excludedSuitIsomorphismKeysSha256": "2b64ceaaa419a59d21bbe405a9af40b95d1871a3798e15b478368892f6cf5f1d",
+    "freezeBeforeAnyOutputExists": true,
+    "requireSuitIsomorphicDisjointness": true,
+    "roots": [
+      {
+        "board": "2c,9d,Kh",
+        "boardIndices": [
+          0,
+          29,
+          46
+        ],
+        "suitIsomorphismKey": [
+          0,
+          29,
+          46
+        ],
+        "texture": "unpairedRainbowDisconnected"
+      },
+      {
+        "board": "4c,5d,Qh",
+        "boardIndices": [
+          8,
+          13,
+          42
+        ],
+        "suitIsomorphismKey": [
+          8,
+          13,
+          42
+        ],
+        "texture": "unpairedRainbowDisconnected"
+      },
+      {
+        "board": "2c,4d,Ah",
+        "boardIndices": [
+          0,
+          9,
+          50
+        ],
+        "suitIsomorphismKey": [
+          0,
+          9,
+          50
+        ],
+        "texture": "unpairedRainbowConnected"
+      },
+      {
+        "board": "2c,3d,5h",
+        "boardIndices": [
+          0,
+          5,
+          14
+        ],
+        "suitIsomorphismKey": [
+          0,
+          5,
+          14
+        ],
+        "texture": "unpairedRainbowConnected"
+      },
+      {
+        "board": "5c,6d,Td",
+        "boardIndices": [
+          12,
+          17,
+          33
+        ],
+        "suitIsomorphismKey": [
+          12,
+          17,
+          33
+        ],
+        "texture": "unpairedTwoToneDisconnected"
+      },
+      {
+        "board": "9c,Td,Qd",
+        "boardIndices": [
+          28,
+          33,
+          41
+        ],
+        "suitIsomorphismKey": [
+          28,
+          33,
+          41
+        ],
+        "texture": "unpairedTwoToneConnected"
+      },
+      {
+        "board": "8c,Jd,Qd",
+        "boardIndices": [
+          24,
+          37,
+          41
+        ],
+        "suitIsomorphismKey": [
+          24,
+          37,
+          41
+        ],
+        "texture": "unpairedTwoToneConnected"
+      },
+      {
+        "board": "2c,9c,Ac",
+        "boardIndices": [
+          0,
+          28,
+          48
+        ],
+        "suitIsomorphismKey": [
+          0,
+          28,
+          48
+        ],
+        "texture": "unpairedMonotoneDisconnected"
+      },
+      {
+        "board": "Jc,Qc,Kc",
+        "boardIndices": [
+          36,
+          40,
+          44
+        ],
+        "suitIsomorphismKey": [
+          36,
+          40,
+          44
+        ],
+        "texture": "unpairedMonotoneConnected"
+      },
+      {
+        "board": "5c,Qd,Qh",
+        "boardIndices": [
+          12,
+          41,
+          42
+        ],
+        "suitIsomorphismKey": [
+          12,
+          41,
+          42
+        ],
+        "texture": "pairedRainbow"
+      },
+      {
+        "board": "6c,6d,Qc",
+        "boardIndices": [
+          16,
+          17,
+          40
+        ],
+        "suitIsomorphismKey": [
+          16,
+          17,
+          40
+        ],
+        "texture": "pairedTwoTone"
+      },
+      {
+        "board": "3c,3d,3h",
+        "boardIndices": [
+          4,
+          5,
+          6
+        ],
+        "suitIsomorphismKey": [
+          4,
+          5,
+          6
+        ],
+        "texture": "trips"
+      }
+    ],
+    "seed": 15701,
+    "selectedRootCount": 12,
+    "selectedRootsSha256": "0082d411118735d3420d57d4c59392da0648d6a690d335a8f6e3f7abde8ab944",
+    "textureCounts": {
+      "pairedRainbow": 1,
+      "pairedTwoTone": 1,
+      "trips": 1,
+      "unpairedMonotoneConnected": 1,
+      "unpairedMonotoneDisconnected": 1,
+      "unpairedRainbowConnected": 2,
+      "unpairedRainbowDisconnected": 2,
+      "unpairedTwoToneConnected": 2,
+      "unpairedTwoToneDisconnected": 1
+    }
+  },
+  "schema": "hu-range-response-release-freeze-v1",
+  "status": "frozen-before-fresh-range-response-evaluation"
+}
