@@ -295,6 +295,232 @@ def valid_root_state(
     )
 
 
+def validate_response_diagnostics(
+    payload: dict[str, Any], board: list[int]
+) -> tuple[bool, float]:
+    strategies = payload.get("final_response_strategies")
+    attribution = payload.get("information_set_attribution")
+    if (
+        not isinstance(strategies, list)
+        or len(strategies) != 2
+        or not isinstance(attribution, list)
+        or len(attribution) != 2
+    ):
+        return False, math.inf
+    maximum_probability_error = 0.0
+    for responder in range(2):
+        if (
+            not isinstance(strategies[responder], list)
+            or not strategies[responder]
+            or any(
+                not isinstance(strategy, dict)
+                or strategy.get("actor") != responder
+                for strategy in strategies[responder]
+            )
+            or not isinstance(attribution[responder], list)
+            or not attribution[responder]
+        ):
+            return False, math.inf
+        try:
+            valid, error = matched_v1.validate_strategy_probabilities(
+                strategies[responder], board
+            )
+        except ValueError:
+            return False, math.inf
+        maximum_probability_error = max(maximum_probability_error, error)
+        if not valid:
+            return False, maximum_probability_error
+        for node in attribution[responder]:
+            labels = node.get("action_labels") if isinstance(node, dict) else None
+            frozen = node.get("frozen_action_frequencies") if isinstance(node, dict) else None
+            response = (
+                node.get("response_action_frequencies")
+                if isinstance(node, dict)
+                else None
+            )
+            deltas = node.get("action_frequency_deltas") if isinstance(node, dict) else None
+            action_evs = node.get("conditional_action_ev_bb") if isinstance(node, dict) else None
+            numeric = [
+                node.get("node_reach_probability"),
+                node.get("reach_weighted_combo_policy_total_variation"),
+                node.get("reach_weighted_primary_action_agreement"),
+                node.get("maximum_combo_total_variation"),
+            ] if isinstance(node, dict) else []
+            ev_numeric = [
+                node.get("conditional_frozen_strategy_ev_bb"),
+                node.get("conditional_response_strategy_ev_bb"),
+                node.get("conditional_best_action_ev_bb"),
+                node.get("conditional_frozen_strategy_ev_loss_bb"),
+                node.get("conditional_response_strategy_ev_loss_bb"),
+            ] if isinstance(node, dict) else []
+            if (
+                not isinstance(node, dict)
+                or node.get("actor") != responder
+                or not isinstance(node.get("public_history"), list)
+                or not isinstance(labels, list)
+                or not labels
+                or not all(isinstance(label, str) for label in labels)
+                or not all(
+                    isinstance(vector, list)
+                    and len(vector) == len(labels)
+                    and all(
+                        not isinstance(value, bool)
+                        and isinstance(value, (int, float))
+                        and math.isfinite(float(value))
+                        for value in vector
+                    )
+                    for vector in (frozen, response, deltas, action_evs)
+                )
+                or len(numeric) != 4
+                or not all(
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                    for value in numeric
+                )
+                or not 0.0 < float(numeric[0]) <= 1.0 + 1e-9
+                or not all(0.0 <= float(value) <= 1.0 + 1e-9 for value in numeric[1:])
+                or abs(sum(float(value) for value in frozen) - 1.0) > 1e-5
+                or abs(sum(float(value) for value in response) - 1.0) > 1e-5
+                or any(
+                    abs(float(response[index]) - float(frozen[index]) - float(deltas[index]))
+                    > 1e-6
+                    for index in range(len(labels))
+                )
+                or len(ev_numeric) != 5
+                or not all(
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                    for value in ev_numeric
+                )
+                or float(ev_numeric[3]) < 0.0
+                or float(ev_numeric[4]) < 0.0
+                or abs(
+                    max(float(ev_numeric[2]) - float(ev_numeric[0]), 0.0)
+                    - float(ev_numeric[3])
+                )
+                > 1e-8
+                or abs(
+                    max(float(ev_numeric[2]) - float(ev_numeric[1]), 0.0)
+                    - float(ev_numeric[4])
+                )
+                > 1e-8
+                or any(
+                    float(ev_numeric[2]) + 1e-8 < float(value)
+                    for value in action_evs
+                )
+            ):
+                return False, maximum_probability_error
+            top_combos = node.get("top_combo_deviations")
+            if not isinstance(top_combos, list) or len(top_combos) > 20:
+                return False, maximum_probability_error
+            previous_combo_score = math.inf
+            for combo in top_combos:
+                combo_frozen = combo.get("frozen_probabilities") if isinstance(combo, dict) else None
+                combo_response = combo.get("response_probabilities") if isinstance(combo, dict) else None
+                combo_action_evs = combo.get("action_ev_bb") if isinstance(combo, dict) else None
+                cards = combo.get("cards") if isinstance(combo, dict) else None
+                card_names = combo.get("card_names") if isinstance(combo, dict) else None
+                combo_numeric = [
+                    combo.get("reach_probability"),
+                    combo.get("total_variation"),
+                    combo.get("frozen_strategy_ev_bb"),
+                    combo.get("response_strategy_ev_bb"),
+                    combo.get("best_action_ev_bb"),
+                    combo.get("frozen_ev_loss_bb"),
+                    combo.get("response_ev_loss_bb"),
+                ] if isinstance(combo, dict) else []
+                combo_score = (
+                    float(combo_numeric[0]) * float(combo_numeric[1])
+                    if len(combo_numeric) == 7
+                    and all(
+                        not isinstance(value, bool)
+                        and isinstance(value, (int, float))
+                        and math.isfinite(float(value))
+                        for value in combo_numeric[:2]
+                    )
+                    else math.inf
+                )
+                if (
+                    not isinstance(combo, dict)
+                    or isinstance(combo.get("combo_key"), bool)
+                    or not isinstance(combo.get("combo_key"), int)
+                    or int(combo["combo_key"]) < 0
+                    or not isinstance(cards, list)
+                    or len(cards) != 2
+                    or any(
+                        isinstance(card, bool)
+                        or not isinstance(card, int)
+                        or not 0 <= int(card) < 52
+                        for card in cards
+                    )
+                    or len(set(int(card) for card in cards)) != 2
+                    or any(int(card) in board for card in cards)
+                    or not isinstance(card_names, list)
+                    or len(card_names) != 2
+                    or not all(isinstance(name, str) and name for name in card_names)
+                    or not isinstance(combo.get("hand_class"), str)
+                    or not combo["hand_class"]
+                    or combo.get("frozen_primary_action") not in labels
+                    or combo.get("response_primary_action") not in labels
+                    or not all(
+                        isinstance(vector, list)
+                        and len(vector) == len(labels)
+                        and all(
+                            not isinstance(value, bool)
+                            and isinstance(value, (int, float))
+                            and math.isfinite(float(value))
+                            for value in vector
+                        )
+                        for vector in (combo_frozen, combo_response, combo_action_evs)
+                    )
+                    or len(combo_numeric) != 7
+                    or not all(
+                        not isinstance(value, bool)
+                        and isinstance(value, (int, float))
+                        and math.isfinite(float(value))
+                        for value in combo_numeric
+                    )
+                    or not 0.0 < float(combo_numeric[0]) <= 1.0 + 1e-9
+                    or not 0.0 < float(combo_numeric[1]) <= 1.0 + 1e-9
+                    or combo_score > previous_combo_score + 1e-15
+                    or abs(sum(float(value) for value in combo_frozen) - 1.0) > 1e-5
+                    or abs(sum(float(value) for value in combo_response) - 1.0) > 1e-5
+                    or abs(max(float(value) for value in combo_action_evs) - float(combo_numeric[4]))
+                    > 1e-8
+                    or abs(
+                        sum(
+                            float(probability) * float(value)
+                            for probability, value in zip(combo_frozen, combo_action_evs)
+                        )
+                        - float(combo_numeric[2])
+                    )
+                    > 1e-6
+                    or abs(
+                        sum(
+                            float(probability) * float(value)
+                            for probability, value in zip(combo_response, combo_action_evs)
+                        )
+                        - float(combo_numeric[3])
+                    )
+                    > 1e-6
+                    or abs(
+                        max(float(combo_numeric[4]) - float(combo_numeric[2]), 0.0)
+                        - float(combo_numeric[5])
+                    )
+                    > 1e-8
+                    or abs(
+                        max(float(combo_numeric[4]) - float(combo_numeric[3]), 0.0)
+                        - float(combo_numeric[6])
+                    )
+                    > 1e-8
+                ):
+                    return False, maximum_probability_error
+                previous_combo_score = combo_score
+    return True, maximum_probability_error
+
+
 def inspect_convergence(
     job: dict[str, Any], controls: dict[str, Any], gates: dict[str, Any], path: Path
 ) -> dict[str, Any]:
@@ -450,6 +676,9 @@ def inspect_response(
     checkpoints = payload.get("checkpoints", [])
     expected_iterations = [int(value) for value in controls["responseCheckpoints"]]
     iterations = [int(value.get("iterations", -1)) for value in checkpoints]
+    diagnostics_valid, response_probability_error = validate_response_diagnostics(
+        payload, job["root"]["boardIndices"]
+    )
     structural = (
         payload.get("schema") == RESPONSE_SCHEMA
         and payload.get("method") == response_method(controls)
@@ -481,6 +710,7 @@ def inspect_response(
         == int(controls["responseAveragingDelay"])
         and int(payload.get("threads", -1)) == int(controls["threads"])
         and iterations == expected_iterations
+        and diagnostics_valid
         and payload.get("validation", {}).get("status") == "diagnostic_only"
     )
     if not structural:
@@ -551,6 +781,9 @@ def inspect_response(
     checks = {
         "artifactProvenance": True,
         "strategyArtifactLink": True,
+        "responseDiagnostics": diagnostics_valid,
+        "responseStrategyProbabilitySums": response_probability_error
+        <= float(gates["maximumProbabilitySumError"]),
         "gainArithmetic": consistency_error <= 1e-12
         and all(gain >= 0.0 for gain in gains),
         "maximumResponseGain": maximum_gain
@@ -568,6 +801,7 @@ def inspect_response(
         "finalCheckpointIncreaseBbPerHand": final_increase,
         "maximumZeroSumResidualBb": max(maximum_residual, baseline_residual),
         "gainArithmeticErrorBb": consistency_error,
+        "maximumResponseStrategyProbabilitySumError": response_probability_error,
         "gates": checks,
         "accepted": all(checks.values()),
     }

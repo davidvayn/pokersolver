@@ -329,6 +329,16 @@ checkpoint strategy. A diagnostic response can select one with
 `--strategy-iterations N`, so iteration sweeps do not repeat earlier strategy
 training.
 
+The response artifact also retains each responder's final average policy and
+reach-weighted information-set attribution. Each attributed node records the
+frozen/response action mix, exact-card policy deviations, conditional action
+EVs, and both policies' loss to the best action under the pinned evaluation
+network. These values diagnose where an oracle-backed response is changing;
+they inherit that oracle's approximation error and remain diagnostic rather
+than independent action-EV or equilibrium evidence. The release validator
+checks their policy sums, card legality, ordering, finiteness, and EV-loss
+arithmetic before accepting the artifact's structural provenance.
+
 On the already-rejected root, a 400-round range-consistent response found
 `0.041081bb/hand` gain against the 100-round resolver strategy, with a final
 200-to-400 increase of `0.003322bb`. Increasing strategy training to 200 rounds

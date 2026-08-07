@@ -1525,6 +1525,47 @@ pub struct FlopRangeResponseCheckpoint {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopResponseComboDeviation {
+    pub combo_key: usize,
+    pub cards: [u8; 2],
+    pub card_names: [String; 2],
+    pub hand_class: String,
+    pub reach_probability: f64,
+    pub total_variation: f64,
+    pub frozen_primary_action: String,
+    pub response_primary_action: String,
+    pub frozen_probabilities: Vec<f32>,
+    pub response_probabilities: Vec<f32>,
+    pub action_ev_bb: Vec<f64>,
+    pub frozen_strategy_ev_bb: f64,
+    pub response_strategy_ev_bb: f64,
+    pub best_action_ev_bb: f64,
+    pub frozen_ev_loss_bb: f64,
+    pub response_ev_loss_bb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FlopResponseInformationSetAttribution {
+    pub public_history: Vec<String>,
+    pub actor: usize,
+    pub action_labels: Vec<String>,
+    pub node_reach_probability: f64,
+    pub frozen_action_frequencies: Vec<f64>,
+    pub response_action_frequencies: Vec<f64>,
+    pub action_frequency_deltas: Vec<f64>,
+    pub conditional_action_ev_bb: Vec<f64>,
+    pub conditional_frozen_strategy_ev_bb: f64,
+    pub conditional_response_strategy_ev_bb: f64,
+    pub conditional_best_action_ev_bb: f64,
+    pub conditional_frozen_strategy_ev_loss_bb: f64,
+    pub conditional_response_strategy_ev_loss_bb: f64,
+    pub reach_weighted_combo_policy_total_variation: f64,
+    pub reach_weighted_primary_action_agreement: f64,
+    pub maximum_combo_total_variation: f64,
+    pub top_combo_deviations: Vec<FlopResponseComboDeviation>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct FlopRangeResponseReport {
     pub schema: String,
     pub method: String,
@@ -1552,6 +1593,10 @@ pub struct FlopRangeResponseReport {
     pub response_dcfr: DcfrParameters,
     pub threads: usize,
     pub checkpoints: Vec<FlopRangeResponseCheckpoint>,
+    #[serde(default)]
+    pub final_response_strategies: [Vec<PublicBeliefStrategy>; 2],
+    #[serde(default)]
+    pub information_set_attribution: [Vec<FlopResponseInformationSetAttribution>; 2],
     pub validation: BlueprintValidation,
 }
 
@@ -1890,6 +1935,295 @@ impl FlopSolver {
             }
         }
         values
+    }
+
+    fn average_strategies(&self, actor_filter: Option<usize>) -> Vec<PublicBeliefStrategy> {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| actor_filter.is_none_or(|actor| node.actor == actor))
+            .map(|(history, node)| PublicBeliefStrategy {
+                public_history: history.clone(),
+                actor: node.actor,
+                action_labels: node.action_labels.clone(),
+                probabilities: node
+                    .average_strategy(&self.legal[node.actor])
+                    .into_iter()
+                    .map(|value| value as f32)
+                    .collect(),
+            })
+            .collect()
+    }
+
+    fn collect_average_profile_diagnostics(
+        &self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        reach_output: &mut BTreeMap<Vec<String>, [Vec<f64>; 2]>,
+        action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
+    ) -> [Vec<f64>; 2] {
+        if state.street == Street::Turn && state.terminal.is_none() {
+            return self.turn_leaf_values(&state, &reaches);
+        }
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches);
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let history = state.public_history.clone();
+        let actor = state.actor;
+        let node = self
+            .nodes
+            .get(&history)
+            .expect("response profile contains every public node");
+        let strategy = node.average_strategy(&self.legal[actor]);
+        reach_output.insert(history.clone(), reaches.clone());
+        let mut children = Vec::with_capacity(actions.len());
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * actions.len() + action_index];
+            }
+            children.push(self.collect_average_profile_diagnostics(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                reach_output,
+                action_value_output,
+            ));
+        }
+        action_value_output.insert(
+            history,
+            children.iter().map(|child| child[actor].clone()).collect(),
+        );
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            for action in 0..actions.len() {
+                values[actor][combo] +=
+                    strategy[combo * actions.len() + action] * children[action][actor][combo];
+                values[opponent][combo] += children[action][opponent][combo];
+            }
+        }
+        values
+    }
+
+    fn response_information_set_attribution(
+        &self,
+        responder: usize,
+        frozen_strategies: &[PublicBeliefStrategy],
+    ) -> Result<Vec<FlopResponseInformationSetAttribution>, String> {
+        let frozen = frozen_strategies
+            .iter()
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let root_reaches = self.config.state.ranges.clone();
+        let root_joint = joint_compatibility_mass(&root_reaches);
+        if root_joint <= EPSILON {
+            return Err("response attribution root ranges have no compatible mass".to_owned());
+        }
+        let mut reaches = BTreeMap::new();
+        let mut action_values = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            root_reaches,
+            &mut reaches,
+            &mut action_values,
+        );
+        let combos = all_combos();
+        let mut attribution = Vec::new();
+        for (history, node) in &self.nodes {
+            if node.actor != responder {
+                continue;
+            }
+            let frozen_strategy = frozen
+                .get(history)
+                .ok_or_else(|| "response attribution is missing the frozen strategy".to_owned())?;
+            if frozen_strategy.actor != responder
+                || frozen_strategy.action_labels != node.action_labels
+                || frozen_strategy.probabilities.len() != COMBO_COUNT * node.action_labels.len()
+            {
+                return Err("response attribution frozen strategy is incompatible".to_owned());
+            }
+            let node_reaches = reaches
+                .get(history)
+                .ok_or_else(|| "response attribution is missing public reach".to_owned())?;
+            let response_probabilities = node.average_strategy(&self.legal[responder]);
+            let node_action_values = action_values
+                .get(history)
+                .ok_or_else(|| "response attribution is missing action values".to_owned())?;
+            let action_count = node.action_labels.len();
+            if node_action_values.len() != action_count
+                || node_action_values
+                    .iter()
+                    .any(|values| values.len() != COMBO_COUNT)
+            {
+                return Err("response attribution action values are incompatible".to_owned());
+            }
+            let mut combo_joint_mass = vec![0.0; COMBO_COUNT];
+            let mut node_joint_mass = 0.0;
+            for combo in 0..COMBO_COUNT {
+                let mass = node_reaches[responder][combo]
+                    * compatible_mass_from_conflicts(
+                        &node_reaches[1 - responder],
+                        &self.conflicts,
+                        combo,
+                    );
+                combo_joint_mass[combo] = mass;
+                node_joint_mass += mass;
+            }
+            if node_joint_mass <= EPSILON {
+                continue;
+            }
+            let mut frozen_action_frequencies = vec![0.0; action_count];
+            let mut response_action_frequencies = vec![0.0; action_count];
+            let mut conditional_action_ev_bb = vec![0.0; action_count];
+            let mut conditional_frozen_strategy_ev_bb = 0.0;
+            let mut conditional_response_strategy_ev_bb = 0.0;
+            let mut conditional_best_action_ev_bb = 0.0;
+            let mut reach_weighted_tv = 0.0;
+            let mut primary_agreement_mass = 0.0;
+            let mut maximum_combo_total_variation: f64 = 0.0;
+            let mut top_combo_deviations = Vec::new();
+            for combo in 0..COMBO_COUNT {
+                let mass = combo_joint_mass[combo];
+                // Node reach can be extremely small while many exact combos
+                // still carry valid positive conditional mass. Dropping each
+                // such combo against a global epsilon can discard most of a
+                // rare node and leave its attributed action frequencies
+                // unnormalised. Attribution is an exact post-training pass, so
+                // retain every representable positive mass.
+                if mass <= 0.0 {
+                    continue;
+                }
+                let offset = combo * action_count;
+                let frozen_row = &frozen_strategy.probabilities[offset..offset + action_count];
+                let response_row = &response_probabilities[offset..offset + action_count];
+                let weight = mass / node_joint_mass;
+                let opponent_mass = compatible_mass_from_conflicts(
+                    &node_reaches[1 - responder],
+                    &self.conflicts,
+                    combo,
+                );
+                if opponent_mass <= 0.0 {
+                    continue;
+                }
+                let combo_action_ev_bb = node_action_values
+                    .iter()
+                    .map(|values| values[combo] / opponent_mass)
+                    .collect::<Vec<_>>();
+                if combo_action_ev_bb.iter().any(|value| !value.is_finite()) {
+                    return Err("response attribution produced a non-finite action EV".to_owned());
+                }
+                let frozen_strategy_ev_bb = frozen_row
+                    .iter()
+                    .zip(&combo_action_ev_bb)
+                    .map(|(probability, value)| *probability as f64 * value)
+                    .sum::<f64>();
+                let response_strategy_ev_bb = response_row
+                    .iter()
+                    .zip(&combo_action_ev_bb)
+                    .map(|(probability, value)| probability * value)
+                    .sum::<f64>();
+                let best_action_ev_bb = combo_action_ev_bb
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let mut total_variation = 0.0;
+                for action in 0..action_count {
+                    frozen_action_frequencies[action] += weight * frozen_row[action] as f64;
+                    response_action_frequencies[action] += weight * response_row[action];
+                    conditional_action_ev_bb[action] += weight * combo_action_ev_bb[action];
+                    total_variation +=
+                        (frozen_row[action] as f64 - response_row[action]).abs() / 2.0;
+                }
+                conditional_frozen_strategy_ev_bb += weight * frozen_strategy_ev_bb;
+                conditional_response_strategy_ev_bb += weight * response_strategy_ev_bb;
+                conditional_best_action_ev_bb += weight * best_action_ev_bb;
+                total_variation = total_variation.clamp(0.0, 1.0);
+                reach_weighted_tv += weight * total_variation;
+                maximum_combo_total_variation = maximum_combo_total_variation.max(total_variation);
+                let frozen_primary = frozen_row
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .map(|(index, _)| index)
+                    .expect("response node has actions");
+                let response_primary = response_row
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .map(|(index, _)| index)
+                    .expect("response node has actions");
+                if frozen_primary == response_primary {
+                    primary_agreement_mass += weight;
+                }
+                if total_variation > EPSILON {
+                    let identity = crate::cards::ComboIdentity::from(combos[combo]);
+                    top_combo_deviations.push(FlopResponseComboDeviation {
+                        combo_key: combo,
+                        cards: identity.cards,
+                        card_names: identity.card_names,
+                        hand_class: identity.label,
+                        reach_probability: mass / root_joint,
+                        total_variation,
+                        frozen_primary_action: node.action_labels[frozen_primary].clone(),
+                        response_primary_action: node.action_labels[response_primary].clone(),
+                        frozen_probabilities: frozen_row.to_vec(),
+                        response_probabilities: response_row
+                            .iter()
+                            .map(|value| *value as f32)
+                            .collect(),
+                        action_ev_bb: combo_action_ev_bb,
+                        frozen_strategy_ev_bb,
+                        response_strategy_ev_bb,
+                        best_action_ev_bb,
+                        frozen_ev_loss_bb: (best_action_ev_bb - frozen_strategy_ev_bb).max(0.0),
+                        response_ev_loss_bb: (best_action_ev_bb - response_strategy_ev_bb).max(0.0),
+                    });
+                }
+            }
+            top_combo_deviations.sort_by(|left, right| {
+                (right.reach_probability * right.total_variation)
+                    .total_cmp(&(left.reach_probability * left.total_variation))
+                    .then_with(|| left.combo_key.cmp(&right.combo_key))
+            });
+            top_combo_deviations.truncate(20);
+            let action_frequency_deltas = response_action_frequencies
+                .iter()
+                .zip(&frozen_action_frequencies)
+                .map(|(response, frozen)| response - frozen)
+                .collect();
+            attribution.push(FlopResponseInformationSetAttribution {
+                public_history: history.clone(),
+                actor: responder,
+                action_labels: node.action_labels.clone(),
+                node_reach_probability: node_joint_mass / root_joint,
+                frozen_action_frequencies,
+                response_action_frequencies,
+                action_frequency_deltas,
+                conditional_action_ev_bb,
+                conditional_frozen_strategy_ev_bb,
+                conditional_response_strategy_ev_bb,
+                conditional_best_action_ev_bb,
+                conditional_frozen_strategy_ev_loss_bb: (conditional_best_action_ev_bb
+                    - conditional_frozen_strategy_ev_bb)
+                    .max(0.0),
+                conditional_response_strategy_ev_loss_bb: (conditional_best_action_ev_bb
+                    - conditional_response_strategy_ev_bb)
+                    .max(0.0),
+                reach_weighted_combo_policy_total_variation: reach_weighted_tv.clamp(0.0, 1.0),
+                reach_weighted_primary_action_agreement: primary_agreement_mass.clamp(0.0, 1.0),
+                maximum_combo_total_variation: maximum_combo_total_variation.clamp(0.0, 1.0),
+                top_combo_deviations,
+            });
+        }
+        attribution.sort_by(|left, right| {
+            (right.node_reach_probability * right.reach_weighted_combo_policy_total_variation)
+                .total_cmp(
+                    &(left.node_reach_probability
+                        * left.reach_weighted_combo_policy_total_variation),
+                )
+                .then_with(|| left.public_history.cmp(&right.public_history))
+        });
+        Ok(attribution)
     }
 
     fn projected_profile_values(&self) -> ([f64; 2], f64) {
@@ -2273,20 +2607,7 @@ impl FlopSolver {
         let unresolved_best_p1 = aggregate(&unresolved_br1[1], 1);
         let unresolved_exploitability =
             ((unresolved_best_p0 - unresolved_p0) + (unresolved_best_p1 - unresolved_p1)) / 2.0;
-        let strategies = self
-            .nodes
-            .iter()
-            .map(|(history, node)| PublicBeliefStrategy {
-                public_history: history.clone(),
-                actor: node.actor,
-                action_labels: node.action_labels.clone(),
-                probabilities: node
-                    .average_strategy(&self.legal[node.actor])
-                    .into_iter()
-                    .map(|value| value as f32)
-                    .collect(),
-            })
-            .collect::<Vec<_>>();
+        let strategies = self.average_strategies(None);
         let opponent_compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
             (0..COMBO_COUNT)
                 .map(|combo| {
@@ -2869,6 +3190,10 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         std::array::from_fn(|_| Vec::with_capacity(checkpoints.len()));
     let mut response_residuals: [Vec<f64>; 2] =
         std::array::from_fn(|_| Vec::with_capacity(checkpoints.len()));
+    let mut final_response_strategies: [Vec<PublicBeliefStrategy>; 2] =
+        std::array::from_fn(|_| Vec::new());
+    let mut information_set_attribution: [Vec<FlopResponseInformationSetAttribution>; 2] =
+        std::array::from_fn(|_| Vec::new());
     for responder in 0..2 {
         let mut solver = base.clone();
         solver.reset_player_for_range_response(responder);
@@ -2890,6 +3215,9 @@ pub fn evaluate_frozen_flop_range_response_convergence(
             response_values[responder].push(profile[responder].max(baseline[responder]));
             response_residuals[responder].push(residual);
         }
+        final_response_strategies[responder] = solver.average_strategies(Some(responder));
+        information_set_attribution[responder] =
+            solver.response_information_set_attribution(responder, &frozen.strategies)?;
     }
     let evidence = checkpoints
         .iter()
@@ -2949,6 +3277,8 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         response_dcfr: base.config.game.dcfr.clone(),
         threads,
         checkpoints: evidence,
+        final_response_strategies,
+        information_set_attribution,
         validation: BlueprintValidation {
             status: "diagnostic_only".to_owned(),
             reasons: vec![
@@ -7653,6 +7983,75 @@ mod tests {
                 && checkpoint.response_gain_p1_bb >= 0.0
                 && checkpoint.range_consistent_response_gain_bb_per_hand >= 0.0
         }));
+        for responder in 0..2 {
+            assert!(!report.final_response_strategies[responder].is_empty());
+            assert!(report.final_response_strategies[responder]
+                .iter()
+                .all(|strategy| strategy.actor == responder));
+            assert!(!report.information_set_attribution[responder].is_empty());
+            assert!(report.information_set_attribution[responder]
+                .iter()
+                .all(|node| {
+                    node.actor == responder
+                        && node.node_reach_probability > 0.0
+                        && node.node_reach_probability <= 1.0 + EPSILON
+                        && (0.0..=1.0).contains(&node.reach_weighted_combo_policy_total_variation)
+                        && (0.0..=1.0).contains(&node.reach_weighted_primary_action_agreement)
+                        && (0.0..=1.0).contains(&node.maximum_combo_total_variation)
+                        && (node.frozen_action_frequencies.iter().sum::<f64>() - 1.0).abs() < 1e-6
+                        && (node.response_action_frequencies.iter().sum::<f64>() - 1.0).abs() < 1e-6
+                        && node.action_frequency_deltas.iter().sum::<f64>().abs() < 1e-6
+                        && node.conditional_action_ev_bb.len() == node.action_labels.len()
+                        && node
+                            .conditional_action_ev_bb
+                            .iter()
+                            .all(|value| value.is_finite())
+                        && node.conditional_frozen_strategy_ev_bb.is_finite()
+                        && node.conditional_response_strategy_ev_bb.is_finite()
+                        && node.conditional_best_action_ev_bb.is_finite()
+                        && node.conditional_frozen_strategy_ev_loss_bb >= 0.0
+                        && node.conditional_response_strategy_ev_loss_bb >= 0.0
+                        && ((node.conditional_best_action_ev_bb
+                            - node.conditional_frozen_strategy_ev_bb)
+                            .max(0.0)
+                            - node.conditional_frozen_strategy_ev_loss_bb)
+                            .abs()
+                            < 1e-9
+                        && ((node.conditional_best_action_ev_bb
+                            - node.conditional_response_strategy_ev_bb)
+                            .max(0.0)
+                            - node.conditional_response_strategy_ev_loss_bb)
+                            .abs()
+                            < 1e-9
+                        && node.top_combo_deviations.iter().all(|combo| {
+                            combo.action_ev_bb.len() == node.action_labels.len()
+                                && combo.action_ev_bb.iter().all(|value| value.is_finite())
+                                && combo.frozen_strategy_ev_bb.is_finite()
+                                && combo.response_strategy_ev_bb.is_finite()
+                                && combo.best_action_ev_bb.is_finite()
+                                && combo.frozen_ev_loss_bb >= 0.0
+                                && combo.response_ev_loss_bb >= 0.0
+                                && ((combo.best_action_ev_bb - combo.frozen_strategy_ev_bb)
+                                    .max(0.0)
+                                    - combo.frozen_ev_loss_bb)
+                                    .abs()
+                                    < 1e-9
+                                && ((combo.best_action_ev_bb - combo.response_strategy_ev_bb)
+                                    .max(0.0)
+                                    - combo.response_ev_loss_bb)
+                                    .abs()
+                                    < 1e-9
+                        })
+                }));
+            assert!(report.information_set_attribution[responder]
+                .windows(2)
+                .all(|pair| {
+                    pair[0].node_reach_probability
+                        * pair[0].reach_weighted_combo_policy_total_variation
+                        >= pair[1].node_reach_probability
+                            * pair[1].reach_weighted_combo_policy_total_variation
+                }));
+        }
         assert!(report
             .interpretation
             .contains("not an exploitability upper bound"));
@@ -7669,6 +8068,67 @@ mod tests {
         .unwrap();
         assert!(strengthened.response_regret_matching_plus);
         assert!(strengthened.method.ends_with("_regret_matching_plus"));
+
+        let mut rare_frozen = frozen.clone();
+        let root_strategy = rare_frozen
+            .strategies
+            .iter_mut()
+            .find(|strategy| {
+                strategy.actor == 1
+                    && strategy.public_history == ["public_belief:flop_start".to_owned()]
+            })
+            .expect("frozen strategy has the root node");
+        let check = root_strategy
+            .action_labels
+            .iter()
+            .position(|label| label == "check")
+            .expect("flop root can check");
+        let fallback = (0..root_strategy.action_labels.len())
+            .find(|action| *action != check)
+            .expect("flop root has another action");
+        for row in root_strategy
+            .probabilities
+            .chunks_mut(root_strategy.action_labels.len())
+        {
+            if row.iter().sum::<f32>() <= 0.0 {
+                continue;
+            }
+            row.fill(0.0);
+            row[check] = 1e-8;
+            row[fallback] = 1.0;
+        }
+        let rare_report = evaluate_frozen_flop_range_response_convergence(
+            game.clone(),
+            &rare_frozen,
+            evaluation_network.clone(),
+            &[2],
+            0,
+            false,
+            1,
+        )
+        .unwrap();
+        let rare_node = rare_report.information_set_attribution[0]
+            .iter()
+            .find(|node| {
+                node.public_history
+                    == [
+                        "public_belief:flop_start".to_owned(),
+                        "Flop:p1:check".to_owned(),
+                    ]
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "positive rare branch remains attributed: {:?}",
+                    rare_report.information_set_attribution[0]
+                        .iter()
+                        .map(|node| (&node.public_history, node.node_reach_probability))
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert!(rare_node.node_reach_probability < 1e-7);
+        assert!((rare_node.frozen_action_frequencies.iter().sum::<f64>() - 1.0).abs() < 1e-6);
+        assert!((rare_node.response_action_frequencies.iter().sum::<f64>() - 1.0).abs() < 1e-6);
+
         assert!(evaluate_frozen_flop_range_response_convergence(
             game,
             &frozen,

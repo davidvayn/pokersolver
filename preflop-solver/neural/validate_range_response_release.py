@@ -56,6 +56,14 @@ def summarize(
             entry["response"]["gates"]["strategyArtifactLink"]
             for entry in evidence
         ),
+        "validResponseDiagnostics": all(
+            entry["response"]["gates"]["responseDiagnostics"]
+            for entry in evidence
+        ),
+        "validResponseStrategyProbabilitySums": all(
+            entry["response"]["gates"]["responseStrategyProbabilitySums"]
+            for entry in evidence
+        ),
         "validProbabilitySums": all(
             entry["convergence"]["accepted"] for entry in evidence
         ),
@@ -108,7 +116,10 @@ def summarize(
             entry["response"]["maximumZeroSumResidualBb"] for entry in evidence
         ),
         "maximumObservedProbabilitySumError": max(
-            entry["convergence"]["maximumProbabilitySumError"]
+            max(
+                entry["convergence"]["maximumProbabilitySumError"],
+                entry["response"]["maximumResponseStrategyProbabilitySumError"],
+            )
             for entry in evidence
         ),
         "gates": gates,

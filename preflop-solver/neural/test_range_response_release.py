@@ -188,6 +188,54 @@ class RangeResponseReleaseTests(unittest.TestCase):
         strategy = job["strategyModel"]
         evaluation = job["evaluationModel"]
         gains = [0.02, 0.025, final_gain]
+        response_strategies = []
+        response_attribution = []
+        for responder in range(2):
+            response_strategy = copy.deepcopy(self.strategies()[0])
+            response_strategy["actor"] = responder
+            response_strategies.append([response_strategy])
+            response_attribution.append(
+                [
+                    {
+                        "public_history": ["public_belief:flop_start"],
+                        "actor": responder,
+                        "action_labels": ["check", "bet:0.5pot"],
+                        "node_reach_probability": 1.0,
+                        "frozen_action_frequencies": [0.25, 0.75],
+                        "response_action_frequencies": [0.25, 0.75],
+                        "action_frequency_deltas": [0.0, 0.0],
+                        "conditional_action_ev_bb": [0.1, 0.2],
+                        "conditional_frozen_strategy_ev_bb": 0.175,
+                        "conditional_response_strategy_ev_bb": 0.175,
+                        "conditional_best_action_ev_bb": 0.2,
+                        "conditional_frozen_strategy_ev_loss_bb": 0.025,
+                        "conditional_response_strategy_ev_loss_bb": 0.025,
+                        "reach_weighted_combo_policy_total_variation": 0.0,
+                        "reach_weighted_primary_action_agreement": 1.0,
+                        "maximum_combo_total_variation": 0.0,
+                        "top_combo_deviations": [
+                            {
+                                "combo_key": 0,
+                                "cards": [2, 3],
+                                "card_names": ["2h", "2s"],
+                                "hand_class": "22",
+                                "reach_probability": 0.01,
+                                "total_variation": 0.25,
+                                "frozen_primary_action": "bet:0.5pot",
+                                "response_primary_action": "check",
+                                "frozen_probabilities": [0.25, 0.75],
+                                "response_probabilities": [0.5, 0.5],
+                                "action_ev_bb": [0.1, 0.2],
+                                "frozen_strategy_ev_bb": 0.175,
+                                "response_strategy_ev_bb": 0.15,
+                                "best_action_ev_bb": 0.2,
+                                "frozen_ev_loss_bb": 0.025,
+                                "response_ev_loss_bb": 0.05,
+                            }
+                        ],
+                    }
+                ]
+            )
         return {
             "schema": runner.RESPONSE_SCHEMA,
             "method": runner.RESPONSE_METHOD,
@@ -229,6 +277,8 @@ class RangeResponseReleaseTests(unittest.TestCase):
                 }
                 for iteration, gain in zip((100, 200, 400), gains)
             ],
+            "final_response_strategies": response_strategies,
+            "information_set_attribution": response_attribution,
             "validation": {"status": "diagnostic_only"},
         }
 
@@ -427,6 +477,30 @@ class RangeResponseReleaseTests(unittest.TestCase):
             self.assertTrue(convergence["accepted"])
             self.assertTrue(response["accepted"])
             self.assertAlmostEqual(response["finalCheckpointIncreaseBbPerHand"], 0.003)
+            self.assertTrue(response["gates"]["responseDiagnostics"])
+            self.assertLessEqual(
+                response["maximumResponseStrategyProbabilitySumError"], 1e-5
+            )
+
+            malformed_response = self.response_payload()
+            malformed_response["information_set_attribution"][0][0][
+                "action_frequency_deltas"
+            ][0] = 0.1
+            response_path.write_text(json.dumps(malformed_response))
+            with self.assertRaisesRegex(ValueError, "provenance/state"):
+                runner.inspect_response(
+                    self.job(), self.controls(), self.gates(), convergence, response_path
+                )
+
+            malformed_response = self.response_payload()
+            malformed_response["information_set_attribution"][0][0][
+                "conditional_best_action_ev_bb"
+            ] = 0.05
+            response_path.write_text(json.dumps(malformed_response))
+            with self.assertRaisesRegex(ValueError, "provenance/state"):
+                runner.inspect_response(
+                    self.job(), self.controls(), self.gates(), convergence, response_path
+                )
 
             convergence_payload["final_solution"]["strategies"][0][
                 "probabilities"
@@ -458,9 +532,12 @@ class RangeResponseReleaseTests(unittest.TestCase):
             "maximumResponseGainBbPerHand": 0.04,
             "finalCheckpointIncreaseBbPerHand": 0.003,
             "maximumZeroSumResidualBb": 1e-12,
+            "maximumResponseStrategyProbabilitySumError": 1e-8,
             "gates": {
                 "artifactProvenance": True,
                 "strategyArtifactLink": True,
+                "responseDiagnostics": True,
+                "responseStrategyProbabilitySums": True,
                 "gainArithmetic": True,
                 "maximumResponseGain": True,
                 "finalCheckpointIncrease": True,
