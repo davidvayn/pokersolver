@@ -1,0 +1,82 @@
+{
+  "schema": "hu-flop-dcfr-plus-pilot-result-v2",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "selected-for-fresh-paired-evaluation",
+  "activationAllowed": false,
+  "configurationSelectedForFreshRoots": true,
+  "implementation": {
+    "commit": "447af20cd549405208edc094fe667316d39af4bc",
+    "strategyIterations": 400,
+    "strategyAveragingDelay": 200,
+    "strategyRegretMatchingPlus": true,
+    "responseCheckpoints": [100, 200, 400],
+    "responseAveragingDelay": 10,
+    "responseRegretMatchingPlus": true,
+    "dcfr": {
+      "positiveRegretExponent": 1.5,
+      "negativeRegretExponent": 0.0,
+      "strategyExponent": 2.0
+    },
+    "threads": 10
+  },
+  "root": {
+    "board": "8c,Qd,Kh",
+    "texture": "unpairedRainbowDisconnected",
+    "strategySeed": 15301,
+    "evaluationSeed": 15302,
+    "evaluationHasDistinctTrainingIdentity": true,
+    "releaseEvidence": false,
+    "releaseRootSetBurned": true
+  },
+  "artifacts": {
+    "strategyConvergence": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay200-iter800-convergence-v3.json",
+      "sha256": "b62dd6f5dbb96d292d9c3acbeb7bb1c91139397557214832ec08ae832a9a903d",
+      "bytes": 5126542,
+      "frozenStrategySha256": "391caf6518ab41dbbcc88dd7c0b931995f133ed1a831a2c49b111b67eae84b3f"
+    },
+    "rangeResponse": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-delay200-iter400-response400-plus-attribution-ev-cross-seed15302-v3.json",
+      "sha256": "da2085a72ccb868aecc7b2885d2a43bec53ca660e6fabc06714c0e2a744cab74",
+      "bytes": 1787756,
+      "maximumResponseStrategyProbabilitySumError": 7.400000012758312e-8
+    }
+  },
+  "measurements": {
+    "responseGainBbPerHandByCheckpoint": {
+      "100": 0.04244394396458351,
+      "200": 0.047191171325454556,
+      "400": 0.04918087247750587
+    },
+    "maximumResponseGainBbPerHand": 0.04918087247750587,
+    "maximumAllowedResponseGainBbPerHand": 0.05,
+    "headroomBelowResponseGainGateBbPerHand": 0.0008191275224941329,
+    "finalCheckpointIncreaseBbPerHand": 0.0019897011520513125,
+    "maximumAllowedFinalCheckpointIncreaseBbPerHand": 0.005,
+    "headroomBelowConvergenceGateBbPerHand": 0.0030102988479486876,
+    "maximumZeroSumResidualBb": 5.3013149425851225e-15
+  },
+  "gates": {
+    "maximumRangeConsistentResponseGain": true,
+    "finalCheckpointConvergence": true,
+    "zeroSumResidual": true,
+    "responseStrategyProbabilitySums": true,
+    "strategyArtifactLink": true,
+    "independentEvaluationIdentity": true
+  },
+  "reportingIntegrity": {
+    "solverMetricsAffected": false,
+    "originalArtifactAttributionAccepted": false,
+    "issue": "The post-training attribution pass discarded individually sub-epsilon positive combo masses at a 7.01e-7-reach node, so that node's displayed aggregate action frequencies were incomplete.",
+    "fix": "The reporter now retains every representable positive combo and opponent mass.",
+    "regressionTest": "flop_range_response_keeps_the_opponent_frozen_and_ranges_consistent includes a positive rare branch whose per-combo masses are below the former global cutoff.",
+    "verifiedSuites": {
+      "pythonUnitTests": 177,
+      "rustUnitTests": 95,
+      "rustCliTests": 3
+    },
+    "freshArtifactPolicy": "Every fresh paired artifact must pass response diagnostics and probability validation under the corrected committed binary."
+  },
+  "nextStep": "Freeze the exact selected controls on newly selected roots disjoint from all training, reserved, legacy, and burned response roots; run both independent model directions and reject on any declared gate failure.",
+  "interpretation": "The frozen 400-round resolver passed the independent learned-response gain and convergence limits on the burned diagnostic root. This selects a configuration for fresh paired evaluation only; it is not an exploitability upper bound and cannot activate the model."
+}
