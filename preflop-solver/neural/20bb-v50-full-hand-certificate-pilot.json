@@ -1,0 +1,74 @@
+{
+  "schema": "hu-routed-full-hand-causal-certificate-pilot-v1",
+  "modelVersion": "hu-20bb-v50-v27-preflop-v26-postflop-routed-candidate",
+  "status": "rejected-not-activated",
+  "activationAllowed": false,
+  "candidateFreeze": {
+    "path": "neural/20bb-v50-full-hand-candidate-freeze.json",
+    "sha256": "64597ac3189b9bae7757750aa345434ab38f23f4797828b83e0066f89443ebbb"
+  },
+  "evaluation": {
+    "schema": "hu-neural-causal-sample-game-upper-bound-v1",
+    "method": "nested_public_chance_and_hidden_hand_sample_game_best_response_with_empirical_bernstein_ucb",
+    "deals": 8,
+    "seed": 14602,
+    "confidence": 0.99,
+    "threads": 8,
+    "publicBranchesPerStreet": 2,
+    "opponentSamplesPerRunout": 4,
+    "scenariosPerDeal": 32,
+    "exactBettingTreeNodesPerCandidate": 782896
+  },
+  "candidates": [
+    {
+      "candidateSeed": 7601,
+      "networkSha256": "c5dba74744d817423c94803c2a1c92dc8a3acacd3b5f58094c700704c0fcbf92",
+      "artifact": {
+        "path": "neural/runs/v50-full-hand/causal-certificate-seed7601-8x2x4.json",
+        "sha256": "df5e08cb8f854abb4a9f37fb565ba9bd58b5df0d63a3f9ea3249c16f9e44a3a9"
+      },
+      "sampleMeanRelaxedExploitabilityBbPerHand": 2.2582742976142156,
+      "sampleStandardErrorBb": 0.5614914642673343,
+      "empiricalBernsteinMarginBb": 37.149909328363655,
+      "exploitabilityUpperBoundBb": 20.0,
+      "relativeRelaxedMeanImprovementFromV26": 0.09314323353461676
+    },
+    {
+      "candidateSeed": 7602,
+      "networkSha256": "bf6a303459f2c853baaef8b62045119ba1a58332792c8e29f0fff6a8cfb0922f",
+      "artifact": {
+        "path": "neural/runs/v50-full-hand/causal-certificate-seed7602-8x2x4.json",
+        "sha256": "c46ee47352e2f9af3a1405b95366a821a1b35fab304d5e32d9c21fc9e45f3e7f"
+      },
+      "sampleMeanRelaxedExploitabilityBbPerHand": 2.205688355300275,
+      "sampleStandardErrorBb": 0.5945370242749696,
+      "empiricalBernsteinMarginBb": 37.25748079708118,
+      "exploitabilityUpperBoundBb": 20.0,
+      "relativeRelaxedMeanImprovementFromV26": 0.11426020664046845
+    }
+  ],
+  "controlledBaseline": {
+    "model": "v26 routed seed 5101",
+    "artifact": {
+      "path": "neural/runs/v45-complete-turn/causal-certificate-v26-pilot-8x2x4.json",
+      "sha256": "a7510531a77b967183d004bad0394e3884712bff28814c5f36d80e6aaa6bf2d4"
+    },
+    "sampleMeanRelaxedExploitabilityBbPerHand": 2.490221588593527,
+    "exploitabilityUpperBoundBb": 20.0
+  },
+  "gates": {
+    "candidateArtifactsMatchFreeze": true,
+    "pairedChanceDesignMatches": true,
+    "causalInformationConstraint": true,
+    "maximumOneSided99PercentExploitabilityUpperBound": false,
+    "eligibleForActivation": false
+  },
+  "diagnosis": {
+    "selectedDiagnosticCandidateSeed": 7602,
+    "outerSamplingAloneCanPassCurrentGate": false,
+    "reason": "At fixed inner sample-game controls, increasing only independent outer deals shrinks the confidence margin but converges toward a relaxed empirical optimum above 2bb/hand, not the required 0.10bb/hand upper bound.",
+    "directPolicyGap": "The frozen full-hand action policy still uses the v26 postflop probability student; the accepted V49 continuation networks improve resolver evaluation but are not represented in the served postflop action policy.",
+    "nextCorrection": "Generate authentic range-conditioned postflop action targets with the V49-backed resolver, distill a paired postflop policy, route it with the frozen v27 preflop students, and rerun this same causal certificate before increasing outer confidence samples."
+  },
+  "interpretation": "This controlled pilot fails to certify either frozen full-hand candidate and therefore keeps activation disabled. Its relaxed sample-game mean is an upper-bound diagnostic with finite inner-sample optimization bias, not a claim that true exploitability equals the reported value."
+}
