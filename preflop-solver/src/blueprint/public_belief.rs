@@ -1440,6 +1440,8 @@ pub struct FlopSolution {
     pub evaluation_value_network_source_dataset_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_source_policy_sha256: Option<String>,
+    #[serde(default)]
+    pub evaluation_has_distinct_training_identity: bool,
     pub state: PublicBeliefState,
     pub iterations: u64,
     #[serde(default)]
@@ -1477,6 +1479,8 @@ pub struct FlopConvergenceReport {
     pub evaluation_value_network_sha256: Option<String>,
     pub evaluation_value_network_source_dataset_sha256: Option<String>,
     pub evaluation_value_network_source_policy_sha256: Option<String>,
+    #[serde(default)]
+    pub evaluation_has_distinct_training_identity: bool,
     pub state: PublicBeliefState,
     pub averaging_delay: u64,
     #[serde(default)]
@@ -1536,6 +1540,8 @@ pub struct FlopRangeResponseReport {
     pub evaluation_value_network_sha256: Option<String>,
     pub evaluation_value_network_source_dataset_sha256: Option<String>,
     pub evaluation_value_network_source_policy_sha256: Option<String>,
+    #[serde(default)]
+    pub evaluation_has_distinct_training_identity: bool,
     pub state: PublicBeliefState,
     pub baseline_profile_value_p0_bb: f64,
     pub baseline_profile_value_p1_bb: f64,
@@ -2367,6 +2373,7 @@ impl FlopSolver {
             evaluation_value_network_sha256: None,
             evaluation_value_network_source_dataset_sha256: None,
             evaluation_value_network_source_policy_sha256: None,
+            evaluation_has_distinct_training_identity: false,
             state: self.config.state,
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
@@ -2610,13 +2617,16 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
 }
 
 /// Train the resolver with one frozen leaf model and score its frozen average
-/// strategy with another. This prevents a candidate from serving as both the
-/// policy optimizer and the supposedly independent downstream evaluator.
+/// strategy with another. The artifact records whether the two models have
+/// distinct training identities; release callers must require that flag.
 pub fn solve_flop_cross_evaluated(
     config: FlopResolveConfig,
     evaluation_value_network: PublicValueNetwork,
 ) -> Result<FlopSolution, String> {
     evaluation_value_network.validate()?;
+    let evaluation_has_distinct_training_identity = config
+        .value_network
+        .has_distinct_training_identity(&evaluation_value_network);
     let resolver_seed = config.value_network.seed;
     let resolver_sha256 = config.value_network.artifact_sha256.clone();
     let resolver_uses_exact_ranges = config.value_network.uses_exact_ranges;
@@ -2634,7 +2644,12 @@ pub fn solve_flop_cross_evaluated(
     solver.exact_all_in_terminal_evaluations.set(0);
     solver.maximum_leaf_zero_sum_residual.set(0.0);
     let mut solution = solver.finish();
-    solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+    solution.method = if evaluation_has_distinct_training_identity {
+        "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts"
+    } else {
+        "frozen_average_resolver_strategy_self_scored_by_same_training_identity_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts"
+    }
+    .to_owned();
     if regret_matching_plus {
         solution.method.push_str("_regret_matching_plus");
     }
@@ -2647,6 +2662,7 @@ pub fn solve_flop_cross_evaluated(
     solution.evaluation_value_network_sha256 = evaluation_sha256;
     solution.evaluation_value_network_source_dataset_sha256 = evaluation_source_dataset;
     solution.evaluation_value_network_source_policy_sha256 = evaluation_source_policy;
+    solution.evaluation_has_distinct_training_identity = evaluation_has_distinct_training_identity;
     Ok(solution)
 }
 
@@ -2659,6 +2675,9 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     checkpoints: &[u64],
 ) -> Result<FlopConvergenceReport, String> {
     evaluation_value_network.validate()?;
+    let evaluation_has_distinct_training_identity = config
+        .value_network
+        .has_distinct_training_identity(&evaluation_value_network);
     if checkpoints.is_empty()
         || checkpoints.iter().any(|checkpoint| *checkpoint < 2)
         || checkpoints.windows(2).any(|pair| pair[0] >= pair[1])
@@ -2701,7 +2720,12 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         evaluator.exact_all_in_terminal_evaluations.set(0);
         evaluator.maximum_leaf_zero_sum_residual.set(0.0);
         let mut solution = evaluator.finish();
-        solution.method = "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts".to_owned();
+        solution.method = if evaluation_has_distinct_training_identity {
+            "frozen_average_resolver_strategy_scored_by_independent_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts"
+        } else {
+            "frozen_average_resolver_strategy_self_scored_by_same_training_identity_turn_cfv_network_with_exact_turn_chance_and_exact_flop_all_in_runouts"
+        }
+        .to_owned();
         if regret_matching_plus {
             solution.method.push_str("_regret_matching_plus");
         }
@@ -2716,6 +2740,8 @@ pub fn diagnose_flop_cross_evaluated_convergence(
             evaluation_value_network_source_dataset_sha256.clone();
         solution.evaluation_value_network_source_policy_sha256 =
             evaluation_value_network_source_policy_sha256.clone();
+        solution.evaluation_has_distinct_training_identity =
+            evaluation_has_distinct_training_identity;
         evidence.push(FlopConvergenceCheckpoint {
             iterations: *checkpoint,
             metrics: solution.metrics.clone(),
@@ -2726,7 +2752,12 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     }
     let final_solution = final_solution.expect("nonempty convergence checkpoints");
     let final_strategy_sha256 = flop_strategy_sha256(&final_solution.strategies);
-    let mut method = "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network".to_owned();
+    let mut method = if evaluation_has_distinct_training_identity {
+        "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_cross_scored_by_independent_turn_cfv_network"
+    } else {
+        "single_paired_alternating_dcfr_trajectory_with_frozen_average_checkpoints_self_scored_by_same_training_identity_turn_cfv_network"
+    }
+    .to_owned();
     if regret_matching_plus {
         method.push_str("_regret_matching_plus");
     }
@@ -2742,6 +2773,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         evaluation_value_network_sha256,
         evaluation_value_network_source_dataset_sha256,
         evaluation_value_network_source_policy_sha256,
+        evaluation_has_distinct_training_identity,
         state: solver.config.state,
         averaging_delay: solver.config.averaging_delay,
         regret_matching_plus,
@@ -2798,6 +2830,12 @@ pub fn evaluate_frozen_flop_range_response_convergence(
     threads: usize,
 ) -> Result<FlopRangeResponseReport, String> {
     evaluation_value_network.validate()?;
+    let evaluation_has_distinct_training_identity = frozen.value_network_seed
+        != evaluation_value_network.seed
+        && frozen.value_network_sha256.is_some()
+        && evaluation_value_network.artifact_sha256.is_some()
+        && frozen.value_network_sha256.as_ref()
+            != evaluation_value_network.artifact_sha256.as_ref();
     if frozen.effective_stack_bb > 0.0
         && (frozen.effective_stack_bb - game.effective_stack_bb).abs() > EPSILON
     {
@@ -2872,7 +2910,12 @@ pub fn evaluate_frozen_flop_range_response_convergence(
             }
         })
         .collect();
-    let mut method = "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_public_ranges_cross_scored_by_independent_turn_cfv_network".to_owned();
+    let mut method = if evaluation_has_distinct_training_identity {
+        "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_public_ranges_cross_scored_by_independent_turn_cfv_network"
+    } else {
+        "one_player_depth_limited_dcfr_with_frozen_opponent_and_response_conditioned_public_ranges_self_scored_by_same_training_identity_turn_cfv_network"
+    }
+    .to_owned();
     if regret_matching_plus {
         method.push_str("_regret_matching_plus");
     }
@@ -2897,6 +2940,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
             .source_dataset_sha256,
         evaluation_value_network_source_policy_sha256: evaluation_value_network
             .source_policy_sha256,
+        evaluation_has_distinct_training_identity,
         state: frozen.state.clone(),
         baseline_profile_value_p0_bb: baseline[0],
         baseline_profile_value_p1_bb: baseline[1],
@@ -7425,6 +7469,7 @@ mod tests {
             Some("b".repeat(64))
         );
         assert!(cross.method.contains("scored_by_independent"));
+        assert!(cross.evaluation_has_distinct_training_identity);
         assert!(rescored.method.contains("serialized_frozen"));
         assert_eq!(rescored.value_network_sha256, Some("c".repeat(64)));
         assert_eq!(
@@ -7488,6 +7533,11 @@ mod tests {
         assert_eq!(report.checkpoints[1].iterations, 4);
         assert_eq!(report.value_network_seed, 41);
         assert_eq!(report.evaluation_value_network_seed, 42);
+        assert!(report.evaluation_has_distinct_training_identity);
+        assert!(report
+            .checkpoint_solutions
+            .iter()
+            .all(|solution| solution.evaluation_has_distinct_training_identity));
         assert_eq!(report.final_solution.strategies, direct.strategies);
         assert_eq!(report.solution_at_iterations(Some(4)).unwrap(), direct);
         assert_eq!(
@@ -7590,6 +7640,7 @@ mod tests {
         assert_eq!(report, repeated);
         assert_eq!(report.schema, "hu-flop-range-response-diagnostic-v1");
         assert_eq!(report.response_dcfr.strategy_exponent, 3.0);
+        assert!(report.evaluation_has_distinct_training_identity);
         assert_eq!(report.checkpoints.len(), 2);
         assert_eq!(report.frozen_strategy_iterations, 4);
         assert_eq!(

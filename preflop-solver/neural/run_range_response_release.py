@@ -332,6 +332,7 @@ def inspect_convergence(
         == evaluation["sourceDatasetSha256"]
         and payload.get("evaluation_value_network_source_policy_sha256")
         == evaluation["sourcePolicySha256"]
+        and payload.get("evaluation_has_distinct_training_identity") is True
         and valid_root_state(payload.get("state"), job["root"], controls)
         and int(payload.get("averaging_delay", -1))
         == int(controls["strategyAveragingDelay"])
@@ -403,6 +404,7 @@ def inspect_convergence(
         == evaluation["sourceDatasetSha256"]
         and solution.get("evaluation_value_network_source_policy_sha256")
         == evaluation["sourcePolicySha256"]
+        and solution.get("evaluation_has_distinct_training_identity") is True
         and solution.get("uses_exact_ranges") is True
         and solution.get("state") == payload.get("state")
         and int(solution.get("averaging_delay", -1))
@@ -473,6 +475,7 @@ def inspect_response(
         == evaluation["sourceDatasetSha256"]
         and payload.get("evaluation_value_network_source_policy_sha256")
         == evaluation["sourcePolicySha256"]
+        and payload.get("evaluation_has_distinct_training_identity") is True
         and valid_root_state(payload.get("state"), job["root"], controls)
         and int(payload.get("response_averaging_delay", -1))
         == int(controls["responseAveragingDelay"])

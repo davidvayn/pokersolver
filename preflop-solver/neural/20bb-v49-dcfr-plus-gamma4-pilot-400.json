@@ -1,0 +1,71 @@
+{
+  "schema": "hu-flop-dcfr-plus-pilot-result-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "rejected-research-only",
+  "activationAllowed": false,
+  "configurationSelectedForFreshRoots": false,
+  "root": {
+    "board": "8c,Qd,Kh",
+    "releaseEvidence": false,
+    "releaseRootSetBurned": true
+  },
+  "controls": {
+    "strategyIterations": 400,
+    "strategyCheckpoints": [200, 400],
+    "strategyAveragingDelay": 100,
+    "strategyRegretMatchingPlus": true,
+    "strategyDcfr": {
+      "positiveRegretExponent": 1.5,
+      "negativeRegretExponent": 0.0,
+      "strategyExponent": 4.0
+    },
+    "responseCheckpoints": [100],
+    "responseAveragingDelay": 10,
+    "responseRegretMatchingPlus": true,
+    "responseDcfr": {
+      "positiveRegretExponent": 1.5,
+      "negativeRegretExponent": 0.0,
+      "strategyExponent": 2.0
+    },
+    "threads": 10
+  },
+  "implementation": {
+    "flopAlgorithmCommit": "17aefb70edfd0d072eceb4b1713fa62f1d1640e8",
+    "responseBinarySha256": "a183a24e02b18934722d08b86adfe0389259b65ff721ce23a8ff35fe39270df1"
+  },
+  "artifacts": {
+    "strategyConvergence": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-gamma4-delay100-iter400-convergence-v3.json",
+      "sha256": "417d2058f8ba2539f382a89a48db8a8dd36221ede8c15e8a39308eca7394298d",
+      "frozenStrategySha256": "695b932eefad81994e70525d167b964d9fc43be2faecab8d0263e9938a02febf",
+      "maximumProbabilitySumError": 7.099999987936201e-8
+    },
+    "rangeResponse": {
+      "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v2/diagnostic-failed-root-flop-8cQdKh-strategy15301-dcfr-plus-gamma4-delay100-iter400-response100-plus-v1.json",
+      "sha256": "a9552a629b2fa1c9493029f32d2c7d97c3afa88fa1e15ebfc8ec301081072b2d"
+    }
+  },
+  "measurements": {
+    "responseGainBbPerHandAt100": 0.04344667667123012,
+    "maximumAllowedResponseGainBbPerHand": 0.05,
+    "diagnosticExtensionMarginTargetBbPerHand": 0.04,
+    "maximumZeroSumResidualBb": 2.581268532253489e-15
+  },
+  "comparison": {
+    "gamma2Delay100StrategyGainAt100BbPerHand": 0.043344921463735225,
+    "gamma2Delay200CheckpointGainAt100BbPerHand": 0.043299644606044616,
+    "gamma4Delay100StrategyGainAt100BbPerHand": 0.04344667667123012,
+    "bestObservedDifferenceBbPerHand": 0.00014703206518550186
+  },
+  "gates": {
+    "nominalMaximumRangeConsistentResponseGainAt100": true,
+    "sufficientMarginForResponseExtension": false,
+    "zeroSumResidual": true,
+    "validProbabilitySums": true,
+    "strategyArtifactLink": true,
+    "algorithmIdentity": true,
+    "independentReleaseEvidence": false
+  },
+  "decision": "rejected-before-response-extension",
+  "interpretation": "Increasing the DCFR average-strategy exponent from 2 to 4 did not reduce the stable 100-round learned-response floor on the burned diagnostic root. The 0.043447bb/hand result is slightly worse than both gamma-2 400-round candidates and lacks enough margin to justify a 200/400-round extension. Fresh release roots remain unopened and activation remains fail-closed."
+}

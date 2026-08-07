@@ -64,12 +64,28 @@ pub struct ResolverContinuationCacheConfig {
     pub resolver_iterations: u64,
     pub resolver_averaging_delay: u64,
     pub resolver_regret_matching_plus: bool,
+    pub resolver_dcfr: DcfrParameters,
     pub value_uncertainty_bb: f64,
     pub value_network_path: PathBuf,
     pub evaluation_value_network_path: Option<PathBuf>,
     pub range_policy_path: Option<PathBuf>,
     pub source_cache_path: PathBuf,
     pub threads: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResolverContinuationProvenance {
+    pub iterations: u64,
+    pub averaging_delay: u64,
+    pub regret_matching_plus: bool,
+    pub dcfr: DcfrParameters,
+    pub value_uncertainty_bb: f64,
+    pub threads: usize,
+    pub value_network_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_value_network_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_policy_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -120,6 +136,8 @@ pub struct ContinuationCache {
     pub network_sha256s: Vec<String>,
     #[serde(default)]
     pub policy_mixture: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver_provenance: Option<ResolverContinuationProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_cache_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,6 +213,42 @@ impl ContinuationCache {
         }
         self.game.validate()?;
         let expected = self.public_histories.len();
+        let valid_digest = |digest: &str| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        };
+        let valid_dcfr = |dcfr: &DcfrParameters| {
+            dcfr.positive_regret_exponent.is_finite()
+                && dcfr.negative_regret_exponent.is_finite()
+                && dcfr.strategy_exponent.is_finite()
+                && dcfr.positive_regret_exponent >= 0.0
+                && dcfr.negative_regret_exponent >= 0.0
+                && dcfr.strategy_exponent >= 0.0
+        };
+        let resolver_provenance_is_valid =
+            self.resolver_provenance.as_ref().is_none_or(|resolver| {
+                self.source_cache_sha256.is_some()
+                    && resolver.iterations >= 2
+                    && resolver.averaging_delay < resolver.iterations
+                    && valid_dcfr(&resolver.dcfr)
+                    && resolver.value_uncertainty_bb.is_finite()
+                    && resolver.value_uncertainty_bb >= 0.0
+                    && resolver.threads > 0
+                    && valid_digest(&resolver.value_network_sha256)
+                    && resolver.value_network_sha256 == self.network_sha256
+                    && self.network_sha256s.first() == Some(&resolver.value_network_sha256)
+                    && match resolver.evaluation_value_network_sha256.as_ref() {
+                        Some(digest) => {
+                            valid_digest(digest)
+                                && self.network_sha256s.get(1) == Some(digest)
+                                && self.network_sha256s.len() == 2
+                        }
+                        None => self.network_sha256s.len() == 1,
+                    }
+                    && resolver
+                        .range_policy_sha256
+                        .as_deref()
+                        .is_none_or(valid_digest)
+            });
         let provenance_is_valid = match (&self.source_cache_sha256, &self.source_deal_indices) {
             (None, None) => true,
             (Some(digest), Some(indices)) => {
@@ -217,6 +271,7 @@ impl ContinuationCache {
             .unwrap_or_else(|| self.deals.len().is_multiple_of(2 * all_combos().len()));
         if expected == 0
             || !provenance_is_valid
+            || !resolver_provenance_is_valid
             || self.complete_exact_combo_cycles != expected_cycles
             || self.balanced_exact_combo_marginals != expected_balanced
             || self.network_sha256.len() != 64
@@ -1050,6 +1105,7 @@ pub fn build_continuation_cache(
             .map(|path| sha256_file(path))
             .collect::<Result<Vec<_>, _>>()?,
         policy_mixture: "frozen_v26_model_selected_round_robin_per_rollout".to_owned(),
+        resolver_provenance: None,
         source_cache_sha256: None,
         source_deal_indices: None,
         game: config.game,
@@ -1100,6 +1156,12 @@ pub fn build_resolver_continuation_cache(
             .is_none_or(|end| end > base.deals.len())
         || config.resolver_iterations < 2
         || config.resolver_averaging_delay >= config.resolver_iterations
+        || !config.resolver_dcfr.positive_regret_exponent.is_finite()
+        || !config.resolver_dcfr.negative_regret_exponent.is_finite()
+        || !config.resolver_dcfr.strategy_exponent.is_finite()
+        || config.resolver_dcfr.positive_regret_exponent < 0.0
+        || config.resolver_dcfr.negative_regret_exponent < 0.0
+        || config.resolver_dcfr.strategy_exponent < 0.0
         || !config.value_uncertainty_bb.is_finite()
         || config.value_uncertainty_bb < 0.0
         || config.threads == 0
@@ -1171,7 +1233,8 @@ pub fn build_resolver_continuation_cache(
                 .collect::<Vec<_>>();
             let network = network.clone();
             let evaluation_network = evaluation_network.clone();
-            let game = base.game.clone();
+            let mut game = base.game.clone();
+            game.dcfr = config.resolver_dcfr.clone();
             let leaf_ranges = leaf_ranges.clone();
             let leaves = &leaves;
             workers.push(scope.spawn(move || {
@@ -1294,6 +1357,17 @@ pub fn build_resolver_continuation_cache(
             },
             range_method
         ),
+        resolver_provenance: Some(ResolverContinuationProvenance {
+            iterations: config.resolver_iterations,
+            averaging_delay: config.resolver_averaging_delay,
+            regret_matching_plus: config.resolver_regret_matching_plus,
+            dcfr: config.resolver_dcfr,
+            value_uncertainty_bb: config.value_uncertainty_bb,
+            threads: config.threads,
+            value_network_sha256: network_sha256.clone(),
+            evaluation_value_network_sha256: evaluation_network_sha256.clone(),
+            range_policy_sha256,
+        }),
         source_cache_sha256: Some(source_cache_sha256),
         source_deal_indices: Some(source_deal_indices),
         game: base.game.clone(),
@@ -1685,6 +1759,7 @@ pub fn merge_continuation_caches(
         || first.network_sha256 != second.network_sha256
         || first.network_sha256s != second.network_sha256s
         || first.policy_mixture != second.policy_mixture
+        || first.resolver_provenance != second.resolver_provenance
         || first.source_cache_sha256 != second.source_cache_sha256
         || (first.source_cache_sha256.is_some() && first.seed != second.seed)
     {
@@ -1752,6 +1827,7 @@ pub fn merge_continuation_caches(
         network_sha256: first.network_sha256.clone(),
         network_sha256s: first.network_sha256s.clone(),
         policy_mixture: first.policy_mixture.clone(),
+        resolver_provenance: first.resolver_provenance.clone(),
         source_cache_sha256: first.source_cache_sha256.clone(),
         source_deal_indices,
         game: first.game.clone(),
@@ -2672,6 +2748,7 @@ mod tests {
             network_sha256: "0".repeat(64),
             network_sha256s: vec!["0".repeat(64)],
             policy_mixture: "synthetic_test".to_owned(),
+            resolver_provenance: None,
             source_cache_sha256: None,
             source_deal_indices: None,
             game,
@@ -3014,6 +3091,55 @@ mod tests {
         split_across_cycles.extend(cycle_size..cycle_size + cycle_size / 2);
         assert_eq!(complete_source_deal_cycles(&split_across_cycles), 0);
         assert!(!balanced_source_deal_indices(&split_across_cycles));
+    }
+
+    #[test]
+    fn resolver_provenance_pins_dcfr_and_independent_networks() {
+        let mut cache = synthetic_cache(7);
+        cache.source_cache_sha256 = Some("1".repeat(64));
+        cache.source_deal_indices = Some(vec![0, 1, 2, 3]);
+        cache.network_sha256s.push("2".repeat(64));
+        cache.resolver_provenance = Some(ResolverContinuationProvenance {
+            iterations: 400,
+            averaging_delay: 100,
+            regret_matching_plus: true,
+            dcfr: DcfrParameters {
+                strategy_exponent: 4.0,
+                ..DcfrParameters::default()
+            },
+            value_uncertainty_bb: 0.02,
+            threads: 10,
+            value_network_sha256: "0".repeat(64),
+            evaluation_value_network_sha256: Some("2".repeat(64)),
+            range_policy_sha256: Some("3".repeat(64)),
+        });
+        cache.validate().unwrap();
+
+        let mut malformed = cache.clone();
+        malformed
+            .resolver_provenance
+            .as_mut()
+            .unwrap()
+            .dcfr
+            .strategy_exponent = f64::NAN;
+        assert!(malformed.validate().is_err());
+
+        let mut invalid_uncertainty = cache.clone();
+        invalid_uncertainty
+            .resolver_provenance
+            .as_mut()
+            .unwrap()
+            .value_uncertainty_bb = -0.01;
+        assert!(invalid_uncertainty.validate().is_err());
+
+        let mut incompatible = cache.clone();
+        incompatible
+            .resolver_provenance
+            .as_mut()
+            .unwrap()
+            .dcfr
+            .strategy_exponent = 2.0;
+        assert!(merge_continuation_caches(&cache, &incompatible).is_err());
     }
 
     #[test]

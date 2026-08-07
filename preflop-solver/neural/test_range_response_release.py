@@ -140,6 +140,7 @@ class RangeResponseReleaseTests(unittest.TestCase):
             "evaluation_value_network_source_policy_sha256": evaluation[
                 "sourcePolicySha256"
             ],
+            "evaluation_has_distinct_training_identity": True,
             "state": state,
             "iterations": 100,
             "averaging_delay": 10,
@@ -169,6 +170,7 @@ class RangeResponseReleaseTests(unittest.TestCase):
             "evaluation_value_network_source_policy_sha256": evaluation[
                 "sourcePolicySha256"
             ],
+            "evaluation_has_distinct_training_identity": True,
             "state": state,
             "averaging_delay": 10,
             "threads": 10,
@@ -209,6 +211,7 @@ class RangeResponseReleaseTests(unittest.TestCase):
             "evaluation_value_network_source_policy_sha256": evaluation[
                 "sourcePolicySha256"
             ],
+            "evaluation_has_distinct_training_identity": True,
             "state": self.state(),
             "baseline_profile_value_p0_bb": 0.1,
             "baseline_profile_value_p1_bb": -0.1,

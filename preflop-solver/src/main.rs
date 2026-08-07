@@ -59,6 +59,8 @@ fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
         .ok_or("--value-network is required")?;
     let base = blueprint::preflop::ContinuationCache::read(&base_path)?;
     let iterations = parse_or(args, "--resolver-iterations", 10u64)?;
+    let mut resolver_game = BlueprintConfig::default();
+    apply_dcfr_args(&mut resolver_game, args)?;
     let cache = blueprint::preflop::build_resolver_continuation_cache(
         &base,
         blueprint::preflop::ResolverContinuationCacheConfig {
@@ -73,6 +75,7 @@ fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
             resolver_regret_matching_plus: args
                 .iter()
                 .any(|argument| argument == "--regret-matching-plus"),
+            resolver_dcfr: resolver_game.dcfr,
             value_uncertainty_bb: parse_or(args, "--value-uncertainty-bb", 1.0f64)?,
             value_network_path: network_path,
             evaluation_value_network_path: value(args, "--evaluation-value-network")
@@ -1976,6 +1979,7 @@ Preflop continuation/solve options:
     [--range-policy <tabular-policy.json>] [--deal-offset 0] [--deals 2]
     [--resolver-iterations 10] [--resolver-averaging-delay 1]
     [--regret-matching-plus]
+    [--dcfr-alpha 1.5] [--dcfr-beta 0] [--dcfr-gamma 2]
   preflop-cache-compare --cache-a <json.gz> --cache-b <json.gz> [--output <json>]
   preflop-cache-merge --cache-a <json.gz> --cache-b <json.gz> --output <json.gz>
   preflop-cache-refresh --cache <json.gz> --output <json.gz>
