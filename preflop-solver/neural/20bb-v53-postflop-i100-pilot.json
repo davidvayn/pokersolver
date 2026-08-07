@@ -1,0 +1,86 @@
+{
+  "schema": "hu-range-conditioned-postflop-iteration-pilot-v1",
+  "modelVersion": "hu-20bb-v53-v27-preflop-v53-i100-postflop-action-pilot",
+  "depthBb": 20,
+  "status": "rejected-retain-v51",
+  "activationAllowed": false,
+  "hypothesis": "Doubling local DCFR iterations on the original authentic roots would improve the paired routed action policies without changing coverage.",
+  "teacherComparison": [
+    {
+      "seed": 16001,
+      "report": "neural/runs/20bb-v53-postflop-action/targets-seed16001-report.json",
+      "reportSha256": "f5d42209ae050c177179ccf969456315fd9539b6c3b2d0341713d017f8867033",
+      "flopBoundAt50IterationsBbPerHand": 0.25614957607905176,
+      "flopBoundAt100IterationsBbPerHand": 0.21849990755364387,
+      "turnRiverBoundAt50IterationsBbPerHand": 0.10886123119519311,
+      "turnRiverBoundAt100IterationsBbPerHand": 0.013483907967933861,
+      "bothBoundsImprove": true
+    },
+    {
+      "seed": 16002,
+      "report": "neural/runs/20bb-v53-postflop-action/targets-seed16002-report.json",
+      "reportSha256": "9a7bd9a262d02c6a6d51cc90a99e7fa32e23c71fbbe004d681db7b38c039ae13",
+      "flopBoundAt50IterationsBbPerHand": 0.08761636893532748,
+      "flopBoundAt100IterationsBbPerHand": 0.0894671218845342,
+      "turnRiverBoundAt50IterationsBbPerHand": 0.023052852436432597,
+      "turnRiverBoundAt100IterationsBbPerHand": 0.007978590645211225,
+      "bothBoundsImprove": false
+    }
+  ],
+  "distillation": {
+    "report": "neural/runs/20bb-v53-postflop-distilled-i100-mix25-s200/report.json",
+    "reportSha256": "e97dc699d11b73ba81eb0fdad8337f527b8741d9866634ab50b2cb85f9e74f94",
+    "studentWeightsSha256": [
+      "87e3ca066541a64bf3bc80fe174fce2bfb511ac634261b64bf49949ba7a8975c",
+      "98a9e6a8ca0b919a56823ab02f1bef5e0ef0f48ced451ee8411e8c04556c36d3"
+    ],
+    "steps": 200,
+    "learningRate": 0.00003,
+    "crossSeedReplayProbability": 0.25,
+    "metricsImprovedFromV26": true,
+    "metricsImprovedFromV51": "15_of_16",
+    "remainingMetricRegression": "candidate 7601 other-seed primary agreement fell from 0.80508 to 0.79371"
+  },
+  "routedCandidates": [
+    {
+      "candidateSeed": 7601,
+      "networkSha256": "cf841508ee2e8385f1e2625784137d74847af50055af2bf2fc89bab3aa0d12a1",
+      "certificate": "neural/runs/20bb-v53-postflop-action/causal-certificate-seed7601-i100-mix25-s200.json",
+      "certificateSha256": "b2df96116407858f202702cfc1d7440c2c9c3b36ee544bf56b1eb56d950febd3",
+      "sampleMeanExploitabilityBbPerHand": 2.1330780340013193,
+      "v51MeanBbPerHand": 2.1763580639024402,
+      "relativeImprovementFromV51": 0.019886447280423714,
+      "oneSided99PercentUpperBoundBbPerHand": 20.0
+    },
+    {
+      "candidateSeed": 7602,
+      "networkSha256": "2d554ea99a28e56513bdb6e14f6167339708e6640682c86817acdbe14cb27149",
+      "certificate": "neural/runs/20bb-v53-postflop-action/causal-certificate-seed7602-i100-mix25-s200.json",
+      "certificateSha256": "ebf0f2d55d5a774b3ae5e2529eb783ebcb4abc1374585657043d6db8801569dd",
+      "sampleMeanExploitabilityBbPerHand": 2.119148176912864,
+      "v51MeanBbPerHand": 2.08776451096832,
+      "relativeRegressionFromV51": 0.015032186714385679,
+      "oneSided99PercentUpperBoundBbPerHand": 20.0
+    }
+  ],
+  "streetHybridFollowup": {
+    "description": "Candidate 7602 retained its better 50-iteration flop targets and used 100-iteration turn/river targets.",
+    "networkSha256": "10ca472207f69c5fca732a566c7bd0c4d7619dae7c5fe126a76e56d766f04eab",
+    "certificate": "neural/runs/20bb-v53-postflop-action/causal-certificate-seed7602-street-hybrid-mix25-s200.json",
+    "certificateSha256": "8b1d5d3597db540b0aabb341ed0aad35a3eb3547c744844c5bfe50d35587263d",
+    "sampleMeanExploitabilityBbPerHand": 2.122543959186131,
+    "relativeRegressionFromV51": 0.016658702662629227,
+    "accepted": false
+  },
+  "decision": {
+    "retainModelVersion": "hu-20bb-v51-v27-preflop-v51-mixed-postflop-action-pilot",
+    "reason": "Only one independently routed seed improves versus v51; neither the standard nor street-hybrid candidate 7602 improves.",
+    "nextCorrection": "Continue the paired same-root local convergence ladder to 200 iterations and distill only if the local bounds improve materially."
+  },
+  "gates": {
+    "pairedFullGameMeanImprovesFromV51": false,
+    "maximumEstimatedExploitabilityBbPerHand": false,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": false,
+    "eligibleForActivation": false
+  }
+}

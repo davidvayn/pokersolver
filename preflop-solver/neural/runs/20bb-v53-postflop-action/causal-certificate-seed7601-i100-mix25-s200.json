@@ -1,0 +1,31 @@
+{
+  "schema": "hu-neural-causal-sample-game-upper-bound-v1",
+  "method": "nested_public_chance_and_hidden_hand_sample_game_best_response_with_empirical_bernstein_ucb",
+  "depth_bb": 20.0,
+  "deals": 8,
+  "seed": 14602,
+  "network_sha256": "cf841508ee2e8385f1e2625784137d74847af50055af2bf2fc89bab3aa0d12a1",
+  "confidence": 0.99,
+  "threads": 8,
+  "opponent_samples_per_runout": 4,
+  "public_branches_per_street": 2,
+  "scenarios_per_deal": 32,
+  "exact_betting_tree_nodes": 782896,
+  "sample_mean_exploitability_bb": 2.1330780340013193,
+  "sample_standard_error_bb": 0.4837089764513451,
+  "hoeffding_margin_bb": 10.729830131446736,
+  "empirical_bernstein_margin_bb": 36.896708097912864,
+  "confidence_bound_method": "maurer_pontil_2009_theorem_4_one_sided_empirical_bernstein",
+  "confidence_bound_reference": "https://arxiv.org/abs/0907.3740",
+  "exploitability_upper_bound_bb": 20.0,
+  "relaxation": "each responder observes its own cards, betting history, and only the currently revealed public board in a nested public-chance and hidden-hand sample game",
+  "guarantee": "every fixed legal response has an unbiased nested sample-game value; the expected empirical optimum upper-bounds the legal best response by convexity, and the one-sided empirical Bernstein bound covers the independent outer games",
+  "assumptions": [
+    "outer responder-card samples are independent and exact under card removal",
+    "nested flop, turn, river, and hidden-hand branches have the exact conditional card distribution",
+    "identical observed public boards share one responder action within each sampled betting history",
+    "the frozen opponent network is evaluated exactly on every reached betting action",
+    "complete sampled runouts settle every showdown exactly",
+    "utilities are zero-sum and bounded to the effective stack in absolute value"
+  ]
+}
