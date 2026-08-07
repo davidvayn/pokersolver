@@ -920,6 +920,82 @@ pub(super) fn average_strategy_record_json(
     .expect("average-strategy sample is serializable")
 }
 
+pub(super) fn average_strategy_record_bytes(
+    state: &GameState,
+    deal: &Deal,
+    actions: &[LegalAction],
+    targets: Vec<f64>,
+    weight: f32,
+    config: &BlueprintConfig,
+) -> Vec<u8> {
+    serde_json::to_vec(&training_sample(
+        SampleKind::AverageStrategy,
+        0,
+        weight,
+        1.0,
+        state,
+        deal,
+        actions,
+        targets,
+        None,
+        None,
+        config,
+    ))
+    .expect("average-strategy sample is serializable")
+}
+
+/// Persist solver-produced average-policy records using the exact dataset
+/// contract consumed by the MLX action-policy distiller.
+pub(super) fn write_average_strategy_dataset(
+    game: &BlueprintConfig,
+    seed: u64,
+    teacher: serde_json::Value,
+    records: &[Vec<u8>],
+    output: &Path,
+) -> Result<(), Box<dyn Error>> {
+    if records.is_empty() {
+        return Err("average-strategy dataset has no records".into());
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = output.with_extension("tmp");
+    let file = fs::File::create(&temporary)?;
+    let buffered = BufWriter::new(file);
+    let mut writer = GzEncoder::new(buffered, Compression::fast());
+    let metadata = serde_json::json!({
+        "record_type": "metadata",
+        "schema": DATASET_SCHEMA,
+        "state_feature_schema": "hu-cash-trajectory-poker-aware-v4",
+        "state_feature_count": STATE_FEATURE_COUNT,
+        "action_feature_schema": "hu-cash-legal-action-v1",
+        "action_feature_count": ACTION_FEATURE_COUNT,
+        "depth_bb": game.effective_stack_bb,
+        "seed": seed,
+        "start_iteration": 0,
+        "traversals": 0,
+        "records": records.len(),
+        "truncated": false,
+        "sampling_mode": "range_conditioned_solver_average_policy",
+        "value_rollouts_per_action": 0,
+        "evaluates_trajectory_action_values": false,
+        "enumerates_turn_river_chance": true,
+        "action_abstraction": game.action_abstraction,
+        "teacher": teacher,
+    });
+    serde_json::to_writer(&mut writer, &metadata)?;
+    writer.write_all(b"\n")?;
+    for record in records {
+        writer.write_all(record)?;
+        writer.write_all(b"\n")?;
+    }
+    writer.finish()?.flush()?;
+    fs::rename(temporary, output)?;
+    Ok(())
+}
+
 fn feature_sha256(features: &[f32]) -> String {
     let mut digest = Sha256::new();
     for feature in features {

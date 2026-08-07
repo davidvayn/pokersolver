@@ -405,9 +405,9 @@ enum ActionKind {
     RaiseTo(f64),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum TrajectoryActionKind {
+pub(crate) enum TrajectoryActionKind {
     Fold,
     Check,
     Call,
@@ -416,8 +416,8 @@ enum TrajectoryActionKind {
     AllIn,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-struct TrajectoryAction {
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub(crate) struct TrajectoryAction {
     actor: usize,
     street: Street,
     kind: TrajectoryActionKind,

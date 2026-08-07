@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "flop-pbs-evaluate" => run_flop_pbs_evaluate(&args[1..]),
         "flop-pbs-range-response" => run_flop_pbs_range_response(&args[1..]),
         "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
+        "postflop-action-targets" => run_postflop_action_targets(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
@@ -508,6 +509,70 @@ fn run_flop_pbs_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
     } else {
         println!("{output}");
     }
+    Ok(())
+}
+
+fn run_postflop_action_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let source_policy_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required")?;
+    let value_network_path = value(args, "--value-network")
+        .map(PathBuf::from)
+        .ok_or("--value-network is required")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("postflop-action-targets.jsonl.gz"));
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    game.iterations = 2;
+    game.averaging_delay = 0;
+    apply_dcfr_args(&mut game, args)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let flop_iterations = parse_or(args, "--flop-iterations", 400u64)?;
+    let turn_river_iterations = parse_or(args, "--turn-river-iterations", 400u64)?;
+    let report = blueprint::public_belief::generate_postflop_action_targets(
+        blueprint::public_belief::PostflopActionTargetConfig {
+            game,
+            roots: parse_or(args, "--roots", 1usize)?,
+            turn_leaves_per_root: parse_or(args, "--turn-leaves-per-root", 1usize)?,
+            flop_iterations,
+            flop_averaging_delay: parse_or(args, "--flop-averaging-delay", flop_iterations / 4)?,
+            turn_river_iterations,
+            turn_river_averaging_delay: parse_or(
+                args,
+                "--turn-river-averaging-delay",
+                turn_river_iterations / 10,
+            )?,
+            seed: parse_or(args, "--seed", 16_001u64)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+            exploration_probability: parse_or(args, "--exploration", 0.05f64)?,
+            max_records: parse_or(args, "--max-records", 100_000usize)?,
+            source_policy_path,
+            value_network_path,
+            output,
+        },
+    )?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--report").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
     Ok(())
 }
 

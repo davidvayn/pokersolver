@@ -95,6 +95,10 @@ pub struct PublicBeliefState {
     pub raise_reopened: bool,
     pub public_history: Vec<String>,
     pub ranges: [Vec<f64>; 2],
+    /// Exact action trajectory consumed by the served action-policy encoder.
+    /// Older value-only artifacts omit it and deserialize to an empty vector.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) trajectory: Vec<TrajectoryAction>,
 }
 
 impl PublicBeliefState {
@@ -116,6 +120,7 @@ impl PublicBeliefState {
             raise_reopened: true,
             public_history: vec!["public_belief:flop_start".to_owned()],
             ranges,
+            trajectory: Vec::new(),
         }
     }
 
@@ -137,6 +142,7 @@ impl PublicBeliefState {
             raise_reopened: true,
             public_history: vec!["public_belief:turn_start".to_owned()],
             ranges,
+            trajectory: Vec::new(),
         }
     }
 
@@ -158,6 +164,7 @@ impl PublicBeliefState {
             raise_reopened: true,
             public_history: vec!["public_belief:river_start".to_owned()],
             ranges,
+            trajectory: Vec::new(),
         }
     }
 
@@ -246,8 +253,25 @@ impl PublicBeliefState {
             checks: self.checks,
             raise_reopened: self.raise_reopened,
             public_history: self.public_history.clone(),
-            trajectory: Vec::new(),
+            trajectory: self.trajectory.clone(),
             terminal: None,
+        }
+    }
+
+    fn from_game_state(board: Vec<u8>, state: &GameState, ranges: [Vec<f64>; 2]) -> Self {
+        Self {
+            street: state.street,
+            board,
+            actor: state.actor,
+            invested_bb: state.invested,
+            street_invested_bb: state.street_invested,
+            last_full_raise_bb: state.last_full_raise,
+            aggressions: state.aggressions,
+            checks: state.checks,
+            raise_reopened: state.raise_reopened,
+            public_history: state.public_history.clone(),
+            ranges,
+            trajectory: state.trajectory.clone(),
         }
     }
 }
@@ -1631,6 +1655,8 @@ struct FlopSolver {
 struct ResolverTurnLeaf {
     root_board: [u8; 3],
     public_history: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    trajectory: Vec<TrajectoryAction>,
     board: [u8; 4],
     actor: usize,
     invested: [f64; 2],
@@ -2405,6 +2431,7 @@ impl FlopSolver {
                 leaves.push(ResolverTurnLeaf {
                     root_board,
                     public_history: state.public_history.clone(),
+                    trajectory: state.trajectory.clone(),
                     board: [root_board[0], root_board[1], root_board[2], turn],
                     actor: state.actor,
                     invested: state.invested,
@@ -4908,6 +4935,626 @@ pub fn solve_turn_river(config: TurnRiverSolveConfig) -> Result<TurnRiverSolutio
     Ok(solver.finish())
 }
 
+fn deal_with_visible_board_and_private_combo(board: &[u8], player: usize, combo: Combo) -> Deal {
+    debug_assert!(board.len() <= 5);
+    let private = combo.cards();
+    let available = (0..52u8)
+        .filter(|card| !board.contains(card) && !private.contains(card))
+        .take(7 - board.len())
+        .collect::<Vec<_>>();
+    debug_assert_eq!(available.len(), 7 - board.len());
+    let mut holes = [[0u8; 2]; 2];
+    holes[player] = private;
+    holes[1 - player] = [available[0], available[1]];
+    let mut full_board = [0u8; 5];
+    full_board[..board.len()].copy_from_slice(board);
+    full_board[board.len()..].copy_from_slice(&available[2..]);
+    Deal::from_sampled_cards(holes, full_board)
+}
+
+struct BoundedActionRecordCollector {
+    capacities: [usize; 3],
+    seed: u64,
+    seen: usize,
+    seen_by_street: [usize; 3],
+    records: [BTreeMap<(u64, u64), Vec<u8>>; 3],
+}
+
+impl BoundedActionRecordCollector {
+    fn new(capacity: usize, seed: u64) -> Self {
+        let flop = (capacity / 4).max(1);
+        let turn = (capacity * 3 / 10).max(1);
+        Self {
+            capacities: [flop, turn, capacity - flop - turn],
+            seed,
+            seen: 0,
+            seen_by_street: [0; 3],
+            records: std::array::from_fn(|_| BTreeMap::new()),
+        }
+    }
+
+    fn street_index(street: Street) -> usize {
+        match street {
+            Street::Flop => 0,
+            Street::Turn => 1,
+            Street::River => 2,
+            Street::Preflop => unreachable!("postflop action collector"),
+        }
+    }
+
+    fn consider(&mut self, street: Street, record: Vec<u8>) {
+        let street_index = Self::street_index(street);
+        let mut digest = Sha256::new();
+        digest.update(b"hu-postflop-action-record-reservoir-v1");
+        digest.update(self.seed.to_le_bytes());
+        digest.update(self.seen.to_le_bytes());
+        digest.update([street_index as u8]);
+        digest.update(&record);
+        let bytes = digest.finalize();
+        let key = (
+            u64::from_le_bytes(bytes[..8].try_into().expect("SHA-256 prefix")),
+            u64::from_le_bytes(bytes[8..16].try_into().expect("SHA-256 suffix")),
+        );
+        self.seen += 1;
+        self.seen_by_street[street_index] += 1;
+        let records = &mut self.records[street_index];
+        if records.len() < self.capacities[street_index] {
+            records.insert(key, record);
+            return;
+        }
+        let largest = *records
+            .last_key_value()
+            .expect("positive action-record capacity")
+            .0;
+        if key < largest {
+            records.pop_last();
+            records.insert(key, record);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.records.iter().map(BTreeMap::len).sum()
+    }
+
+    fn into_records(self) -> Vec<Vec<u8>> {
+        let mut output = Vec::with_capacity(self.len());
+        for (street, records) in self.records.into_iter().enumerate() {
+            let inclusion_correction =
+                self.seen_by_street[street] as f64 / records.len().max(1) as f64;
+            for record in records.into_values() {
+                let mut value: serde_json::Value = serde_json::from_slice(&record)
+                    .expect("generated action record remains valid JSON");
+                let weight = value["weight"]
+                    .as_f64()
+                    .expect("generated action record has a numeric weight");
+                value["weight"] = serde_json::json!(weight * inclusion_correction);
+                output.push(
+                    serde_json::to_vec(&value)
+                        .expect("importance-corrected action record remains serializable"),
+                );
+            }
+        }
+        output
+    }
+}
+
+fn append_public_belief_policy_records(
+    game: &BlueprintConfig,
+    root_state: GameState,
+    root_board: &[u8],
+    root_ranges: [Vec<f64>; 2],
+    strategies: &[PublicBeliefStrategy],
+    root_weight: f64,
+    records: &mut BoundedActionRecordCollector,
+) -> Result<usize, String> {
+    let strategy_map = strategies
+        .iter()
+        .map(|strategy| (strategy.public_history.clone(), strategy))
+        .collect::<BTreeMap<_, _>>();
+    let conflicts = combo_conflicts();
+    let before = records.seen;
+
+    struct RecordWalk<'a> {
+        game: &'a BlueprintConfig,
+        strategies: &'a BTreeMap<Vec<String>, &'a PublicBeliefStrategy>,
+        conflicts: &'a [Vec<usize>],
+        root_weight: f64,
+        records: &'a mut BoundedActionRecordCollector,
+    }
+
+    impl RecordWalk<'_> {
+        fn walk(
+            &mut self,
+            state: GameState,
+            board: Vec<u8>,
+            reaches: [Vec<f64>; 2],
+            chance_weight: f64,
+            river: Option<u8>,
+        ) -> Result<(), String> {
+            if state.terminal.is_some() {
+                return Ok(());
+            }
+            let mut key = state.public_history.clone();
+            if let Some(card) = river {
+                key.push(format!("chance:river:{card}"));
+            }
+            if let Some(strategy) = self.strategies.get(&key).copied() {
+                return self.emit_and_descend(
+                    state,
+                    board,
+                    reaches,
+                    chance_weight,
+                    river,
+                    strategy,
+                );
+            }
+            // Complete turn-river teachers append the observed river card to
+            // the information-set key instead of mutating the betting state.
+            if state.street == Street::River && board.len() == 4 {
+                for river in 0..52u8 {
+                    if board.contains(&river) {
+                        continue;
+                    }
+                    let mut key = state.public_history.clone();
+                    key.push(format!("chance:river:{river}"));
+                    let Some(strategy) = self.strategies.get(&key).copied() else {
+                        continue;
+                    };
+                    let mut masked = reaches.clone();
+                    for player in 0..2 {
+                        for combo in all_combos() {
+                            if combo.cards().contains(&river) {
+                                masked[player][combo.key()] = 0.0;
+                            }
+                        }
+                    }
+                    let mut river_board = board.clone();
+                    river_board.push(river);
+                    self.emit_and_descend(
+                        state.clone(),
+                        river_board,
+                        masked,
+                        chance_weight / 44.0,
+                        Some(river),
+                        strategy,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
+        fn emit_and_descend(
+            &mut self,
+            state: GameState,
+            board: Vec<u8>,
+            reaches: [Vec<f64>; 2],
+            chance_weight: f64,
+            river: Option<u8>,
+            strategy: &PublicBeliefStrategy,
+        ) -> Result<(), String> {
+            let actions = state.legal_actions(self.game);
+            if strategy.actor != state.actor
+                || strategy.action_labels
+                    != actions
+                        .iter()
+                        .map(|action| action.label.clone())
+                        .collect::<Vec<_>>()
+                || strategy.probabilities.len() != COMBO_COUNT * actions.len()
+            {
+                return Err(
+                    "solver strategy does not match the exact legal action state".to_owned(),
+                );
+            }
+            let actor = state.actor;
+            let action_count = actions.len();
+            for combo in all_combos() {
+                let key = combo.key();
+                if combo.cards().iter().any(|card| board.contains(card)) {
+                    continue;
+                }
+                let offset = key * action_count;
+                let targets = strategy.probabilities[offset..offset + action_count]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect::<Vec<_>>();
+                let probability_sum = targets.iter().sum::<f64>();
+                if probability_sum <= EPSILON {
+                    continue;
+                }
+                if (probability_sum - 1.0).abs() > 1e-5 {
+                    return Err("solver action probabilities do not sum to one".to_owned());
+                }
+                let opponent_mass =
+                    compatible_mass_from_conflicts(&reaches[1 - actor], self.conflicts, key);
+                let weight = self.root_weight * chance_weight * reaches[actor][key] * opponent_mass;
+                if !weight.is_finite() || weight <= EPSILON {
+                    continue;
+                }
+                let deal = deal_with_visible_board_and_private_combo(&board, actor, combo);
+                self.records.consider(
+                    state.street,
+                    super::neural::average_strategy_record_bytes(
+                        &state,
+                        &deal,
+                        &actions,
+                        targets,
+                        weight as f32,
+                        self.game,
+                    ),
+                );
+            }
+            for (action_index, action) in actions.iter().enumerate() {
+                let mut child_reaches = reaches.clone();
+                for combo in 0..COMBO_COUNT {
+                    child_reaches[actor][combo] *=
+                        f64::from(strategy.probabilities[combo * action_count + action_index]);
+                }
+                self.walk(
+                    state.apply(action, self.game),
+                    board.clone(),
+                    child_reaches,
+                    chance_weight,
+                    river,
+                )?;
+            }
+            Ok(())
+        }
+    }
+
+    RecordWalk {
+        game,
+        strategies: &strategy_map,
+        conflicts: &conflicts,
+        root_weight,
+        records,
+    }
+    .walk(root_state, root_board.to_vec(), root_ranges, 1.0, None)?;
+    Ok(records.seen - before)
+}
+
+#[derive(Clone, Debug)]
+pub struct PostflopActionTargetConfig {
+    pub game: BlueprintConfig,
+    pub roots: usize,
+    pub turn_leaves_per_root: usize,
+    pub flop_iterations: u64,
+    pub flop_averaging_delay: u64,
+    pub turn_river_iterations: u64,
+    pub turn_river_averaging_delay: u64,
+    pub seed: u64,
+    pub threads: usize,
+    pub exploration_probability: f64,
+    pub max_records: usize,
+    pub source_policy_path: PathBuf,
+    pub value_network_path: PathBuf,
+    pub output: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostflopActionTargetReport {
+    pub schema: String,
+    pub method: String,
+    pub seed: u64,
+    pub source_policy_sha256: String,
+    pub value_network_sha256: String,
+    pub roots: usize,
+    pub turn_leaves: usize,
+    pub flop_records: usize,
+    pub turn_river_records: usize,
+    pub total_records: usize,
+    pub candidate_records: usize,
+    pub truncated: bool,
+    pub maximum_flop_exploitability_bb_per_hand: f64,
+    pub maximum_turn_river_exploitability_bb_per_hand: f64,
+    pub output: PathBuf,
+    pub validation: BlueprintValidation,
+}
+
+fn sample_flop_root(
+    policy: &FrozenPolicy,
+    game: &BlueprintConfig,
+    deal: &Deal,
+    rng: &mut SplitMix64,
+    explorer: Option<usize>,
+    exploration_probability: f64,
+) -> Option<(GameState, Vec<String>)> {
+    let mut state = GameState::initial(game);
+    let mut line = Vec::new();
+    while state.terminal.is_none() && state.street == Street::Preflop {
+        let actions = state.legal_actions(game);
+        let strategy = policy.strategy(&state, deal, &actions, game);
+        let sampling = if explorer == Some(state.actor) {
+            epsilon_sampling_strategy(&strategy, exploration_probability)
+        } else {
+            strategy
+        };
+        let selected = sample_index(&sampling, rng);
+        line.push(actions[selected].label.clone());
+        state = state.apply(&actions[selected], game);
+    }
+    (state.street == Street::Flop && state.terminal.is_none()).then_some((state, line))
+}
+
+fn sample_reach_weighted_turn_leaves(
+    leaves: &[ResolverTurnLeaf],
+    count: usize,
+    seed: u64,
+) -> Result<Vec<ResolverTurnLeaf>, String> {
+    let mut rng = SplitMix64::new(seed);
+    let mut candidates = (0..leaves.len()).collect::<Vec<_>>();
+    let mut selected = Vec::with_capacity(count);
+    while selected.len() < count {
+        let Some(index) = weighted_resolver_leaf_index(leaves, &candidates, &mut rng) else {
+            return Err("resolver has too few positive-reach turn leaves".to_owned());
+        };
+        selected.push(leaves[index].clone());
+        candidates.retain(|candidate| *candidate != index);
+    }
+    Ok(selected)
+}
+
+pub fn generate_postflop_action_targets(
+    config: PostflopActionTargetConfig,
+) -> Result<PostflopActionTargetReport, Box<dyn Error>> {
+    config.game.validate()?;
+    if config.roots == 0
+        || config.turn_leaves_per_root == 0
+        || config.flop_iterations < 2
+        || config.flop_averaging_delay >= config.flop_iterations
+        || config.turn_river_iterations < 2
+        || config.turn_river_averaging_delay >= config.turn_river_iterations
+        || config.threads == 0
+        || config.max_records < 3
+        || !config.exploration_probability.is_finite()
+        || !(0.0..1.0).contains(&config.exploration_probability)
+    {
+        return Err(
+            "postflop action targets require valid roots, solve controls, and record capacity"
+                .into(),
+        );
+    }
+    let policy_bytes = fs::read(&config.source_policy_path)?;
+    let source_policy_sha256 = format!("{:x}", Sha256::digest(&policy_bytes));
+    let policy = FrozenPolicy::load(&config.source_policy_path)?;
+    let value_bytes = fs::read(&config.value_network_path)?;
+    let value_network_sha256 = format!("{:x}", Sha256::digest(&value_bytes));
+    let value_network = PublicValueNetwork::read(&config.value_network_path)?;
+    let mut chance = SplitMix64::new(config.seed);
+    let mut records = BoundedActionRecordCollector::new(config.max_records, config.seed);
+    let mut roots_solved = 0usize;
+    let mut leaves_solved = 0usize;
+    let mut maximum_flop_exploitability = 0.0f64;
+    let mut maximum_turn_river_exploitability = 0.0f64;
+    let mut attempts = 0usize;
+
+    while roots_solved < config.roots {
+        attempts += 1;
+        if attempts > config.roots * 1_000 {
+            return Err("could not sample enough authentic nonterminal flop roots".into());
+        }
+        let true_deal = Deal::sample(&mut chance);
+        let explorer = (config.exploration_probability > 0.0).then_some(roots_solved % 2);
+        let Some((flop_state, line)) = sample_flop_root(
+            &policy,
+            &config.game,
+            &true_deal,
+            &mut chance,
+            explorer,
+            config.exploration_probability,
+        ) else {
+            continue;
+        };
+        let board = [true_deal.board[0], true_deal.board[1], true_deal.board[2]];
+        let ranges = match exact_reach_factors_for_visible_line(
+            &policy,
+            &config.game,
+            &board,
+            &line,
+            config.threads,
+        ) {
+            Ok(ranges) => ranges,
+            Err(error) if error.contains("zero exact reach") => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let root_state =
+            PublicBeliefState::from_game_state(board.to_vec(), &flop_state, ranges.clone());
+        let mut flop_solver = FlopSolver::new(FlopResolveConfig {
+            game: config.game.clone(),
+            state: root_state,
+            iterations: config.flop_iterations,
+            averaging_delay: config.flop_averaging_delay,
+            regret_matching_plus: false,
+            value_network: value_network.clone(),
+            threads: config.threads,
+        })?;
+        flop_solver.train();
+        let leaves = flop_solver
+            .capture_average_turn_leaves()
+            .into_iter()
+            .filter_map(canonicalize_resolver_turn_leaf)
+            .collect::<Vec<_>>();
+        let selected_leaves = sample_reach_weighted_turn_leaves(
+            &leaves,
+            config.turn_leaves_per_root,
+            config.seed ^ (roots_solved as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        )?;
+        let flop_solution = flop_solver.finish();
+        let flop_training_usable = flop_solution
+            .validation
+            .reasons
+            .iter()
+            .all(|reason| reason.starts_with("depth-limited exploitability "))
+            && flop_solution
+                .metrics
+                .depth_limited_exploitability_bb_per_hand
+                .is_finite()
+            && flop_solution
+                .metrics
+                .resolver_relative_exploitability_improvement
+                > 0.0
+            && flop_solution.metrics.zero_sum_residual_after_projection_bb <= 1e-6;
+        if !flop_training_usable {
+            return Err(format!(
+                "flop action teacher is structurally unusable at root {roots_solved}: {}",
+                flop_solution.validation.reasons.join("; ")
+            )
+            .into());
+        }
+        maximum_flop_exploitability = maximum_flop_exploitability.max(
+            flop_solution
+                .metrics
+                .depth_limited_exploitability_bb_per_hand,
+        );
+        append_public_belief_policy_records(
+            &config.game,
+            flop_solution.state.game_state(),
+            &flop_solution.state.board,
+            flop_solution.state.ranges.clone(),
+            &flop_solution.strategies,
+            1.0 / config.roots as f64,
+            &mut records,
+        )?;
+
+        for leaf in selected_leaves {
+            let turn_game_state = GameState {
+                street: Street::Turn,
+                actor: leaf.actor,
+                invested: leaf.invested,
+                street_invested: [0.0, 0.0],
+                last_full_raise: config.game.big_blind_bb,
+                aggressions: 0,
+                checks: 0,
+                raise_reopened: true,
+                public_history: leaf.public_history.clone(),
+                trajectory: leaf.trajectory.clone(),
+                terminal: None,
+            };
+            let turn_state = PublicBeliefState::from_game_state(
+                leaf.board.to_vec(),
+                &turn_game_state,
+                leaf.ranges.clone(),
+            );
+            let turn_solution = solve_turn_river(TurnRiverSolveConfig {
+                game: config.game.clone(),
+                state: turn_state,
+                iterations: config.turn_river_iterations,
+                averaging_delay: config.turn_river_averaging_delay,
+                river_refinement_iterations: 0,
+                regret_matching_plus: false,
+            })?;
+            let turn_training_usable = turn_solution
+                .validation
+                .reasons
+                .iter()
+                .all(|reason| reason.starts_with("turn-river abstraction exploitability "))
+                && turn_solution
+                    .metrics
+                    .exact_abstract_exploitability_bb_per_hand
+                    .is_finite()
+                && turn_solution.metrics.maximum_probability_sum_error <= 1e-6
+                && turn_solution.metrics.zero_sum_residual_bb <= 1e-8;
+            if !turn_training_usable {
+                return Err(format!(
+                    "turn-river action teacher is structurally unusable at root {roots_solved} leaf {leaves_solved}: {}",
+                    turn_solution.validation.reasons.join("; ")
+                )
+                .into());
+            }
+            maximum_turn_river_exploitability = maximum_turn_river_exploitability.max(
+                turn_solution
+                    .metrics
+                    .exact_abstract_exploitability_bb_per_hand,
+            );
+            append_public_belief_policy_records(
+                &config.game,
+                turn_solution.state.game_state(),
+                &turn_solution.state.board,
+                turn_solution.state.ranges.clone(),
+                &turn_solution.strategies,
+                1.0 / (config.roots * config.turn_leaves_per_root) as f64,
+                &mut records,
+            )?;
+            leaves_solved += 1;
+        }
+        roots_solved += 1;
+    }
+
+    let candidate_records = records.seen;
+    let sampled = candidate_records > records.len();
+    let records = records.into_records();
+    let flop_records = records
+        .iter()
+        .filter(|record| {
+            serde_json::from_slice::<serde_json::Value>(record)
+                .expect("generated action record remains valid JSON")["state"]["street"]
+                == "flop"
+        })
+        .count();
+    let turn_river_records = records.len() - flop_records;
+    let truncated = false;
+    let validation = BlueprintValidation {
+        status: if roots_solved == config.roots
+            && leaves_solved == config.roots * config.turn_leaves_per_root
+        {
+            "accepted_for_training"
+        } else {
+            "rejected"
+        }
+        .to_owned(),
+        reasons: vec![
+            "local postflop teachers are successor-training targets, not release-qualified policies; activation still requires the unchanged full-game exploitability gate"
+                .to_owned(),
+            if sampled {
+                format!(
+                    "deterministic street-stratified reservoir with inverse-inclusion weight correction retained {} of {candidate_records} complete-tree action rows",
+                    records.len()
+                )
+            } else {
+                "every complete-tree action row was retained".to_owned()
+            },
+        ],
+    };
+    let teacher = serde_json::json!({
+        "schema": "hu-range-conditioned-postflop-action-teacher-v1",
+        "sourcePolicySha256": source_policy_sha256,
+        "valueNetworkSha256": value_network_sha256,
+        "flopIterations": config.flop_iterations,
+        "flopAveragingDelay": config.flop_averaging_delay,
+        "turnRiverIterations": config.turn_river_iterations,
+        "turnRiverAveragingDelay": config.turn_river_averaging_delay,
+        "roots": roots_solved,
+        "turnLeaves": leaves_solved,
+        "explorationProbability": config.exploration_probability,
+        "validation": validation,
+    });
+    super::neural::write_average_strategy_dataset(
+        &config.game,
+        config.seed,
+        teacher,
+        &records,
+        &config.output,
+    )?;
+    Ok(PostflopActionTargetReport {
+        schema: "hu-range-conditioned-postflop-action-target-report-v1".to_owned(),
+        method: "authentic_preflop_reach_conditioning_v49_depth_limited_flop_resolver_and_exact_complete_turn_river_dcfr_action_export".to_owned(),
+        seed: config.seed,
+        source_policy_sha256,
+        value_network_sha256,
+        roots: roots_solved,
+        turn_leaves: leaves_solved,
+        flop_records,
+        turn_river_records,
+        total_records: records.len(),
+        candidate_records,
+        truncated,
+        maximum_flop_exploitability_bb_per_hand: maximum_flop_exploitability,
+        maximum_turn_river_exploitability_bb_per_hand: maximum_turn_river_exploitability,
+        output: config.output,
+        validation,
+    })
+}
+
 pub fn solve_turn_river_continuation_values(
     config: TurnRiverSolveConfig,
 ) -> Result<TurnRiverContinuationValues, String> {
@@ -6575,6 +7222,16 @@ fn exact_reach_factors_for_line(
     line: &[String],
     threads: usize,
 ) -> Result<[Vec<f64>; 2], String> {
+    exact_reach_factors_for_visible_line(policy, game, &board, line, threads)
+}
+
+fn exact_reach_factors_for_visible_line(
+    policy: &FrozenPolicy,
+    game: &BlueprintConfig,
+    board: &[u8],
+    line: &[String],
+    threads: usize,
+) -> Result<[Vec<f64>; 2], String> {
     let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
     let legal = all_combos()
         .into_iter()
@@ -6680,12 +7337,12 @@ fn particle_reach_factors_from_exact(
 fn reach_likelihood_for_combo(
     policy: &FrozenPolicy,
     game: &BlueprintConfig,
-    board: [u8; 4],
+    board: &[u8],
     line: &[String],
     player: usize,
     combo: Combo,
 ) -> Result<f64, String> {
-    let deal = deal_with_private_combo(board, player, combo);
+    let deal = deal_with_visible_board_and_private_combo(board, player, combo);
     let mut state = GameState::initial(game);
     let mut likelihood = 1.0;
     for selected_label in line {
@@ -6701,22 +7358,6 @@ fn reach_likelihood_for_combo(
         state = state.apply(&actions[selected], game);
     }
     Ok(likelihood)
-}
-
-fn deal_with_private_combo(board: [u8; 4], player: usize, combo: Combo) -> Deal {
-    let private = combo.cards();
-    let available = (0..52u8)
-        .filter(|card| !board.contains(card) && !private.contains(card))
-        .take(3)
-        .collect::<Vec<_>>();
-    debug_assert_eq!(available.len(), 3);
-    let mut holes = [[0u8; 2]; 2];
-    holes[player] = private;
-    holes[1 - player] = [available[0], available[1]];
-    Deal::from_sampled_cards(
-        holes,
-        [board[0], board[1], board[2], board[3], available[2]],
-    )
 }
 
 fn maximum_range_total_variation(first: &[Vec<f64>; 2], second: &[Vec<f64>; 2]) -> f64 {
@@ -8251,6 +8892,7 @@ mod tests {
                 canonicalize_resolver_turn_leaf(ResolverTurnLeaf {
                     root_board,
                     public_history: vec![format!("leaf-{index}")],
+                    trajectory: Vec::new(),
                     board,
                     actor: index % 2,
                     invested,
@@ -8492,5 +9134,149 @@ mod tests {
         assert_eq!(merged.targets[0].state_id, "turn-pbs-000000");
         assert_eq!(merged.targets[63].state_id, "turn-pbs-000063");
         assert_eq!(merged.validation.status, "accepted");
+    }
+
+    #[test]
+    fn action_target_export_preserves_the_live_preflop_trajectory() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        game.iterations = 2;
+        game.averaging_delay = 0;
+        let mut state = GameState::initial(&game);
+        let limp = state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "limp")
+            .unwrap();
+        state = state.apply(&limp, &game);
+        let check = state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "check")
+            .unwrap();
+        state = state.apply(&check, &game);
+        assert_eq!(state.street, Street::Flop);
+        assert_eq!(state.trajectory.len(), 2);
+
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let public = PublicBeliefState::from_game_state(board.to_vec(), &state, ranges.clone());
+        let actions = state.legal_actions(&game);
+        let action_count = actions.len();
+        let strategy = PublicBeliefStrategy {
+            public_history: state.public_history.clone(),
+            actor: state.actor,
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities: vec![1.0 / action_count as f32; COMBO_COUNT * action_count],
+        };
+        let mut records = BoundedActionRecordCollector::new(3, 7);
+        let added = append_public_belief_policy_records(
+            &game,
+            public.game_state(),
+            &board,
+            ranges,
+            &[strategy],
+            1.0,
+            &mut records,
+        )
+        .unwrap();
+        assert!(added > 1);
+        assert_eq!(records.len(), 1);
+        let records = records.into_records();
+        let record: serde_json::Value = serde_json::from_slice(&records[0]).unwrap();
+        assert_eq!(record["state"]["street"], "flop");
+        assert_eq!(record["state"]["trajectory"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            record["feature_sha256"].as_array().unwrap().len(),
+            action_count
+        );
+    }
+
+    #[test]
+    fn bounded_action_records_apply_inverse_inclusion_weight_correction() {
+        let mut records = BoundedActionRecordCollector::new(3, 19);
+        records.consider(Street::Flop, br#"{"weight":1.0,"id":0}"#.to_vec());
+        records.consider(Street::Flop, br#"{"weight":1.0,"id":1}"#.to_vec());
+        assert_eq!(records.seen, 2);
+        assert_eq!(records.len(), 1);
+        let selected: serde_json::Value =
+            serde_json::from_slice(&records.into_records()[0]).unwrap();
+        assert_eq!(selected["weight"], 2.0);
+    }
+
+    #[test]
+    fn action_target_export_keeps_river_chance_on_descendant_keys() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        game.iterations = 2;
+        game.averaging_delay = 0;
+        let board = [20, 25, 30, 35];
+        let combos = all_combos();
+        let first = combos
+            .iter()
+            .find(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+            .unwrap();
+        let second = combos
+            .iter()
+            .find(|combo| {
+                !combo.overlaps(*first) && !combo.cards().iter().any(|card| board.contains(card))
+            })
+            .unwrap();
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        ranges[0][first.key()] = 1.0;
+        ranges[1][second.key()] = 1.0;
+        let root = PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges.clone());
+        let root_state = root.game_state();
+        let first_check = root_state.legal_actions(&game)[0].clone();
+        assert_eq!(first_check.label, "check");
+        let checked_once = root_state.apply(&first_check, &game);
+        let second_check = checked_once.legal_actions(&game)[0].clone();
+        let river_state = checked_once.apply(&second_check, &game);
+        assert_eq!(river_state.street, Street::River);
+        let river = (0..52u8)
+            .find(|card| {
+                !board.contains(card)
+                    && !first.cards().contains(card)
+                    && !second.cards().contains(card)
+            })
+            .unwrap();
+        let river_check = river_state.legal_actions(&game)[0].clone();
+        let river_checked_once = river_state.apply(&river_check, &game);
+        let make_strategy = |state: &GameState, river: Option<u8>| {
+            let actions = state.legal_actions(&game);
+            let mut history = state.public_history.clone();
+            if let Some(card) = river {
+                history.push(format!("chance:river:{card}"));
+            }
+            PublicBeliefStrategy {
+                public_history: history,
+                actor: state.actor,
+                action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+                probabilities: vec![1.0 / actions.len() as f32; COMBO_COUNT * actions.len()],
+            }
+        };
+        let strategies = vec![
+            make_strategy(&root_state, None),
+            make_strategy(&checked_once, None),
+            make_strategy(&river_state, Some(river)),
+            make_strategy(&river_checked_once, Some(river)),
+        ];
+        let mut records = BoundedActionRecordCollector::new(100, 11);
+        append_public_belief_policy_records(
+            &game,
+            root_state,
+            &board,
+            ranges,
+            &strategies,
+            1.0,
+            &mut records,
+        )
+        .unwrap();
+        let records = records.into_records();
+        assert!(records.iter().any(|record| {
+            let record: serde_json::Value = serde_json::from_slice(record).unwrap();
+            record["state"]["board"].as_array().unwrap().len() == 5
+                && record["state"]["trajectory"].as_array().unwrap().len() == 3
+        }));
     }
 }
