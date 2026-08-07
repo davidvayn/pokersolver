@@ -1,0 +1,109 @@
+{
+  "schema": "hu-range-conditioned-postflop-distillation-alignment-pilot-v1",
+  "modelVersion": "hu-20bb-v54-v27-preflop-v54-i200-postflop-action-pilot",
+  "depthBb": 20,
+  "status": "rejected-retain-v51",
+  "activationAllowed": false,
+  "teacherConvergence": [
+    {
+      "seed": 16001,
+      "report": "neural/runs/20bb-v54-postflop-action/targets-seed16001-report.json",
+      "reportSha256": "b9cf3b15a8d2f668a09af9ddf5a1be90ce2de76d01213bae791788764cfa7dbd",
+      "flopBoundAt100IterationsBbPerHand": 0.21849990755364387,
+      "flopBoundAt200IterationsBbPerHand": 0.19001213694543656,
+      "turnRiverBoundAt100IterationsBbPerHand": 0.013483907967933861,
+      "turnRiverBoundAt200IterationsBbPerHand": 0.0037944968407110924,
+      "bothBoundsImprove": true
+    },
+    {
+      "seed": 16002,
+      "report": "neural/runs/20bb-v54-postflop-action/targets-seed16002-report.json",
+      "reportSha256": "f5d32c9ad32faf0d740a6fcf16a7e29a54fcc5827f996f3963e5019b1c264d75",
+      "flopBoundAt100IterationsBbPerHand": 0.0894671218845342,
+      "flopBoundAt200IterationsBbPerHand": 0.08685596498121756,
+      "turnRiverBoundAt100IterationsBbPerHand": 0.007978590645211225,
+      "turnRiverBoundAt200IterationsBbPerHand": 0.001851089361186442,
+      "bothBoundsImprove": true
+    }
+  ],
+  "distillationCheckpoints": [
+    {
+      "steps": 200,
+      "report": "neural/runs/20bb-v54-postflop-distilled-i200-mix25-s200/report.json",
+      "reportSha256": "7ca46c2bb4fff69c7dbe0a58e85649a0f813fa7dac2fb2a6cf8d0caf494ad800",
+      "studentWeightsSha256": [
+        "66e9034c422550b6560ca9a490f632007ae6b4b94f7a5c45c6157a58cb7de1b0",
+        "4da40f730e1979122530d9de5b6dcecfb4fa47b90fa1d8836a12153281920f5b"
+      ],
+      "heldoutComparisonsImprovedFromV51": "15_of_16",
+      "fullGame": [
+        {
+          "candidateSeed": 7601,
+          "networkSha256": "78d3dd662b072a65efe996211f9058a04b1976706b8e9fb49fcb64cd1a425838",
+          "certificate": "neural/runs/20bb-v54-postflop-action/causal-certificate-seed7601-i200-mix25-s200.json",
+          "certificateSha256": "ae63a3f12d9bd2139952e305e681448a2e03df0b2acf6878049d459f67332b5a",
+          "sampleMeanExploitabilityBbPerHand": 2.1477060899888585,
+          "relativeImprovementFromV51": 0.013165101087366913,
+          "oneSided99PercentUpperBoundBbPerHand": 20.0
+        },
+        {
+          "candidateSeed": 7602,
+          "networkSha256": "d336ba4fdc66ef12f023fffe4f0162ea37701e0ad7016a6a9251f019a647c922",
+          "certificate": "neural/runs/20bb-v54-postflop-action/causal-certificate-seed7602-i200-mix25-s200.json",
+          "certificateSha256": "c70d1808c645fdf6ea191ae81e720a7c0e0866a0d657f3b76eb88d42392e8d89",
+          "sampleMeanExploitabilityBbPerHand": 2.127077096572846,
+          "relativeRegressionFromV51": 0.01882999035475152,
+          "oneSided99PercentUpperBoundBbPerHand": 20.0
+        }
+      ]
+    },
+    {
+      "steps": 1000,
+      "report": "neural/runs/20bb-v54-postflop-distilled-i200-mix25-s1000/report.json",
+      "reportSha256": "0440cea662bf50e2d62d52885d64f863b27d2986ed25a27b018b5a948aca35d6",
+      "studentWeightsSha256": [
+        "179ae96b8cbe33d9c508a2b767fcf1974a3f7c0c936c0b2c870c44de2b5afea8",
+        "3f7d9a08ff579abcda2fcb3a3040e42d32be56037e5632655ce0fc5ca058af2a"
+      ],
+      "heldoutComparisonsImprovedFromV51": "16_of_16",
+      "fullGame": [
+        {
+          "candidateSeed": 7601,
+          "networkSha256": "b354d471c3ffb33f9d8567f0fe9dac580a32c75fd80aaf26a1141bb7ba831d92",
+          "certificate": "neural/runs/20bb-v54-postflop-action/causal-certificate-seed7601-i200-mix25-s1000.json",
+          "certificateSha256": "70d4d826c76b566eff27c22496ea8661cf213496a1dd75ad2135a848b89c4ef0",
+          "sampleMeanExploitabilityBbPerHand": 2.182443541777508,
+          "relativeRegressionFromV51": 0.0027961749383075916,
+          "oneSided99PercentUpperBoundBbPerHand": 20.0
+        },
+        {
+          "candidateSeed": 7602,
+          "networkSha256": "0adbaddad0b080556564b18d116172bba1ef052bd7fb13d16f11cb4c9bd1a963",
+          "certificate": "neural/runs/20bb-v54-postflop-action/causal-certificate-seed7602-i200-mix25-s1000.json",
+          "certificateSha256": "14b64e6044ae18f04f7523bb39acb67796c1b7d00790d78aad92ccfc59942e30",
+          "sampleMeanExploitabilityBbPerHand": 2.1898207470561313,
+          "relativeRegressionFromV51": 0.04888302083479559,
+          "oneSided99PercentUpperBoundBbPerHand": 20.0
+        }
+      ]
+    }
+  ],
+  "diagnosis": {
+    "solverIterationBottleneck": false,
+    "studentStepBottleneck": false,
+    "frequencyOnlyObjectiveAlignedWithExploitability": false,
+    "evidence": "Both local teachers converge and every held-out/cross-seed frequency metric improves at 1000 steps, yet both routed full-game means regress versus v51.",
+    "nextCorrection": "Export per-action counterfactual EVs from the trained flop and turn/river public-belief profiles, then add a bounded expected-regret term to policy distillation so costly off-support action mass is penalized more than harmless frequency error."
+  },
+  "decision": {
+    "retainModelVersion": "hu-20bb-v51-v27-preflop-v51-mixed-postflop-action-pilot",
+    "continueRootIterationOrStudentStepLadders": false,
+    "activationAllowed": false
+  },
+  "gates": {
+    "pairedFullGameMeanImprovesFromV51": false,
+    "maximumEstimatedExploitabilityBbPerHand": false,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": false,
+    "eligibleForActivation": false
+  }
+}

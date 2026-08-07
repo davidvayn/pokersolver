@@ -61,48 +61,26 @@ The additional roots had worse maximum local teacher bounds at the same 50 itera
 
 At 100 iterations, seed 16001's flop and turn/river bounds improved from 0.2561/0.1089 to 0.2185/0.0135 bb/hand. Seed 16002's turn/river bound improved from 0.0231 to 0.0080, but its flop bound slightly regressed from 0.0876 to 0.0895. The routed candidate 7601 improved 1.99% versus v51, while candidate 7602 regressed 1.50%. A street-hybrid seed 7602 also regressed. Complete evidence is pinned in `neural/20bb-v53-postflop-i100-pilot.json`; retain v51.
 
+## Rejected v54 200-iteration/alignment pilot
+
+At 200 iterations, all four local teacher bounds improved: seed 16001 reached 0.1900 flop / 0.00379 turn-river, and seed 16002 reached 0.08686 / 0.00185 bb/hand. A 200-step student improved 15/16 exact held-out comparisons versus v51, but only candidate 7601 improved in the routed test. A 1,000-step student improved all 16 frequency-fit comparisons, yet both routed means regressed to 2.1824 and 2.1898 bb/hand. Complete evidence is pinned in `neural/20bb-v54-postflop-i200-pilot.json`; retain v51.
+
+This closes the root-count, solver-iteration, and student-step ladders. Frequency-only cross-entropy is the remaining measured policy blocker: better frequency fit is not producing lower exploitability.
+
 ## Exact next sequence
 
-Continue the same-root convergence ladder at 200 DCFR iterations, scaling the averaging delays with the solve length:
+Implement EV-aware action-policy distillation without changing the game, evaluator, or frozen v27 preflop policy:
 
-```sh
-target/release/preflop-solver postflop-action-targets \
-  --effective-stack-bb 20 \
-  --networks neural/runs/20bb-v27-routed-seed7601-s5000.json \
-  --value-network neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json \
-  --roots 1 --turn-leaves-per-root 1 \
-  --flop-iterations 200 --flop-averaging-delay 50 \
-  --turn-river-iterations 200 --turn-river-averaging-delay 20 \
-  --seed 16001 --threads 4 --exploration 0.05 --max-records 100000 \
-  --output neural/runs/20bb-v54-postflop-action/targets-seed16001.jsonl.gz \
-  --report neural/runs/20bb-v54-postflop-action/targets-seed16001-report.json
+1. Extend `PublicBeliefStrategy` in `src/blueprint/public_belief.rs` with an optional flattened `[combo][action]` `action_values_bb` field using a serde default so existing artifacts remain readable.
+2. For `FlopSolver`, reuse `collect_average_profile_diagnostics` to attach exact per-action counterfactual values to each exported average-strategy node. Normalize each combo row by its compatible opponent mass, matching the existing response-attribution calculation.
+3. Add the analogous average-profile diagnostic walk to `TurnRiverSolver`, including observed-river chance branches, and attach finite normalized per-action values to turn and river strategies.
+4. Pass the combo row into `average_strategy_record_bytes`; set `action_values_bb` in each record and change dataset metadata `evaluates_trajectory_action_values` to `true`. Reject missing, non-finite, or action-count-mismatched values.
+5. Add Rust tests that reconstruct each node's average-policy EV from its action EVs, preserve zero-sum/chip invariants, cover river chance keys, and verify deterministic byte-identical export.
+6. Extend `neural/distill_postflop_policy.py` with an opt-in bounded expected-regret loss term: `sum(student_probability * (best_action_ev - action_ev))`, combined with the existing reach-weighted policy cross-entropy. Keep `--ev-regret-scale 0` byte-compatible with current behavior.
+7. Add Python tests for masked actions, equal-EV mixed support, dominated-action penalties, finite scaling, and the zero-scale compatibility path.
+8. Run a tiny paired smoke export first. Then regenerate the existing one-root paired targets with 200 iterations, run a short paired regret-scale pilot, and route only if both normal held-out metrics remain sane. The unchanged full-game certificate remains decisive.
 
-target/release/preflop-solver postflop-action-targets \
-  --effective-stack-bb 20 \
-  --networks neural/runs/20bb-v27-routed-seed7602-s5000.json \
-  --value-network neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json \
-  --roots 1 --turn-leaves-per-root 1 \
-  --flop-iterations 200 --flop-averaging-delay 50 \
-  --turn-river-iterations 200 --turn-river-averaging-delay 20 \
-  --seed 16002 --threads 4 --exploration 0.05 --max-records 100000 \
-  --output neural/runs/20bb-v54-postflop-action/targets-seed16002.jsonl.gz \
-  --report neural/runs/20bb-v54-postflop-action/targets-seed16002-report.json
-```
-
-If both local bounds improve over their matching v51 one-root teachers, repeat the validated mixed-replay update from the frozen v26 weights:
-
-```sh
-PYTHONPATH=neural .venv-neural/bin/python neural/distill_postflop_policy.py \
-  --dataset-a neural/runs/20bb-v54-postflop-action/targets-seed16001.jsonl.gz \
-  --dataset-b neural/runs/20bb-v54-postflop-action/targets-seed16002.jsonl.gz \
-  --initial-weights-a neural/runs/20bb-v26-probability-combined-distilled/seed-0.safetensors \
-  --initial-weights-b neural/runs/20bb-v26-probability-combined-distilled/seed-1.safetensors \
-  --output-dir neural/runs/20bb-v54-postflop-distilled-i200-mix25-s200 \
-  --hidden-sizes 512,256 --steps 200 --batch-size 512 \
-  --learning-rate 0.00003 --cross-seed-replay-probability 0.25 --seed 16701
-```
-
-Require all own-root and cross-root metrics to improve, route with the same frozen v27 preflop weights, and rerun the exact certificate controls pinned in `neural/20bb-v51-postflop-action-pilot.json`. Keep the successor only if both full-game means improve versus v51. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes; never infer a pass from teacher fit or cross-seed stability alone.
+Do not resume more roots, higher DCFR iterations, or longer frequency-only distillation; v52–v54 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
 
 ## Verification already completed
 
