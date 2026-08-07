@@ -1,0 +1,87 @@
+{
+  "schema": "hu-range-response-fresh-root-pair-result-v1",
+  "modelVersion": "20bb-v49-resolver-reach-candidate",
+  "status": "accepted-awaiting-remaining-fresh-roots-and-full-game-gates",
+  "activationAllowed": false,
+  "freeze": {
+    "path": "neural/20bb-v49-range-response-v3-freeze.json",
+    "sha256": "55d7f9fffd969f83763e1b81049d4ed132cfbf12f104ed32414faa2500795ac9"
+  },
+  "root": {
+    "board": "2c,9d,Kh",
+    "boardIndices": [0, 29, 46],
+    "texture": "unpairedRainbowDisconnected"
+  },
+  "directions": [
+    {
+      "strategySeed": 15301,
+      "evaluationSeed": 15302,
+      "convergence": {
+        "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v3/flop-2c9dKh-strategy15301-evaluation15302-convergence.json",
+        "sha256": "f687394c24486c5720f5e3152b7026251a3baef4c04f42e35a25326844c30de1",
+        "frozenStrategySha256": "a001e723823bca67daff2fc8a7541b62a456165925fad639f216e024cd66cd58",
+        "maximumProbabilitySumError": 7.899999998617346e-08
+      },
+      "rangeResponse": {
+        "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v3/flop-2c9dKh-strategy15301-evaluation15302-range-response.json",
+        "sha256": "f0d083a04285b7bd0923d703f4a3a63a758a90324b8059f88cd165461bbae996",
+        "checkpointGainsBbPerHand": [
+          0.006863092660384512,
+          0.012346443443967028,
+          0.014679399011135033
+        ],
+        "maximumResponseGainBbPerHand": 0.014679399011135033,
+        "finalCheckpointIncreaseBbPerHand": 0.0023329555671680047,
+        "maximumZeroSumResidualBb": 2.7755575615628914e-15,
+        "maximumResponseStrategyProbabilitySumError": 7.500000009930119e-08
+      },
+      "accepted": true
+    },
+    {
+      "strategySeed": 15302,
+      "evaluationSeed": 15301,
+      "convergence": {
+        "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v3/flop-2c9dKh-strategy15302-evaluation15301-convergence.json",
+        "sha256": "604608d10ea56c1632de052b21cc4be1d79a10e16f832255827954f4a4b9f2b3",
+        "frozenStrategySha256": "648489350e9ac2de2e325072a100b66ed47a7256026230f5ebb3a8ed3c545bed",
+        "maximumProbabilitySumError": 7.999999995789153e-08
+      },
+      "rangeResponse": {
+        "path": "neural/runs/v49-resolver-reach/release/uniform-expanded/range-response-v3/flop-2c9dKh-strategy15302-evaluation15301-range-response.json",
+        "sha256": "f9d634c9569ee8bd901636ce531de279931e2d2daefa0c9f216b1d63dfe46160",
+        "checkpointGainsBbPerHand": [
+          0.029010814764902595,
+          0.034373197420616744,
+          0.037969760074863676
+        ],
+        "maximumResponseGainBbPerHand": 0.037969760074863676,
+        "finalCheckpointIncreaseBbPerHand": 0.003596562654246932,
+        "maximumZeroSumResidualBb": 4.135580766728708e-15,
+        "maximumResponseStrategyProbabilitySumError": 6.79999999642078e-08
+      },
+      "accepted": true
+    }
+  ],
+  "observed": {
+    "maximumRangeConsistentResponseGainBbPerHand": 0.037969760074863676,
+    "maximumFinalCheckpointIncreaseBbPerHand": 0.003596562654246932,
+    "maximumZeroSumResidualBb": 4.135580766728708e-15,
+    "maximumStrategyProbabilitySumError": 7.999999995789153e-08,
+    "maximumResponseStrategyProbabilitySumError": 7.500000009930119e-08
+  },
+  "gates": {
+    "bothDirectionsAccepted": true,
+    "maximumRangeConsistentResponseGain": true,
+    "finalCheckpointConvergence": true,
+    "zeroSumResidual": true,
+    "strategyArtifactLinks": true,
+    "probabilitySums": true
+  },
+  "progress": {
+    "acceptedRoots": 1,
+    "requiredRoots": 12,
+    "acceptedDirectionalJobs": 2,
+    "requiredDirectionalJobs": 24
+  },
+  "interpretation": "The first fresh root passed the frozen finite learned-response rejection gate in both cross-seed directions. This is not an exploitability upper bound; the remaining fresh roots and every independent full-game release gate are still required before activation."
+}
