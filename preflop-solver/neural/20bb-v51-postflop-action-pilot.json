@@ -1,0 +1,127 @@
+{
+  "schema": "hu-range-conditioned-postflop-action-policy-pilot-v1",
+  "modelVersion": "hu-20bb-v51-v27-preflop-v51-mixed-postflop-action-pilot",
+  "depthBb": 20,
+  "status": "improved-but-release-rejected",
+  "activationAllowed": false,
+  "baseline": {
+    "modelVersion": "hu-20bb-v50-v27-preflop-v26-postflop-routed-candidate",
+    "certificate": "neural/20bb-v50-full-hand-certificate-pilot.json",
+    "candidateMeansBbPerHand": [
+      2.2582742976142156,
+      2.205688355300275
+    ]
+  },
+  "training": {
+    "script": "neural/distill_postflop_policy.py",
+    "scriptSha256": "25f16f5d3da85b9a68c7c0f95f76b2b2b0d7ec7ba6b816f08ff53699cd5ec074",
+    "report": {
+      "path": "neural/runs/20bb-v51-postflop-distilled-mix25-s200/report.json",
+      "sha256": "ee4fcd73b5abce51cea63aecc33b85760cea571a6c62a1c982b62cf07c9943f5"
+    },
+    "steps": 200,
+    "batchSize": 512,
+    "learningRate": 0.00003,
+    "crossSeedReplayProbability": 0.25,
+    "seed": 16101,
+    "reproducibility": "byte-identical",
+    "students": [
+      {
+        "candidateSeed": 7601,
+        "weights": "neural/runs/20bb-v51-postflop-distilled-mix25-s200/seed-0.safetensors",
+        "weightsSha256": "f8f4ae016ae0ca6720a878f6ae6dae4a7b9f3678ac0e743d860aac4a4a1c5dca",
+        "weightsBytes": 2013717,
+        "ownHeldout": {
+          "baselineActionFrequencyMae": 0.21435168385505676,
+          "studentActionFrequencyMae": 0.1412581205368042,
+          "baselinePrimaryAgreement": 0.563077449798584,
+          "studentPrimaryAgreement": 0.7308322191238403,
+          "baselineMaximumAggregateActionDelta": 0.17793866991996765,
+          "studentMaximumAggregateActionDelta": 0.02975221909582615
+        },
+        "otherSeedHeldout": {
+          "baselineActionFrequencyMae": 0.24409878253936768,
+          "studentActionFrequencyMae": 0.1992739886045456,
+          "baselinePrimaryAgreement": 0.6780899167060852,
+          "studentPrimaryAgreement": 0.7851927280426025,
+          "baselineMaximumAggregateActionDelta": 0.1411084681749344,
+          "studentMaximumAggregateActionDelta": 0.023092765361070633
+        }
+      },
+      {
+        "candidateSeed": 7602,
+        "weights": "neural/runs/20bb-v51-postflop-distilled-mix25-s200/seed-1.safetensors",
+        "weightsSha256": "6ff243ca2e6d6989c107e9517c1487ceb82f5aed69d77b5d31de7436e46cc1a5",
+        "weightsBytes": 2013717,
+        "ownHeldout": {
+          "baselineActionFrequencyMae": 0.2379150688648224,
+          "studentActionFrequencyMae": 0.1811060607433319,
+          "baselinePrimaryAgreement": 0.6966977119445801,
+          "studentPrimaryAgreement": 0.8119175434112549,
+          "baselineMaximumAggregateActionDelta": 0.10127411037683487,
+          "studentMaximumAggregateActionDelta": 0.02523883432149887
+        },
+        "otherSeedHeldout": {
+          "baselineActionFrequencyMae": 0.20535807311534882,
+          "studentActionFrequencyMae": 0.15434741973876953,
+          "baselinePrimaryAgreement": 0.600049614906311,
+          "studentPrimaryAgreement": 0.7100069522857666,
+          "baselineMaximumAggregateActionDelta": 0.14071160554885864,
+          "studentMaximumAggregateActionDelta": 0.03533276170492172
+        }
+      }
+    ]
+  },
+  "routedCandidates": [
+    {
+      "candidateSeed": 7601,
+      "path": "neural/runs/20bb-v51-routed-seed7601-mix25-s200.json",
+      "sha256": "0faa769485c6ea2c5f38bead024d3c924b7cd5dfb8af9cc76ec07ecef867ef1a",
+      "bytes": 30417654,
+      "reproducibility": "byte-identical",
+      "certificate": {
+        "path": "neural/runs/20bb-v51-postflop-action/causal-certificate-seed7601-mix25-s200.json",
+        "sha256": "962d2359f94350ca12e611cd8cf73f0eb65ccbcfb5a7b0cb2aa120acda5e58f4",
+        "sampleMeanExploitabilityBbPerHand": 2.1763580639024402,
+        "sampleStandardErrorBb": 0.453745916588234,
+        "oneSided99PercentUpperBoundBbPerHand": 20.0,
+        "relativeMeanReductionFromV50": 0.036273819260271824
+      }
+    },
+    {
+      "candidateSeed": 7602,
+      "path": "neural/runs/20bb-v51-routed-seed7602-mix25-s200.json",
+      "sha256": "f462c6dc70743d1f645761d80317e4e9e102efcbed875b68090595bbb0fca296",
+      "bytes": 30427814,
+      "reproducibility": "byte-identical",
+      "certificate": {
+        "path": "neural/runs/20bb-v51-postflop-action/causal-certificate-seed7602-mix25-s200.json",
+        "sha256": "f0b0c51ec3ccbb045f95db60bd2693c3febc6d245ded0e844d7b950204f15c37",
+        "sampleMeanExploitabilityBbPerHand": 2.08776451096832,
+        "sampleStandardErrorBb": 0.5189568010242918,
+        "oneSided99PercentUpperBoundBbPerHand": 20.0,
+        "relativeMeanReductionFromV50": 0.05346351131091729
+      }
+    }
+  ],
+  "certificateControls": {
+    "deals": 8,
+    "seed": 14602,
+    "confidence": 0.99,
+    "threads": 8,
+    "publicBranchesPerStreet": 2,
+    "opponentSamplesPerRunout": 4,
+    "scenariosPerDeal": 32,
+    "exactBettingTreeNodesPerCandidate": 782896
+  },
+  "gates": {
+    "pairedHeldoutTeacherMetricsImprove": true,
+    "byteIdenticalArtifactReproduction": true,
+    "pairedFullGameMeanImproves": true,
+    "maximumEstimatedExploitabilityBbPerHand": false,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": false,
+    "eligibleForActivation": false
+  },
+  "nextCorrection": "Increase authentic range-conditioned postflop root coverage using the same validated target exporter, retain paired replay during distillation, and rerun the unchanged controlled full-game certificate.",
+  "interpretation": "Paired cross-root replay fixes the one-root cross-seed regression and improves both routed full-game sample means, but the exploitability certificate still fails by a wide margin. This pilot is evidence for the next action-policy iteration, not an Approximate GTO model."
+}

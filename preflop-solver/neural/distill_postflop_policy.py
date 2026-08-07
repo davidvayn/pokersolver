@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=2_000)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=3e-5)
+    parser.add_argument("--cross-seed-replay-probability", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=16_101)
     return parser.parse_args()
 
@@ -119,6 +120,9 @@ def aggregate_action_delta(
 def fit(
     data: dict[str, np.ndarray],
     training: np.ndarray,
+    auxiliary_data: dict[str, np.ndarray],
+    auxiliary_training: np.ndarray,
+    cross_seed_replay_probability: float,
     initial: Path,
     hidden: tuple[int, int],
     steps: int,
@@ -135,12 +139,24 @@ def fit(
     step = make_compiled_policy_step(model, optimizer)
     losses: list[float] = []
     for _ in range(steps):
-        indices = rng.choice(training, size=min(batch_size, len(training)), replace=True)
+        batch_data = data
+        batch_training = training
+        if (
+            cross_seed_replay_probability > 0
+            and rng.random() < cross_seed_replay_probability
+        ):
+            batch_data = auxiliary_data
+            batch_training = auxiliary_training
+        indices = rng.choice(
+            batch_training,
+            size=min(batch_size, len(batch_training)),
+            replace=True,
+        )
         loss = step(
-            batch_features(data, indices),
-            mx.array(data["targets"][indices]),
-            mx.array(data["masks"][indices]),
-            mx.array(data["weights"][indices]),
+            batch_features(batch_data, indices),
+            mx.array(batch_data["targets"][indices]),
+            mx.array(batch_data["masks"][indices]),
+            mx.array(batch_data["weights"][indices]),
         )
         mx.eval(loss, model.parameters(), optimizer.state)
         losses.append(float(loss.item()))
@@ -164,6 +180,8 @@ def main() -> None:
         raise ValueError("--hidden-sizes requires two positive widths")
     if min(args.steps, args.batch_size) <= 0 or args.learning_rate <= 0:
         raise ValueError("distillation optimization settings must be positive")
+    if not 0 <= args.cross_seed_replay_probability <= 1:
+        raise ValueError("--cross-seed-replay-probability must be between zero and one")
     hidden = (hidden_values[0], hidden_values[1])
     args.output_dir.mkdir(parents=True, exist_ok=True)
     loaded: list[tuple[dict[str, Any], dict[str, np.ndarray], np.ndarray, np.ndarray]] = []
@@ -194,19 +212,28 @@ def main() -> None:
     for index, ((_, data, training, heldout), initial) in enumerate(
         zip(loaded, (args.initial_weights_a, args.initial_weights_b))
     ):
+        other = 1 - index
+        _, other_data, other_training, other_heldout = loaded[other]
         baseline = {
             "training": None,
             "heldout": None,
+            "otherSeedHeldout": None,
         }
         baseline_model = ActionScorer(INPUT_FEATURE_COUNT, hidden)
         baseline_model.load_weights(str(initial))
         mx.eval(baseline_model.parameters())
         baseline["training"] = evaluated_metrics(baseline_model, data, training)
         baseline["heldout"] = evaluated_metrics(baseline_model, data, heldout)
+        baseline["otherSeedHeldout"] = evaluated_metrics(
+            baseline_model, other_data, other_heldout
+        )
         del baseline_model
         model, losses = fit(
             data,
             training,
+            other_data,
+            other_training,
+            args.cross_seed_replay_probability,
             initial,
             hidden,
             args.steps,
@@ -246,6 +273,7 @@ def main() -> None:
         "steps": args.steps,
         "batchSize": args.batch_size,
         "learningRate": args.learning_rate,
+        "crossSeedReplayProbability": args.cross_seed_replay_probability,
         "seed": args.seed,
         "datasets": descriptions,
         "students": reports,

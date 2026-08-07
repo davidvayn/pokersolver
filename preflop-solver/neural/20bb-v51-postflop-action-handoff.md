@@ -2,11 +2,11 @@
 
 ## Boundary and release state
 
-- Implementation baseline: commit `c888a9c` (`Add range-conditioned postflop policy distillation`).
+- Target-export implementation baseline: commit `c888a9c` (`Add range-conditioned postflop policy distillation`).
 - The paired action-target jobs described below completed successfully.
-- No v51 student has been distilled or evaluated yet.
-- `activationAllowed` remains `false`. These targets are training inputs, not a release candidate or an equilibrium certificate.
-- Continue only the served action-policy correction. Do not add value-oracle, untouched-root, or unrelated diagnostic work before evaluating this correction.
+- The mixed-replay v51 student pilot has now been distilled and evaluated. Its complete evidence is pinned in `neural/20bb-v51-postflop-action-pilot.json`.
+- `activationAllowed` remains `false`. Both full-game means improved, but the required exploitability gates still fail by a wide margin.
+- Continue only the served action-policy correction. Do not add value-oracle, untouched-root, or unrelated diagnostic work.
 
 The current routed v50 candidate is frozen in `neural/20bb-v50-full-hand-candidate-freeze.json`. Its controlled certificate is recorded in `neural/20bb-v50-full-hand-certificate-pilot.json`: paired relaxed means are 2.2582742976 and 2.2056883553 bb/hand, and both one-sided 99% upper bounds are 20 bb/hand. The v26 postflop action student is therefore the measured policy gap this experiment addresses. The v27 preflop students stay frozen.
 
@@ -45,73 +45,54 @@ Independent streaming verification matched each header and report count, found f
 
 The local bounds above do not qualify either teacher for release. `accepted_for_training` means only that the complete-tree policies are valid supervised correction targets. The final routed student must pass the unchanged full-game release gates.
 
+## Completed v51 mixed-replay pilot
+
+Training each student only on its own one-root corpus caused a cross-seed regression. The retained configuration used 25% cross-seed replay for 200 steps at learning rate `0.00003`. It improved own-root and cross-root action-frequency MAE, primary agreement, and maximum aggregate action delta for both students. Distillation and routed export reproduce byte-for-byte.
+
+The unchanged full-game certificate improved candidate 7601 from 2.2582742976 to 2.1763580639 bb/hand and candidate 7602 from 2.2056883553 to 2.0877645110 bb/hand on the paired chance design. Their one-sided 99% upper bounds remain 20 bb/hand, so this is a rejected directional pilot rather than a releasable model.
+
 ## Exact next sequence
 
-Run a short paired 200-step update first. This limits catastrophic forgetting from the intentionally small one-root pilot while testing whether the new targets causally improve the served policy.
+Increase authentic root coverage without increasing the 100,000-row memory ceiling. Reuse seeds 16001 and 16002 with two roots so each replacement corpus includes its prior deterministic root plus one new root:
+
+```sh
+target/release/preflop-solver postflop-action-targets \
+  --effective-stack-bb 20 \
+  --networks neural/runs/20bb-v27-routed-seed7601-s5000.json \
+  --value-network neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15301.json \
+  --roots 2 --turn-leaves-per-root 1 \
+  --flop-iterations 50 --flop-averaging-delay 12 \
+  --turn-river-iterations 50 --turn-river-averaging-delay 5 \
+  --seed 16001 --threads 4 --exploration 0.05 --max-records 100000 \
+  --output neural/runs/20bb-v52-postflop-action/targets-seed16001.jsonl.gz \
+  --report neural/runs/20bb-v52-postflop-action/targets-seed16001-report.json
+
+target/release/preflop-solver postflop-action-targets \
+  --effective-stack-bb 20 \
+  --networks neural/runs/20bb-v27-routed-seed7602-s5000.json \
+  --value-network neural/runs/v49-resolver-reach/release/uniform-expanded/turn-value-range-seed15302.json \
+  --roots 2 --turn-leaves-per-root 1 \
+  --flop-iterations 50 --flop-averaging-delay 12 \
+  --turn-river-iterations 50 --turn-river-averaging-delay 5 \
+  --seed 16002 --threads 4 --exploration 0.05 --max-records 100000 \
+  --output neural/runs/20bb-v52-postflop-action/targets-seed16002.jsonl.gz \
+  --report neural/runs/20bb-v52-postflop-action/targets-seed16002-report.json
+```
+
+Then repeat the validated mixed-replay update from the frozen v26 weights:
 
 ```sh
 PYTHONPATH=neural .venv-neural/bin/python neural/distill_postflop_policy.py \
-  --dataset-a neural/runs/20bb-v51-postflop-action/targets-seed16001.jsonl.gz \
-  --dataset-b neural/runs/20bb-v51-postflop-action/targets-seed16002.jsonl.gz \
+  --dataset-a neural/runs/20bb-v52-postflop-action/targets-seed16001.jsonl.gz \
+  --dataset-b neural/runs/20bb-v52-postflop-action/targets-seed16002.jsonl.gz \
   --initial-weights-a neural/runs/20bb-v26-probability-combined-distilled/seed-0.safetensors \
   --initial-weights-b neural/runs/20bb-v26-probability-combined-distilled/seed-1.safetensors \
-  --output-dir neural/runs/20bb-v51-postflop-distilled-s200 \
-  --hidden-sizes 512,256 \
-  --steps 200 \
-  --batch-size 512 \
-  --learning-rate 0.00003 \
-  --seed 16101
+  --output-dir neural/runs/20bb-v52-postflop-distilled-roots2-mix25-s200 \
+  --hidden-sizes 512,256 --steps 200 --batch-size 512 \
+  --learning-rate 0.00003 --cross-seed-replay-probability 0.25 --seed 16301
 ```
 
-Require both students' held-out teacher fit and other-seed held-out teacher fit to improve. If they do, export paired routed bundles while preserving the frozen v27 preflop weights:
-
-```sh
-PYTHONPATH=neural .venv-neural/bin/python neural/export_routed_bundle.py \
-  --preflop-run neural/runs/20bb-long-v1-narrow-seed5101 \
-  --preflop-round 250 \
-  --preflop-weights neural/runs/20bb-v27-tabular-distilled-s5000/seed-0.safetensors \
-  --postflop-run neural/runs/20bb-long-v1-wide-seed5101 \
-  --postflop-round 100 \
-  --postflop-weights neural/runs/20bb-v51-postflop-distilled-s200/seed-0.safetensors \
-  --output neural/runs/20bb-v51-routed-seed7601-s200.json
-
-PYTHONPATH=neural .venv-neural/bin/python neural/export_routed_bundle.py \
-  --preflop-run neural/runs/20bb-long-v1-narrow-seed5102 \
-  --preflop-round 250 \
-  --preflop-weights neural/runs/20bb-v27-tabular-distilled-s5000/seed-1.safetensors \
-  --postflop-run neural/runs/20bb-long-v1-wide-seed5102 \
-  --postflop-round 100 \
-  --postflop-weights neural/runs/20bb-v51-postflop-distilled-s200/seed-1.safetensors \
-  --output neural/runs/20bb-v51-routed-seed7602-s200.json
-```
-
-Then rerun the same paired controlled certificate, changing only the candidate bundle and output path:
-
-```sh
-target/release/preflop-solver neural-certificate \
-  --effective-stack-bb 20 \
-  --networks neural/runs/20bb-v51-routed-seed7601-s200.json \
-  --deals 8 \
-  --seed 14602 \
-  --confidence 0.99 \
-  --threads 8 \
-  --public-branches-per-street 2 \
-  --opponent-samples-per-runout 4 \
-  --output neural/runs/20bb-v51-postflop-action/causal-certificate-seed7601-s200.json
-
-target/release/preflop-solver neural-certificate \
-  --effective-stack-bb 20 \
-  --networks neural/runs/20bb-v51-routed-seed7602-s200.json \
-  --deals 8 \
-  --seed 14602 \
-  --confidence 0.99 \
-  --threads 8 \
-  --public-branches-per-street 2 \
-  --opponent-samples-per-runout 4 \
-  --output neural/runs/20bb-v51-postflop-action/causal-certificate-seed7602-s200.json
-```
-
-Compare on the paired seed against the v50 means in `neural/20bb-v50-full-hand-certificate-pilot.json`. Keep the successor only if both routed candidates improve and normal action metrics remain sane. If it improves but still fails release, expand authentic roots using the same pipeline. If it regresses, retain v50 and first reduce the update steps or learning rate. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes; never infer a pass from teacher fit or cross-seed stability alone.
+Require all own-root and cross-root metrics to improve, route with the same frozen v27 preflop weights, and rerun the exact certificate controls pinned in `neural/20bb-v51-postflop-action-pilot.json`. Keep the successor only if both full-game means improve. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes; never infer a pass from teacher fit or cross-seed stability alone.
 
 ## Verification already completed
 
