@@ -1,0 +1,175 @@
+{
+  "schema": "hu-range-conditioned-postflop-policy-distillation-v1",
+  "depthBb": 20.0,
+  "hiddenSizes": [
+    512,
+    256
+  ],
+  "steps": 50,
+  "batchSize": 512,
+  "learningRate": 1e-05,
+  "crossSeedReplayProbability": 0.25,
+  "seed": 16401,
+  "datasets": [
+    {
+      "path": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/20bb-v52-postflop-action/targets-seed16001.jsonl.gz",
+      "sha256": "7e942f0f819fe0c41ce28f1a38c05514e6fbfb879277a0a05e78ffb2941b07ca",
+      "records": 91998,
+      "trainingRecords": 82798,
+      "heldoutRecords": 9200,
+      "streetRecords": {
+        "flop": 25000,
+        "turn": 21998,
+        "river": 45000
+      },
+      "teacher": {
+        "explorationProbability": 0.05,
+        "flopAveragingDelay": 12,
+        "flopIterations": 50,
+        "roots": 2,
+        "schema": "hu-range-conditioned-postflop-action-teacher-v1",
+        "sourcePolicySha256": "c5dba74744d817423c94803c2a1c92dc8a3acacd3b5f58094c700704c0fcbf92",
+        "turnLeaves": 2,
+        "turnRiverAveragingDelay": 5,
+        "turnRiverIterations": 50,
+        "validation": {
+          "reasons": [
+            "local postflop teachers are successor-training targets, not release-qualified policies; activation still requires the unchanged full-game exploitability gate",
+            "deterministic street-stratified reservoir with inverse-inclusion weight correction retained 91998 of 2582086 complete-tree action rows"
+          ],
+          "status": "accepted_for_training"
+        },
+        "valueNetworkSha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81"
+      }
+    },
+    {
+      "path": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/20bb-v52-postflop-action/targets-seed16002.jsonl.gz",
+      "sha256": "aa9e94f0472c1ad01867dec408906d11bebd4b71671ef8a7eff8491df0350cfb",
+      "records": 90027,
+      "trainingRecords": 81024,
+      "heldoutRecords": 9003,
+      "streetRecords": {
+        "flop": 25000,
+        "turn": 20027,
+        "river": 45000
+      },
+      "teacher": {
+        "explorationProbability": 0.05,
+        "flopAveragingDelay": 12,
+        "flopIterations": 50,
+        "roots": 2,
+        "schema": "hu-range-conditioned-postflop-action-teacher-v1",
+        "sourcePolicySha256": "bf6a303459f2c853baaef8b62045119ba1a58332792c8e29f0fff6a8cfb0922f",
+        "turnLeaves": 2,
+        "turnRiverAveragingDelay": 5,
+        "turnRiverIterations": 50,
+        "validation": {
+          "reasons": [
+            "local postflop teachers are successor-training targets, not release-qualified policies; activation still requires the unchanged full-game exploitability gate",
+            "deterministic street-stratified reservoir with inverse-inclusion weight correction retained 90027 of 3069842 complete-tree action rows"
+          ],
+          "status": "accepted_for_training"
+        },
+        "valueNetworkSha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1"
+      }
+    }
+  ],
+  "students": [
+    {
+      "student": 0,
+      "initialWeightsSha256": "f8f4ae016ae0ca6720a878f6ae6dae4a7b9f3678ac0e743d860aac4a4a1c5dca",
+      "studentWeightsSha256": "571da57d7470f18bcc7925d523b74159bc1f20bfa9c94060b14b37c680218b38",
+      "studentBytes": 2013717,
+      "firstLoss": 0.882910966873169,
+      "finalLoss": 0.8106691241264343,
+      "baseline": {
+        "training": {
+          "weightedActionFrequencyMae": 0.16392368078231812,
+          "weightedPrimaryAgreement": 0.6869177222251892,
+          "weightedTeacherProbability": 0.5477149486541748,
+          "maximumAggregateActionDelta": 0.061007026582956314
+        },
+        "heldout": {
+          "weightedActionFrequencyMae": 0.16506198048591614,
+          "weightedPrimaryAgreement": 0.6776605844497681,
+          "weightedTeacherProbability": 0.5437450408935547,
+          "maximumAggregateActionDelta": 0.05787280574440956
+        },
+        "otherSeedHeldout": {
+          "weightedActionFrequencyMae": 0.16739216446876526,
+          "weightedPrimaryAgreement": 0.7489805221557617,
+          "weightedTeacherProbability": 0.5705388784408569,
+          "maximumAggregateActionDelta": 0.0806884914636612
+        }
+      },
+      "teacherFit": {
+        "training": {
+          "weightedActionFrequencyMae": 0.1640167385339737,
+          "weightedPrimaryAgreement": 0.7024508714675903,
+          "weightedTeacherProbability": 0.5341470241546631,
+          "maximumAggregateActionDelta": 0.025036286562681198
+        },
+        "heldout": {
+          "weightedActionFrequencyMae": 0.16574591398239136,
+          "weightedPrimaryAgreement": 0.6960725784301758,
+          "weightedTeacherProbability": 0.5298218727111816,
+          "maximumAggregateActionDelta": 0.019130611792206764
+        }
+      },
+      "otherSeedHeldoutTeacherFit": {
+        "weightedActionFrequencyMae": 0.16680222749710083,
+        "weightedPrimaryAgreement": 0.7503632307052612,
+        "weightedTeacherProbability": 0.5584254264831543,
+        "maximumAggregateActionDelta": 0.036211393773555756
+      }
+    },
+    {
+      "student": 1,
+      "initialWeightsSha256": "6ff243ca2e6d6989c107e9517c1487ceb82f5aed69d77b5d31de7436e46cc1a5",
+      "studentWeightsSha256": "6076b7d0e3d8146b735ce82ef9e36c09107e8b558cb7473d9f6e0046fd8c8303",
+      "studentBytes": 2013717,
+      "firstLoss": 0.6811871528625488,
+      "finalLoss": 0.7457572221755981,
+      "baseline": {
+        "training": {
+          "weightedActionFrequencyMae": 0.15918177366256714,
+          "weightedPrimaryAgreement": 0.7465922832489014,
+          "weightedTeacherProbability": 0.5763564109802246,
+          "maximumAggregateActionDelta": 0.046888768672943115
+        },
+        "heldout": {
+          "weightedActionFrequencyMae": 0.16348686814308167,
+          "weightedPrimaryAgreement": 0.7373708486557007,
+          "weightedTeacherProbability": 0.5711820125579834,
+          "maximumAggregateActionDelta": 0.0485188290476799
+        },
+        "otherSeedHeldout": {
+          "weightedActionFrequencyMae": 0.17862240970134735,
+          "weightedPrimaryAgreement": 0.6784778237342834,
+          "weightedTeacherProbability": 0.5169148445129395,
+          "maximumAggregateActionDelta": 0.033469654619693756
+        }
+      },
+      "teacherFit": {
+        "training": {
+          "weightedActionFrequencyMae": 0.15744374692440033,
+          "weightedPrimaryAgreement": 0.7486704587936401,
+          "weightedTeacherProbability": 0.5716739296913147,
+          "maximumAggregateActionDelta": 0.033053793013095856
+        },
+        "heldout": {
+          "weightedActionFrequencyMae": 0.16233107447624207,
+          "weightedPrimaryAgreement": 0.7431681752204895,
+          "weightedTeacherProbability": 0.5666117668151855,
+          "maximumAggregateActionDelta": 0.03718699514865875
+        }
+      },
+      "otherSeedHeldoutTeacherFit": {
+        "weightedActionFrequencyMae": 0.17523664236068726,
+        "weightedPrimaryAgreement": 0.6773268580436707,
+        "weightedTeacherProbability": 0.5168480277061462,
+        "maximumAggregateActionDelta": 0.01472337357699871
+      }
+    }
+  ]
+}

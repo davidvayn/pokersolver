@@ -1,0 +1,101 @@
+{
+  "schema": "hu-range-conditioned-postflop-roots-expansion-pilot-v1",
+  "modelVersion": "hu-20bb-v52-v27-preflop-v52-roots2-postflop-action-pilot",
+  "depthBb": 20,
+  "status": "rejected-retain-v51",
+  "activationAllowed": false,
+  "hypothesis": "Two authentic roots per seed would improve the routed policy by increasing postflop action-target coverage under the same fixed memory cap.",
+  "targets": [
+    {
+      "seed": 16001,
+      "corpus": "neural/runs/20bb-v52-postflop-action/targets-seed16001.jsonl.gz",
+      "corpusSha256": "7e942f0f819fe0c41ce28f1a38c05514e6fbfb879277a0a05e78ffb2941b07ca",
+      "report": "neural/runs/20bb-v52-postflop-action/targets-seed16001-report.json",
+      "reportSha256": "520758563a1c42b499b11e972f1995b09f72837286ecb6e2ea09b1a4d2f2f306",
+      "candidateRows": 2582086,
+      "retainedRows": 91998,
+      "flopRows": 25000,
+      "turnRows": 21998,
+      "riverRows": 45000,
+      "maximumFlopExploitabilityBbPerHand": 0.266142723223663,
+      "maximumTurnRiverExploitabilityBbPerHand": 0.10886123119519311,
+      "validation": "accepted_for_training"
+    },
+    {
+      "seed": 16002,
+      "corpus": "neural/runs/20bb-v52-postflop-action/targets-seed16002.jsonl.gz",
+      "corpusSha256": "aa9e94f0472c1ad01867dec408906d11bebd4b71671ef8a7eff8491df0350cfb",
+      "report": "neural/runs/20bb-v52-postflop-action/targets-seed16002-report.json",
+      "reportSha256": "24627a9c381ce1060ef7acc6defb9452087286b57999c6185a0983ed06992125",
+      "candidateRows": 3069842,
+      "retainedRows": 90027,
+      "flopRows": 25000,
+      "turnRows": 20027,
+      "riverRows": 45000,
+      "maximumFlopExploitabilityBbPerHand": 0.2334450321409929,
+      "maximumTurnRiverExploitabilityBbPerHand": 0.08024914361701291,
+      "validation": "accepted_for_training"
+    }
+  ],
+  "targetIntegrity": {
+    "recordCountsMatch": true,
+    "probabilitiesValid": true,
+    "weightsFiniteAndPositive": true,
+    "actionFeatureHashesComplete": true,
+    "truncated": false
+  },
+  "fromFrozenV26": {
+    "report": "neural/runs/20bb-v52-postflop-distilled-roots2-mix25-s200/report.json",
+    "reportSha256": "8dc9b224e79d59f3055fb2ea7a0a3ac9e677eaf710e579cbef1441af5b36ceca",
+    "studentWeightsSha256": [
+      "7fb5f18b8aa545a9a972999479776d108372b06d86638d2f9c3e93620997860d",
+      "851a8565f70461c2653502dadd73b99b61da67876e46ea0c786fa137413b9804"
+    ],
+    "heldoutAndCrossSeedTeacherMetricsImproveFromV26": true,
+    "routedCandidates": [
+      {
+        "candidateSeed": 7601,
+        "sha256": "209c6eb782a293ea9d4b03cddee185ba5e637a8cf6de33d2206639c6c846cd4e",
+        "sampleMeanExploitabilityBbPerHand": 2.2331482812606316,
+        "v51MeanBbPerHand": 2.1763580639024402,
+        "relativeRegressionFromV51": 0.0260941516472526,
+        "oneSided99PercentUpperBoundBbPerHand": 20.0,
+        "certificate": "neural/runs/20bb-v52-postflop-action/causal-certificate-seed7601-roots2-mix25-s200.json",
+        "certificateSha256": "e3e1d058b4434325b0df694f4250328107f5ce4fd554dc4c9c6842b51d79882e"
+      },
+      {
+        "candidateSeed": 7602,
+        "sha256": "c29dbbb168afb55cc690e346ba54d6803b718d6e6b31aebcabceb28d41d337b5",
+        "sampleMeanExploitabilityBbPerHand": 2.1407232955072084,
+        "v51MeanBbPerHand": 2.08776451096832,
+        "relativeRegressionFromV51": 0.02536626341747983,
+        "oneSided99PercentUpperBoundBbPerHand": 20.0,
+        "certificate": "neural/runs/20bb-v52-postflop-action/causal-certificate-seed7602-roots2-mix25-s200.json",
+        "certificateSha256": "a9377d7febf47a003a8a449db6e0f6f6b3061aeff999c735703f108758d505f7"
+      }
+    ]
+  },
+  "continualVariant": {
+    "description": "Initialize from v51 and update for 50 steps at learning rate 0.00001 with 25% cross-seed replay.",
+    "report": "neural/runs/20bb-v52-postflop-continual-roots2-mix25-s50-lr1e5/report.json",
+    "reportSha256": "59c9e1a876e17201be60282f90b2aa633369db485490c4ef34f0d53534e86061",
+    "studentWeightsSha256": [
+      "571da57d7470f18bcc7925d523b74159bc1f20bfa9c94060b14b37c680218b38",
+      "6076b7d0e3d8146b735ce82ef9e36c09107e8b558cb7473d9f6e0046fd8c8303"
+    ],
+    "acceptedForRouting": false,
+    "reason": "Several held-out MAE, primary-agreement, and teacher-probability comparisons regressed, so the variant failed before full-game evaluation."
+  },
+  "decision": {
+    "retainModelVersion": "hu-20bb-v51-v27-preflop-v51-mixed-postflop-action-pilot",
+    "reason": "Both independently routed v52 candidates regress by about 2.5% versus v51 on the unchanged paired full-game mean.",
+    "nextCorrection": "Improve the local action teachers with more DCFR iterations before adding more target coverage or student optimization."
+  },
+  "gates": {
+    "studentTeacherFit": true,
+    "pairedFullGameMeanImprovesFromV51": false,
+    "maximumEstimatedExploitabilityBbPerHand": false,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": false,
+    "eligibleForActivation": false
+  }
+}
