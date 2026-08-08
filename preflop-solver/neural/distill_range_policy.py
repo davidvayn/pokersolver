@@ -122,9 +122,9 @@ def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
         candidates = grouped[street]
         candidates.sort(
             key=lambda record: hashlib.sha256(
-                b"hu-range-policy-python-cap-v1"
+                b"hu-range-policy-python-cap-v2-source-invariant"
                 + str(metadata["seed"]).encode()
-                + json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+                + record_selection_identity(record)
             ).digest()
         )
         retained = candidates[: capacities[street]]
@@ -150,6 +150,34 @@ def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
                 )
     temporary.replace(output)
     return output
+
+
+def record_selection_identity(record: dict[str, Any]) -> bytes:
+    """Identify a solver target without depending on its attached source policy."""
+    return json.dumps(
+        {
+            "state": record.get("state"),
+            "action_labels": record.get("action_labels"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def target_corpus_sha256(dataset: LoadedDataset) -> str:
+    digest = hashlib.sha256(b"hu-range-policy-target-corpus-v1\0")
+    for record in dataset.records:
+        digest.update(target_record_identity(record))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def target_record_identity(record: dict[str, Any]) -> bytes:
+    """Canonicalize a solver target across Rust's typed JSON round trip."""
+    target = dict(record)
+    target.pop("source_policy_probabilities", None)
+    target["weight"] = float(np.float32(target["weight"]))
+    return json.dumps(target, sort_keys=True, separators=(",", ":")).encode()
 
 
 def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
@@ -762,6 +790,18 @@ def parse_args() -> argparse.Namespace:
         default="replace",
     )
     parser.add_argument("--source-network", type=Path)
+    parser.add_argument("--source-network-a", type=Path)
+    parser.add_argument("--source-network-b", type=Path)
+    parser.add_argument(
+        "--dataset-a-with-source-b",
+        type=Path,
+        help="teacher A targets augmented with source network B",
+    )
+    parser.add_argument(
+        "--dataset-b-with-source-a",
+        type=Path,
+        help="teacher B targets augmented with source network A",
+    )
     parser.add_argument("--seeds", default="17601,17602")
     parser.add_argument("--maximum-records-per-teacher", type=int, default=256)
     parser.add_argument("--maximum-weighted-kl", type=float, default=0.10)
@@ -773,6 +813,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     seeds = [int(value) for value in args.seeds.split(",")]
+    shared_source = args.source_network is not None
+    paired_sources = args.source_network_a is not None and args.source_network_b is not None
     if (
         len(seeds) != 2
         or min(args.steps, args.batch_size) <= 0
@@ -782,46 +824,119 @@ def main() -> None:
         or args.maximum_records_per_teacher < 12
         or (
             args.composition == "source_bundle_logit_residual"
-            and args.source_network is None
+            and shared_source == paired_sources
+        )
+        or (
+            paired_sources
+            and (
+                args.dataset_a_with_source_b is None
+                or args.dataset_b_with_source_a is None
+            )
+        )
+        or (
+            not paired_sources
+            and (
+                args.dataset_a_with_source_b is not None
+                or args.dataset_b_with_source_a is not None
+                or args.source_network_a is not None
+                or args.source_network_b is not None
+            )
         )
     ):
         raise ValueError("invalid paired range-policy optimization controls")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    source_paths = [
+    primary_paths = [
         cap_dataset(
             args.dataset_a,
-            args.output_dir / "teacher-0-capped.jsonl.gz",
+            args.output_dir / "teacher-a-primary-capped.jsonl.gz",
             args.maximum_records_per_teacher,
         ),
         cap_dataset(
             args.dataset_b,
-            args.output_dir / "teacher-1-capped.jsonl.gz",
+            args.output_dir / "teacher-b-primary-capped.jsonl.gz",
             args.maximum_records_per_teacher,
         ),
     ]
-    metadata_a, records_a = read_records(source_paths[0])
-    metadata_b, records_b = read_records(source_paths[1])
-    maximum_actions = max(
-        len(record["action_labels"]) for record in records_a + records_b
+    cross_paths = (
+        [
+            cap_dataset(
+                args.dataset_a_with_source_b,
+                args.output_dir / "teacher-a-source-b-capped.jsonl.gz",
+                args.maximum_records_per_teacher,
+            ),
+            cap_dataset(
+                args.dataset_b_with_source_a,
+                args.output_dir / "teacher-b-source-a-capped.jsonl.gz",
+                args.maximum_records_per_teacher,
+            ),
+        ]
+        if paired_sources
+        else primary_paths
     )
-    datasets = [
-        load_dataset(source_paths[0], maximum_actions),
-        load_dataset(source_paths[1], maximum_actions),
+    loaded_records = [read_records(path) for path in primary_paths + cross_paths]
+    metadata_a, records_a = loaded_records[0]
+    metadata_b, records_b = loaded_records[1]
+    maximum_actions = max(
+        len(record["action_labels"])
+        for _, records in loaded_records
+        for record in records
+    )
+    primary_datasets = [
+        load_dataset(primary_paths[0], maximum_actions),
+        load_dataset(primary_paths[1], maximum_actions),
     ]
+    cross_datasets = (
+        [
+            load_dataset(cross_paths[0], maximum_actions),
+            load_dataset(cross_paths[1], maximum_actions),
+        ]
+        if paired_sources
+        else primary_datasets
+    )
+    source_networks = (
+        [args.source_network_a, args.source_network_b]
+        if paired_sources
+        else [args.source_network, args.source_network]
+    )
     if (
-        datasets[0].sha256 == datasets[1].sha256
-        or datasets[0].metadata["seed"] == datasets[1].metadata["seed"]
-        or datasets[0].metadata["depth_bb"] != datasets[1].metadata["depth_bb"]
+        primary_datasets[0].sha256 == primary_datasets[1].sha256
+        or primary_datasets[0].metadata["seed"]
+        == primary_datasets[1].metadata["seed"]
+        or primary_datasets[0].metadata["depth_bb"]
+        != primary_datasets[1].metadata["depth_bb"]
         or metadata_a["teacher"]["valueNetworkSha256"]
         == metadata_b["teacher"]["valueNetworkSha256"]
     ):
         raise ValueError("paired policy teachers must have independent identities at one depth")
-    for dataset in datasets:
+    if paired_sources and (
+        source_networks[0] is None
+        or source_networks[1] is None
+        or sha256(source_networks[0]) == sha256(source_networks[1])
+        or target_corpus_sha256(primary_datasets[0])
+        != target_corpus_sha256(cross_datasets[0])
+        or target_corpus_sha256(primary_datasets[1])
+        != target_corpus_sha256(cross_datasets[1])
+    ):
+        raise ValueError(
+            "paired residual sources must be independent and cross-augmented from identical targets"
+        )
+    expected_sources = (
+        [source_networks[0], source_networks[1], source_networks[1], source_networks[0]]
+        if paired_sources
+        else [source_networks[0], source_networks[1]]
+    )
+    datasets_to_prepare = (
+        primary_datasets + cross_datasets if paired_sources else primary_datasets
+    )
+    for dataset, source_network in zip(
+        datasets_to_prepare, expected_sources, strict=True
+    ):
         baseline = dataset.metadata.get("source_policy_baseline", {})
         if args.composition == "source_bundle_logit_residual" and (
             baseline.get("composition") != "source_bundle_logit_residual"
             or len(str(baseline.get("sha256", ""))) != 64
-            or baseline.get("sha256") != sha256(args.source_network)
+            or source_network is None
+            or baseline.get("sha256") != sha256(source_network)
             or np.any(
                 (dataset.combo_weights > 0)
                 & (dataset.source_probabilities.sum(axis=2) <= 0)
@@ -831,22 +946,31 @@ def main() -> None:
                 "residual policy datasets require pinned source probabilities"
             )
         add_features(dataset)
-    splits = [split_rows(dataset) for dataset in datasets]
-    heldout_paths = []
-    for index, (dataset, (_, heldout)) in enumerate(zip(datasets, splits, strict=True)):
-        path = args.output_dir / f"teacher-{index}-heldout.jsonl.gz"
-        write_subset(dataset, heldout, path)
-        heldout_paths.append(path)
+    primary_splits = [split_rows(dataset) for dataset in primary_datasets]
+    cross_splits = (
+        [split_rows(dataset) for dataset in cross_datasets]
+        if paired_sources
+        else primary_splits
+    )
     students = []
     for index, seed in enumerate(seeds):
         other = 1 - index
+        primary = primary_datasets[index]
+        auxiliary = cross_datasets[other]
+        primary_split = primary_splits[index]
+        auxiliary_split = cross_splits[other]
+        source_network = source_networks[index]
+        own_heldout_path = args.output_dir / f"student-{index}-own-heldout.jsonl.gz"
+        cross_heldout_path = args.output_dir / f"student-{index}-cross-heldout.jsonl.gz"
+        write_subset(primary, primary_split[1], own_heldout_path)
+        write_subset(auxiliary, auxiliary_split[1], cross_heldout_path)
         model, losses, selection = train(
-            datasets[index],
-            datasets[other],
-            splits[index][0],
-            splits[other][0],
-            splits[index][1],
-            splits[other][1],
+            primary,
+            auxiliary,
+            primary_split[0],
+            auxiliary_split[0],
+            primary_split[1],
+            auxiliary_split[1],
             seed,
             args.steps,
             args.batch_size,
@@ -857,37 +981,37 @@ def main() -> None:
             args.composition,
         )
         network = args.output_dir / f"range-policy-seed-{seed}.json"
-        export_model(model, network, seed, datasets[index], datasets[other])
+        export_model(model, network, seed, primary, auxiliary)
         python_diagnostics = {
             "sourceFull": python_diagnostic(
-                model, datasets[index], np.arange(len(datasets[index].records))
+                model, primary, np.arange(len(primary.records))
             ),
-            "ownHeldout": python_diagnostic(model, datasets[index], splits[index][1]),
+            "ownHeldout": python_diagnostic(model, primary, primary_split[1]),
             "otherSeedHeldout": python_diagnostic(
-                model, datasets[other], splits[other][1]
+                model, auxiliary, auxiliary_split[1]
             ),
         }
         evaluations = {
             "sourceFull": rust_evaluate(
                 args.rust_evaluator,
                 network,
-                datasets[index].path,
+                primary.path,
                 False,
-                args.source_network,
+                source_network,
             ),
             "ownHeldout": rust_evaluate(
                 args.rust_evaluator,
                 network,
-                heldout_paths[index],
+                own_heldout_path,
                 True,
-                args.source_network,
+                source_network,
             ),
             "otherSeedHeldout": rust_evaluate(
                 args.rust_evaluator,
                 network,
-                heldout_paths[other],
+                cross_heldout_path,
                 True,
-                args.source_network,
+                source_network,
             ),
         }
         passes = all(
@@ -918,7 +1042,7 @@ def main() -> None:
     accepted = all(student["passesPilotTrustGate"] for student in students)
     report = {
         "schema": "hu-paired-range-conditioned-policy-distillation-v1",
-        "depthBb": datasets[0].metadata["depth_bb"],
+        "depthBb": primary_datasets[0].metadata["depth_bb"],
         "steps": args.steps,
         "batchSize": args.batch_size,
         "learningRate": args.learning_rate,
@@ -927,26 +1051,50 @@ def main() -> None:
         "architecture": args.architecture,
         "composition": args.composition,
         "sourceNetwork": str(args.source_network) if args.source_network else None,
+        "sourceNetworks": [
+            str(source_network) if source_network else None
+            for source_network in source_networks
+        ],
         "datasets": [
             {
                 "path": str(dataset.path.resolve()),
                 "sha256": dataset.sha256,
                 "seed": dataset.metadata["seed"],
                 "records": len(dataset.records),
-                "trainingRecords": len(splits[index][0]),
-                "heldoutRecords": len(splits[index][1]),
+                "trainingRecords": len(primary_splits[index][0]),
+                "heldoutRecords": len(primary_splits[index][1]),
             }
-            for index, dataset in enumerate(datasets)
+            for index, dataset in enumerate(primary_datasets)
         ],
-        "sourcePolicyDiagnostics": [
+        "crossAugmentedDatasets": [
             {
-                "sourceFull": source_policy_diagnostic(
-                    dataset, np.arange(len(dataset.records))
-                ),
-                "heldout": source_policy_diagnostic(dataset, splits[index][1]),
+                "path": str(dataset.path.resolve()),
+                "sha256": dataset.sha256,
+                "seed": dataset.metadata["seed"],
+                "records": len(dataset.records),
+                "targetCorpusSha256": target_corpus_sha256(dataset),
             }
-            for index, dataset in enumerate(datasets)
+            for dataset in cross_datasets
         ],
+        "sourcePolicyDiagnostics": (
+            [
+                {
+                    "sourceFull": source_policy_diagnostic(
+                        primary_datasets[index],
+                        np.arange(len(primary_datasets[index].records)),
+                    ),
+                    "ownHeldout": source_policy_diagnostic(
+                        primary_datasets[index], primary_splits[index][1]
+                    ),
+                    "crossHeldout": source_policy_diagnostic(
+                        cross_datasets[1 - index], cross_splits[1 - index][1]
+                    ),
+                }
+                for index in range(2)
+            ]
+            if args.composition == "source_bundle_logit_residual"
+            else []
+        ),
         "gates": {
             "maximumWeightedKl": args.maximum_weighted_kl,
             "minimumPrimaryAgreement": args.minimum_primary_agreement,

@@ -8,6 +8,36 @@ import train_public_value_network as value_features
 
 
 class RangePolicyDistillationTests(unittest.TestCase):
+    def test_record_selection_is_source_policy_invariant(self) -> None:
+        first = {
+            "state": {"street": "flop", "public_history": ["root"]},
+            "action_labels": ["check", "bet"],
+            "source_policy_probabilities": [0.9, 0.1],
+        }
+        second = dict(first)
+        second["source_policy_probabilities"] = [0.2, 0.8]
+        self.assertEqual(
+            module.record_selection_identity(first),
+            module.record_selection_identity(second),
+        )
+
+    def test_target_identity_is_source_policy_and_f32_weight_invariant(self) -> None:
+        first = {
+            "record_type": "range_conditioned_average_strategy",
+            "weight": 3.3185869866666664,
+            "state": {"street": "flop", "public_history": ["root"]},
+            "action_labels": ["check", "bet"],
+            "probabilities": [0.7, 0.3],
+            "source_policy_probabilities": [0.9, 0.1],
+        }
+        second = dict(first)
+        second["weight"] = float(module.np.float32(first["weight"]))
+        second["source_policy_probabilities"] = [0.2, 0.8]
+        self.assertEqual(
+            module.target_record_identity(first),
+            module.target_record_identity(second),
+        )
+
     def test_network_scores_every_combo_and_masks_padded_actions(self) -> None:
         for architecture in ("compact", "wide"):
             with self.subTest(architecture=architecture):
