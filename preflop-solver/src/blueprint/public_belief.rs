@@ -686,12 +686,16 @@ impl PublicValueNetwork {
             .head
             .iter()
             .fold(head, |values, layer| layer.forward(&values));
+        let board_legal = all_combos()
+            .iter()
+            .map(|private| !private.cards().iter().any(|card| board.contains(card)))
+            .collect::<Vec<_>>();
         std::array::from_fn(|player| {
             output[player * COMBO_COUNT..(player + 1) * COMBO_COUNT]
                 .iter()
                 .enumerate()
                 .map(|(combo, value)| {
-                    if ranges[player][combo] > 0.0 {
+                    if board_legal[combo] {
                         *value as f64 * self.target_scale_bb
                     } else {
                         0.0
@@ -737,13 +741,18 @@ impl PublicValueNetwork {
                     layer.forward(&values)
                 })
         });
-        let legal_combos: [Vec<usize>; 2] = std::array::from_fn(|player| {
-            ranges[player]
-                .iter()
-                .enumerate()
-                .filter_map(|(combo, weight)| (*weight > 0.0).then_some(combo))
-                .collect()
-        });
+        // Counterfactual regret updates need a value for every private hand
+        // that could deviate into this public branch, including hands whose
+        // current strategy assigns the branch zero reach. Masking queries by
+        // current reach makes a zero-probability action permanently invisible
+        // to regret matching and can freeze an exploitable policy.
+        let board_cards = board.iter().copied().collect::<BTreeSet<_>>();
+        let board_legal_combos = all_combos()
+            .iter()
+            .filter(|combo| !combo.cards().iter().any(|card| board_cards.contains(card)))
+            .map(|combo| combo.key())
+            .collect::<Vec<_>>();
+        let legal_combos = [board_legal_combos.clone(), board_legal_combos];
         let query_embeddings: [Vec<f32>; 2] = std::array::from_fn(|player| {
             let mut query_batch = Vec::with_capacity(legal_combos[player].len() * self.query_size);
             for combo in &legal_combos[player] {
@@ -836,10 +845,8 @@ impl PublicValueNetwork {
         };
         let residual = aggregate(0) + aggregate(1);
         for player in 0..2 {
-            for (combo, value) in result[player].iter_mut().enumerate() {
-                if ranges[player][combo] > 0.0 {
-                    *value -= residual / 2.0;
-                }
+            for combo in &legal_combos[player] {
+                result[player][*combo] -= residual / 2.0;
             }
         }
         result
@@ -9957,6 +9964,17 @@ mod tests {
                 / joint
         };
         assert!((aggregate(0) + aggregate(1)).abs() < 1e-8);
+    }
+
+    #[test]
+    fn shared_value_network_scores_zero_reach_board_legal_deviations() {
+        let board = [0, 5, 10, 15];
+        let mut ranges = std::array::from_fn(|_| uniform_range(&board));
+        let deviation = Combo::new(47, 51).key();
+        ranges[0][deviation] = 0.0;
+        let network = zero_shared_value_network();
+        let values = network.predict(&board, 1, [1.0, 3.0], &ranges);
+        assert!(values[0][deviation].abs() > 1e-6);
     }
 
     #[test]
