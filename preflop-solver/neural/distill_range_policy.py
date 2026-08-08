@@ -60,6 +60,7 @@ class LoadedDataset:
     projection_weights: np.ndarray
     actions: np.ndarray
     action_masks: np.ndarray
+    source_probabilities: np.ndarray
     targets: np.ndarray
     action_values: np.ndarray
     combo_weights: np.ndarray
@@ -160,6 +161,9 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
     ranges = np.empty((count, 2, COMBO_COUNT), dtype=np.float32)
     actions = np.zeros((count, maximum_actions, ACTION_FEATURE_COUNT), dtype=np.float32)
     action_masks = np.zeros((count, maximum_actions), dtype=np.float32)
+    source_probabilities = np.zeros(
+        (count, COMBO_COUNT, maximum_actions), dtype=np.float32
+    )
     targets = np.zeros((count, COMBO_COUNT, maximum_actions), dtype=np.float32)
     action_values = np.zeros_like(targets)
     node_weights = np.empty(count, dtype=np.float64)
@@ -169,6 +173,9 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
         record_ranges = np.asarray(record.get("ranges"), dtype=np.float32)
         record_actions = np.asarray(record.get("action_features"), dtype=np.float32)
         record_targets = np.asarray(record.get("probabilities"), dtype=np.float32)
+        record_source = np.asarray(
+            record.get("source_policy_probabilities", []), dtype=np.float32
+        )
         record_values = np.asarray(record.get("action_values_bb"), dtype=np.float32)
         if (
             record.get("record_type") != "range_conditioned_average_strategy"
@@ -176,6 +183,10 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
             or record_ranges.shape != (2, COMBO_COUNT)
             or record_actions.shape != (action_count, ACTION_FEATURE_COUNT)
             or record_targets.shape != (COMBO_COUNT * action_count,)
+            or record_source.shape not in (
+                (0,),
+                (COMBO_COUNT * action_count,),
+            )
             or record_values.shape != (COMBO_COUNT * action_count,)
             or not np.all(np.isfinite(record_ranges))
             or not np.all(record_ranges >= 0)
@@ -201,6 +212,10 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
         targets[index, :, :action_count] = record_targets.reshape(
             COMBO_COUNT, action_count
         )
+        if record_source.size:
+            source_probabilities[index, :, :action_count] = record_source.reshape(
+                COMBO_COUNT, action_count
+            )
         action_values[index, :, :action_count] = record_values.reshape(
             COMBO_COUNT, action_count
         )
@@ -236,6 +251,7 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
         projection_weights=projection,
         actions=actions,
         action_masks=action_masks,
+        source_probabilities=source_probabilities,
         targets=targets,
         action_values=action_values,
         combo_weights=combo_weights,
@@ -266,9 +282,12 @@ def add_features(dataset: LoadedDataset) -> None:
 
 
 class RangeConditionedPolicy(nn.Module):
-    def __init__(self, architecture: str = "compact") -> None:
+    def __init__(
+        self, architecture: str = "compact", composition: str = "replace"
+    ) -> None:
         super().__init__()
         self.architecture = architecture
+        self.composition = composition
         if architecture == "compact":
             self.embedding_size = 64
             self.action_embedding_size = 32
@@ -329,6 +348,13 @@ class RangeConditionedPolicy(nn.Module):
             )
         else:
             raise ValueError(f"unknown range-policy architecture {architecture}")
+        if composition not in ("replace", "source_bundle_logit_residual"):
+            raise ValueError(f"unknown range-policy composition {composition}")
+        if composition == "source_bundle_logit_residual":
+            final = self.head.layers[-1]
+            final.weight = mx.zeros_like(final.weight)
+            if final.bias is not None:
+                final.bias = mx.zeros_like(final.bias)
 
     def __call__(
         self,
@@ -338,6 +364,7 @@ class RangeConditionedPolicy(nn.Module):
         actors: mx.array,
         actions: mx.array,
         action_masks: mx.array,
+        source_probabilities: mx.array | None = None,
     ) -> mx.array:
         context_embedding = self.context_tower(contexts)
         query_embedding = self.query_tower(queries)
@@ -382,6 +409,10 @@ class RangeConditionedPolicy(nn.Module):
             axis=3,
         )
         logits = self.head(combined).reshape((batch, hands, actions_count))
+        if self.composition == "source_bundle_logit_residual":
+            if source_probabilities is None:
+                raise ValueError("residual policy requires source probabilities")
+            logits = logits + mx.log(mx.maximum(source_probabilities, 1e-12))
         return mx.where(action_masks[:, None, :] > 0, logits, -1e9)
 
 
@@ -429,6 +460,7 @@ def batch(dataset: LoadedDataset, rows: np.ndarray) -> tuple[mx.array, ...]:
         mx.array(dataset.targets[rows]),
         mx.array(dataset.action_values[rows]),
         mx.array(dataset.combo_weights[rows]),
+        mx.array(dataset.source_probabilities[rows]),
     )
 
 
@@ -446,10 +478,11 @@ def train(
     auxiliary_probability: float,
     ev_regret_scale: float,
     architecture: str,
+    composition: str,
 ) -> tuple[RangeConditionedPolicy, list[float], dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
-    model = RangeConditionedPolicy(architecture)
+    model = RangeConditionedPolicy(architecture, composition)
     mx.eval(model.parameters())
     optimizer = optim.AdamW(learning_rate=learning_rate, weight_decay=1e-5)
 
@@ -464,8 +497,17 @@ def train(
         targets: mx.array,
         values: mx.array,
         weights: mx.array,
+        source_probabilities: mx.array,
     ) -> mx.array:
-        logits = current(contexts, queries, projection, actors, actions, action_masks)
+        logits = current(
+            contexts,
+            queries,
+            projection,
+            actors,
+            actions,
+            action_masks,
+            source_probabilities,
+        )
         log_probabilities = logits - mx.logsumexp(logits, axis=2, keepdims=True)
         cross_entropy = -mx.sum(targets * log_probabilities, axis=2)
         denominator = mx.maximum(mx.sum(weights), 1e-8)
@@ -540,7 +582,7 @@ def python_diagnostic(
     total_weight = 0.0
     for row in rows:
         arguments = batch(dataset, np.asarray([row]))
-        logits = model(*arguments[:6])
+        logits = model(*arguments[:6], arguments[9])
         probabilities = np.asarray(mx.softmax(logits, axis=2))[0]
         targets = dataset.targets[row]
         values = dataset.action_values[row]
@@ -562,6 +604,51 @@ def python_diagnostic(
         )
         local_agreement = (
             np.argmax(target_rows, axis=1) == np.argmax(policy_rows, axis=1)
+        )
+        selected_weights = weights[reachable].astype(np.float64)
+        weighted_kl += float(np.sum(selected_weights * local_kl))
+        ev_loss += float(np.sum(selected_weights * local_ev_loss))
+        agreement += float(np.sum(selected_weights * local_agreement))
+        total_weight += float(selected_weights.sum())
+    return {
+        "weightedTeacherKl": weighted_kl / total_weight,
+        "reachWeightedPrimaryActionAgreement": agreement / total_weight,
+        "teacherEvMinusCandidateEvBb": ev_loss / total_weight,
+    }
+
+
+def source_policy_diagnostic(
+    dataset: LoadedDataset, rows: np.ndarray
+) -> dict[str, float]:
+    weighted_kl = 0.0
+    agreement = 0.0
+    ev_loss = 0.0
+    total_weight = 0.0
+    for row in rows:
+        targets = dataset.targets[row]
+        source = np.maximum(dataset.source_probabilities[row], 1e-12)
+        values = dataset.action_values[row]
+        weights = dataset.combo_weights[row]
+        reachable = weights > 0
+        target_rows = targets[reachable]
+        source_rows = source[reachable]
+        local_kl = np.sum(
+            np.where(
+                target_rows > 0,
+                target_rows
+                * (
+                    np.log(np.maximum(target_rows, 1e-12))
+                    - np.log(source_rows)
+                ),
+                0.0,
+            ),
+            axis=1,
+        )
+        local_ev_loss = np.sum(
+            (target_rows - source_rows) * values[reachable], axis=1
+        )
+        local_agreement = (
+            np.argmax(target_rows, axis=1) == np.argmax(source_rows, axis=1)
         )
         selected_weights = weights[reachable].astype(np.float64)
         weighted_kl += float(np.sum(selected_weights * local_kl))
@@ -598,6 +685,10 @@ def export_model(
         "auxiliaryDatasetSha256": auxiliary.sha256,
         "sourceDatasetSchema": DATASET_SCHEMA,
         "sourceValidationStatus": "accepted_for_training",
+        "policyComposition": model.composition,
+        "sourcePolicySha256": primary.metadata.get("source_policy_baseline", {}).get(
+            "sha256"
+        ),
         "contextTower": tower_payload(model.context_tower, "gelu-fast", "gelu-fast"),
         "queryTower": tower_payload(model.query_tower, "gelu-fast", "gelu-fast"),
         "actionTower": tower_payload(model.action_tower, "gelu-fast", "gelu-fast"),
@@ -633,6 +724,7 @@ def rust_evaluate(
     network: Path,
     dataset: Path,
     independent: bool,
+    source_network: Path | None,
 ) -> dict[str, Any]:
     command = [
         str(evaluator),
@@ -644,6 +736,8 @@ def rust_evaluate(
     ]
     if independent:
         command.append("--allow-independent-dataset")
+    if source_network is not None:
+        command.extend(("--source-network", str(source_network)))
     completed = subprocess.run(command, check=True, capture_output=True, text=True)
     return json.loads(completed.stdout)
 
@@ -662,6 +756,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--architecture", choices=("compact", "wide"), default="compact"
     )
+    parser.add_argument(
+        "--composition",
+        choices=("replace", "source_bundle_logit_residual"),
+        default="replace",
+    )
+    parser.add_argument("--source-network", type=Path)
     parser.add_argument("--seeds", default="17601,17602")
     parser.add_argument("--maximum-records-per-teacher", type=int, default=256)
     parser.add_argument("--maximum-weighted-kl", type=float, default=0.10)
@@ -680,6 +780,10 @@ def main() -> None:
         or not 0 <= args.auxiliary_probability <= 1
         or args.ev_regret_scale < 0
         or args.maximum_records_per_teacher < 12
+        or (
+            args.composition == "source_bundle_logit_residual"
+            and args.source_network is None
+        )
     ):
         raise ValueError("invalid paired range-policy optimization controls")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -713,6 +817,19 @@ def main() -> None:
     ):
         raise ValueError("paired policy teachers must have independent identities at one depth")
     for dataset in datasets:
+        baseline = dataset.metadata.get("source_policy_baseline", {})
+        if args.composition == "source_bundle_logit_residual" and (
+            baseline.get("composition") != "source_bundle_logit_residual"
+            or len(str(baseline.get("sha256", ""))) != 64
+            or baseline.get("sha256") != sha256(args.source_network)
+            or np.any(
+                (dataset.combo_weights > 0)
+                & (dataset.source_probabilities.sum(axis=2) <= 0)
+            )
+        ):
+            raise ValueError(
+                "residual policy datasets require pinned source probabilities"
+            )
         add_features(dataset)
     splits = [split_rows(dataset) for dataset in datasets]
     heldout_paths = []
@@ -737,6 +854,7 @@ def main() -> None:
             args.auxiliary_probability,
             args.ev_regret_scale,
             args.architecture,
+            args.composition,
         )
         network = args.output_dir / f"range-policy-seed-{seed}.json"
         export_model(model, network, seed, datasets[index], datasets[other])
@@ -751,13 +869,25 @@ def main() -> None:
         }
         evaluations = {
             "sourceFull": rust_evaluate(
-                args.rust_evaluator, network, datasets[index].path, False
+                args.rust_evaluator,
+                network,
+                datasets[index].path,
+                False,
+                args.source_network,
             ),
             "ownHeldout": rust_evaluate(
-                args.rust_evaluator, network, heldout_paths[index], True
+                args.rust_evaluator,
+                network,
+                heldout_paths[index],
+                True,
+                args.source_network,
             ),
             "otherSeedHeldout": rust_evaluate(
-                args.rust_evaluator, network, heldout_paths[other], True
+                args.rust_evaluator,
+                network,
+                heldout_paths[other],
+                True,
+                args.source_network,
             ),
         }
         passes = all(
@@ -795,6 +925,8 @@ def main() -> None:
         "auxiliaryProbability": args.auxiliary_probability,
         "evRegretScale": args.ev_regret_scale,
         "architecture": args.architecture,
+        "composition": args.composition,
+        "sourceNetwork": str(args.source_network) if args.source_network else None,
         "datasets": [
             {
                 "path": str(dataset.path.resolve()),
@@ -803,6 +935,15 @@ def main() -> None:
                 "records": len(dataset.records),
                 "trainingRecords": len(splits[index][0]),
                 "heldoutRecords": len(splits[index][1]),
+            }
+            for index, dataset in enumerate(datasets)
+        ],
+        "sourcePolicyDiagnostics": [
+            {
+                "sourceFull": source_policy_diagnostic(
+                    dataset, np.arange(len(dataset.records))
+                ),
+                "heldout": source_policy_diagnostic(dataset, splits[index][1]),
             }
             for index, dataset in enumerate(datasets)
         ],

@@ -191,6 +191,7 @@ struct TrainingNetworkBundle {
 /// feature or action semantics than the browser artifact.
 pub(super) struct FrozenPolicy {
     bundle: TrainingNetworkBundle,
+    bundle_sha256: String,
     range_policy: Option<RangeConditionedPolicyNetwork>,
     range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
 }
@@ -202,11 +203,13 @@ struct RangePolicyCachedNode {
 
 impl FrozenPolicy {
     pub(super) fn load(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
-        let file = fs::File::open(path)?;
-        let bundle: TrainingNetworkBundle = serde_json::from_reader(BufReader::new(file))?;
+        let bytes = fs::read(path)?;
+        let bundle_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let bundle: TrainingNetworkBundle = serde_json::from_slice(&bytes)?;
         validate_training_bundle(&bundle)?;
         Ok(Self {
             bundle,
+            bundle_sha256,
             range_policy: None,
             range_cache: Mutex::new(BTreeMap::new()),
         })
@@ -220,6 +223,9 @@ impl FrozenPolicy {
         policy.range_policy = range_policy_path
             .map(RangeConditionedPolicyNetwork::read)
             .transpose()?;
+        if let Some(range_policy) = &policy.range_policy {
+            range_policy.validate_source_policy_sha256(&policy.bundle_sha256)?;
+        }
         Ok(policy)
     }
 
@@ -285,7 +291,11 @@ impl FrozenPolicy {
                     &cursor,
                     ranges.clone(),
                 );
-                let matrix = range_policy.strategy(&public, config)?;
+                let source = range_policy
+                    .requires_source_policy()
+                    .then(|| self.bundle_strategy_matrix(&cursor, &public.board, &legal, config))
+                    .transpose()?;
+                let matrix = range_policy.strategy(&public, config, source.as_deref())?;
                 let actor = cursor.actor;
                 for combo in 0..COMBO_COUNT {
                     ranges[actor][combo] *= matrix[combo * legal.len() + selected];
@@ -305,7 +315,11 @@ impl FrozenPolicy {
             state,
             ranges,
         );
-        let probabilities = range_policy.strategy(&public, config)?;
+        let source = range_policy
+            .requires_source_policy()
+            .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
+            .transpose()?;
+        let probabilities = range_policy.strategy(&public, config, source.as_deref())?;
         let cached = Arc::new(RangePolicyCachedNode {
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             probabilities,
@@ -320,6 +334,30 @@ impl FrozenPolicy {
             cache.insert(key, cached.clone());
         }
         cached.range_for_deal(state, deal, actions)
+    }
+
+    pub(super) fn bundle_sha256(&self) -> &str {
+        &self.bundle_sha256
+    }
+
+    pub(super) fn bundle_strategy_matrix(
+        &self,
+        state: &GameState,
+        board: &[u8],
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Result<Vec<f64>, String> {
+        let mut probabilities = vec![0.0; COMBO_COUNT * actions.len()];
+        for combo in all_combos() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                continue;
+            }
+            let deal = deal_for_policy_combo_on_board(combo, state.actor, board)?;
+            let strategy = strategy_from_bundle(&self.bundle, state, &deal, actions, config);
+            let offset = combo.key() * actions.len();
+            probabilities[offset..offset + actions.len()].copy_from_slice(&strategy);
+        }
+        Ok(probabilities)
     }
 }
 
@@ -385,24 +423,38 @@ fn trajectory_action_matches(
 }
 
 fn deal_for_policy_combo(combo: Combo, actor: usize) -> Deal {
+    deal_for_policy_combo_on_board(combo, actor, &[])
+        .expect("an empty public board always has enough remaining cards")
+}
+
+fn deal_for_policy_combo_on_board(
+    combo: Combo,
+    actor: usize,
+    visible_board: &[u8],
+) -> Result<Deal, String> {
+    if visible_board.len() > 5 {
+        return Err("source policy board contains more than five cards".to_owned());
+    }
     let private = combo.cards();
+    if private.iter().any(|card| visible_board.contains(card))
+        || visible_board.iter().copied().collect::<BTreeSet<_>>().len() != visible_board.len()
+    {
+        return Err("source policy private cards conflict with the public board".to_owned());
+    }
     let available = (0..52u8)
-        .filter(|card| !private.contains(card))
-        .take(7)
+        .filter(|card| !private.contains(card) && !visible_board.contains(card))
+        .take(7 - visible_board.len())
         .collect::<Vec<_>>();
+    if available.len() != 7 - visible_board.len() {
+        return Err("source policy synthetic deal lacks enough cards".to_owned());
+    }
     let mut holes = [[0u8; 2]; 2];
     holes[actor] = private;
     holes[1 - actor] = [available[0], available[1]];
-    Deal::from_sampled_cards(
-        holes,
-        [
-            available[2],
-            available[3],
-            available[4],
-            available[5],
-            available[6],
-        ],
-    )
+    let mut board = [0u8; 5];
+    board[..visible_board.len()].copy_from_slice(visible_board);
+    board[visible_board.len()..].copy_from_slice(&available[2..]);
+    Ok(Deal::from_sampled_cards(holes, board))
 }
 
 fn normalize_ranges_for_board(ranges: &mut [Vec<f64>; 2], board: &[u8]) -> Result<(), String> {
@@ -3954,6 +4006,90 @@ mod tests {
         assert_eq!(policy.range_cache.lock().unwrap().len(), 1);
         fs::remove_file(bundle_path).unwrap();
         fs::remove_file(range_path).unwrap();
+    }
+
+    #[test]
+    fn frozen_residual_policy_pins_and_preserves_its_source_bundle() {
+        let dense = serde_json::json!({
+            "layers": [{
+                "input_size": MODEL_INPUT_COUNT,
+                "output_size": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; MODEL_INPUT_COUNT],
+                "biases": [0.0]
+            }]
+        });
+        let bundle = serde_json::json!({
+            "schema": TRAINING_NETWORK_SCHEMA,
+            "input_size": MODEL_INPUT_COUNT,
+            "strategy_transform": "softmax",
+            "networks": [dense.clone(), dense]
+        });
+        let bundle_bytes = serde_json::to_vec(&bundle).unwrap();
+        let bundle_sha256 = format!("{:x}", Sha256::digest(&bundle_bytes));
+        let layer = |input_size: usize| {
+            serde_json::json!({
+                "inputSize": input_size,
+                "outputSize": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; input_size],
+                "biases": [0.0]
+            })
+        };
+        let residual = serde_json::json!({
+            "schema": "hu-public-belief-combo-policy-network-v1",
+            "seed": 92,
+            "depthBb": 20.0,
+            "usesExactRanges": true,
+            "featureSchema": "rank-suit-invariant-combo-policy-query-v1",
+            "contextSize": 417,
+            "querySize": 124,
+            "actionFeatureSchema": "hu-cash-legal-action-v1",
+            "actionFeatureSize": ACTION_FEATURE_COUNT,
+            "contextTower": [layer(417)],
+            "queryTower": [layer(124)],
+            "actionTower": [layer(ACTION_FEATURE_COUNT)],
+            "head": [layer(5)],
+            "sourceDatasetSha256": "1".repeat(64),
+            "sourceDatasetSchema": "hu-range-conditioned-postflop-policy-dataset-v1",
+            "sourceValidationStatus": "accepted_for_training",
+            "policyComposition": "source_bundle_logit_residual",
+            "sourcePolicySha256": bundle_sha256,
+        });
+        let prefix = format!("pokersolver-residual-route-{}", std::process::id());
+        let bundle_path = std::env::temp_dir().join(format!("{prefix}-bundle.json"));
+        let residual_path = std::env::temp_dir().join(format!("{prefix}-residual.json"));
+        fs::write(&bundle_path, bundle_bytes).unwrap();
+        fs::write(&residual_path, serde_json::to_vec(&residual).unwrap()).unwrap();
+        let policy = FrozenPolicy::load_with_range(&bundle_path, Some(&residual_path)).unwrap();
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let mut state = GameState::initial(&game);
+        let limp = state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "limp")
+            .unwrap();
+        state = state.apply(&limp, &game);
+        let check = state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "check")
+            .unwrap();
+        state = state.apply(&check, &game);
+        let deal = Deal::from_sampled_cards([[48, 49], [44, 45]], [0, 5, 10, 15, 20]);
+        let actions = state.legal_actions(&game);
+        let probabilities = policy.strategy(&state, &deal, &actions, &game);
+        assert!(probabilities
+            .iter()
+            .all(|probability| (*probability - 1.0 / actions.len() as f64).abs() < 1e-12));
+
+        let mut mismatched = residual;
+        mismatched["sourcePolicySha256"] = serde_json::json!("f".repeat(64));
+        fs::write(&residual_path, serde_json::to_vec(&mismatched).unwrap()).unwrap();
+        assert!(FrozenPolicy::load_with_range(&bundle_path, Some(&residual_path)).is_err());
+        fs::remove_file(bundle_path).unwrap();
+        fs::remove_file(residual_path).unwrap();
     }
 
     #[test]

@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "flop-pbs-range-response" => run_flop_pbs_range_response(&args[1..]),
         "flop-pbs-leaf-targets" => run_flop_pbs_leaf_targets(&args[1..]),
         "postflop-action-targets" => run_postflop_action_targets(&args[1..]),
+        "range-policy-add-baseline" => run_range_policy_add_baseline(&args[1..]),
         "range-policy-evaluate" => run_range_policy_evaluate(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
@@ -550,6 +551,16 @@ fn run_postflop_action_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
         .last()
         .ok_or("--flop-checkpoints must not be empty")?;
     let turn_river_iterations = parse_or(args, "--turn-river-iterations", 400u64)?;
+    let flop_response_checkpoints = value(args, "--flop-response-checkpoints")
+        .map(|values| {
+            values
+                .split(',')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let default_response_delay = flop_response_checkpoints.first().copied().unwrap_or(1) / 4;
     let report = blueprint::public_belief::generate_postflop_action_targets(
         blueprint::public_belief::PostflopActionTargetConfig {
             game,
@@ -564,6 +575,23 @@ fn run_postflop_action_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
             require_accepted_flop_teachers: args
                 .iter()
                 .any(|argument| argument == "--require-accepted-flop-teachers"),
+            require_range_consistent_flop_teachers: args
+                .iter()
+                .any(|argument| argument == "--require-range-consistent-flop-teachers"),
+            flop_response_checkpoints,
+            flop_response_averaging_delay: parse_or(
+                args,
+                "--flop-response-averaging-delay",
+                default_response_delay,
+            )?,
+            flop_response_regret_matching_plus: args
+                .iter()
+                .any(|argument| argument == "--flop-response-regret-matching-plus"),
+            maximum_flop_range_response_gain_bb_per_hand: parse_or(
+                args,
+                "--maximum-flop-range-response-gain-bb",
+                0.05f64,
+            )?,
             require_accepted_turn_river_teachers: args
                 .iter()
                 .any(|argument| argument == "--require-accepted-turn-river-teachers"),
@@ -585,6 +613,8 @@ fn run_postflop_action_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
             max_records: parse_or(args, "--max-records", 100_000usize)?,
             source_policy_path,
             value_network_path,
+            evaluation_value_network_path: value(args, "--evaluation-value-network")
+                .map(PathBuf::from),
             output,
             range_output: value(args, "--range-output").map(PathBuf::from),
             range_only: args.iter().any(|argument| argument == "--range-only"),
@@ -615,6 +645,9 @@ fn run_range_policy_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
         &dataset,
         args.iter()
             .any(|argument| argument == "--allow-independent-dataset"),
+        value(args, "--source-network")
+            .map(PathBuf::from)
+            .as_deref(),
     )?;
     let serialized = serde_json::to_string_pretty(&report)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
@@ -631,6 +664,21 @@ fn run_range_policy_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
     } else {
         println!("{serialized}");
     }
+    Ok(())
+}
+
+fn run_range_policy_add_baseline(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let source = value(args, "--source-network")
+        .map(PathBuf::from)
+        .ok_or("--source-network is required")?;
+    let input = value(args, "--dataset")
+        .map(PathBuf::from)
+        .ok_or("--dataset is required")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .ok_or("--output is required")?;
+    let report = blueprint::public_belief::attach_source_policy_baseline(&source, &input, &output)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
 
@@ -2098,6 +2146,9 @@ Usage:
   preflop-solver flop-pbs-convergence [options]
   preflop-solver flop-pbs-range-response [options]
   preflop-solver flop-pbs-leaf-targets [options]
+  preflop-solver postflop-action-targets [options]
+  preflop-solver range-policy-add-baseline [options]
+  preflop-solver range-policy-evaluate [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5
@@ -2219,6 +2270,16 @@ Neural exploitability-certificate options:
                                   when their street is reached
 
 Complete turn/river label options:
+  postflop-action-targets --networks <source-policy.json>
+    --value-network <turn-value.json> --range-output <targets.jsonl.gz>
+    [--evaluation-value-network <independent-turn-value.json>]
+    [--flop-checkpoints <csv>] [--flop-response-checkpoints <csv>]
+    [--require-range-consistent-flop-teachers]
+    [--maximum-flop-range-response-gain-bb 0.05]
+  range-policy-add-baseline --source-network <source-policy.json>
+    --dataset <targets.jsonl.gz> --output <augmented.jsonl.gz>
+  range-policy-evaluate --network <residual-policy.json>
+    --source-network <source-policy.json> --dataset <targets.jsonl.gz>
   flop-pbs-convergence --board <3-card-csv> --value-network <json>
     --evaluation-value-network <json> --checkpoints <csv>
     [--pot-bb 4] [--actor 1] [--averaging-delay N] [--threads N]

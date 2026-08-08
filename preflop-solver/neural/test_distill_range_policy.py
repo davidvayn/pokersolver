@@ -66,6 +66,25 @@ class RangePolicyDistillationTests(unittest.TestCase):
                 queries[0, legal, 66:75].sum(axis=1), 1.0, atol=1e-6
             )
 
+    def test_zero_initialized_residual_preserves_source_probabilities(self) -> None:
+        model = module.RangeConditionedPolicy(
+            "compact", "source_bundle_logit_residual"
+        )
+        source = np.zeros((1, module.COMBO_COUNT, 4), dtype=np.float32)
+        source[:, :, :3] = np.asarray([0.7, 0.2, 0.1], dtype=np.float32)
+        logits = model(
+            mx.zeros((1, 2, module.CONTEXT_SIZE)),
+            mx.zeros((1, 2, module.COMBO_COUNT, module.QUERY_SIZE)),
+            mx.ones((1, 2, module.COMBO_COUNT)),
+            mx.array([1]),
+            mx.zeros((1, 4, module.ACTION_FEATURE_COUNT)),
+            mx.array([[1.0, 1.0, 1.0, 0.0]]),
+            mx.array(source),
+        )
+        probabilities = np.asarray(mx.softmax(logits, axis=2))
+        np.testing.assert_allclose(probabilities[:, :, :3], source[:, :, :3])
+        np.testing.assert_allclose(probabilities[:, :, 3], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

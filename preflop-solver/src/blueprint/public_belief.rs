@@ -35,6 +35,8 @@ const SHARED_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-query-v2";
 const SHARED_FEATURE_SCHEMA_V3: &str = "rank-suit-invariant-combo-query-v3";
 const RANGE_POLICY_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-policy-query-v1";
 const RANGE_POLICY_SCHEMA_V1: &str = "hu-public-belief-combo-policy-network-v1";
+const RANGE_POLICY_REPLACE: &str = "replace";
+const RANGE_POLICY_SOURCE_LOGIT_RESIDUAL: &str = "source_bundle_logit_residual";
 const ACTION_FEATURE_SCHEMA_V1: &str = "hu-cash-legal-action-v1";
 const ACTION_FEATURE_COUNT: usize = 9;
 const HAND_CLASS_COUNT: usize = 169;
@@ -885,6 +887,14 @@ pub struct RangeConditionedPolicyNetwork {
     source_dataset_sha256: String,
     source_dataset_schema: String,
     source_validation_status: String,
+    #[serde(default = "default_range_policy_composition")]
+    policy_composition: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_policy_sha256: Option<String>,
+}
+
+fn default_range_policy_composition() -> String {
+    RANGE_POLICY_REPLACE.to_owned()
 }
 
 impl RangeConditionedPolicyNetwork {
@@ -913,6 +923,15 @@ impl RangeConditionedPolicyNetwork {
             || self.source_dataset_sha256.len() != 64
             || self.source_dataset_schema != "hu-range-conditioned-postflop-policy-dataset-v1"
             || self.source_validation_status != "accepted_for_training"
+            || !matches!(
+                self.policy_composition.as_str(),
+                RANGE_POLICY_REPLACE | RANGE_POLICY_SOURCE_LOGIT_RESIDUAL
+            )
+            || (self.policy_composition == RANGE_POLICY_SOURCE_LOGIT_RESIDUAL
+                && self
+                    .source_policy_sha256
+                    .as_deref()
+                    .is_none_or(|hash| hash.len() != 64))
         {
             return Err("range-conditioned policy network header is incompatible".to_owned());
         }
@@ -938,10 +957,24 @@ impl RangeConditionedPolicyNetwork {
         Ok(())
     }
 
+    pub(crate) fn requires_source_policy(&self) -> bool {
+        self.policy_composition == RANGE_POLICY_SOURCE_LOGIT_RESIDUAL
+    }
+
+    pub(crate) fn validate_source_policy_sha256(&self, sha256: &str) -> Result<(), String> {
+        if self.requires_source_policy() && self.source_policy_sha256.as_deref() != Some(sha256) {
+            return Err(
+                "range-conditioned residual policy source bundle hash does not match".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn strategy(
         &self,
         state: &PublicBeliefState,
         game: &BlueprintConfig,
+        source_policy: Option<&[f64]>,
     ) -> Result<Vec<f64>, String> {
         self.validate()?;
         game.validate()?;
@@ -955,6 +988,24 @@ impl RangeConditionedPolicyNetwork {
         if actions.is_empty() {
             return Err("range-conditioned policy cannot score a terminal state".to_owned());
         }
+        let source_policy = if self.requires_source_policy() {
+            let source = source_policy.ok_or_else(|| {
+                "range-conditioned residual policy requires source bundle probabilities".to_owned()
+            })?;
+            if source.len() != COMBO_COUNT * actions.len()
+                || source
+                    .iter()
+                    .any(|probability| !probability.is_finite() || *probability < 0.0)
+            {
+                return Err(
+                    "range-conditioned residual policy received invalid source probabilities"
+                        .to_owned(),
+                );
+            }
+            Some(source)
+        } else {
+            None
+        };
         let conflicts = combo_conflicts();
         let (contexts, queries) = shared_combo_features(
             &normalized.board,
@@ -1058,12 +1109,18 @@ impl RangeConditionedPolicyNetwork {
         let mut probabilities = vec![0.0; COMBO_COUNT * actions.len()];
         for (row, combo) in legal_combos.iter().enumerate() {
             let offset = row * actions.len();
-            let strategy = super::neural::stable_softmax(
-                &logits[offset..offset + actions.len()]
-                    .iter()
-                    .map(|value| f64::from(*value))
-                    .collect::<Vec<_>>(),
-            );
+            let source_offset = *combo * actions.len();
+            let composed_logits = logits[offset..offset + actions.len()]
+                .iter()
+                .enumerate()
+                .map(|(action, value)| {
+                    let residual = f64::from(*value);
+                    source_policy.map_or(residual, |source| {
+                        source[source_offset + action].max(1e-12).ln() + residual
+                    })
+                })
+                .collect::<Vec<_>>();
+            let strategy = super::neural::stable_softmax(&composed_logits);
             probabilities[*combo * actions.len()..(*combo + 1) * actions.len()]
                 .copy_from_slice(&strategy);
         }
@@ -1084,6 +1141,8 @@ pub struct RangePolicyEvaluationReport {
     pub network_sha256: String,
     pub dataset_sha256: String,
     pub source_dataset_match: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_policy_sha256: Option<String>,
     pub records: usize,
     pub weighted_public_reach: f64,
     pub weighted_probability_mae: f64,
@@ -1095,6 +1154,7 @@ pub struct RangePolicyEvaluationReport {
     pub teacher_ev_minus_candidate_ev_bb: f64,
     pub maximum_probability_sum_error: f64,
     pub minimum_scored_combo_coverage: f64,
+    pub maximum_stored_source_probability_difference: f64,
     pub validation: BlueprintValidation,
 }
 
@@ -1106,10 +1166,20 @@ pub fn evaluate_range_conditioned_policy_dataset(
     network_path: &Path,
     dataset_path: &Path,
     allow_independent_dataset: bool,
+    source_policy_path: Option<&Path>,
 ) -> Result<RangePolicyEvaluationReport, Box<dyn Error>> {
     let dataset_bytes = fs::read(dataset_path)?;
     let dataset_sha256 = format!("{:x}", Sha256::digest(&dataset_bytes));
     let network = RangeConditionedPolicyNetwork::read(network_path)?;
+    let source_policy = if network.requires_source_policy() {
+        let path = source_policy_path
+            .ok_or("range-conditioned residual evaluation requires a source network")?;
+        let policy = FrozenPolicy::load(path)?;
+        network.validate_source_policy_sha256(policy.bundle_sha256())?;
+        Some(policy)
+    } else {
+        None
+    };
     let source_dataset_match = network.source_dataset_sha256 == dataset_sha256;
     if !source_dataset_match && !allow_independent_dataset {
         return Err("range policy source dataset hash does not match evaluation corpus".into());
@@ -1161,6 +1231,7 @@ pub fn evaluate_range_conditioned_policy_dataset(
     let mut ev_loss = 0.0f64;
     let mut maximum_sum_error = 0.0f64;
     let mut minimum_coverage = 1.0f64;
+    let mut maximum_source_difference = 0.0f64;
     for line in lines {
         let record: RangeConditionedPolicyRecord = serde_json::from_str(&line?)?;
         if record.record_type != "range_conditioned_average_strategy"
@@ -1220,7 +1291,29 @@ pub fn evaluate_range_conditioned_policy_dataset(
                 return Err("range policy record action features fail Rust parity".into());
             }
         }
-        let candidate = network.strategy(&normalized, &game)?;
+        let source_probabilities = source_policy
+            .as_ref()
+            .map(|policy| {
+                policy.bundle_strategy_matrix(&game_state, &normalized.board, &actions, &game)
+            })
+            .transpose()?;
+        if let Some(source) = &source_probabilities {
+            if record.source_policy_probabilities.len() != source.len() {
+                return Err(
+                    "residual range policy record omits its pinned source probabilities".into(),
+                );
+            }
+            for (stored, exact) in record.source_policy_probabilities.iter().zip(source) {
+                maximum_source_difference =
+                    maximum_source_difference.max((f64::from(*stored) - exact).abs());
+            }
+            if maximum_source_difference > 1e-6 {
+                return Err(
+                    "stored residual source probabilities fail exact Rust bundle parity".into(),
+                );
+            }
+        }
+        let candidate = network.strategy(&normalized, &game, source_probabilities.as_deref())?;
         let actor = normalized.actor;
         let masses = (0..COMBO_COUNT)
             .map(|combo| {
@@ -1327,6 +1420,9 @@ pub fn evaluate_range_conditioned_policy_dataset(
         network_sha256,
         dataset_sha256,
         source_dataset_match,
+        source_policy_sha256: source_policy
+            .as_ref()
+            .map(|policy| policy.bundle_sha256().to_owned()),
         records,
         weighted_public_reach: public_weight,
         weighted_probability_mae: absolute_probability_error / combo_weight,
@@ -1338,6 +1434,7 @@ pub fn evaluate_range_conditioned_policy_dataset(
         teacher_ev_minus_candidate_ev_bb: ev_loss / combo_weight,
         maximum_probability_sum_error: maximum_sum_error,
         minimum_scored_combo_coverage: minimum_coverage,
+        maximum_stored_source_probability_difference: maximum_source_difference,
         validation,
     })
 }
@@ -5700,6 +5797,7 @@ impl BoundedActionRecordCollector {
 
 fn append_public_belief_policy_records(
     game: &BlueprintConfig,
+    source_policy: Option<&FrozenPolicy>,
     root_state: GameState,
     root_board: &[u8],
     root_ranges: [Vec<f64>; 2],
@@ -5722,6 +5820,7 @@ fn append_public_belief_policy_records(
 
     struct RecordWalk<'a> {
         game: &'a BlueprintConfig,
+        source_policy: Option<&'a FrozenPolicy>,
         strategies: &'a BTreeMap<Vec<String>, &'a PublicBeliefStrategy>,
         conflicts: &'a [Vec<usize>],
         root_weight: f64,
@@ -5830,6 +5929,16 @@ fn append_public_belief_policy_records(
                     / self.root_joint_mass.max(EPSILON);
                 if node_weight.is_finite() && node_weight > EPSILON {
                     let normalized_ranges = normalize_policy_ranges(&reaches, &board)?;
+                    let source_policy_probabilities = self
+                        .source_policy
+                        .map(|policy| {
+                            policy.bundle_strategy_matrix(&state, &board, &actions, self.game)
+                        })
+                        .transpose()?
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|probability| probability as f32)
+                        .collect();
                     let record = RangeConditionedPolicyRecord {
                         record_type: "range_conditioned_average_strategy".to_owned(),
                         weight: node_weight as f32,
@@ -5855,6 +5964,7 @@ fn append_public_belief_policy_records(
                             })
                             .collect(),
                         probabilities: strategy.probabilities.clone(),
+                        source_policy_probabilities,
                         action_values_bb: action_values.clone(),
                     };
                     range_records.consider(
@@ -5931,6 +6041,7 @@ fn append_public_belief_policy_records(
 
     RecordWalk {
         game,
+        source_policy,
         strategies: &strategy_map,
         conflicts: &conflicts,
         root_weight,
@@ -5968,6 +6079,9 @@ struct RangeConditionedPolicyRecord {
     action_features: Vec<Vec<f32>>,
     /// Row-major `[combo][action]` frozen average policy.
     probabilities: Vec<f32>,
+    /// Row-major `[combo][action]` probabilities from the pinned source bundle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    source_policy_probabilities: Vec<f32>,
     /// Row-major `[combo][action]` counterfactual action EVs in big blinds.
     action_values_bb: Vec<f32>,
 }
@@ -6032,6 +6146,10 @@ fn write_range_conditioned_policy_dataset(
             "seed": seed,
             "records": records.len(),
             "sampling_mode": "authentic_public_reach_weighted_solver_nodes",
+            "source_policy_baseline": {
+                "composition": RANGE_POLICY_SOURCE_LOGIT_RESIDUAL,
+                "sha256": teacher["sourcePolicySha256"],
+            },
             "teacher": teacher,
         }),
     )?;
@@ -6045,6 +6163,150 @@ fn write_range_conditioned_policy_dataset(
     Ok(())
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePolicyBaselineReport {
+    pub schema: String,
+    pub input_sha256: String,
+    pub output_sha256: String,
+    pub source_policy_sha256: String,
+    pub records: usize,
+    pub maximum_probability_sum_error: f64,
+    pub output: PathBuf,
+}
+
+/// Attach exact serving-inference probabilities from a pinned source bundle to
+/// every solver target row. A residual student can then start at the already
+/// validated policy and learn only bounded postflop corrections.
+pub fn attach_source_policy_baseline(
+    source_policy_path: &Path,
+    input: &Path,
+    output: &Path,
+) -> Result<RangePolicyBaselineReport, Box<dyn Error>> {
+    if input == output {
+        return Err("range-policy baseline augmentation requires a distinct output path".into());
+    }
+    let input_bytes = fs::read(input)?;
+    let input_sha256 = format!("{:x}", Sha256::digest(&input_bytes));
+    let policy = FrozenPolicy::load(source_policy_path)?;
+    let source_policy_sha256 = policy.bundle_sha256().to_owned();
+    let decoder = GzDecoder::new(input_bytes.as_slice());
+    let mut lines = BufReader::new(decoder).lines();
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(&lines.next().ok_or("range policy dataset is empty")??)?;
+    if metadata["record_type"] != "metadata"
+        || metadata["schema"] != "hu-range-conditioned-postflop-policy-dataset-v1"
+        || metadata["teacher"]["validation"]["status"] != "accepted_for_training"
+    {
+        return Err("range policy dataset metadata is incompatible or unvalidated".into());
+    }
+    let depth = metadata["depth_bb"]
+        .as_f64()
+        .ok_or("range policy dataset omits its depth")?;
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = depth;
+    if let Ok(action_abstraction) =
+        serde_json::from_value(metadata["teacher"]["actionAbstraction"].clone())
+    {
+        game.action_abstraction = action_abstraction;
+    }
+    game.validate()?;
+    let mut encoded_records = Vec::new();
+    let mut maximum_sum_error = 0.0f64;
+    for line in lines {
+        let mut record: RangeConditionedPolicyRecord = serde_json::from_str(&line?)?;
+        let state = PublicBeliefState {
+            street: record.state.street,
+            board: record.state.board.clone(),
+            actor: record.state.actor,
+            invested_bb: record.state.invested_bb,
+            street_invested_bb: record.state.street_invested_bb,
+            last_full_raise_bb: record.state.last_full_raise_bb,
+            aggressions: record.state.aggressions,
+            checks: record.state.checks,
+            raise_reopened: record.state.raise_reopened,
+            public_history: record.state.public_history.clone(),
+            ranges: std::array::from_fn(|player| {
+                record.ranges[player]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect()
+            }),
+            trajectory: record.state.trajectory.clone(),
+        }
+        .validate_street_and_normalize(
+            &game,
+            record.state.street,
+            record.state.board.len(),
+        )?;
+        let game_state = state.game_state();
+        let actions = game_state.legal_actions(&game);
+        if record.record_type != "range_conditioned_average_strategy"
+            || record.ranges.iter().any(|range| range.len() != COMBO_COUNT)
+            || record.probabilities.len() != COMBO_COUNT * actions.len()
+            || record.action_values_bb.len() != COMBO_COUNT * actions.len()
+            || record.action_features.len() != actions.len()
+            || record.action_labels
+                != actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err("range policy record action labels do not match the source game".into());
+        }
+        let baseline =
+            policy.bundle_strategy_matrix(&game_state, &record.state.board, &actions, &game)?;
+        let board = record.state.board.iter().copied().collect::<BTreeSet<_>>();
+        for combo in all_combos() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                continue;
+            }
+            let offset = combo.key() * actions.len();
+            let sum = baseline[offset..offset + actions.len()].iter().sum::<f64>();
+            maximum_sum_error = maximum_sum_error.max((sum - 1.0).abs());
+        }
+        record.source_policy_probabilities = baseline
+            .into_iter()
+            .map(|probability| probability as f32)
+            .collect();
+        encoded_records.push(serde_json::to_vec(&record)?);
+    }
+    if encoded_records.len() != metadata["records"].as_u64().unwrap_or(0) as usize {
+        return Err("range policy baseline augmentation record count changed".into());
+    }
+    metadata["source_policy_baseline"] = serde_json::json!({
+        "composition": RANGE_POLICY_SOURCE_LOGIT_RESIDUAL,
+        "sha256": source_policy_sha256,
+        "inference": "exact_rust_frozen_source_bundle",
+    });
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = output.with_extension("tmp");
+    let file = fs::File::create(&temporary)?;
+    let mut writer = GzEncoder::new(BufWriter::new(file), Compression::fast());
+    serde_json::to_writer(&mut writer, &metadata)?;
+    writer.write_all(b"\n")?;
+    for record in &encoded_records {
+        writer.write_all(record)?;
+        writer.write_all(b"\n")?;
+    }
+    writer.finish()?.flush()?;
+    fs::rename(&temporary, output)?;
+    let output_sha256 = format!("{:x}", Sha256::digest(fs::read(output)?));
+    Ok(RangePolicyBaselineReport {
+        schema: "hu-range-policy-source-baseline-augmentation-v1".to_owned(),
+        input_sha256,
+        output_sha256,
+        source_policy_sha256,
+        records: encoded_records.len(),
+        maximum_probability_sum_error: maximum_sum_error,
+        output: output.to_owned(),
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct PostflopActionTargetConfig {
     pub game: BlueprintConfig,
@@ -6055,6 +6317,11 @@ pub struct PostflopActionTargetConfig {
     pub flop_averaging_delay: u64,
     pub flop_regret_matching_plus: bool,
     pub require_accepted_flop_teachers: bool,
+    pub require_range_consistent_flop_teachers: bool,
+    pub flop_response_checkpoints: Vec<u64>,
+    pub flop_response_averaging_delay: u64,
+    pub flop_response_regret_matching_plus: bool,
+    pub maximum_flop_range_response_gain_bb_per_hand: f64,
     pub require_accepted_turn_river_teachers: bool,
     pub turn_river_iterations: u64,
     pub turn_river_averaging_delay: u64,
@@ -6064,6 +6331,7 @@ pub struct PostflopActionTargetConfig {
     pub max_records: usize,
     pub source_policy_path: PathBuf,
     pub value_network_path: PathBuf,
+    pub evaluation_value_network_path: Option<PathBuf>,
     pub output: PathBuf,
     pub range_output: Option<PathBuf>,
     pub range_only: bool,
@@ -6080,18 +6348,31 @@ pub struct PostflopActionTeacherCheckpoint {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PostflopActionRangeResponseCheckpoint {
+    pub root: usize,
+    pub response_iterations: u64,
+    pub range_consistent_response_gain_bb_per_hand: f64,
+    pub evaluation_has_distinct_training_identity: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PostflopActionTargetReport {
     pub schema: String,
     pub method: String,
     pub seed: u64,
     pub source_policy_sha256: String,
     pub value_network_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_value_network_sha256: Option<String>,
     pub roots: usize,
     pub turn_leaves: usize,
     pub flop_regret_matching_plus: bool,
     pub required_accepted_flop_teachers: bool,
+    pub required_range_consistent_flop_teachers: bool,
     pub required_accepted_turn_river_teachers: bool,
     pub flop_convergence: Vec<PostflopActionTeacherCheckpoint>,
+    pub flop_range_response: Vec<PostflopActionRangeResponseCheckpoint>,
     pub flop_records: usize,
     pub turn_river_records: usize,
     pub total_records: usize,
@@ -6168,6 +6449,22 @@ pub fn generate_postflop_action_targets(
             .any(|pair| pair[0] >= pair[1])
         || config.flop_iteration_checkpoints.last().copied() != Some(config.flop_iterations)
         || config.flop_averaging_delay >= config.flop_iteration_checkpoints[0]
+        || (config.require_range_consistent_flop_teachers
+            && (config.evaluation_value_network_path.is_none()
+                || config.flop_response_checkpoints.is_empty()
+                || config
+                    .flop_response_checkpoints
+                    .iter()
+                    .any(|checkpoint| *checkpoint < 2)
+                || config
+                    .flop_response_checkpoints
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || config.flop_response_averaging_delay >= config.flop_response_checkpoints[0]
+                || !config
+                    .maximum_flop_range_response_gain_bb_per_hand
+                    .is_finite()
+                || config.maximum_flop_range_response_gain_bb_per_hand < 0.0))
         || config.turn_river_iterations < 2
         || config.turn_river_averaging_delay >= config.turn_river_iterations
         || config.threads == 0
@@ -6187,6 +6484,17 @@ pub fn generate_postflop_action_targets(
     let value_bytes = fs::read(&config.value_network_path)?;
     let value_network_sha256 = format!("{:x}", Sha256::digest(&value_bytes));
     let value_network = PublicValueNetwork::read(&config.value_network_path)?;
+    let evaluation_value_network = config
+        .evaluation_value_network_path
+        .as_ref()
+        .map(|path| PublicValueNetwork::read(path))
+        .transpose()?;
+    let evaluation_value_network_sha256 = config
+        .evaluation_value_network_path
+        .as_ref()
+        .map(fs::read)
+        .transpose()?
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
     let mut chance = SplitMix64::new(config.seed);
     let mut records = BoundedActionRecordCollector::new(config.max_records, config.seed);
     let mut range_records = config
@@ -6198,6 +6506,7 @@ pub fn generate_postflop_action_targets(
     let mut maximum_flop_exploitability = 0.0f64;
     let mut maximum_turn_river_exploitability = 0.0f64;
     let mut flop_convergence = Vec::new();
+    let mut flop_range_response = Vec::new();
     let mut attempts = 0usize;
 
     while roots_solved < config.roots {
@@ -6291,6 +6600,50 @@ pub fn generate_postflop_action_targets(
             config.seed ^ (roots_solved as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         )?;
         let flop_solution = final_flop_solution.expect("nonempty flop iteration checkpoints");
+        let mut range_response_usable = !config.require_range_consistent_flop_teachers;
+        if let Some(evaluation) = evaluation_value_network.as_ref() {
+            if !config.flop_response_checkpoints.is_empty() {
+                let response = evaluate_frozen_flop_range_response_convergence(
+                    config.game.clone(),
+                    &flop_solution,
+                    evaluation.clone(),
+                    &config.flop_response_checkpoints,
+                    config.flop_response_averaging_delay,
+                    config.flop_response_regret_matching_plus,
+                    config.threads,
+                )?;
+                let final_response = response
+                    .checkpoints
+                    .last()
+                    .expect("configured range response has a checkpoint");
+                range_response_usable = response.evaluation_has_distinct_training_identity
+                    && final_response.maximum_zero_sum_residual_bb <= 1e-6
+                    && final_response.range_consistent_response_gain_bb_per_hand
+                        <= config.maximum_flop_range_response_gain_bb_per_hand;
+                flop_range_response.push(PostflopActionRangeResponseCheckpoint {
+                    root: roots_solved,
+                    response_iterations: final_response.iterations,
+                    range_consistent_response_gain_bb_per_hand: final_response
+                        .range_consistent_response_gain_bb_per_hand,
+                    evaluation_has_distinct_training_identity: response
+                        .evaluation_has_distinct_training_identity,
+                });
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "event": "postflop-action-flop-range-response",
+                        "root": roots_solved,
+                        "iterations": final_response.iterations,
+                        "rangeConsistentResponseGainBbPerHand": final_response
+                            .range_consistent_response_gain_bb_per_hand,
+                        "evaluationHasDistinctTrainingIdentity": response
+                            .evaluation_has_distinct_training_identity,
+                        "acceptedForTraining": range_response_usable,
+                    }))
+                    .expect("flop range-response progress event remains serializable")
+                );
+            }
+        }
         let structurally_usable_flop_teacher = flop_solution
             .validation
             .reasons
@@ -6307,7 +6660,8 @@ pub fn generate_postflop_action_targets(
             && flop_solution.metrics.zero_sum_residual_after_projection_bb <= 1e-6;
         let flop_training_usable = structurally_usable_flop_teacher
             && (!config.require_accepted_flop_teachers
-                || flop_solution.validation.status == "accepted");
+                || flop_solution.validation.status == "accepted")
+            && range_response_usable;
         if !flop_training_usable {
             return Err(format!(
                 "flop action teacher failed the configured quality gate at root {roots_solved}: {}",
@@ -6333,6 +6687,7 @@ pub fn generate_postflop_action_targets(
         );
         append_public_belief_policy_records(
             &config.game,
+            Some(&policy),
             flop_solution.state.game_state(),
             &flop_solution.state.board,
             flop_solution.state.ranges.clone(),
@@ -6398,6 +6753,7 @@ pub fn generate_postflop_action_targets(
             );
             append_public_belief_policy_records(
                 &config.game,
+                Some(&policy),
                 turn_solution.state.game_state(),
                 &turn_solution.state.board,
                 turn_solution.state.ranges.clone(),
@@ -6451,12 +6807,17 @@ pub fn generate_postflop_action_targets(
         "schema": "hu-range-conditioned-postflop-action-teacher-v1",
         "sourcePolicySha256": source_policy_sha256,
         "valueNetworkSha256": value_network_sha256,
+        "evaluationValueNetworkSha256": evaluation_value_network_sha256,
         "flopIterations": config.flop_iterations,
         "flopIterationCheckpoints": config.flop_iteration_checkpoints,
         "flopConvergence": flop_convergence,
         "flopAveragingDelay": config.flop_averaging_delay,
         "flopRegretMatchingPlus": config.flop_regret_matching_plus,
         "requiresAcceptedFlopTeachers": config.require_accepted_flop_teachers,
+        "requiresRangeConsistentFlopTeachers": config.require_range_consistent_flop_teachers,
+        "flopRangeResponseCheckpoints": config.flop_response_checkpoints,
+        "flopRangeResponse": flop_range_response,
+        "maximumFlopRangeResponseGainBbPerHand": config.maximum_flop_range_response_gain_bb_per_hand,
         "requiresAcceptedTurnRiverTeachers": config.require_accepted_turn_river_teachers,
         "turnRiverIterations": config.turn_river_iterations,
         "turnRiverAveragingDelay": config.turn_river_averaging_delay,
@@ -6491,12 +6852,16 @@ pub fn generate_postflop_action_targets(
         seed: config.seed,
         source_policy_sha256,
         value_network_sha256,
+        evaluation_value_network_sha256,
         roots: roots_solved,
         turn_leaves: leaves_solved,
         flop_regret_matching_plus: config.flop_regret_matching_plus,
         required_accepted_flop_teachers: config.require_accepted_flop_teachers,
+        required_range_consistent_flop_teachers: config
+            .require_range_consistent_flop_teachers,
         required_accepted_turn_river_teachers: config.require_accepted_turn_river_teachers,
         flop_convergence,
+        flop_range_response,
         flop_records,
         turn_river_records,
         total_records: records.len(),
@@ -8606,6 +8971,8 @@ mod tests {
             source_dataset_sha256: "1".repeat(64),
             source_dataset_schema: "hu-range-conditioned-postflop-policy-dataset-v1".to_owned(),
             source_validation_status: "accepted_for_training".to_owned(),
+            policy_composition: RANGE_POLICY_REPLACE.to_owned(),
+            source_policy_sha256: None,
         }
     }
 
@@ -8624,7 +8991,7 @@ mod tests {
         let network = check_preferring_range_policy();
         network.validate().unwrap();
         let actions = state.game_state().legal_actions(&game);
-        let probabilities = network.strategy(&state, &game).unwrap();
+        let probabilities = network.strategy(&state, &game, None).unwrap();
         let row = &probabilities
             [forced_combo.key() * actions.len()..(forced_combo.key() + 1) * actions.len()];
         assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
@@ -8638,6 +9005,49 @@ mod tests {
                 assert_eq!(row.iter().sum::<f64>(), 0.0);
             } else {
                 assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn zero_residual_range_policy_preserves_the_pinned_source_policy() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let state = PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges);
+        let actions = state.game_state().legal_actions(&game);
+        let mut network = check_preferring_range_policy();
+        network.policy_composition = RANGE_POLICY_SOURCE_LOGIT_RESIDUAL.to_owned();
+        network.source_policy_sha256 = Some("a".repeat(64));
+        network.head[0].weights.fill(0.0);
+        network.head[0].biases.fill(0.0);
+        network.validate().unwrap();
+        network
+            .validate_source_policy_sha256(&"a".repeat(64))
+            .unwrap();
+        assert!(network
+            .validate_source_policy_sha256(&"b".repeat(64))
+            .is_err());
+        assert!(network.strategy(&state, &game, None).is_err());
+
+        let mut source = vec![0.0; COMBO_COUNT * actions.len()];
+        for combo in all_combos() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                continue;
+            }
+            let row = &mut source[combo.key() * actions.len()..(combo.key() + 1) * actions.len()];
+            row.fill(0.3 / (actions.len() - 1) as f64);
+            row[0] = 0.7;
+        }
+        let probabilities = network.strategy(&state, &game, Some(&source)).unwrap();
+        for combo in all_combos() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                continue;
+            }
+            let offset = combo.key() * actions.len();
+            for action in 0..actions.len() {
+                assert!((probabilities[offset + action] - source[offset + action]).abs() < 1e-12);
             }
         }
     }
@@ -10239,6 +10649,7 @@ mod tests {
         let mut range_records = BoundedActionRecordCollector::new(10, 8);
         let added = append_public_belief_policy_records(
             &game,
+            None,
             public.game_state(),
             &board,
             ranges,
@@ -10297,6 +10708,7 @@ mod tests {
         let mut records = BoundedActionRecordCollector::new(3, 7);
         let error = append_public_belief_policy_records(
             &game,
+            None,
             state,
             &board,
             ranges,
@@ -10386,6 +10798,7 @@ mod tests {
         let mut records = BoundedActionRecordCollector::new(100, 11);
         append_public_belief_policy_records(
             &game,
+            None,
             root_state,
             &board,
             ranges,
