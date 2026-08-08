@@ -109,14 +109,44 @@ The exact paired evidence is pinned in `neural/20bb-v56-causal-trust-pilot.json`
 
 The pilot also exposed a cross-runtime numerical boundary: all 503,297 postflop parameters match the attributed routed bundles exactly, while Rust scalar inference and MLX matrix inference differ by up to 0.00342 action probability. The distiller now verifies exact artifact identity, reports that bounded numerical difference, and leaves final acceptance to Rust. Do not loosen the trust gate or route a student using MLX-only evidence.
 
+## Retained v57 exact-Rust projected pair
+
+The exact Rust evaluator now reconstructs every causal-attribution decision,
+verifies the canonical feature hash, and scores candidate action values with the
+same dense inference implementation used by the full-game certificate. The
+distiller evaluates every optimizer checkpoint and retains only a checkpoint
+that improves both independently seeded fixed-response corpora while staying
+inside the declared maximum-node and reach-weighted KL bounds.
+
+On the unchanged 20-step trajectories, candidate 7601 selected step 8 and
+candidate 7602 selected step 3. Their exact independent value gains were
+`0.00635145bb` and `0.00461654bb`; maximum train/validation node KL remained
+below `0.005`. Both then improved the unchanged paired full-game means: 7601
+moved from `2.17635806` to `2.16690165bb/hand`, and 7602 moved from
+`2.08776451` to `2.08427165bb/hand`. Complete hashes and gates are pinned in
+`neural/20bb-v57-rust-projected-trust-pilot.json`.
+
+V57 is therefore the best measured paired static policy, but activation remains
+false: both means are far above `0.05bb/hand` and both one-sided 99% upper
+bounds remain `20bb/hand`. The small improvement confirms that causal policy
+updates point in the right direction; it does not support repeating static
+frequency or fixed-response fitting as the primary route to release.
+
+The next policy architecture should reuse the existing public-belief flop
+resolver and exact-card turn/river solver, add a safe multi-valued continuation
+boundary, and serve or distill the resulting range-conditioned policy. This is
+the common mechanism in continual re-solving, safe nested subgame solving, and
+public-belief search. Do not import ReBeL or PokerRL wholesale: their public
+implementations do not provide this repository's HUNL game/runtime contract.
+
 ## Exact next sequence
 
 Continue only with policy-action updates aligned to the full-game exploitability certificate:
 
-1. Keep the v27 preflop and v51 postflop policies frozen as the baseline.
+1. Keep the v27 preflop and retained v57 postflop policies frozen as the baseline.
 2. If the goal is only a combined full-hand artifact, use the two existing routed v51 bundles and stop here.
-3. If the goal remains reducing exploitability, first add selection-aware projection/evaluation under Rust inference. Do not sweep the rejected two-deal smoke or loosen its KL bound.
-4. Only then create a new independent paired candidate. Route it through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
+3. If the goal remains reducing exploitability, continue with the safe range-conditioned public-belief serving path described above. Do not sweep the rejected local objectives or loosen the KL bound.
+4. Route every new paired candidate through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
 
 Do not resume more roots, local solver iterations, frequency-only training, or local fixed-policy EV scale/step/replay sweeps; v52–v55 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
 

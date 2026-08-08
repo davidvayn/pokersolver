@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "neural-samples" => run_neural_samples(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
         "neural-causal-attribution" => run_neural_causal_attribution(&args[1..]),
+        "neural-causal-attribution-evaluate" => run_neural_causal_attribution_evaluate(&args[1..]),
         "preflop-cache" => run_preflop_cache(&args[1..]),
         "preflop-cache-resolver" => run_preflop_cache_resolver(&args[1..]),
         "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
@@ -1674,6 +1675,37 @@ fn run_neural_causal_attribution(args: &[String]) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+fn run_neural_causal_attribution_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let evaluation = blueprint::neural::evaluate_causal_attribution_policy(
+        blueprint::neural::CausalAttributionPolicyEvaluationConfig {
+            dataset_path: value(args, "--dataset")
+                .map(PathBuf::from)
+                .ok_or("--dataset is required for causal attribution evaluation")?,
+            network_path: value(args, "--networks")
+                .map(PathBuf::from)
+                .ok_or("--networks is required for causal attribution evaluation")?,
+            maximum_node_kl: parse_or(args, "--maximum-node-kl", 0.005f64)?,
+            maximum_weighted_kl: parse_or(args, "--maximum-weighted-kl", 0.0015f64)?,
+            minimum_policy_value_gain_bb: parse_or(
+                args,
+                "--minimum-policy-value-gain-bb",
+                0.000001f64,
+            )?,
+        },
+    )?;
+    let serialized = serde_json::to_string_pretty(&evaluation)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
+    Ok(())
+}
+
 fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
@@ -1986,6 +2018,7 @@ Usage:
   preflop-solver neural-samples [options]
   preflop-solver neural-certificate [options]
   preflop-solver neural-causal-attribution [options]
+  preflop-solver neural-causal-attribution-evaluate [options]
   preflop-solver preflop-cache [options]
   preflop-solver preflop-cache-resolver [options]
   preflop-solver preflop-cache-compare [options]

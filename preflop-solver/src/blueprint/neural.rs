@@ -12,7 +12,7 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
 pub const STATE_FEATURE_COUNT: usize = 716;
@@ -92,6 +92,45 @@ pub struct CausalPolicyAttributionReport {
     pub output: PathBuf,
     pub output_sha256: String,
     pub validation_status: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct CausalAttributionPolicyEvaluationConfig {
+    pub dataset_path: PathBuf,
+    pub network_path: PathBuf,
+    pub maximum_node_kl: f64,
+    pub maximum_weighted_kl: f64,
+    pub minimum_policy_value_gain_bb: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CausalAttributionPolicyEvaluation {
+    pub schema: &'static str,
+    pub method: &'static str,
+    pub depth_bb: f64,
+    pub records: usize,
+    pub dataset_sha256: String,
+    pub source_network_sha256: String,
+    pub candidate_network_sha256: String,
+    pub total_objective_weight: f64,
+    pub weighted_baseline_policy_value_bb: f64,
+    pub weighted_candidate_policy_value_bb: f64,
+    pub weighted_policy_value_gain_bb: f64,
+    pub weighted_reverse_kl_from_frozen: f64,
+    pub maximum_reverse_kl_from_frozen: f64,
+    pub weighted_forward_kl_from_frozen: f64,
+    pub maximum_forward_kl_from_frozen: f64,
+    pub weighted_l1_action_delta: f64,
+    pub maximum_l1_action_delta: f64,
+    pub weighted_primary_action_agreement: f64,
+    pub maximum_baseline_probability_sum_error: f64,
+    pub maximum_candidate_probability_sum_error: f64,
+    pub minimum_policy_value_gain_bb: f64,
+    pub feature_hashes_verified: bool,
+    pub policy_value_improved: bool,
+    pub maximum_node_kl_passed: bool,
+    pub weighted_kl_passed: bool,
+    pub accepted_for_routed_evaluation: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -349,7 +388,7 @@ fn activate_dense(value: f32, activation: DenseActivation) -> f32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SampleKind {
     AdvantageP0,
@@ -357,7 +396,7 @@ enum SampleKind {
     AverageStrategy,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct CompactState {
     private_cards: [u8; 2],
     board: Vec<u8>,
@@ -374,7 +413,7 @@ struct CompactState {
     trajectory: Vec<CompactTrajectoryAction>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct CompactTrajectoryAction {
     actor: usize,
     street: Street,
@@ -384,13 +423,13 @@ struct CompactTrajectoryAction {
     pot_after_bb: f32,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct CompactLegalAction {
     kind: TrajectoryActionKind,
     amount_to_bb: Option<f32>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct TrainingSample {
     kind: SampleKind,
     iteration: u64,
@@ -2506,6 +2545,424 @@ pub fn generate_causal_policy_attribution(
     })
 }
 
+fn reconstruct_attribution_state(
+    compact: &CompactState,
+    game: &BlueprintConfig,
+) -> Result<(GameState, Deal), String> {
+    if compact.actor > 1
+        || compact.button != 0
+        || compact.board.len() != compact.street.board_len()
+        || compact.trajectory.len() > MAX_TRAJECTORY_ACTIONS
+    {
+        return Err("causal attribution state is structurally invalid".to_owned());
+    }
+    let state = GameState {
+        street: compact.street,
+        actor: compact.actor,
+        invested: compact.total_committed_bb.map(f64::from),
+        street_invested: compact.street_bets_bb.map(f64::from),
+        last_full_raise: f64::from(compact.last_full_raise_bb),
+        aggressions: 0,
+        checks: 0,
+        raise_reopened: compact.raise_reopened,
+        public_history: Vec::new(),
+        trajectory: compact
+            .trajectory
+            .iter()
+            .map(|action| TrajectoryAction {
+                actor: action.actor,
+                street: action.street,
+                kind: action.kind,
+                amount_bb: f64::from(action.amount_bb),
+                amount_to_bb: action.amount_to_bb.map(f64::from),
+                pot_after_bb: f64::from(action.pot_after_bb),
+            })
+            .collect(),
+        terminal: None,
+    };
+    let settled_pot = state.pot() - state.street_invested[0] - state.street_invested[1];
+    if (settled_pot - f64::from(compact.pot_bb)).abs() > 1e-4
+        || (state.to_call() - f64::from(compact.to_call_bb)).abs() > 1e-4
+        || (0..2).any(|player| {
+            (state.remaining(player, game) - f64::from(compact.stacks_bb[player])).abs() > 1e-4
+        })
+    {
+        return Err("causal attribution chip accounting is inconsistent".to_owned());
+    }
+
+    let mut used = [false; 52];
+    for card in compact
+        .private_cards
+        .into_iter()
+        .chain(compact.board.iter().copied())
+    {
+        if card >= 52 || used[card as usize] {
+            return Err("causal attribution cards are invalid or duplicated".to_owned());
+        }
+        used[card as usize] = true;
+    }
+    let mut filler = (0..52u8).filter(|card| !used[*card as usize]);
+    let opponent = [
+        filler
+            .next()
+            .ok_or_else(|| "causal attribution has no filler card".to_owned())?,
+        filler
+            .next()
+            .ok_or_else(|| "causal attribution has no filler card".to_owned())?,
+    ];
+    let mut holes = [[0u8; 2]; 2];
+    holes[compact.actor] = compact.private_cards;
+    holes[1 - compact.actor] = opponent;
+    let mut board = [0u8; 5];
+    board[..compact.board.len()].copy_from_slice(&compact.board);
+    for card in &mut board[compact.board.len()..] {
+        *card = filler
+            .next()
+            .ok_or_else(|| "causal attribution has no future-board filler".to_owned())?;
+    }
+    Ok((state, Deal::from_sampled_cards(holes, board)))
+}
+
+fn compact_attribution_features(
+    compact: &CompactState,
+    compact_actions: &[CompactLegalAction],
+    state: &GameState,
+    deal: &Deal,
+    game: &BlueprintConfig,
+) -> (Vec<f32>, Vec<Vec<f32>>) {
+    let mut state_features = encode_state_features(state, deal, game);
+    let depth = game.effective_stack_bb as f32;
+    let actor = compact.actor;
+    let opponent = 1 - actor;
+    let scalars = [
+        compact.pot_bb / depth,
+        compact.stacks_bb[actor] / depth,
+        compact.stacks_bb[opponent] / depth,
+        compact.street_bets_bb[actor] / depth,
+        compact.street_bets_bb[opponent] / depth,
+        compact.total_committed_bb[actor] / depth,
+        compact.total_committed_bb[opponent] / depth,
+        compact.to_call_bb / depth,
+        compact.last_full_raise_bb / depth,
+        f32::from(compact.raise_reopened),
+        compact.board.len() as f32 / 5.0,
+        compact.trajectory.len() as f32 / MAX_TRAJECTORY_ACTIONS as f32,
+    ];
+    state_features[112..124].copy_from_slice(&scalars);
+    let milliblind = |value: f64| (value * 1_000.0).round() / 1_000.0;
+    let current = milliblind(f64::from(compact.street_bets_bb[actor]));
+    let highest = compact
+        .street_bets_bb
+        .iter()
+        .copied()
+        .map(f64::from)
+        .fold(0.0f64, f64::max);
+    let highest = milliblind(highest);
+    let pot = milliblind(
+        f64::from(compact.pot_bb)
+            + compact
+                .street_bets_bb
+                .iter()
+                .copied()
+                .map(f64::from)
+                .sum::<f64>(),
+    );
+    let action_features = compact_actions
+        .iter()
+        .map(|action| {
+            let mut features = vec![0.0f32; ACTION_FEATURE_COUNT];
+            features[trajectory_kind_index(action.kind)] = 1.0;
+            let target = match action.kind {
+                TrajectoryActionKind::Call => highest,
+                TrajectoryActionKind::Bet
+                | TrajectoryActionKind::Raise
+                | TrajectoryActionKind::AllIn => {
+                    f64::from(action.amount_to_bb.expect("validated sized action target"))
+                }
+                TrajectoryActionKind::Fold | TrajectoryActionKind::Check => current,
+            };
+            let paid = if action.kind == TrajectoryActionKind::Call {
+                milliblind(f64::from(compact.to_call_bb))
+            } else {
+                milliblind((target - current).max(0.0))
+            };
+            features[6] = target as f32 / depth;
+            features[7] = paid as f32 / depth;
+            features[8] = (paid / pot.max(1.0)) as f32;
+            features
+        })
+        .collect();
+    (state_features, action_features)
+}
+
+fn frozen_policy_from_features(
+    policy: &FrozenPolicy,
+    street: Street,
+    actor: usize,
+    state_features: &[f32],
+    action_features: &[Vec<f32>],
+) -> Vec<f64> {
+    let scores = policy
+        .bundle
+        .policy_network(street, actor)
+        .score_state_actions(state_features, action_features);
+    match policy.bundle.strategy_transform {
+        StrategyTransform::RegretMatching => {
+            normalize_or_uniform(scores.into_iter().map(|value| value.max(0.0)).collect())
+        }
+        StrategyTransform::Softmax => stable_softmax(&scores),
+    }
+}
+
+fn categorical_kl(first: &[f64], second: &[f64]) -> Result<f64, String> {
+    if first.len() != second.len() || first.is_empty() {
+        return Err("categorical distributions have incompatible shapes".to_owned());
+    }
+    let mut value = 0.0;
+    for (probability, reference) in first.iter().zip(second) {
+        if !probability.is_finite()
+            || !reference.is_finite()
+            || *probability <= 0.0
+            || *reference <= 0.0
+        {
+            return Err("categorical distributions must have finite full support".to_owned());
+        }
+        value += probability * (probability / reference).ln();
+    }
+    Ok(value.max(0.0))
+}
+
+/// Score a causal-attribution corpus with the same deterministic Rust dense
+/// inference used by the full-game certificate. This is the authoritative
+/// pre-routing trust-region check; ML framework metrics remain diagnostics.
+pub fn evaluate_causal_attribution_policy(
+    config: CausalAttributionPolicyEvaluationConfig,
+) -> Result<CausalAttributionPolicyEvaluation, Box<dyn Error>> {
+    if !config.maximum_node_kl.is_finite()
+        || config.maximum_node_kl <= 0.0
+        || !config.maximum_weighted_kl.is_finite()
+        || config.maximum_weighted_kl <= 0.0
+        || !config.minimum_policy_value_gain_bb.is_finite()
+        || config.minimum_policy_value_gain_bb <= 0.0
+    {
+        return Err("causal attribution KL bounds must be finite and positive".into());
+    }
+    let dataset_sha256 = sha256_path(&config.dataset_path)?;
+    let candidate_network_sha256 = sha256_path(&config.network_path)?;
+    let policy = FrozenPolicy::load(&config.network_path)?;
+    let file = fs::File::open(&config.dataset_path)?;
+    let mut lines = BufReader::new(flate2::read::GzDecoder::new(file)).lines();
+    let metadata_line = lines
+        .next()
+        .ok_or("causal attribution dataset is empty")??;
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_line)?;
+    if metadata["schema"] != "hu-neural-causal-policy-attribution-jsonl-v1"
+        || metadata["state_feature_schema"] != "hu-cash-trajectory-poker-aware-v4"
+        || metadata["state_feature_count"] != STATE_FEATURE_COUNT
+        || metadata["action_feature_count"] != ACTION_FEATURE_COUNT
+        || metadata["postflop_only"] != true
+        || metadata["preflop_policy_frozen"] != true
+    {
+        return Err("causal attribution metadata is incompatible".into());
+    }
+    let records = metadata["records"]
+        .as_u64()
+        .ok_or("causal attribution metadata omits its record count")? as usize;
+    let source_network_sha256 = metadata["source_network_sha256"]
+        .as_str()
+        .ok_or("causal attribution metadata omits its source network")?
+        .to_owned();
+    let depth = metadata["depth_bb"]
+        .as_f64()
+        .ok_or("causal attribution metadata omits its depth")?;
+    let action_abstraction: ActionAbstraction =
+        serde_json::from_value(metadata["action_abstraction"].clone())?;
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = depth;
+    game.action_abstraction = action_abstraction;
+    game.validate()
+        .map_err(|error| format!("causal attribution game is invalid: {error}"))?;
+
+    let mut observed = 0usize;
+    let mut total_weight = 0.0;
+    let mut baseline_value_sum = 0.0;
+    let mut candidate_value_sum = 0.0;
+    let mut reverse_kl_sum = 0.0;
+    let mut forward_kl_sum = 0.0;
+    let mut l1_sum = 0.0;
+    let mut primary_agreement_sum = 0.0;
+    let mut maximum_reverse_kl = 0.0f64;
+    let mut maximum_forward_kl = 0.0f64;
+    let mut maximum_l1 = 0.0f64;
+    let mut maximum_baseline_sum_error = 0.0f64;
+    let mut maximum_candidate_sum_error = 0.0f64;
+    for line in lines {
+        let sample: TrainingSample = serde_json::from_str(&line?)?;
+        if sample.kind != SampleKind::AverageStrategy
+            || sample.state.street == Street::Preflop
+            || sample.actions.is_empty()
+            || sample.actions.len() != sample.targets.len()
+            || sample.actions.len() != sample.feature_sha256.len()
+        {
+            return Err("causal attribution record is structurally invalid".into());
+        }
+        let action_values = sample
+            .action_values_bb
+            .as_ref()
+            .ok_or("causal attribution record omits policy action values")?;
+        if action_values.len() != sample.actions.len()
+            || action_values
+                .iter()
+                .any(|value| !value.is_finite() || f64::from(value.abs()) > depth + 1e-6)
+            || !sample.weight.is_finite()
+            || sample.weight <= 0.0
+        {
+            return Err("causal attribution values or weight are invalid".into());
+        }
+        let (state, deal) = reconstruct_attribution_state(&sample.state, &game)?;
+        let (state_features, action_features) =
+            compact_attribution_features(&sample.state, &sample.actions, &state, &deal, &game);
+        for (action_index, ((features, expected_hash), compact_action)) in action_features
+            .iter()
+            .zip(&sample.feature_sha256)
+            .zip(&sample.actions)
+            .enumerate()
+        {
+            let mut complete_features = state_features.clone();
+            complete_features.extend(features);
+            let measured_hash = feature_sha256(&complete_features);
+            if measured_hash != *expected_hash {
+                return Err(format!(
+                    "causal attribution feature hash differs at record {observed}, action {action_index}: expected {expected_hash}, measured {measured_hash}"
+                )
+                .into());
+            }
+            if matches!(
+                compact_action.kind,
+                TrajectoryActionKind::Bet
+                    | TrajectoryActionKind::Raise
+                    | TrajectoryActionKind::AllIn
+            ) && compact_action.amount_to_bb.is_none()
+            {
+                return Err("causal attribution sized action has no target".into());
+            }
+        }
+        let mut baseline = sample
+            .targets
+            .iter()
+            .map(|value| f64::from(*value))
+            .collect::<Vec<_>>();
+        let baseline_sum = baseline.iter().sum::<f64>();
+        maximum_baseline_sum_error = maximum_baseline_sum_error.max((baseline_sum - 1.0).abs());
+        if baseline_sum <= 0.0
+            || baseline
+                .iter()
+                .any(|probability| !probability.is_finite() || *probability <= 0.0)
+        {
+            return Err("causal attribution baseline probabilities are invalid".into());
+        }
+        for probability in &mut baseline {
+            *probability /= baseline_sum;
+        }
+        let candidate = frozen_policy_from_features(
+            &policy,
+            sample.state.street,
+            sample.state.actor,
+            &state_features,
+            &action_features,
+        );
+        let candidate_sum = candidate.iter().sum::<f64>();
+        maximum_candidate_sum_error = maximum_candidate_sum_error.max((candidate_sum - 1.0).abs());
+        let reverse_kl = categorical_kl(&candidate, &baseline)?;
+        let forward_kl = categorical_kl(&baseline, &candidate)?;
+        let l1 = candidate
+            .iter()
+            .zip(&baseline)
+            .map(|(first, second)| (first - second).abs())
+            .sum::<f64>();
+        let baseline_value = baseline
+            .iter()
+            .zip(action_values)
+            .map(|(probability, value)| probability * f64::from(*value))
+            .sum::<f64>();
+        let candidate_value = candidate
+            .iter()
+            .zip(action_values)
+            .map(|(probability, value)| probability * f64::from(*value))
+            .sum::<f64>();
+        let weight = f64::from(sample.weight);
+        total_weight += weight;
+        baseline_value_sum += weight * baseline_value;
+        candidate_value_sum += weight * candidate_value;
+        reverse_kl_sum += weight * reverse_kl;
+        forward_kl_sum += weight * forward_kl;
+        l1_sum += weight * l1;
+        let baseline_primary = baseline
+            .iter()
+            .enumerate()
+            .max_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map(|(index, _)| index)
+            .expect("nonempty baseline");
+        let candidate_primary = candidate
+            .iter()
+            .enumerate()
+            .max_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map(|(index, _)| index)
+            .expect("nonempty candidate");
+        if baseline_primary == candidate_primary {
+            primary_agreement_sum += weight;
+        }
+        maximum_reverse_kl = maximum_reverse_kl.max(reverse_kl);
+        maximum_forward_kl = maximum_forward_kl.max(forward_kl);
+        maximum_l1 = maximum_l1.max(l1);
+        observed += 1;
+    }
+    if observed != records || records == 0 || !total_weight.is_finite() || total_weight <= 0.0 {
+        return Err("causal attribution observed record count or weight is invalid".into());
+    }
+    let weighted_baseline_value = baseline_value_sum / total_weight;
+    let weighted_candidate_value = candidate_value_sum / total_weight;
+    let weighted_gain = weighted_candidate_value - weighted_baseline_value;
+    let weighted_reverse_kl = reverse_kl_sum / total_weight;
+    let weighted_forward_kl = forward_kl_sum / total_weight;
+    let probability_sums_valid =
+        maximum_baseline_sum_error <= 1e-6 && maximum_candidate_sum_error <= 1e-12;
+    let policy_value_improved = weighted_gain > config.minimum_policy_value_gain_bb;
+    let maximum_node_kl_passed = maximum_reverse_kl <= config.maximum_node_kl;
+    let weighted_kl_passed = weighted_reverse_kl <= config.maximum_weighted_kl;
+    Ok(CausalAttributionPolicyEvaluation {
+        schema: "hu-neural-causal-attribution-policy-evaluation-v1",
+        method: "exact_rust_dense_inference_on_fixed_causal_response_action_values",
+        depth_bb: depth,
+        records,
+        dataset_sha256,
+        source_network_sha256,
+        candidate_network_sha256,
+        total_objective_weight: total_weight,
+        weighted_baseline_policy_value_bb: weighted_baseline_value,
+        weighted_candidate_policy_value_bb: weighted_candidate_value,
+        weighted_policy_value_gain_bb: weighted_gain,
+        weighted_reverse_kl_from_frozen: weighted_reverse_kl,
+        maximum_reverse_kl_from_frozen: maximum_reverse_kl,
+        weighted_forward_kl_from_frozen: weighted_forward_kl,
+        maximum_forward_kl_from_frozen: maximum_forward_kl,
+        weighted_l1_action_delta: l1_sum / total_weight,
+        maximum_l1_action_delta: maximum_l1,
+        weighted_primary_action_agreement: primary_agreement_sum / total_weight,
+        maximum_baseline_probability_sum_error: maximum_baseline_sum_error,
+        maximum_candidate_probability_sum_error: maximum_candidate_sum_error,
+        minimum_policy_value_gain_bb: config.minimum_policy_value_gain_bb,
+        feature_hashes_verified: true,
+        policy_value_improved,
+        maximum_node_kl_passed,
+        weighted_kl_passed,
+        accepted_for_routed_evaluation: policy_value_improved
+            && maximum_node_kl_passed
+            && weighted_kl_passed
+            && probability_sums_valid,
+    })
+}
+
 fn one_sided_empirical_bernstein_margin(
     sample_variance: f64,
     range: f64,
@@ -3348,6 +3805,15 @@ mod tests {
             1,
         )
         .unwrap();
+        let source_evaluation =
+            evaluate_causal_attribution_policy(CausalAttributionPolicyEvaluationConfig {
+                dataset_path: first_path.clone(),
+                network_path: network_path.clone(),
+                maximum_node_kl: 0.005,
+                maximum_weighted_kl: 0.0015,
+                minimum_policy_value_gain_bb: 0.000001,
+            })
+            .unwrap();
         assert_eq!(
             fs::read(&first_path).unwrap(),
             fs::read(&second_path).unwrap()
@@ -3362,6 +3828,12 @@ mod tests {
         assert!(first.retained_records > 0);
         assert!(first.minimum_frozen_policy_action_probability > 0.0);
         assert!(first.maximum_target_probability_sum_error < 1e-12);
+        assert_eq!(source_evaluation.records, first.retained_records);
+        assert!(source_evaluation.feature_hashes_verified);
+        assert!(source_evaluation.weighted_policy_value_gain_bb.abs() < 1e-12);
+        assert!(source_evaluation.maximum_reverse_kl_from_frozen < 1e-12);
+        assert!(source_evaluation.maximum_candidate_probability_sum_error < 1e-12);
+        assert!(!source_evaluation.accepted_for_routed_evaluation);
 
         let reader = BufReader::new(GzDecoder::new(fs::File::open(&first_path).unwrap()));
         let mut lines = reader.lines();

@@ -1,0 +1,73 @@
+{
+  "schema": "hu-20bb-rust-projected-causal-policy-pilot-v1",
+  "status": "retained_directional_candidate_not_activated",
+  "activationAllowed": false,
+  "sourceCandidate": "v51",
+  "retainedCandidate": "v57",
+  "selection": {
+    "method": "evaluate every optimizer checkpoint with exact Rust serving inference; require positive train and independent value gain plus maximum and reach-weighted KL bounds; maximize the smaller independent gain",
+    "steps": 20,
+    "batchSize": 512,
+    "learningRate": 0.00001,
+    "mirrorStepPerBb": 0.1,
+    "maximumTargetNodeKl": 0.001,
+    "maximumRealizedNodeKl": 0.005,
+    "maximumRealizedWeightedKl": 0.0015,
+    "minimumPolicyValueGainBb": 0.000001
+  },
+  "candidates": [
+    {
+      "seed": 7601,
+      "optimizerSeed": 16221,
+      "selectedStep": 8,
+      "reportSha256": "a49e44e9e8597f0cb5bbedecbc9e76daf019f0b65d5f9a314d3d2e1b3acdd939",
+      "studentWeightsSha256": "4e936393ce1bf9cf77e3d97319818e0b67f88c8f61418cca9e8664054f235707",
+      "routedBundleSha256": "310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3",
+      "certificateSha256": "c498a1a449b01f322ea643a67b6ff499ad85dc02ac108f9be1f6a02176f68494",
+      "exactRustTrainingPolicyValueGainBb": 0.04143596070789979,
+      "exactRustIndependentPolicyValueGainBb": 0.006351449104888385,
+      "trainingMaximumReverseKl": 0.004112846444774693,
+      "independentMaximumReverseKl": 0.0025429939154667505,
+      "sourceFullGameMeanBbPerHand": 2.1763580639024402,
+      "candidateFullGameMeanBbPerHand": 2.1669016480692265,
+      "pairedMeanImprovementBbPerHand": 0.009456415833213772,
+      "sampleStandardErrorBb": 0.45071313666496654,
+      "oneSided99PercentUpperBoundBbPerHand": 20.0,
+      "passedPreRoutingGates": true,
+      "improvedPairedFullGameMean": true
+    },
+    {
+      "seed": 7602,
+      "optimizerSeed": 16222,
+      "selectedStep": 3,
+      "reportSha256": "f9cdf49e8e7753cf1c1b5bd77d035d7351a7d2d29c9f22f2646077461ef177a3",
+      "studentWeightsSha256": "87c44469a11188b49f39d12157c59bd0daa73e3e73bcc9db0aac47febc787462",
+      "routedBundleSha256": "b04b5485a9a50ff343b07446de7a333699f22ae4df7d3611bcde330db7b866ef",
+      "certificateSha256": "e9c58518379ad1210758e95f5ef3378de33a03009bbc98ae5fc0298aaf754b00",
+      "exactRustTrainingPolicyValueGainBb": 0.013505346256476702,
+      "exactRustIndependentPolicyValueGainBb": 0.00461653515708349,
+      "trainingMaximumReverseKl": 0.002620562618309133,
+      "independentMaximumReverseKl": 0.00031483568072157575,
+      "sourceFullGameMeanBbPerHand": 2.08776451096832,
+      "candidateFullGameMeanBbPerHand": 2.084271650687241,
+      "pairedMeanImprovementBbPerHand": 0.003492860281078647,
+      "sampleStandardErrorBb": 0.5176277059705818,
+      "oneSided99PercentUpperBoundBbPerHand": 20.0,
+      "passedPreRoutingGates": true,
+      "improvedPairedFullGameMean": true
+    }
+  ],
+  "decision": {
+    "pairRetained": true,
+    "reason": "both independently selected policies passed exact Rust train and validation gates and both lowered the unchanged paired full-game sample mean",
+    "releaseGatePassed": false,
+    "releaseBlocker": "the measured means remain above 0.05bb/hand and both one-sided 99% upper bounds remain 20bb/hand",
+    "next": "replace further static frequency fitting with safe range-conditioned public-belief solving and multi-valued continuation policies; preserve v57 as the frozen paired baseline"
+  },
+  "researchBasis": [
+    "DeepStack continual re-solving with range and opponent counterfactual values: https://arxiv.org/abs/1701.01724",
+    "safe and nested subgame solving: https://arxiv.org/abs/1705.02955",
+    "multi-valued depth-limited states: https://arxiv.org/abs/1805.08195",
+    "ReBeL public-belief search and self-play learning: https://arxiv.org/abs/2007.13544"
+  ]
+}

@@ -15,7 +15,9 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 import mlx.core as mx
@@ -39,7 +41,7 @@ from train import (
 
 
 SCHEMA = "hu-neural-causal-policy-attribution-jsonl-v1"
-REPORT_SCHEMA = "hu-neural-causal-policy-trust-region-v1"
+REPORT_SCHEMA = "hu-neural-causal-policy-trust-region-v2"
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-dataset", type=Path, required=True)
     parser.add_argument("--initial-weights", type=Path, required=True)
     parser.add_argument("--source-networks", type=Path, required=True)
+    parser.add_argument("--rust-evaluator", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--hidden-sizes", default="512,256")
     parser.add_argument("--steps", type=int, default=20)
@@ -57,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-target-node-kl", type=float, default=0.001)
     parser.add_argument("--maximum-realized-node-kl", type=float, default=0.005)
     parser.add_argument("--maximum-realized-weighted-kl", type=float, default=0.0015)
+    parser.add_argument("--minimum-policy-value-gain-bb", type=float, default=1e-6)
     parser.add_argument("--source-parity-tolerance", type=float, default=0.005)
     parser.add_argument("--seed", type=int, default=16_201)
     return parser.parse_args()
@@ -273,7 +277,7 @@ def validate_source_artifact_identity(
     model: ActionScorer,
     source_networks: Path,
     expected_sha256: str,
-) -> None:
+) -> dict[str, Any]:
     if sha256(source_networks) != expected_sha256:
         raise ValueError("source network hash differs from the attribution corpus")
     bundle = json.loads(source_networks.read_text(encoding="utf-8"))
@@ -287,6 +291,100 @@ def validate_source_artifact_identity(
         raise ValueError(
             "initial weights are not parameter-identical to the attributed policy"
         )
+    return bundle
+
+
+def write_candidate_bundle(
+    model: ActionScorer, source_bundle: dict[str, Any], path: Path
+) -> str:
+    candidate_bundle = dict(source_bundle)
+    candidate_postflop = scorer_json(model)
+    candidate_bundle["postflop_networks"] = [candidate_postflop, candidate_postflop]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(candidate_bundle, separators=(",", ":")), encoding="utf-8"
+    )
+    os.replace(temporary, path)
+    return sha256(path)
+
+
+def evaluate_candidate_with_rust(
+    rust_evaluator: Path,
+    dataset: Path,
+    candidate_networks: Path,
+    maximum_node_kl: float,
+    maximum_weighted_kl: float,
+    minimum_policy_value_gain_bb: float,
+) -> dict[str, Any]:
+    completed = subprocess.run(
+        [
+            str(rust_evaluator),
+            "neural-causal-attribution-evaluate",
+            "--dataset",
+            str(dataset),
+            "--networks",
+            str(candidate_networks),
+            "--maximum-node-kl",
+            str(maximum_node_kl),
+            "--maximum-weighted-kl",
+            str(maximum_weighted_kl),
+            "--minimum-policy-value-gain-bb",
+            str(minimum_policy_value_gain_bb),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    evaluation = json.loads(completed.stdout)
+    if evaluation.get("schema") != (
+        "hu-neural-causal-attribution-policy-evaluation-v1"
+    ):
+        raise RuntimeError("Rust causal policy evaluator returned an incompatible report")
+    if evaluation.get("candidate_network_sha256") != sha256(candidate_networks):
+        raise RuntimeError("Rust causal policy evaluator scored a different candidate")
+    return evaluation
+
+
+def checkpoint_selection_key(
+    checkpoint: dict[str, Any],
+) -> tuple[float, float, float, int] | None:
+    training = checkpoint["training"]
+    validation = checkpoint["independentValidation"]
+    if not (
+        training.get("accepted_for_routed_evaluation")
+        and validation.get("accepted_for_routed_evaluation")
+    ):
+        return None
+    minimum_gain = min(
+        float(training["weighted_policy_value_gain_bb"]),
+        float(validation["weighted_policy_value_gain_bb"]),
+    )
+    maximum_node_kl = max(
+        float(training["maximum_reverse_kl_from_frozen"]),
+        float(validation["maximum_reverse_kl_from_frozen"]),
+    )
+    maximum_weighted_kl = max(
+        float(training["weighted_reverse_kl_from_frozen"]),
+        float(validation["weighted_reverse_kl_from_frozen"]),
+    )
+    return (
+        minimum_gain,
+        -maximum_node_kl,
+        -maximum_weighted_kl,
+        -int(checkpoint["step"]),
+    )
+
+
+def select_better_checkpoint(
+    selected: dict[str, Any] | None, candidate: dict[str, Any]
+) -> dict[str, Any] | None:
+    candidate_key = checkpoint_selection_key(candidate)
+    if candidate_key is None:
+        return selected
+    if selected is None or candidate_key > checkpoint_selection_key(selected):
+        return candidate
+    return selected
 
 
 def main() -> None:
@@ -296,11 +394,15 @@ def main() -> None:
         raise ValueError("--hidden-sizes requires two positive widths")
     if min(args.steps, args.batch_size) <= 0 or args.learning_rate <= 0:
         raise ValueError("trust-region optimization settings must be positive")
+    rust_evaluator = args.rust_evaluator.resolve()
+    if not rust_evaluator.is_file() or not os.access(rust_evaluator, os.X_OK):
+        raise ValueError("--rust-evaluator must be an executable file")
     for value in (
         args.mirror_step_per_bb,
         args.maximum_target_node_kl,
         args.maximum_realized_node_kl,
         args.maximum_realized_weighted_kl,
+        args.minimum_policy_value_gain_bb,
         args.source_parity_tolerance,
     ):
         if not np.isfinite(value) or value <= 0:
@@ -320,7 +422,7 @@ def main() -> None:
     model = ActionScorer(INPUT_FEATURE_COUNT, (hidden[0], hidden[1]))
     model.load_weights(str(args.initial_weights.resolve()))
     mx.eval(model.parameters())
-    validate_source_artifact_identity(
+    source_bundle = validate_source_artifact_identity(
         model,
         args.source_networks.resolve(),
         str(training_metadata["source_network_sha256"]),
@@ -369,7 +471,13 @@ def main() -> None:
     step = make_compiled_policy_step(model, optimizer)
     indices = np.arange(len(training["states"]))
     losses: list[float] = []
-    for _ in range(args.steps):
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output = args.output_dir / "student.safetensors"
+    candidate_networks = args.output_dir / "candidate-networks.json"
+    working_candidate = args.output_dir / ".checkpoint-candidate-networks.json"
+    exact_checkpoint_evaluations: list[dict[str, Any]] = []
+    selected_checkpoint: dict[str, Any] | None = None
+    for step_index in range(args.steps):
         batch = rng.choice(
             indices, size=min(args.batch_size, len(indices)), replace=True
         )
@@ -382,22 +490,71 @@ def main() -> None:
         mx.eval(loss, model.parameters(), optimizer.state)
         losses.append(float(loss.item()))
 
+        candidate_sha256 = write_candidate_bundle(
+            model, source_bundle, working_candidate
+        )
+        checkpoint = {
+            "step": step_index + 1,
+            "loss": losses[-1],
+            "candidateNetworksSha256": candidate_sha256,
+            "training": evaluate_candidate_with_rust(
+                rust_evaluator,
+                args.dataset.resolve(),
+                working_candidate,
+                args.maximum_realized_node_kl,
+                args.maximum_realized_weighted_kl,
+                args.minimum_policy_value_gain_bb,
+            ),
+            "independentValidation": evaluate_candidate_with_rust(
+                rust_evaluator,
+                args.validation_dataset.resolve(),
+                working_candidate,
+                args.maximum_realized_node_kl,
+                args.maximum_realized_weighted_kl,
+                args.minimum_policy_value_gain_bb,
+            ),
+        }
+        exact_checkpoint_evaluations.append(checkpoint)
+        previous_selection = selected_checkpoint
+        selected_checkpoint = select_better_checkpoint(
+            selected_checkpoint, checkpoint
+        )
+        if selected_checkpoint is not previous_selection:
+            save_model(model, output)
+            retained_sha256 = write_candidate_bundle(
+                model, source_bundle, candidate_networks
+            )
+            if retained_sha256 != candidate_sha256:
+                raise RuntimeError("retained causal policy candidate changed during export")
+
+    if selected_checkpoint is None:
+        save_model(model, output)
+        write_candidate_bundle(model, source_bundle, candidate_networks)
+    else:
+        model.load_weights(str(output.resolve()))
+        mx.eval(model.parameters())
+        if sha256(candidate_networks) != selected_checkpoint[
+            "candidateNetworksSha256"
+        ]:
+            raise RuntimeError("selected causal policy artifact hash changed")
+    working_candidate.unlink(missing_ok=True)
+
     student_training = model_probabilities(model, training)
     student_validation = model_probabilities(model, validation)
     student_training_metrics = policy_metrics(student_training, training)
     student_validation_metrics = policy_metrics(student_validation, validation)
-    selection_checks = {
+    diagnostic_mlx_checks = {
         "sourcePolicyArtifactIdentity": True,
         "sourceInferenceDifferenceBounded": maximum_source_error
         <= args.source_parity_tolerance,
         "trainingPolicyValueImproved": student_training_metrics[
             "weightedPolicyValueGainBb"
         ]
-        > 0,
+        > args.minimum_policy_value_gain_bb,
         "independentPolicyValueImproved": student_validation_metrics[
             "weightedPolicyValueGainBb"
         ]
-        > 0,
+        > args.minimum_policy_value_gain_bb,
         "trainingMaximumKlBounded": student_training_metrics[
             "maximumReverseKlFromFrozen"
         ]
@@ -420,10 +577,24 @@ def main() -> None:
         )
         <= 1e-6,
     }
-    selection_checks_passed = all(selection_checks.values())
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    output = args.output_dir / "student.safetensors"
-    save_model(model, output)
+    selection_checks_passed = selected_checkpoint is not None
+    selection_checks = {
+        "exactRustTrainingAccepted": bool(
+            selected_checkpoint
+            and selected_checkpoint["training"]["accepted_for_routed_evaluation"]
+        ),
+        "exactRustIndependentValidationAccepted": bool(
+            selected_checkpoint
+            and selected_checkpoint["independentValidation"][
+                "accepted_for_routed_evaluation"
+            ]
+        ),
+        "selectedArtifactHashMatches": bool(
+            selected_checkpoint
+            and selected_checkpoint["candidateNetworksSha256"]
+            == sha256(candidate_networks)
+        ),
+    }
     report = {
         "schema": REPORT_SCHEMA,
         "status": (
@@ -433,6 +604,14 @@ def main() -> None:
         ),
         "selectionChecksPassed": selection_checks_passed,
         "selectionChecks": selection_checks,
+        "diagnosticMlxChecks": diagnostic_mlx_checks,
+        "selectionMethod": (
+            "maximize_the_minimum_exact_rust_train_and_independent_value_gain_"
+            "then_minimize_kl_and_step"
+        ),
+        "selectedStep": (
+            int(selected_checkpoint["step"]) if selected_checkpoint else None
+        ),
         "depthBb": training_metadata["depth_bb"],
         "hiddenSizes": list(hidden),
         "steps": args.steps,
@@ -442,14 +621,21 @@ def main() -> None:
         "maximumTargetNodeKl": args.maximum_target_node_kl,
         "maximumRealizedNodeKl": args.maximum_realized_node_kl,
         "maximumRealizedWeightedKl": args.maximum_realized_weighted_kl,
+        "minimumPolicyValueGainBb": args.minimum_policy_value_gain_bb,
         "seed": args.seed,
         "initialWeightsSha256": sha256(args.initial_weights),
         "sourceNetworksSha256": sha256(args.source_networks),
         "studentWeightsSha256": sha256(output),
+        "candidateNetworksSha256": sha256(candidate_networks),
+        "rustEvaluator": str(rust_evaluator),
+        "rustEvaluatorSha256": sha256(rust_evaluator),
         "studentBytes": output.stat().st_size,
         "maximumRustMlxSourcePolicyProbabilityDifference": maximum_source_error,
         "firstLoss": losses[0],
         "finalLoss": losses[-1],
+        "selectedLoss": (
+            float(selected_checkpoint["loss"]) if selected_checkpoint else None
+        ),
         "trainingDataset": {
             "path": str(args.dataset.resolve()),
             "sha256": sha256(args.dataset),
@@ -468,6 +654,8 @@ def main() -> None:
             "training": student_training_metrics,
             "independentValidation": student_validation_metrics,
         },
+        "selectedExactRustEvaluation": selected_checkpoint,
+        "exactRustCheckpointEvaluations": exact_checkpoint_evaluations,
     }
     (args.output_dir / "report.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"

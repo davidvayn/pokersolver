@@ -68,6 +68,60 @@ class CausalPolicyTrustRegionTests(unittest.TestCase):
                     model, path, hashlib.sha256(changed).hexdigest()
                 )
 
+    def test_checkpoint_selection_requires_both_exact_rust_evaluations(self):
+        def checkpoint(
+            step: int,
+            training_gain: float,
+            validation_gain: float,
+            accepted: bool = True,
+        ):
+            def evaluation(gain: float):
+                return {
+                    "accepted_for_routed_evaluation": accepted,
+                    "weighted_policy_value_gain_bb": gain,
+                    "maximum_reverse_kl_from_frozen": 0.001 * step,
+                    "weighted_reverse_kl_from_frozen": 0.0001 * step,
+                }
+
+            return {
+                "step": step,
+                "training": evaluation(training_gain),
+                "independentValidation": evaluation(validation_gain),
+            }
+
+        first = checkpoint(1, 0.02, 0.01)
+        stronger_minimum_gain = checkpoint(2, 0.03, 0.015)
+        rejected = checkpoint(3, 0.5, 0.5, accepted=False)
+        selected = None
+        for candidate in (first, rejected, stronger_minimum_gain):
+            selected = causal.select_better_checkpoint(selected, candidate)
+        self.assertIs(selected, stronger_minimum_gain)
+
+    def test_checkpoint_selection_breaks_equal_gain_ties_with_lower_kl(self):
+        high_kl = {
+            "step": 2,
+            "training": {
+                "accepted_for_routed_evaluation": True,
+                "weighted_policy_value_gain_bb": 0.02,
+                "maximum_reverse_kl_from_frozen": 0.004,
+                "weighted_reverse_kl_from_frozen": 0.001,
+            },
+            "independentValidation": {
+                "accepted_for_routed_evaluation": True,
+                "weighted_policy_value_gain_bb": 0.01,
+                "maximum_reverse_kl_from_frozen": 0.004,
+                "weighted_reverse_kl_from_frozen": 0.001,
+            },
+        }
+        low_kl = json.loads(json.dumps(high_kl))
+        low_kl["step"] = 1
+        for evaluation in (
+            low_kl["training"],
+            low_kl["independentValidation"],
+        ):
+            evaluation["maximum_reverse_kl_from_frozen"] = 0.003
+        self.assertIs(causal.select_better_checkpoint(high_kl, low_kl), low_kl)
+
 
 if __name__ == "__main__":
     unittest.main()
