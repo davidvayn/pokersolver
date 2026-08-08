@@ -103,14 +103,20 @@ All four authentic v51 smoke corpora reconstructed their root response values wi
 
 This work is not needed to combine the frozen preflop and postflop networks; those routed v51 bundles already exist. It is only the next policy-action experiment if work continues toward lower full-game exploitability.
 
+## Rejected v56 causal trust-region pair
+
+The exact paired evidence is pinned in `neural/20bb-v56-causal-trust-pilot.json`. Both 20-step students failed before routing. Candidate 7601 improved the training and independent fixed-response objectives, but its maximum training-node KL was `0.00720`, above the declared `0.005` trust bound. Candidate 7602 reached `0.00604` and slightly regressed the independent fixed-response value. No routed bundle or full-game certificate was produced; retain v51.
+
+The pilot also exposed a cross-runtime numerical boundary: all 503,297 postflop parameters match the attributed routed bundles exactly, while Rust scalar inference and MLX matrix inference differ by up to 0.00342 action probability. The distiller now verifies exact artifact identity, reports that bounded numerical difference, and leaves final acceptance to Rust. Do not loosen the trust gate or route a student using MLX-only evidence.
+
 ## Exact next sequence
 
 Continue only with policy-action updates aligned to the full-game exploitability certificate:
 
 1. Keep the v27 preflop and v51 postflop policies frozen as the baseline.
 2. If the goal is only a combined full-hand artifact, use the two existing routed v51 bundles and stop here.
-3. If the goal remains reducing exploitability, run one short paired v56 trust-region distillation from the validated training/independent-attribution interface. Do not expand its budget until both independent fixed-response value checks pass.
-4. Route an eligible pair through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
+3. If the goal remains reducing exploitability, first add selection-aware projection/evaluation under Rust inference. Do not sweep the rejected two-deal smoke or loosen its KL bound.
+4. Only then create a new independent paired candidate. Route it through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
 
 Do not resume more roots, local solver iterations, frequency-only training, or local fixed-policy EV scale/step/replay sweeps; v52–v55 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
 

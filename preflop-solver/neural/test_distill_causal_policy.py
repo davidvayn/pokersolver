@@ -1,8 +1,14 @@
+import hashlib
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
+import mlx.core as mx
 import numpy as np
 
 import distill_causal_policy as causal
+from train import ActionScorer, scorer_json
 
 
 class CausalPolicyTrustRegionTests(unittest.TestCase):
@@ -41,6 +47,26 @@ class CausalPolicyTrustRegionTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["weightedCandidatePolicyValueBb"], 0.25)
         self.assertAlmostEqual(metrics["weightedPolicyValueGainBb"], 0.75)
         self.assertGreater(metrics["weightedReverseKlFromFrozen"], 0.0)
+
+    def test_source_identity_uses_exact_exported_parameters(self):
+        model = ActionScorer(725, (2, 2))
+        mx.eval(model.parameters())
+        scorer = scorer_json(model)
+        bundle = {"postflop_networks": [scorer, scorer]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "networks.json"
+            payload = json.dumps(bundle, separators=(",", ":")).encode()
+            path.write_bytes(payload)
+            causal.validate_source_artifact_identity(
+                model, path, hashlib.sha256(payload).hexdigest()
+            )
+            bundle["postflop_networks"][1] = {"layers": []}
+            changed = json.dumps(bundle, separators=(",", ":")).encode()
+            path.write_bytes(changed)
+            with self.assertRaisesRegex(ValueError, "parameter-identical"):
+                causal.validate_source_artifact_identity(
+                    model, path, hashlib.sha256(changed).hexdigest()
+                )
 
 
 if __name__ == "__main__":

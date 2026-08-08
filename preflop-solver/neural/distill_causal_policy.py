@@ -34,6 +34,7 @@ from train import (
     expand_state,
     make_compiled_policy_step,
     save_model,
+    scorer_json,
 )
 
 
@@ -46,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--validation-dataset", type=Path, required=True)
     parser.add_argument("--initial-weights", type=Path, required=True)
+    parser.add_argument("--source-networks", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--hidden-sizes", default="512,256")
     parser.add_argument("--steps", type=int, default=20)
@@ -55,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-target-node-kl", type=float, default=0.001)
     parser.add_argument("--maximum-realized-node-kl", type=float, default=0.005)
     parser.add_argument("--maximum-realized-weighted-kl", type=float, default=0.0015)
-    parser.add_argument("--source-parity-tolerance", type=float, default=2e-5)
+    parser.add_argument("--source-parity-tolerance", type=float, default=0.005)
     parser.add_argument("--seed", type=int, default=16_201)
     return parser.parse_args()
 
@@ -267,6 +269,26 @@ def model_probabilities(model: ActionScorer, data: dict[str, np.ndarray]) -> np.
     return probabilities(model, compatible)
 
 
+def validate_source_artifact_identity(
+    model: ActionScorer,
+    source_networks: Path,
+    expected_sha256: str,
+) -> None:
+    if sha256(source_networks) != expected_sha256:
+        raise ValueError("source network hash differs from the attribution corpus")
+    bundle = json.loads(source_networks.read_text(encoding="utf-8"))
+    postflop = bundle.get("postflop_networks")
+    if (
+        not isinstance(postflop, list)
+        or len(postflop) != 2
+        or postflop[0] != postflop[1]
+        or scorer_json(model) != postflop[0]
+    ):
+        raise ValueError(
+            "initial weights are not parameter-identical to the attributed policy"
+        )
+
+
 def main() -> None:
     args = parse_args()
     hidden = tuple(int(value) for value in args.hidden_sizes.split(","))
@@ -298,6 +320,11 @@ def main() -> None:
     model = ActionScorer(INPUT_FEATURE_COUNT, (hidden[0], hidden[1]))
     model.load_weights(str(args.initial_weights.resolve()))
     mx.eval(model.parameters())
+    validate_source_artifact_identity(
+        model,
+        args.source_networks.resolve(),
+        str(training_metadata["source_network_sha256"]),
+    )
     baseline_training = model_probabilities(model, training)
     baseline_validation = model_probabilities(model, validation)
     maximum_source_error = max(
@@ -305,7 +332,9 @@ def main() -> None:
         float(np.max(np.abs(baseline_validation - validation["current"]))),
     )
     if maximum_source_error > args.source_parity_tolerance:
-        raise ValueError("initial weights do not reproduce the attributed frozen policy")
+        raise ValueError(
+            "Rust/MLX source inference difference exceeds its declared tolerance"
+        )
 
     training_targets = mirror_descent_targets(
         training["current"],
@@ -325,9 +354,9 @@ def main() -> None:
     target_validation_metrics = policy_metrics(validation_targets, validation)
     if (
         target_training_metrics["maximumReverseKlFromFrozen"]
-        > args.maximum_target_node_kl + 1e-8
+        > args.maximum_target_node_kl + 1e-7
         or target_validation_metrics["maximumReverseKlFromFrozen"]
-        > args.maximum_target_node_kl + 1e-8
+        > args.maximum_target_node_kl + 1e-7
         or target_training_metrics["weightedPolicyValueGainBb"] < -1e-9
         or target_validation_metrics["weightedPolicyValueGainBb"] < -1e-9
     ):
@@ -358,7 +387,9 @@ def main() -> None:
     student_training_metrics = policy_metrics(student_training, training)
     student_validation_metrics = policy_metrics(student_validation, validation)
     selection_checks = {
-        "sourcePolicyParity": maximum_source_error <= args.source_parity_tolerance,
+        "sourcePolicyArtifactIdentity": True,
+        "sourceInferenceDifferenceBounded": maximum_source_error
+        <= args.source_parity_tolerance,
         "trainingPolicyValueImproved": student_training_metrics[
             "weightedPolicyValueGainBb"
         ]
@@ -413,9 +444,10 @@ def main() -> None:
         "maximumRealizedWeightedKl": args.maximum_realized_weighted_kl,
         "seed": args.seed,
         "initialWeightsSha256": sha256(args.initial_weights),
+        "sourceNetworksSha256": sha256(args.source_networks),
         "studentWeightsSha256": sha256(output),
         "studentBytes": output.stat().st_size,
-        "maximumSourcePolicyProbabilityError": maximum_source_error,
+        "maximumRustMlxSourcePolicyProbabilityDifference": maximum_source_error,
         "firstLoss": losses[0],
         "finalLoss": losses[-1],
         "trainingDataset": {

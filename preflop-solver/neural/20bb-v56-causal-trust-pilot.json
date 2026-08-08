@@ -1,0 +1,56 @@
+{
+  "schema": "hu-20bb-causal-policy-trust-region-pilot-v1",
+  "status": "rejected_before_routing",
+  "activationAllowed": false,
+  "retainedCandidate": "v51",
+  "settings": {
+    "steps": 20,
+    "batchSize": 512,
+    "learningRate": 0.00001,
+    "mirrorStepPerBb": 0.1,
+    "maximumTargetNodeKl": 0.001,
+    "maximumRealizedNodeKl": 0.005,
+    "maximumRealizedWeightedKl": 0.0015,
+    "seed7601": 16221,
+    "seed7602": 16222
+  },
+  "sourceParity": {
+    "all503297PostflopParametersMatchEachRoutedBundleExactly": true,
+    "maximumRustMlxProbabilityDifference": [
+      0.0034217238426208496,
+      0.002770155668258667
+    ],
+    "interpretation": "Rust scalar reductions and MLX matrix kernels are numerically different despite exact parameter identity; final policy acceptance must remain on Rust routed evaluation"
+  },
+  "students": [
+    {
+      "candidate": 7601,
+      "reportSha256": "05e052e7eb7c47127338e060becc24d1a5702a72c9d43395a7bac92e42a4fd0c",
+      "studentWeightsSha256": "2dade31597c421909ba4f36ed45405e54f5a1adfa94a7fb1393b7359284abc13",
+      "trainingPolicyValueGainBb": 0.06009754057838561,
+      "independentPolicyValueGainBb": 0.0048380132941831765,
+      "trainingMaximumReverseKl": 0.0072026934900012995,
+      "independentMaximumReverseKl": 0.003761105869637446,
+      "acceptedForRouting": false,
+      "reason": "training maximum node KL exceeded 0.005"
+    },
+    {
+      "candidate": 7602,
+      "reportSha256": "5dc5ae1bb6fe3fcacd3d94313be78e93f9d4cfc823f1a562419bee993791a041",
+      "studentWeightsSha256": "c78f577231056101188f4556abad8b335a6bcb31f8aae551dedd52938abb676b",
+      "trainingPolicyValueGainBb": 0.06972350945980499,
+      "independentPolicyValueGainBb": -0.00011557580877189145,
+      "trainingMaximumReverseKl": 0.006044374309948072,
+      "independentMaximumReverseKl": 0.0036612644302916122,
+      "acceptedForRouting": false,
+      "reason": "training maximum node KL exceeded 0.005 and independent fixed-response value regressed"
+    }
+  ],
+  "decision": {
+    "pairAcceptedForRouting": false,
+    "routedBundlesCreated": false,
+    "causalCertificatesRun": false,
+    "v51Retained": true,
+    "next": "do not sweep this smoke corpus; if exploitability work resumes, add selection-aware trust-region projection under Rust inference before another paired candidate"
+  }
+}
