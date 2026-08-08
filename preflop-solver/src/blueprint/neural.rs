@@ -14,6 +14,9 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use super::public_belief::{PublicBeliefState, RangeConditionedPolicyNetwork, COMBO_COUNT};
 
 pub const STATE_FEATURE_COUNT: usize = 716;
 pub const ACTION_FEATURE_COUNT: usize = 9;
@@ -49,6 +52,7 @@ pub struct ExploitabilityCertificateConfig {
     pub confidence: f64,
     pub threads: usize,
     pub network_path: PathBuf,
+    pub range_policy_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +145,8 @@ pub struct ExploitabilityCertificate {
     pub deals: u64,
     pub seed: u64,
     pub network_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range_policy_sha256: Option<String>,
     pub confidence: f64,
     pub threads: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +191,13 @@ struct TrainingNetworkBundle {
 /// feature or action semantics than the browser artifact.
 pub(super) struct FrozenPolicy {
     bundle: TrainingNetworkBundle,
+    range_policy: Option<RangeConditionedPolicyNetwork>,
+    range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
+}
+
+struct RangePolicyCachedNode {
+    action_labels: Vec<String>,
+    probabilities: Vec<f64>,
 }
 
 impl FrozenPolicy {
@@ -192,7 +205,22 @@ impl FrozenPolicy {
         let file = fs::File::open(path)?;
         let bundle: TrainingNetworkBundle = serde_json::from_reader(BufReader::new(file))?;
         validate_training_bundle(&bundle)?;
-        Ok(Self { bundle })
+        Ok(Self {
+            bundle,
+            range_policy: None,
+            range_cache: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    fn load_with_range(
+        path: &std::path::Path,
+        range_policy_path: Option<&std::path::Path>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut policy = Self::load(path)?;
+        policy.range_policy = range_policy_path
+            .map(RangeConditionedPolicyNetwork::read)
+            .transpose()?;
+        Ok(policy)
     }
 
     pub(super) fn strategy(
@@ -202,8 +230,197 @@ impl FrozenPolicy {
         actions: &[LegalAction],
         config: &BlueprintConfig,
     ) -> Vec<f64> {
-        strategy_from_bundle(&self.bundle, state, deal, actions, config)
+        if state.street == Street::Preflop || self.range_policy.is_none() {
+            return strategy_from_bundle(&self.bundle, state, deal, actions, config);
+        }
+        self.range_strategy(state, deal, actions, config)
+            .expect("validated range-conditioned policy state")
     }
+
+    fn range_strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Result<Vec<f64>, String> {
+        let range_policy = self
+            .range_policy
+            .as_ref()
+            .ok_or_else(|| "range-conditioned policy is unavailable".to_owned())?;
+        let key = range_policy_cache_key(state, deal);
+        if let Some(cached) = self
+            .range_cache
+            .lock()
+            .expect("range policy cache")
+            .get(&key)
+            .cloned()
+        {
+            return cached.range_for_deal(state, deal, actions);
+        }
+        let mut cursor = GameState::initial(config);
+        let uniform = 1.0 / COMBO_COUNT as f64;
+        let mut ranges = [vec![uniform; COMBO_COUNT], vec![uniform; COMBO_COUNT]];
+        for observed in &state.trajectory {
+            let legal = cursor.legal_actions(config);
+            let selected = legal
+                .iter()
+                .position(|action| trajectory_action_matches(&cursor, action, observed, config))
+                .ok_or_else(|| "range policy could not replay the public trajectory".to_owned())?;
+            if cursor.street == Street::Preflop {
+                let actor = cursor.actor;
+                for combo in all_combos() {
+                    if ranges[actor][combo.key()] <= 0.0 {
+                        continue;
+                    }
+                    let synthetic = deal_for_policy_combo(combo, actor);
+                    let strategy =
+                        strategy_from_bundle(&self.bundle, &cursor, &synthetic, &legal, config);
+                    ranges[actor][combo.key()] *= strategy[selected];
+                }
+            } else {
+                normalize_ranges_for_board(&mut ranges, &deal.board[..cursor.street.board_len()])?;
+                let public = PublicBeliefState::from_game_state(
+                    deal.board[..cursor.street.board_len()].to_vec(),
+                    &cursor,
+                    ranges.clone(),
+                );
+                let matrix = range_policy.strategy(&public, config)?;
+                let actor = cursor.actor;
+                for combo in 0..COMBO_COUNT {
+                    ranges[actor][combo] *= matrix[combo * legal.len() + selected];
+                }
+            }
+            cursor = cursor.apply(&legal[selected], config);
+        }
+        if cursor.public_history != state.public_history
+            || cursor.street != state.street
+            || cursor.actor != state.actor
+        {
+            return Err("range policy replay did not reconstruct the requested state".to_owned());
+        }
+        normalize_ranges_for_board(&mut ranges, &deal.board[..state.street.board_len()])?;
+        let public = PublicBeliefState::from_game_state(
+            deal.board[..state.street.board_len()].to_vec(),
+            state,
+            ranges,
+        );
+        let probabilities = range_policy.strategy(&public, config)?;
+        let cached = Arc::new(RangePolicyCachedNode {
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities,
+        });
+        {
+            let mut cache = self.range_cache.lock().expect("range policy cache");
+            if cache.len() >= 4_096 {
+                if let Some(oldest) = cache.keys().next().copied() {
+                    cache.remove(&oldest);
+                }
+            }
+            cache.insert(key, cached.clone());
+        }
+        cached.range_for_deal(state, deal, actions)
+    }
+}
+
+impl RangePolicyCachedNode {
+    fn range_for_deal(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+    ) -> Result<Vec<f64>, String> {
+        let labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        if labels != self.action_labels {
+            return Err("cached range policy legal actions changed".to_owned());
+        }
+        let combo = Combo::new(deal.holes[state.actor][0], deal.holes[state.actor][1]).key();
+        let offset = combo * actions.len();
+        let row = self.probabilities[offset..offset + actions.len()].to_vec();
+        if (row.iter().sum::<f64>() - 1.0).abs() > 1e-6 {
+            return Err(
+                "range policy cannot score the requested forced-deviation combo".to_owned(),
+            );
+        }
+        Ok(row)
+    }
+}
+
+fn range_policy_cache_key(state: &GameState, deal: &Deal) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"hu-range-policy-public-state-v1");
+    digest.update([state.street as u8, state.actor as u8]);
+    for card in &deal.board[..state.street.board_len()] {
+        digest.update([*card]);
+    }
+    for history in &state.public_history {
+        digest.update((history.len() as u64).to_le_bytes());
+        digest.update(history.as_bytes());
+    }
+    digest.finalize().into()
+}
+
+fn trajectory_action_matches(
+    state: &GameState,
+    action: &LegalAction,
+    observed: &TrajectoryAction,
+    config: &BlueprintConfig,
+) -> bool {
+    let next = state.apply(action, config);
+    let Some(candidate) = next.trajectory.last() else {
+        return false;
+    };
+    candidate.actor == observed.actor
+        && candidate.street == observed.street
+        && candidate.kind == observed.kind
+        && (candidate.amount_bb - observed.amount_bb).abs() <= 1e-6
+        && match (candidate.amount_to_bb, observed.amount_to_bb) {
+            (Some(left), Some(right)) => (left - right).abs() <= 1e-6,
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+fn deal_for_policy_combo(combo: Combo, actor: usize) -> Deal {
+    let private = combo.cards();
+    let available = (0..52u8)
+        .filter(|card| !private.contains(card))
+        .take(7)
+        .collect::<Vec<_>>();
+    let mut holes = [[0u8; 2]; 2];
+    holes[actor] = private;
+    holes[1 - actor] = [available[0], available[1]];
+    Deal::from_sampled_cards(
+        holes,
+        [
+            available[2],
+            available[3],
+            available[4],
+            available[5],
+            available[6],
+        ],
+    )
+}
+
+fn normalize_ranges_for_board(ranges: &mut [Vec<f64>; 2], board: &[u8]) -> Result<(), String> {
+    for player in 0..2 {
+        for combo in all_combos() {
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                ranges[player][combo.key()] = 0.0;
+            }
+        }
+        let total = ranges[player].iter().sum::<f64>();
+        if !total.is_finite() || total <= EPSILON {
+            return Err("range policy public action has zero conditional reach".to_owned());
+        }
+        for weight in &mut ranges[player] {
+            *weight /= total;
+        }
+    }
+    Ok(())
 }
 
 impl TrainingNetworkBundle {
@@ -466,7 +683,7 @@ struct DatasetMetadata<'a> {
 
 struct SampleGenerator {
     config: SampleGenerationConfig,
-    networks: Option<TrainingNetworkBundle>,
+    networks: Option<FrozenPolicy>,
     rng: SplitMix64,
     records: Vec<TrainingSample>,
     attempted_records: usize,
@@ -474,6 +691,13 @@ struct SampleGenerator {
 
 impl SampleGenerator {
     fn new(config: SampleGenerationConfig) -> Result<Self, Box<dyn Error>> {
+        Self::new_with_range(config, None)
+    }
+
+    fn new_with_range(
+        config: SampleGenerationConfig,
+        range_policy_path: Option<&std::path::Path>,
+    ) -> Result<Self, Box<dyn Error>> {
         config
             .game
             .validate()
@@ -494,12 +718,7 @@ impl SampleGenerator {
             return Err("trajectory action-value evaluation requires at least two rollouts".into());
         }
         let networks = match &config.network_path {
-            Some(path) => {
-                let file = fs::File::open(path)?;
-                let bundle: TrainingNetworkBundle = serde_json::from_reader(BufReader::new(file))?;
-                validate_training_bundle(&bundle)?;
-                Some(bundle)
-            }
+            Some(path) => Some(FrozenPolicy::load_with_range(path, range_policy_path)?),
             None => None,
         };
         Ok(Self {
@@ -547,7 +766,7 @@ impl SampleGenerator {
         let Some(bundle) = &self.networks else {
             return vec![1.0 / actions.len() as f64; actions.len()];
         };
-        strategy_from_bundle(bundle, state, deal, actions, &self.config.game)
+        bundle.strategy(state, deal, actions, &self.config.game)
     }
 
     fn sampled_value_baseline(
@@ -557,7 +776,7 @@ impl SampleGenerator {
         actions: &[LegalAction],
         traverser: usize,
     ) -> Option<Vec<f64>> {
-        let bundle = self.networks.as_ref()?;
+        let bundle = &self.networks.as_ref()?.bundle;
         let baseline = bundle.sampling_baseline.as_ref()?;
         let scale = bundle.sampling_baseline_scale.unwrap_or(0.0);
         if scale <= 0.0 {
@@ -1089,7 +1308,7 @@ fn feature_sha256(features: &[f32]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn stable_softmax(values: &[f64]) -> Vec<f64> {
+pub(super) fn stable_softmax(values: &[f64]) -> Vec<f64> {
     let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let exponentials = values
         .iter()
@@ -1427,7 +1646,7 @@ fn canonical_card(card: u8, suit_map: &[usize; 4]) -> usize {
     (card / 4) as usize * 4 + suit_map[(card % 4) as usize]
 }
 
-fn encode_action_features(
+pub(super) fn encode_action_features(
     state: &GameState,
     action: &LegalAction,
     config: &BlueprintConfig,
@@ -2998,19 +3217,27 @@ pub fn certify_exploitability_upper_bound(
         return Err("certificate thread count must be positive".into());
     }
     let network_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
-    let generator = SampleGenerator::new(SampleGenerationConfig {
-        game: config.game.clone(),
-        traversals: 1,
-        start_iteration: 0,
-        seed: config.seed,
-        max_records: 1,
-        output: PathBuf::from("unused-certificate.jsonl.gz"),
-        network_path: Some(config.network_path),
-        trajectory_sampling: false,
-        evaluate_trajectory_values: false,
-        value_rollouts_per_action: 1,
-        enumerate_turn_river_chance: false,
-    })?;
+    let range_policy_sha256 = config
+        .range_policy_path
+        .as_ref()
+        .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
+        .transpose()?;
+    let generator = SampleGenerator::new_with_range(
+        SampleGenerationConfig {
+            game: config.game.clone(),
+            traversals: 1,
+            start_iteration: 0,
+            seed: config.seed,
+            max_records: 1,
+            output: PathBuf::from("unused-certificate.jsonl.gz"),
+            network_path: Some(config.network_path.clone()),
+            trajectory_sampling: false,
+            evaluate_trajectory_values: false,
+            value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
+        },
+        config.range_policy_path.as_deref(),
+    )?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -3085,6 +3312,7 @@ pub fn certify_exploitability_upper_bound(
         deals: config.deals,
         seed: config.seed,
         network_sha256,
+        range_policy_sha256,
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: None,
@@ -3137,19 +3365,27 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         return Err("certificate thread count must be positive".into());
     }
     let network_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
-    let generator = SampleGenerator::new(SampleGenerationConfig {
-        game: config.game.clone(),
-        traversals: 1,
-        start_iteration: 0,
-        seed: config.seed,
-        max_records: 1,
-        output: PathBuf::from("unused-opponent-hidden-certificate.jsonl.gz"),
-        network_path: Some(config.network_path),
-        trajectory_sampling: false,
-        evaluate_trajectory_values: false,
-        value_rollouts_per_action: 1,
-        enumerate_turn_river_chance: false,
-    })?;
+    let range_policy_sha256 = config
+        .range_policy_path
+        .as_ref()
+        .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
+        .transpose()?;
+    let generator = SampleGenerator::new_with_range(
+        SampleGenerationConfig {
+            game: config.game.clone(),
+            traversals: 1,
+            start_iteration: 0,
+            seed: config.seed,
+            max_records: 1,
+            output: PathBuf::from("unused-opponent-hidden-certificate.jsonl.gz"),
+            network_path: Some(config.network_path.clone()),
+            trajectory_sampling: false,
+            evaluate_trajectory_values: false,
+            value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
+        },
+        config.range_policy_path.as_deref(),
+    )?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -3239,6 +3475,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         deals: config.deals,
         seed: config.seed,
         network_sha256,
+        range_policy_sha256,
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: Some(opponent_samples_per_deal),
@@ -3302,19 +3539,27 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         return Err("causal certificate exceeds one million scenarios per deal".into());
     }
     let network_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
-    let generator = SampleGenerator::new(SampleGenerationConfig {
-        game: config.game.clone(),
-        traversals: 1,
-        start_iteration: 0,
-        seed: config.seed,
-        max_records: 1,
-        output: PathBuf::from("unused-causal-certificate.jsonl.gz"),
-        network_path: Some(config.network_path),
-        trajectory_sampling: false,
-        evaluate_trajectory_values: false,
-        value_rollouts_per_action: 1,
-        enumerate_turn_river_chance: false,
-    })?;
+    let range_policy_sha256 = config
+        .range_policy_path
+        .as_ref()
+        .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
+        .transpose()?;
+    let generator = SampleGenerator::new_with_range(
+        SampleGenerationConfig {
+            game: config.game.clone(),
+            traversals: 1,
+            start_iteration: 0,
+            seed: config.seed,
+            max_records: 1,
+            output: PathBuf::from("unused-causal-certificate.jsonl.gz"),
+            network_path: Some(config.network_path.clone()),
+            trajectory_sampling: false,
+            evaluate_trajectory_values: false,
+            value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
+        },
+        config.range_policy_path.as_deref(),
+    )?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -3402,6 +3647,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         deals: config.deals,
         seed: config.seed,
         network_sha256,
+        range_policy_sha256,
         confidence: config.confidence,
         threads: worker_count,
         opponent_samples_per_deal: None,
@@ -3629,6 +3875,88 @@ mod tests {
     }
 
     #[test]
+    fn frozen_policy_replays_public_ranges_and_routes_postflop_inference() {
+        let dense = serde_json::json!({
+            "layers": [{
+                "input_size": MODEL_INPUT_COUNT,
+                "output_size": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; MODEL_INPUT_COUNT],
+                "biases": [0.0]
+            }]
+        });
+        let bundle = serde_json::json!({
+            "schema": TRAINING_NETWORK_SCHEMA,
+            "input_size": MODEL_INPUT_COUNT,
+            "strategy_transform": "softmax",
+            "networks": [dense.clone(), dense]
+        });
+        let layer = |input_size: usize, weights: Vec<f32>| {
+            serde_json::json!({
+                "inputSize": input_size,
+                "outputSize": 1,
+                "activation": "linear",
+                "weights": weights,
+                "biases": [0.0]
+            })
+        };
+        let mut action_weights = vec![0.0f32; ACTION_FEATURE_COUNT];
+        action_weights[1] = 1.0;
+        let mut head_weights = vec![0.0f32; 5];
+        head_weights[4] = 1.0;
+        let range = serde_json::json!({
+            "schema": "hu-public-belief-combo-policy-network-v1",
+            "seed": 91,
+            "depthBb": 20.0,
+            "usesExactRanges": true,
+            "featureSchema": "rank-suit-invariant-combo-policy-query-v1",
+            "contextSize": 417,
+            "querySize": 124,
+            "actionFeatureSchema": "hu-cash-legal-action-v1",
+            "actionFeatureSize": ACTION_FEATURE_COUNT,
+            "contextTower": [layer(417, vec![0.0f32; 417])],
+            "queryTower": [layer(124, vec![0.0f32; 124])],
+            "actionTower": [layer(ACTION_FEATURE_COUNT, action_weights)],
+            "head": [layer(5, head_weights)],
+            "sourceDatasetSha256": "1".repeat(64),
+            "sourceDatasetSchema": "hu-range-conditioned-postflop-policy-dataset-v1",
+            "sourceValidationStatus": "accepted_for_training"
+        });
+        let prefix = format!("pokersolver-range-route-{}", std::process::id());
+        let bundle_path = std::env::temp_dir().join(format!("{prefix}-bundle.json"));
+        let range_path = std::env::temp_dir().join(format!("{prefix}-range.json"));
+        fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        fs::write(&range_path, serde_json::to_vec(&range).unwrap()).unwrap();
+        let policy = FrozenPolicy::load_with_range(&bundle_path, Some(&range_path)).unwrap();
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let mut state = GameState::initial(&game);
+        let limp = state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "limp")
+            .unwrap();
+        state = state.apply(&limp, &game);
+        let check = state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "check")
+            .unwrap();
+        state = state.apply(&check, &game);
+        assert_eq!(state.street, Street::Flop);
+        let deal = Deal::from_sampled_cards([[48, 49], [44, 45]], [0, 5, 10, 15, 20]);
+        let actions = state.legal_actions(&game);
+        let first = policy.strategy(&state, &deal, &actions, &game);
+        let second = policy.strategy(&state, &deal, &actions, &game);
+        assert_eq!(first, second);
+        let expected = std::f64::consts::E / (std::f64::consts::E + actions.len() as f64 - 1.0);
+        assert!((first[0] - expected).abs() < 1e-6);
+        assert_eq!(policy.range_cache.lock().unwrap().len(), 1);
+        fs::remove_file(bundle_path).unwrap();
+        fs::remove_file(range_path).unwrap();
+    }
+
+    #[test]
     fn clairvoyant_certificate_is_deterministic_and_upper_bounded() {
         let network = serde_json::json!({
             "layers": [{
@@ -3661,6 +3989,7 @@ mod tests {
             confidence: 0.99,
             threads: 2,
             network_path: path.clone(),
+            range_policy_path: None,
         };
         let first = certify_exploitability_upper_bound(make()).unwrap();
         let second = certify_exploitability_upper_bound(make()).unwrap();
@@ -3800,6 +4129,7 @@ mod tests {
                 confidence: 0.99,
                 threads: 2,
                 network_path: network_path.clone(),
+                range_policy_path: None,
             },
             1,
             1,

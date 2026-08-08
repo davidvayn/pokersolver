@@ -13,9 +13,14 @@ use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
@@ -28,6 +33,10 @@ const SHARED_QUERY_BOARD_RELATIVE_COUNT: usize = 124;
 const SHARED_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-query-v1";
 const SHARED_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-query-v2";
 const SHARED_FEATURE_SCHEMA_V3: &str = "rank-suit-invariant-combo-query-v3";
+const RANGE_POLICY_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-policy-query-v1";
+const RANGE_POLICY_SCHEMA_V1: &str = "hu-public-belief-combo-policy-network-v1";
+const ACTION_FEATURE_SCHEMA_V1: &str = "hu-cash-legal-action-v1";
+const ACTION_FEATURE_COUNT: usize = 9;
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const RESOLVER_ROOT_CHECKPOINT_SCHEMA: &str = "hu-resolver-root-leaf-checkpoint-v1";
@@ -74,10 +83,12 @@ static DENSE_TURN_EQUITY_CACHE: LazyLock<Mutex<DenseTurnEquityCache>> =
 fn shared_feature_sizes(schema: &str) -> Option<(usize, usize)> {
     match schema {
         SHARED_FEATURE_SCHEMA_V1 => Some((SHARED_CONTEXT_COUNT, SHARED_QUERY_COUNT)),
-        SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3 => Some((
-            SHARED_CONTEXT_BOARD_RELATIVE_COUNT,
-            SHARED_QUERY_BOARD_RELATIVE_COUNT,
-        )),
+        SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3 | RANGE_POLICY_FEATURE_SCHEMA_V1 => {
+            Some((
+                SHARED_CONTEXT_BOARD_RELATIVE_COUNT,
+                SHARED_QUERY_BOARD_RELATIVE_COUNT,
+            ))
+        }
         _ => None,
     }
 }
@@ -258,7 +269,11 @@ impl PublicBeliefState {
         }
     }
 
-    fn from_game_state(board: Vec<u8>, state: &GameState, ranges: [Vec<f64>; 2]) -> Self {
+    pub(super) fn from_game_state(
+        board: Vec<u8>,
+        state: &GameState,
+        ranges: [Vec<f64>; 2],
+    ) -> Self {
         Self {
             street: state.street,
             board,
@@ -843,6 +858,490 @@ impl PublicValueNetwork {
     }
 }
 
+/// A served postflop policy conditioned on the complete public belief state.
+///
+/// Unlike the legacy action scorer, this network observes both exact private
+/// ranges and scores every board-legal private combo. Scoring zero-reach actor
+/// combos is intentional: a user can force an off-policy action without
+/// making the next decision unavailable.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeConditionedPolicyNetwork {
+    #[serde(skip)]
+    artifact_sha256: Option<String>,
+    schema: String,
+    seed: u64,
+    depth_bb: f64,
+    uses_exact_ranges: bool,
+    feature_schema: String,
+    context_size: usize,
+    query_size: usize,
+    action_feature_schema: String,
+    action_feature_size: usize,
+    context_tower: Vec<ValueNetworkLayer>,
+    query_tower: Vec<ValueNetworkLayer>,
+    action_tower: Vec<ValueNetworkLayer>,
+    head: Vec<ValueNetworkLayer>,
+    source_dataset_sha256: String,
+    source_dataset_schema: String,
+    source_validation_status: String,
+}
+
+impl RangeConditionedPolicyNetwork {
+    pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let bytes = fs::read(path)?;
+        let mut network: Self = serde_json::from_slice(&bytes)?;
+        network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
+        network.validate()?;
+        Ok(network)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != RANGE_POLICY_SCHEMA_V1
+            || !self.uses_exact_ranges
+            || self.feature_schema != RANGE_POLICY_FEATURE_SCHEMA_V1
+            || self.context_size != SHARED_CONTEXT_BOARD_RELATIVE_COUNT
+            || self.query_size != SHARED_QUERY_BOARD_RELATIVE_COUNT
+            || self.action_feature_schema != ACTION_FEATURE_SCHEMA_V1
+            || self.action_feature_size != ACTION_FEATURE_COUNT
+            || !self.depth_bb.is_finite()
+            || self.depth_bb <= 0.0
+            || self.context_tower.is_empty()
+            || self.query_tower.is_empty()
+            || self.action_tower.is_empty()
+            || self.head.is_empty()
+            || self.source_dataset_sha256.len() != 64
+            || self.source_dataset_schema != "hu-range-conditioned-postflop-policy-dataset-v1"
+            || self.source_validation_status != "accepted_for_training"
+        {
+            return Err("range-conditioned policy network header is incompatible".to_owned());
+        }
+        let mut context_embedding = self.context_size;
+        for layer in &self.context_tower {
+            context_embedding = layer.validate(context_embedding)?;
+        }
+        let mut query_embedding = self.query_size;
+        for layer in &self.query_tower {
+            query_embedding = layer.validate(query_embedding)?;
+        }
+        let mut action_embedding = self.action_feature_size;
+        for layer in &self.action_tower {
+            action_embedding = layer.validate(action_embedding)?;
+        }
+        let mut head_size = context_embedding + query_embedding * 3 + action_embedding;
+        for layer in &self.head {
+            head_size = layer.validate(head_size)?;
+        }
+        if head_size != 1 {
+            return Err("range-conditioned policy head must output one logit".to_owned());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn strategy(
+        &self,
+        state: &PublicBeliefState,
+        game: &BlueprintConfig,
+    ) -> Result<Vec<f64>, String> {
+        self.validate()?;
+        game.validate()?;
+        if (game.effective_stack_bb - self.depth_bb).abs() > EPSILON {
+            return Err("range-conditioned policy depth does not match the game".to_owned());
+        }
+        let expected_board = state.street.board_len();
+        let normalized = state.validate_street_and_normalize(game, state.street, expected_board)?;
+        let game_state = normalized.game_state();
+        let actions = game_state.legal_actions(game);
+        if actions.is_empty() {
+            return Err("range-conditioned policy cannot score a terminal state".to_owned());
+        }
+        let conflicts = combo_conflicts();
+        let (contexts, queries) = shared_combo_features(
+            &normalized.board,
+            normalized.actor,
+            normalized.invested_bb,
+            &normalized.ranges,
+            &conflicts,
+            self.depth_bb,
+            &self.feature_schema,
+        );
+        let context_embedding = self
+            .context_tower
+            .iter()
+            .fold(contexts[normalized.actor].clone(), |values, layer| {
+                layer.forward(&values)
+            });
+        let board = normalized.board.iter().copied().collect::<BTreeSet<_>>();
+        let legal_combos = all_combos()
+            .iter()
+            .filter(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+            .map(|combo| combo.key())
+            .collect::<Vec<_>>();
+        let query_embeddings: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            let mut batch = Vec::with_capacity(legal_combos.len() * self.query_size);
+            for combo in &legal_combos {
+                batch.extend_from_slice(&queries[player][*combo]);
+            }
+            forward_batch_tower(&self.query_tower, &batch, legal_combos.len())
+        });
+        let query_embedding_size = self
+            .query_tower
+            .last()
+            .expect("validated query tower")
+            .output_size;
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| {
+                    compatible_mass_from_conflicts(
+                        &normalized.ranges[1 - player],
+                        &conflicts,
+                        combo,
+                    )
+                })
+                .collect()
+        });
+        let pooled: [Vec<f32>; 2] = std::array::from_fn(|player| {
+            let denominator = legal_combos
+                .iter()
+                .map(|combo| normalized.ranges[player][*combo] * masses[player][*combo])
+                .sum::<f64>()
+                .max(EPSILON);
+            let mut result = vec![0.0f32; query_embedding_size];
+            for (row, combo) in legal_combos.iter().enumerate() {
+                let weight = (normalized.ranges[player][*combo] * masses[player][*combo]
+                    / denominator) as f32;
+                for (output, embedded) in result.iter_mut().zip(
+                    &query_embeddings[player]
+                        [row * query_embedding_size..(row + 1) * query_embedding_size],
+                ) {
+                    *output += weight * embedded;
+                }
+            }
+            result
+        });
+        let action_features = actions
+            .iter()
+            .map(|action| super::neural::encode_action_features(&game_state, action, game))
+            .flatten()
+            .collect::<Vec<_>>();
+        let action_embeddings =
+            forward_batch_tower(&self.action_tower, &action_features, actions.len());
+        let action_embedding_size = self
+            .action_tower
+            .last()
+            .expect("validated action tower")
+            .output_size;
+        let actor = normalized.actor;
+        let mut head_context = context_embedding;
+        head_context.extend_from_slice(&pooled[actor]);
+        head_context.extend_from_slice(&pooled[1 - actor]);
+        let mut query_action_batch = Vec::with_capacity(
+            legal_combos.len() * actions.len() * (query_embedding_size + action_embedding_size),
+        );
+        for row in 0..legal_combos.len() {
+            let query = &query_embeddings[actor]
+                [row * query_embedding_size..(row + 1) * query_embedding_size];
+            for action in 0..actions.len() {
+                query_action_batch.extend_from_slice(query);
+                query_action_batch.extend_from_slice(
+                    &action_embeddings
+                        [action * action_embedding_size..(action + 1) * action_embedding_size],
+                );
+            }
+        }
+        let logits = forward_batch_head(
+            &self.head,
+            &head_context,
+            &query_action_batch,
+            legal_combos.len() * actions.len(),
+        );
+        let mut probabilities = vec![0.0; COMBO_COUNT * actions.len()];
+        for (row, combo) in legal_combos.iter().enumerate() {
+            let offset = row * actions.len();
+            let strategy = super::neural::stable_softmax(
+                &logits[offset..offset + actions.len()]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect::<Vec<_>>(),
+            );
+            probabilities[*combo * actions.len()..(*combo + 1) * actions.len()]
+                .copy_from_slice(&strategy);
+        }
+        if probabilities
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err("range-conditioned policy produced invalid probabilities".to_owned());
+        }
+        Ok(probabilities)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePolicyEvaluationReport {
+    pub schema: String,
+    pub network_sha256: String,
+    pub dataset_sha256: String,
+    pub source_dataset_match: bool,
+    pub records: usize,
+    pub weighted_public_reach: f64,
+    pub weighted_probability_mae: f64,
+    pub weighted_total_variation: f64,
+    pub weighted_teacher_cross_entropy: f64,
+    pub weighted_teacher_kl: f64,
+    pub maximum_combo_teacher_kl: f64,
+    pub reach_weighted_primary_action_agreement: f64,
+    pub teacher_ev_minus_candidate_ev_bb: f64,
+    pub maximum_probability_sum_error: f64,
+    pub minimum_scored_combo_coverage: f64,
+    pub validation: BlueprintValidation,
+}
+
+/// Evaluate a frozen range-conditioned policy using Rust serving inference.
+/// The dataset hash and solver provenance are pinned before any metric is
+/// accepted, so Python/MLX diagnostics cannot silently substitute for runtime
+/// behavior.
+pub fn evaluate_range_conditioned_policy_dataset(
+    network_path: &Path,
+    dataset_path: &Path,
+    allow_independent_dataset: bool,
+) -> Result<RangePolicyEvaluationReport, Box<dyn Error>> {
+    let dataset_bytes = fs::read(dataset_path)?;
+    let dataset_sha256 = format!("{:x}", Sha256::digest(&dataset_bytes));
+    let network = RangeConditionedPolicyNetwork::read(network_path)?;
+    let source_dataset_match = network.source_dataset_sha256 == dataset_sha256;
+    if !source_dataset_match && !allow_independent_dataset {
+        return Err("range policy source dataset hash does not match evaluation corpus".into());
+    }
+    let network_sha256 = network
+        .artifact_sha256
+        .clone()
+        .expect("read range policy records an artifact hash");
+    let decoder = GzDecoder::new(dataset_bytes.as_slice());
+    let mut lines = BufReader::new(decoder).lines();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&lines.next().ok_or("range policy dataset is empty")??)?;
+    if metadata["record_type"] != "metadata"
+        || metadata["schema"] != "hu-range-conditioned-postflop-policy-dataset-v1"
+        || metadata["feature_schema"] != RANGE_POLICY_FEATURE_SCHEMA_V1
+        || metadata["context_size"] != SHARED_CONTEXT_BOARD_RELATIVE_COUNT
+        || metadata["query_size"] != SHARED_QUERY_BOARD_RELATIVE_COUNT
+        || metadata["action_feature_schema"] != ACTION_FEATURE_SCHEMA_V1
+        || metadata["action_feature_count"] != ACTION_FEATURE_COUNT
+        || metadata["teacher"]["validation"]["status"] != "accepted_for_training"
+        || metadata["records"].as_u64().unwrap_or(0) == 0
+    {
+        return Err("range policy dataset metadata is incompatible or unvalidated".into());
+    }
+    let depth = metadata["depth_bb"]
+        .as_f64()
+        .ok_or("range policy dataset omits its depth")?;
+    if (depth - network.depth_bb).abs() > EPSILON {
+        return Err("range policy dataset and network use different depths".into());
+    }
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = depth;
+    if let Ok(action_abstraction) =
+        serde_json::from_value(metadata["teacher"]["actionAbstraction"].clone())
+    {
+        game.action_abstraction = action_abstraction;
+    }
+    game.validate()?;
+    let conflicts = combo_conflicts();
+    let mut records = 0usize;
+    let mut public_weight = 0.0f64;
+    let mut combo_weight = 0.0f64;
+    let mut absolute_probability_error = 0.0f64;
+    let mut total_variation = 0.0f64;
+    let mut cross_entropy = 0.0f64;
+    let mut teacher_entropy = 0.0f64;
+    let mut maximum_kl = 0.0f64;
+    let mut primary_agreement = 0.0f64;
+    let mut ev_loss = 0.0f64;
+    let mut maximum_sum_error = 0.0f64;
+    let mut minimum_coverage = 1.0f64;
+    for line in lines {
+        let record: RangeConditionedPolicyRecord = serde_json::from_str(&line?)?;
+        if record.record_type != "range_conditioned_average_strategy"
+            || !record.weight.is_finite()
+            || record.weight <= 0.0
+            || record.ranges.iter().any(|range| range.len() != COMBO_COUNT)
+        {
+            return Err("range policy dataset contains an invalid record".into());
+        }
+        let state = PublicBeliefState {
+            street: record.state.street,
+            board: record.state.board.clone(),
+            actor: record.state.actor,
+            invested_bb: record.state.invested_bb,
+            street_invested_bb: record.state.street_invested_bb,
+            last_full_raise_bb: record.state.last_full_raise_bb,
+            aggressions: record.state.aggressions,
+            checks: record.state.checks,
+            raise_reopened: record.state.raise_reopened,
+            public_history: record.state.public_history.clone(),
+            ranges: std::array::from_fn(|player| {
+                record.ranges[player]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect()
+            }),
+            trajectory: record.state.trajectory.clone(),
+        };
+        let normalized =
+            state.validate_street_and_normalize(&game, state.street, state.street.board_len())?;
+        let game_state = normalized.game_state();
+        let actions = game_state.legal_actions(&game);
+        let action_count = actions.len();
+        if action_count == 0
+            || record.action_labels
+                != actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+            || record.action_features.len() != action_count
+            || record.action_features.iter().any(|features| {
+                features.len() != ACTION_FEATURE_COUNT
+                    || features.iter().any(|value| !value.is_finite())
+            })
+            || record.probabilities.len() != COMBO_COUNT * action_count
+            || record.action_values_bb.len() != COMBO_COUNT * action_count
+        {
+            return Err("range policy record does not match its legal action state".into());
+        }
+        for (stored, action) in record.action_features.iter().zip(&actions) {
+            let exact = super::neural::encode_action_features(&game_state, action, &game);
+            if stored
+                .iter()
+                .zip(exact)
+                .any(|(left, right)| (left - right).abs() > 1e-6)
+            {
+                return Err("range policy record action features fail Rust parity".into());
+            }
+        }
+        let candidate = network.strategy(&normalized, &game)?;
+        let actor = normalized.actor;
+        let masses = (0..COMBO_COUNT)
+            .map(|combo| {
+                compatible_mass_from_conflicts(&normalized.ranges[1 - actor], &conflicts, combo)
+            })
+            .collect::<Vec<_>>();
+        let joint_mass = normalized.ranges[actor]
+            .iter()
+            .zip(&masses)
+            .map(|(reach, mass)| reach * mass)
+            .sum::<f64>();
+        if joint_mass <= EPSILON {
+            return Err("range policy record has no compatible private deals".into());
+        }
+        let mut scored = 0usize;
+        let mut reachable = 0usize;
+        for combo in 0..COMBO_COUNT {
+            let private_weight = normalized.ranges[actor][combo] * masses[combo] / joint_mass;
+            if private_weight <= EPSILON {
+                continue;
+            }
+            reachable += 1;
+            let offset = combo * action_count;
+            let teacher = &record.probabilities[offset..offset + action_count];
+            let predicted = &candidate[offset..offset + action_count];
+            let teacher_sum = teacher.iter().map(|value| f64::from(*value)).sum::<f64>();
+            let predicted_sum = predicted.iter().sum::<f64>();
+            maximum_sum_error = maximum_sum_error
+                .max((teacher_sum - 1.0).abs())
+                .max((predicted_sum - 1.0).abs());
+            if (teacher_sum - 1.0).abs() > 1e-5
+                || (predicted_sum - 1.0).abs() > 1e-6
+                || teacher
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || predicted
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err("range policy record contains invalid probability mass".into());
+            }
+            scored += 1;
+            let weight = f64::from(record.weight) * private_weight;
+            let mut local_l1 = 0.0;
+            let mut local_cross_entropy = 0.0;
+            let mut local_entropy = 0.0;
+            let mut teacher_ev = 0.0;
+            let mut predicted_ev = 0.0;
+            for action in 0..action_count {
+                let target = f64::from(teacher[action]);
+                let policy = predicted[action].max(1e-12);
+                local_l1 += (target - policy).abs();
+                if target > 0.0 {
+                    local_cross_entropy -= target * policy.ln();
+                    local_entropy -= target * target.ln();
+                }
+                let value = f64::from(record.action_values_bb[offset + action]);
+                if !value.is_finite() {
+                    return Err("range policy record contains a non-finite action EV".into());
+                }
+                teacher_ev += target * value;
+                predicted_ev += policy * value;
+            }
+            let local_kl = (local_cross_entropy - local_entropy).max(0.0);
+            maximum_kl = maximum_kl.max(local_kl);
+            combo_weight += weight;
+            absolute_probability_error += weight * local_l1 / action_count as f64;
+            total_variation += weight * local_l1 / 2.0;
+            cross_entropy += weight * local_cross_entropy;
+            teacher_entropy += weight * local_entropy;
+            ev_loss += weight * (teacher_ev - predicted_ev);
+            let teacher_primary = teacher
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .expect("non-empty teacher actions")
+                .0;
+            let candidate_primary = predicted
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .expect("non-empty candidate actions")
+                .0;
+            if teacher_primary == candidate_primary {
+                primary_agreement += weight;
+            }
+        }
+        minimum_coverage = minimum_coverage.min(scored as f64 / reachable.max(1) as f64);
+        public_weight += f64::from(record.weight);
+        records += 1;
+    }
+    if records != metadata["records"].as_u64().unwrap_or(0) as usize || combo_weight <= EPSILON {
+        return Err("range policy dataset record count or reach weight is invalid".into());
+    }
+    let validation = BlueprintValidation {
+        status: "accepted_for_comparison".to_owned(),
+        reasons: vec![
+            "exact Rust serving inference covered every reachable teacher combo with valid probability mass; release activation still requires paired full-game gates"
+                .to_owned(),
+        ],
+    };
+    Ok(RangePolicyEvaluationReport {
+        schema: "hu-range-conditioned-policy-rust-evaluation-v1".to_owned(),
+        network_sha256,
+        dataset_sha256,
+        source_dataset_match,
+        records,
+        weighted_public_reach: public_weight,
+        weighted_probability_mae: absolute_probability_error / combo_weight,
+        weighted_total_variation: total_variation / combo_weight,
+        weighted_teacher_cross_entropy: cross_entropy / combo_weight,
+        weighted_teacher_kl: (cross_entropy - teacher_entropy).max(0.0) / combo_weight,
+        maximum_combo_teacher_kl: maximum_kl,
+        reach_weighted_primary_action_agreement: primary_agreement / combo_weight,
+        teacher_ev_minus_candidate_ev_bb: ev_loss / combo_weight,
+        maximum_probability_sum_error: maximum_sum_error,
+        minimum_scored_combo_coverage: minimum_coverage,
+        validation,
+    })
+}
+
 type SharedContexts = [Vec<f32>; 2];
 type SharedQueries = [Vec<Vec<f32>>; 2];
 
@@ -925,19 +1424,23 @@ fn board_query_features(board: &[u8]) -> Arc<BoardQueryFeatures> {
         strengths[combo.key()] = current;
         let current_category = (current >> 24) as usize;
         query[56 + current_category] = 1.0;
-        let mut rivers = 0u8;
-        for river in 0..52u8 {
-            if blocked.contains(&river) || river == first || river == second {
-                continue;
+        if board.len() < 5 {
+            let mut future_cards = 0u8;
+            for next_card in 0..52u8 {
+                if blocked.contains(&next_card) || next_card == first || next_card == second {
+                    continue;
+                }
+                cards.insert(board.len(), next_card);
+                let final_category = (evaluate(&cards) >> 24) as usize;
+                cards.remove(board.len());
+                river_category_counts[combo.key()][final_category] += 1;
+                improvements[combo.key()] += u8::from(final_category > current_category);
+                future_cards += 1;
             }
-            cards.insert(board.len(), river);
-            let final_category = (evaluate(&cards) >> 24) as usize;
-            cards.remove(board.len());
-            river_category_counts[combo.key()][final_category] += 1;
-            improvements[combo.key()] += u8::from(final_category > current_category);
-            rivers += 1;
+            debug_assert_eq!(future_cards as usize, 50 - board.len());
+        } else {
+            river_category_counts[combo.key()][current_category] = 1;
         }
-        debug_assert_eq!(rivers, 46);
     }
     let mut strength_counts = BTreeMap::<u32, usize>::new();
     for strength in strengths.iter().filter(|strength| **strength > 0) {
@@ -955,10 +1458,12 @@ fn board_query_features(board: &[u8]) -> Arc<BoardQueryFeatures> {
             continue;
         }
         queries[combo][65] = percentile[&strengths[combo]];
+        let future_cards = if board.len() < 5 { 50 - board.len() } else { 1 } as f32;
         for category in 0..9 {
-            queries[combo][66 + category] = river_category_counts[combo][category] as f32 / 46.0;
+            queries[combo][66 + category] =
+                river_category_counts[combo][category] as f32 / future_cards;
         }
-        queries[combo][75] = improvements[combo] as f32 / 46.0;
+        queries[combo][75] = improvements[combo] as f32 / future_cards;
     }
     let result = Arc::new(BoardQueryFeatures {
         context,
@@ -1017,7 +1522,7 @@ fn shared_combo_features(
     }
     let uses_board_relative = matches!(
         feature_schema,
-        SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3
+        SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3 | RANGE_POLICY_FEATURE_SCHEMA_V1
     );
     let mut board_relative_features = vec![[0.0f64; 29]; COMBO_COUNT];
     let mut board_relative_totals = [[0.0f64; 29]; 2];
@@ -5201,6 +5706,8 @@ fn append_public_belief_policy_records(
     strategies: &[PublicBeliefStrategy],
     root_weight: f64,
     records: &mut BoundedActionRecordCollector,
+    mut range_records: Option<&mut BoundedActionRecordCollector>,
+    emit_legacy_records: bool,
 ) -> Result<usize, String> {
     let strategy_map = strategies
         .iter()
@@ -5208,13 +5715,20 @@ fn append_public_belief_policy_records(
         .collect::<BTreeMap<_, _>>();
     let conflicts = combo_conflicts();
     let before = records.seen;
+    let root_joint_mass = joint_compatibility_mass(&root_ranges);
+    if root_joint_mass <= EPSILON {
+        return Err("solver policy export root ranges have no compatible mass".to_owned());
+    }
 
     struct RecordWalk<'a> {
         game: &'a BlueprintConfig,
         strategies: &'a BTreeMap<Vec<String>, &'a PublicBeliefStrategy>,
         conflicts: &'a [Vec<usize>],
         root_weight: f64,
+        root_joint_mass: f64,
         records: &'a mut BoundedActionRecordCollector,
+        range_records: Option<&'a mut BoundedActionRecordCollector>,
+        emit_legacy_records: bool,
     }
 
     impl RecordWalk<'_> {
@@ -5310,6 +5824,46 @@ fn append_public_belief_policy_records(
                     "solver counterfactual action values have incompatible dimensions".to_owned(),
                 );
             }
+            if let Some(range_records) = self.range_records.as_deref_mut() {
+                let node_joint_mass = joint_compatibility_mass(&reaches);
+                let node_weight = self.root_weight * chance_weight * node_joint_mass
+                    / self.root_joint_mass.max(EPSILON);
+                if node_weight.is_finite() && node_weight > EPSILON {
+                    let normalized_ranges = normalize_policy_ranges(&reaches, &board)?;
+                    let record = RangeConditionedPolicyRecord {
+                        record_type: "range_conditioned_average_strategy".to_owned(),
+                        weight: node_weight as f32,
+                        state: RangeConditionedPolicyState {
+                            board: board.clone(),
+                            street: state.street,
+                            actor: state.actor,
+                            invested_bb: state.invested,
+                            street_invested_bb: state.street_invested,
+                            last_full_raise_bb: state.last_full_raise,
+                            aggressions: state.aggressions,
+                            checks: state.checks,
+                            raise_reopened: state.raise_reopened,
+                            public_history: state.public_history.clone(),
+                            trajectory: state.trajectory.clone(),
+                        },
+                        ranges: normalized_ranges,
+                        action_labels: strategy.action_labels.clone(),
+                        action_features: actions
+                            .iter()
+                            .map(|action| {
+                                super::neural::encode_action_features(&state, action, self.game)
+                            })
+                            .collect(),
+                        probabilities: strategy.probabilities.clone(),
+                        action_values_bb: action_values.clone(),
+                    };
+                    range_records.consider(
+                        state.street,
+                        serde_json::to_vec(&record)
+                            .expect("range-conditioned policy record is serializable"),
+                    );
+                }
+            }
             for combo in all_combos() {
                 let key = combo.key();
                 if combo.cards().iter().any(|card| board.contains(card)) {
@@ -5333,6 +5887,9 @@ fn append_public_belief_policy_records(
                     .collect::<Vec<_>>();
                 if action_values_bb.iter().any(|value| !value.is_finite()) {
                     return Err("solver counterfactual action values are non-finite".to_owned());
+                }
+                if !self.emit_legacy_records {
+                    continue;
                 }
                 let opponent_mass =
                     compatible_mass_from_conflicts(&reaches[1 - actor], self.conflicts, key);
@@ -5377,10 +5934,115 @@ fn append_public_belief_policy_records(
         strategies: &strategy_map,
         conflicts: &conflicts,
         root_weight,
+        root_joint_mass,
         records,
+        range_records: range_records.take(),
+        emit_legacy_records,
     }
     .walk(root_state, root_board.to_vec(), root_ranges, 1.0, None)?;
     Ok(records.seen - before)
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct RangeConditionedPolicyState {
+    board: Vec<u8>,
+    street: Street,
+    actor: usize,
+    invested_bb: [f64; 2],
+    street_invested_bb: [f64; 2],
+    last_full_raise_bb: f64,
+    aggressions: u8,
+    checks: u8,
+    raise_reopened: bool,
+    public_history: Vec<String>,
+    trajectory: Vec<TrajectoryAction>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct RangeConditionedPolicyRecord {
+    record_type: String,
+    weight: f32,
+    state: RangeConditionedPolicyState,
+    ranges: [Vec<f32>; 2],
+    action_labels: Vec<String>,
+    action_features: Vec<Vec<f32>>,
+    /// Row-major `[combo][action]` frozen average policy.
+    probabilities: Vec<f32>,
+    /// Row-major `[combo][action]` counterfactual action EVs in big blinds.
+    action_values_bb: Vec<f32>,
+}
+
+fn normalize_policy_ranges(reaches: &[Vec<f64>; 2], board: &[u8]) -> Result<[Vec<f32>; 2], String> {
+    let board = board.iter().copied().collect::<BTreeSet<_>>();
+    let mut normalized: [Vec<f32>; 2] = std::array::from_fn(|_| vec![0.0; COMBO_COUNT]);
+    for player in 0..2 {
+        if reaches[player].len() != COMBO_COUNT {
+            return Err("policy export range has an incompatible size".to_owned());
+        }
+        let total = all_combos()
+            .iter()
+            .filter(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+            .map(|combo| reaches[player][combo.key()])
+            .sum::<f64>();
+        if !total.is_finite() || total <= EPSILON {
+            return Err("policy export range has no legal conditional mass".to_owned());
+        }
+        for combo in all_combos() {
+            if !combo.cards().iter().any(|card| board.contains(card)) {
+                let value = reaches[player][combo.key()] / total;
+                if !value.is_finite() || value < 0.0 {
+                    return Err("policy export range is non-finite or negative".to_owned());
+                }
+                normalized[player][combo.key()] = value as f32;
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn write_range_conditioned_policy_dataset(
+    game: &BlueprintConfig,
+    seed: u64,
+    teacher: &serde_json::Value,
+    records: &[Vec<u8>],
+    output: &Path,
+) -> Result<(), Box<dyn Error>> {
+    if records.is_empty() {
+        return Err("range-conditioned policy dataset has no records".into());
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = output.with_extension("tmp");
+    let file = fs::File::create(&temporary)?;
+    let mut writer = GzEncoder::new(BufWriter::new(file), Compression::fast());
+    serde_json::to_writer(
+        &mut writer,
+        &serde_json::json!({
+            "record_type": "metadata",
+            "schema": "hu-range-conditioned-postflop-policy-dataset-v1",
+            "feature_schema": RANGE_POLICY_FEATURE_SCHEMA_V1,
+            "context_size": SHARED_CONTEXT_BOARD_RELATIVE_COUNT,
+            "query_size": SHARED_QUERY_BOARD_RELATIVE_COUNT,
+            "action_feature_schema": "hu-cash-legal-action-v1",
+            "action_feature_count": 9,
+            "depth_bb": game.effective_stack_bb,
+            "seed": seed,
+            "records": records.len(),
+            "sampling_mode": "authentic_public_reach_weighted_solver_nodes",
+            "teacher": teacher,
+        }),
+    )?;
+    writer.write_all(b"\n")?;
+    for record in records {
+        writer.write_all(record)?;
+        writer.write_all(b"\n")?;
+    }
+    writer.finish()?.flush()?;
+    fs::rename(temporary, output)?;
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -5389,7 +6051,11 @@ pub struct PostflopActionTargetConfig {
     pub roots: usize,
     pub turn_leaves_per_root: usize,
     pub flop_iterations: u64,
+    pub flop_iteration_checkpoints: Vec<u64>,
     pub flop_averaging_delay: u64,
+    pub flop_regret_matching_plus: bool,
+    pub require_accepted_flop_teachers: bool,
+    pub require_accepted_turn_river_teachers: bool,
     pub turn_river_iterations: u64,
     pub turn_river_averaging_delay: u64,
     pub seed: u64,
@@ -5399,6 +6065,17 @@ pub struct PostflopActionTargetConfig {
     pub source_policy_path: PathBuf,
     pub value_network_path: PathBuf,
     pub output: PathBuf,
+    pub range_output: Option<PathBuf>,
+    pub range_only: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostflopActionTeacherCheckpoint {
+    pub root: usize,
+    pub iterations: u64,
+    pub depth_limited_exploitability_bb_per_hand: f64,
+    pub validation_status: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -5411,6 +6088,10 @@ pub struct PostflopActionTargetReport {
     pub value_network_sha256: String,
     pub roots: usize,
     pub turn_leaves: usize,
+    pub flop_regret_matching_plus: bool,
+    pub required_accepted_flop_teachers: bool,
+    pub required_accepted_turn_river_teachers: bool,
+    pub flop_convergence: Vec<PostflopActionTeacherCheckpoint>,
     pub flop_records: usize,
     pub turn_river_records: usize,
     pub total_records: usize,
@@ -5419,6 +6100,10 @@ pub struct PostflopActionTargetReport {
     pub maximum_flop_exploitability_bb_per_hand: f64,
     pub maximum_turn_river_exploitability_bb_per_hand: f64,
     pub output: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_output: Option<PathBuf>,
+    #[serde(default)]
+    pub range_conditioned_records: usize,
     pub validation: BlueprintValidation,
 }
 
@@ -5472,13 +6157,24 @@ pub fn generate_postflop_action_targets(
     if config.roots == 0
         || config.turn_leaves_per_root == 0
         || config.flop_iterations < 2
-        || config.flop_averaging_delay >= config.flop_iterations
+        || config.flop_iteration_checkpoints.is_empty()
+        || config
+            .flop_iteration_checkpoints
+            .iter()
+            .any(|checkpoint| *checkpoint < 2)
+        || config
+            .flop_iteration_checkpoints
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || config.flop_iteration_checkpoints.last().copied() != Some(config.flop_iterations)
+        || config.flop_averaging_delay >= config.flop_iteration_checkpoints[0]
         || config.turn_river_iterations < 2
         || config.turn_river_averaging_delay >= config.turn_river_iterations
         || config.threads == 0
         || config.max_records < 3
         || !config.exploration_probability.is_finite()
         || !(0.0..1.0).contains(&config.exploration_probability)
+        || (config.range_only && config.range_output.is_none())
     {
         return Err(
             "postflop action targets require valid roots, solve controls, and record capacity"
@@ -5493,10 +6189,15 @@ pub fn generate_postflop_action_targets(
     let value_network = PublicValueNetwork::read(&config.value_network_path)?;
     let mut chance = SplitMix64::new(config.seed);
     let mut records = BoundedActionRecordCollector::new(config.max_records, config.seed);
+    let mut range_records = config
+        .range_output
+        .as_ref()
+        .map(|_| BoundedActionRecordCollector::new(config.max_records, config.seed ^ 0xA11C_E5));
     let mut roots_solved = 0usize;
     let mut leaves_solved = 0usize;
     let mut maximum_flop_exploitability = 0.0f64;
     let mut maximum_turn_river_exploitability = 0.0f64;
+    let mut flop_convergence = Vec::new();
     let mut attempts = 0usize;
 
     while roots_solved < config.roots {
@@ -5535,11 +6236,50 @@ pub fn generate_postflop_action_targets(
             state: root_state,
             iterations: config.flop_iterations,
             averaging_delay: config.flop_averaging_delay,
-            regret_matching_plus: false,
+            regret_matching_plus: config.flop_regret_matching_plus,
             value_network: value_network.clone(),
             threads: config.threads,
         })?;
-        flop_solver.train();
+        let solver_root = flop_solver.config.state.game_state();
+        let solver_reaches = flop_solver.config.state.ranges.clone();
+        let mut completed_iterations = 0u64;
+        let mut final_flop_solution = None;
+        for checkpoint in &config.flop_iteration_checkpoints {
+            for round in (completed_iterations + 1)..=*checkpoint {
+                flop_solver.walk(solver_root.clone(), solver_reaches.clone(), 0, round, false);
+                flop_solver.walk(solver_root.clone(), solver_reaches.clone(), 1, round, true);
+            }
+            completed_iterations = *checkpoint;
+            let mut evaluator = flop_solver.clone();
+            evaluator.config.iterations = *checkpoint;
+            let solution = evaluator.finish();
+            let accepted = solution.validation.status == "accepted";
+            flop_convergence.push(PostflopActionTeacherCheckpoint {
+                root: roots_solved,
+                iterations: *checkpoint,
+                depth_limited_exploitability_bb_per_hand: solution
+                    .metrics
+                    .depth_limited_exploitability_bb_per_hand,
+                validation_status: solution.validation.status.clone(),
+            });
+            eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "event": "postflop-action-flop-checkpoint",
+                    "root": roots_solved,
+                    "iterations": checkpoint,
+                    "depthLimitedExploitabilityBbPerHand": solution
+                        .metrics
+                        .depth_limited_exploitability_bb_per_hand,
+                    "validationStatus": solution.validation.status.clone(),
+                }))
+                .expect("flop checkpoint progress event remains serializable")
+            );
+            final_flop_solution = Some(solution);
+            if config.require_accepted_flop_teachers && accepted {
+                break;
+            }
+        }
         let leaves = flop_solver
             .capture_average_turn_leaves()
             .into_iter()
@@ -5550,8 +6290,8 @@ pub fn generate_postflop_action_targets(
             config.turn_leaves_per_root,
             config.seed ^ (roots_solved as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         )?;
-        let flop_solution = flop_solver.finish();
-        let flop_training_usable = flop_solution
+        let flop_solution = final_flop_solution.expect("nonempty flop iteration checkpoints");
+        let structurally_usable_flop_teacher = flop_solution
             .validation
             .reasons
             .iter()
@@ -5565,10 +6305,24 @@ pub fn generate_postflop_action_targets(
                 .resolver_relative_exploitability_improvement
                 > 0.0
             && flop_solution.metrics.zero_sum_residual_after_projection_bb <= 1e-6;
+        let flop_training_usable = structurally_usable_flop_teacher
+            && (!config.require_accepted_flop_teachers
+                || flop_solution.validation.status == "accepted");
         if !flop_training_usable {
             return Err(format!(
-                "flop action teacher is structurally unusable at root {roots_solved}: {}",
-                flop_solution.validation.reasons.join("; ")
+                "flop action teacher failed the configured quality gate at root {roots_solved}: {}",
+                format!(
+                    "{}; convergence {:?}",
+                    flop_solution.validation.reasons.join("; "),
+                    flop_convergence
+                        .iter()
+                        .filter(|checkpoint| checkpoint.root == roots_solved)
+                        .map(|checkpoint| (
+                            checkpoint.iterations,
+                            checkpoint.depth_limited_exploitability_bb_per_hand
+                        ))
+                        .collect::<Vec<_>>()
+                )
             )
             .into());
         }
@@ -5585,6 +6339,8 @@ pub fn generate_postflop_action_targets(
             &flop_solution.strategies,
             1.0 / config.roots as f64,
             &mut records,
+            range_records.as_mut(),
+            !config.range_only,
         )?;
 
         for leaf in selected_leaves {
@@ -5614,7 +6370,7 @@ pub fn generate_postflop_action_targets(
                 river_refinement_iterations: 0,
                 regret_matching_plus: false,
             })?;
-            let turn_training_usable = turn_solution
+            let structurally_usable_turn_teacher = turn_solution
                 .validation
                 .reasons
                 .iter()
@@ -5625,9 +6381,12 @@ pub fn generate_postflop_action_targets(
                     .is_finite()
                 && turn_solution.metrics.maximum_probability_sum_error <= 1e-6
                 && turn_solution.metrics.zero_sum_residual_bb <= 1e-8;
+            let turn_training_usable = structurally_usable_turn_teacher
+                && (!config.require_accepted_turn_river_teachers
+                    || turn_solution.validation.status == "accepted");
             if !turn_training_usable {
                 return Err(format!(
-                    "turn-river action teacher is structurally unusable at root {roots_solved} leaf {leaves_solved}: {}",
+                    "turn-river action teacher failed the configured quality gate at root {roots_solved} leaf {leaves_solved}: {}",
                     turn_solution.validation.reasons.join("; ")
                 )
                 .into());
@@ -5645,6 +6404,8 @@ pub fn generate_postflop_action_targets(
                 &turn_solution.strategies,
                 1.0 / (config.roots * config.turn_leaves_per_root) as f64,
                 &mut records,
+                range_records.as_mut(),
+                !config.range_only,
             )?;
             leaves_solved += 1;
         }
@@ -5691,21 +6452,39 @@ pub fn generate_postflop_action_targets(
         "sourcePolicySha256": source_policy_sha256,
         "valueNetworkSha256": value_network_sha256,
         "flopIterations": config.flop_iterations,
+        "flopIterationCheckpoints": config.flop_iteration_checkpoints,
+        "flopConvergence": flop_convergence,
         "flopAveragingDelay": config.flop_averaging_delay,
+        "flopRegretMatchingPlus": config.flop_regret_matching_plus,
+        "requiresAcceptedFlopTeachers": config.require_accepted_flop_teachers,
+        "requiresAcceptedTurnRiverTeachers": config.require_accepted_turn_river_teachers,
         "turnRiverIterations": config.turn_river_iterations,
         "turnRiverAveragingDelay": config.turn_river_averaging_delay,
         "roots": roots_solved,
         "turnLeaves": leaves_solved,
         "explorationProbability": config.exploration_probability,
+        "actionAbstraction": config.game.action_abstraction,
         "validation": validation,
     });
-    super::neural::write_average_strategy_dataset(
-        &config.game,
-        config.seed,
-        teacher,
-        &records,
-        &config.output,
-    )?;
+    if !config.range_only {
+        super::neural::write_average_strategy_dataset(
+            &config.game,
+            config.seed,
+            teacher.clone(),
+            &records,
+            &config.output,
+        )?;
+    }
+    let range_conditioned_records = range_records.as_ref().map_or(0, |records| records.len());
+    if let (Some(output), Some(records)) = (&config.range_output, range_records) {
+        write_range_conditioned_policy_dataset(
+            &config.game,
+            config.seed,
+            &teacher,
+            &records.into_records(),
+            output,
+        )?;
+    }
     Ok(PostflopActionTargetReport {
         schema: "hu-range-conditioned-postflop-action-target-report-v1".to_owned(),
         method: "authentic_preflop_reach_conditioning_v49_depth_limited_flop_resolver_and_exact_complete_turn_river_dcfr_action_export".to_owned(),
@@ -5714,6 +6493,10 @@ pub fn generate_postflop_action_targets(
         value_network_sha256,
         roots: roots_solved,
         turn_leaves: leaves_solved,
+        flop_regret_matching_plus: config.flop_regret_matching_plus,
+        required_accepted_flop_teachers: config.require_accepted_flop_teachers,
+        required_accepted_turn_river_teachers: config.require_accepted_turn_river_teachers,
+        flop_convergence,
         flop_records,
         turn_river_records,
         total_records: records.len(),
@@ -5722,6 +6505,8 @@ pub fn generate_postflop_action_targets(
         maximum_flop_exploitability_bb_per_hand: maximum_flop_exploitability,
         maximum_turn_river_exploitability_bb_per_hand: maximum_turn_river_exploitability,
         output: config.output,
+        range_output: config.range_output,
+        range_conditioned_records,
         validation,
     })
 }
@@ -7791,6 +8576,72 @@ mod tests {
         }
     }
 
+    fn check_preferring_range_policy() -> RangeConditionedPolicyNetwork {
+        let zero_layer = |input_size, output_size| ValueNetworkLayer {
+            input_size,
+            output_size,
+            activation: "linear".to_owned(),
+            weights: vec![0.0; input_size * output_size],
+            biases: vec![0.0; output_size],
+        };
+        let mut action = zero_layer(ACTION_FEATURE_COUNT, 1);
+        action.weights[1] = 1.0;
+        let mut head = zero_layer(5, 1);
+        head.weights[4] = 1.0;
+        RangeConditionedPolicyNetwork {
+            artifact_sha256: None,
+            schema: RANGE_POLICY_SCHEMA_V1.to_owned(),
+            seed: 71,
+            depth_bb: 20.0,
+            uses_exact_ranges: true,
+            feature_schema: RANGE_POLICY_FEATURE_SCHEMA_V1.to_owned(),
+            context_size: SHARED_CONTEXT_BOARD_RELATIVE_COUNT,
+            query_size: SHARED_QUERY_BOARD_RELATIVE_COUNT,
+            action_feature_schema: ACTION_FEATURE_SCHEMA_V1.to_owned(),
+            action_feature_size: ACTION_FEATURE_COUNT,
+            context_tower: vec![zero_layer(SHARED_CONTEXT_BOARD_RELATIVE_COUNT, 1)],
+            query_tower: vec![zero_layer(SHARED_QUERY_BOARD_RELATIVE_COUNT, 1)],
+            action_tower: vec![action],
+            head: vec![head],
+            source_dataset_sha256: "1".repeat(64),
+            source_dataset_schema: "hu-range-conditioned-postflop-policy-dataset-v1".to_owned(),
+            source_validation_status: "accepted_for_training".to_owned(),
+        }
+    }
+
+    #[test]
+    fn range_policy_scores_zero_reach_forced_deviation_combos_and_normalizes() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let board = [0, 5, 10];
+        let mut ranges = std::array::from_fn(|_| uniform_range(&board));
+        let forced_combo = all_combos()
+            .into_iter()
+            .find(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+            .unwrap();
+        ranges[1][forced_combo.key()] = 0.0;
+        let state = PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges);
+        let network = check_preferring_range_policy();
+        network.validate().unwrap();
+        let actions = state.game_state().legal_actions(&game);
+        let probabilities = network.strategy(&state, &game).unwrap();
+        let row = &probabilities
+            [forced_combo.key() * actions.len()..(forced_combo.key() + 1) * actions.len()];
+        assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        let expected_check =
+            std::f64::consts::E / (std::f64::consts::E + actions.len() as f64 - 1.0);
+        assert!((row[0] - expected_check).abs() < 1e-6);
+        for combo in all_combos() {
+            let row =
+                &probabilities[combo.key() * actions.len()..(combo.key() + 1) * actions.len()];
+            if combo.cards().iter().any(|card| board.contains(card)) {
+                assert_eq!(row.iter().sum::<f64>(), 0.0);
+            } else {
+                assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+            }
+        }
+    }
+
     #[test]
     fn value_network_read_records_the_exact_artifact_hash() {
         let network = zero_value_network();
@@ -9385,6 +10236,7 @@ mod tests {
             action_values_bb: Some(vec![0.0; COMBO_COUNT * action_count]),
         };
         let mut records = BoundedActionRecordCollector::new(3, 7);
+        let mut range_records = BoundedActionRecordCollector::new(10, 8);
         let added = append_public_belief_policy_records(
             &game,
             public.game_state(),
@@ -9393,6 +10245,8 @@ mod tests {
             &[strategy],
             1.0,
             &mut records,
+            Some(&mut range_records),
+            true,
         )
         .unwrap();
         assert!(added > 1);
@@ -9409,6 +10263,20 @@ mod tests {
             record["action_values_bb"].as_array().unwrap().len(),
             action_count
         );
+        assert_eq!(range_records.len(), 1);
+        let range_record: RangeConditionedPolicyRecord =
+            serde_json::from_slice(&range_records.into_records()[0]).unwrap();
+        assert_eq!(range_record.state.street, Street::Flop);
+        assert_eq!(range_record.state.trajectory.len(), 2);
+        assert_eq!(range_record.action_labels.len(), action_count);
+        assert!(range_record
+            .action_features
+            .iter()
+            .all(|features| features.len() == ACTION_FEATURE_COUNT));
+        assert_eq!(range_record.probabilities.len(), COMBO_COUNT * action_count);
+        for range in &range_record.ranges {
+            assert!((range.iter().map(|value| f64::from(*value)).sum::<f64>() - 1.0).abs() < 1e-6);
+        }
     }
 
     #[test]
@@ -9435,6 +10303,8 @@ mod tests {
             &[strategy],
             1.0,
             &mut records,
+            None,
+            true,
         )
         .unwrap_err();
         assert_eq!(
@@ -9522,6 +10392,8 @@ mod tests {
             &strategies,
             1.0,
             &mut records,
+            None,
+            true,
         )
         .unwrap();
         let records = records.into_records();

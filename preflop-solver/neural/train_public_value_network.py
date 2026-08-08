@@ -9,6 +9,7 @@ import itertools
 import json
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ POOLED_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v5"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
 FEATURE_SCHEMA_BOARD_RELATIVE = "rank-suit-invariant-combo-query-v2"
 FEATURE_SCHEMA_EXACT_RUNOUT = "rank-suit-invariant-combo-query-v3"
+RANGE_POLICY_FEATURE_SCHEMA = "rank-suit-invariant-combo-policy-query-v1"
 FEATURE_IMPLEMENTATION_VERSION = "public-value-features-v3-exact-runout-1"
 COMBO_COUNT = 1326
 DEPTH_BB = 20.0
@@ -45,7 +47,11 @@ COMPLETE_TURN_TARGET_SCHEMA = "hu-turn-public-belief-cfv-dataset-v2"
 def feature_sizes(feature_schema: str) -> tuple[int, int]:
     if feature_schema == FEATURE_SCHEMA:
         return CONTEXT_COUNT, QUERY_COUNT
-    if feature_schema in (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT):
+    if feature_schema in (
+        FEATURE_SCHEMA_BOARD_RELATIVE,
+        FEATURE_SCHEMA_EXACT_RUNOUT,
+        RANGE_POLICY_FEATURE_SCHEMA,
+    ):
         return (
             CONTEXT_COUNT + CONTEXT_BOARD_RELATIVE_COUNT,
             QUERY_COUNT + QUERY_BOARD_RELATIVE_COUNT,
@@ -168,6 +174,14 @@ def evaluate_cards(cards: list[int]) -> int:
 def poker_query_features(
     board: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return _poker_query_features_cached(tuple(int(card) for card in board))
+
+
+@lru_cache(maxsize=256)
+def _poker_query_features_cached(
+    board_cards: tuple[int, ...],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    board = np.asarray(board_cards, dtype=np.int16)
     legal = np.ones(COMBO_COUNT, dtype=bool)
     strengths = np.zeros(COMBO_COUNT, dtype=np.int64)
     category = np.zeros((COMBO_COUNT, 9), dtype=np.float32)
@@ -183,20 +197,25 @@ def poker_query_features(
         strengths[combo] = current
         current_category = current >> 24
         category[combo, current_category] = 1.0
-        rivers = 0
-        improved = 0
-        for river in range(52):
-            if river in board_set or river == first or river == second:
-                continue
-            final_category = (
-                evaluate_cards([*(int(card) for card in board), river, first, second])
-                >> 24
-            )
-            river_categories[combo, final_category] += 1.0
-            improved += int(final_category > current_category)
-            rivers += 1
-        river_categories[combo] /= rivers
-        improvement[combo] = improved / rivers
+        if len(board) < 5:
+            future_cards = 0
+            improved = 0
+            for next_card in range(52):
+                if next_card in board_set or next_card == first or next_card == second:
+                    continue
+                final_category = (
+                    evaluate_cards(
+                        [*(int(card) for card in board), next_card, first, second]
+                    )
+                    >> 24
+                )
+                river_categories[combo, final_category] += 1.0
+                improved += int(final_category > current_category)
+                future_cards += 1
+            river_categories[combo] /= future_cards
+            improvement[combo] = improved / future_cards
+        else:
+            river_categories[combo, current_category] = 1.0
     legal_strengths = strengths[legal]
     unique, counts = np.unique(legal_strengths, return_counts=True)
     lower = np.concatenate(([0], np.cumsum(counts)[:-1]))
@@ -1069,6 +1088,7 @@ def build_features(
         if feature_schema in (
             FEATURE_SCHEMA_BOARD_RELATIVE,
             FEATURE_SCHEMA_EXACT_RUNOUT,
+            RANGE_POLICY_FEATURE_SCHEMA,
         ):
             own_mass = max(float(ranges[player].sum()), 1e-8)
             opponent_mass = max(float(ranges[opponent].sum()), 1e-8)
@@ -1184,6 +1204,7 @@ def build_features(
             if feature_schema in (
                 FEATURE_SCHEMA_BOARD_RELATIVE,
                 FEATURE_SCHEMA_EXACT_RUNOUT,
+                RANGE_POLICY_FEATURE_SCHEMA,
             ):
                 query[QUERY_COUNT:] = compatible_opponent_features[combo]
     return context, queries
