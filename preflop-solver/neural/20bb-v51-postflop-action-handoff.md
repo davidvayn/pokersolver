@@ -8,6 +8,7 @@
 - `activationAllowed` remains `false`. Both full-game means improved, but the required exploitability gates still fail by a wide margin.
 - Continue only the served action-policy correction. Do not add value-oracle, untouched-root, or unrelated diagnostic work.
 - No training or evaluation job is running at this handoff.
+- The preflop and postflop networks are already combined in `neural/runs/20bb-v51-routed-seed7601-mix25-s200.json` and `neural/runs/20bb-v51-routed-seed7602-mix25-s200.json`. No additional solver or attribution work is required merely to create a full-hand bundle.
 
 ## 2026-08-07 implementation checkpoint
 
@@ -94,14 +95,22 @@ A direct 200-step update from v26 improved all own/cross expected-EV and frequen
 
 This closes further local action-EV scale, step-count, and replay-mixture sweeps. Exact action values against a frozen local average policy improve that supervised objective but do not reliably reduce bilateral full-game exploitability after both policies change. Every evaluated one-sided 99% upper bound also remained 20 bb/hand. Retain v51 and keep activation false.
 
+## Completed v56 causal-attribution implementation smoke
+
+The implementation and four-corpus evidence are pinned in `neural/20bb-v56-causal-attribution-smoke.json`. The new Rust command freezes the exact information-set-consistent response selected by the existing causal certificate, replays that same response, and emits only reached postflop policy actions with negated responder utilities and exact chance/reach weights. A deterministic thread/street-stratified reservoir bounds memory and applies inverse-inclusion correction.
+
+All four authentic v51 smoke corpora reconstructed their root response values within `1.8e-15` bb. Rust/Python feature hashes matched for 12,070 retained rows, action values stayed in `[-20, 20]` bb, and probability sums remained valid. The KL-capped mirror-descent distiller has independent-corpus fail-closed gates, but no student was trained or routed at this checkpoint.
+
+This work is not needed to combine the frozen preflop and postflop networks; those routed v51 bundles already exist. It is only the next policy-action experiment if work continues toward lower full-game exploitability.
+
 ## Exact next sequence
 
 Continue only with policy-action updates aligned to the full-game exploitability certificate:
 
 1. Keep the v27 preflop and v51 postflop policies frozen as the baseline.
-2. Instrument the existing full-game causal best-response certificate to attribute information-set-consistent counterfactual action values to certificate-reached policy-player nodes while preserving exact public chance.
-3. Use those values as an exploitability subgradient for a bounded trust-region action update. Generate independent paired sample games for the two policies.
-4. Route each pair through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
+2. If the goal is only a combined full-hand artifact, use the two existing routed v51 bundles and stop here.
+3. If the goal remains reducing exploitability, run one short paired v56 trust-region distillation from the validated training/independent-attribution interface. Do not expand its budget until both independent fixed-response value checks pass.
+4. Route an eligible pair through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
 
 Do not resume more roots, local solver iterations, frequency-only training, or local fixed-policy EV scale/step/replay sweeps; v52–v55 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
 
@@ -112,4 +121,4 @@ Do not resume more roots, local solver iterations, frequency-only training, or l
 - A direct positive-scale compiled-step smoke returned a finite loss.
 - `cargo fmt`, Python byte compilation, and `git diff --check` passed.
 - The converged v55 corpora, students, and routed artifacts live under ignored `neural/runs/20bb-v55-*`; the tracked v55 evidence contains their hashes and rejection decision.
-- No training or evaluation process is running. The next agent starts with causal-certificate action-value attribution, not target regeneration or another local-objective sweep.
+- No training or evaluation process is running. The causal-certificate attribution implementation is complete; no future agent should regenerate v52-v55 targets or repeat local-objective sweeps.

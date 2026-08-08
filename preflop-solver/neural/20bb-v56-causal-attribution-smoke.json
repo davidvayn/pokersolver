@@ -1,0 +1,86 @@
+{
+  "schema": "hu-20bb-causal-policy-attribution-smoke-v1",
+  "status": "implementation_validated_no_student_trained",
+  "activationAllowed": false,
+  "retainedCandidate": "v51",
+  "combinationStatus": {
+    "preflopAndPostflopAlreadyCombined": true,
+    "seed7601Bundle": "neural/runs/20bb-v51-routed-seed7601-mix25-s200.json",
+    "seed7602Bundle": "neural/runs/20bb-v51-routed-seed7602-mix25-s200.json",
+    "causalAttributionRequiredForCombination": false,
+    "causalAttributionPurpose": "optional next policy-action update for reducing the combined model's measured exploitability"
+  },
+  "settings": {
+    "depthBb": 20,
+    "deals": 2,
+    "publicBranchesPerStreet": 2,
+    "opponentSamplesPerRunout": 2,
+    "scenariosPerDeal": 16,
+    "threads": 2,
+    "maxRecords": 5000
+  },
+  "corpora": [
+    {
+      "candidate": 7601,
+      "role": "training",
+      "seed": 16201,
+      "sourceNetworkSha256": "0faa769485c6ea2c5f38bead024d3c924b7cd5dfb8af9cc76ec07ecef867ef1a",
+      "corpusSha256": "2a097e7422dfe8e39b820373ea2e5e6bb4a8c2f9bf2e5468118d3ddac5d2a51e",
+      "reportSha256": "1370653efb931135437dd4e72c213d28ed7e7012450e909d8bc6da30db81f052",
+      "candidateRecords": 3424,
+      "retainedRecords": 3391,
+      "sampleMeanExploitabilityBbPerHand": 2.3675899910149756,
+      "maximumRootReconstructionErrorBb": 4.440892098500626e-16
+    },
+    {
+      "candidate": 7601,
+      "role": "independent_validation",
+      "seed": 16211,
+      "sourceNetworkSha256": "0faa769485c6ea2c5f38bead024d3c924b7cd5dfb8af9cc76ec07ecef867ef1a",
+      "corpusSha256": "751e83e0a5bb8c8c1d00d066083f634ac81ba85a7b9320ffe03d4581396da6d9",
+      "reportSha256": "0222c2f980108ce9cce1fe68d58b174ae0356296a9e5a535272ad9244aac02ec",
+      "candidateRecords": 3964,
+      "retainedRecords": 3903,
+      "sampleMeanExploitabilityBbPerHand": 1.9323267343445658,
+      "maximumRootReconstructionErrorBb": 8.881784197001252e-16
+    },
+    {
+      "candidate": 7602,
+      "role": "training",
+      "seed": 16202,
+      "sourceNetworkSha256": "f462c6dc70743d1f645761d80317e4e9e102efcbed875b68090595bbb0fca296",
+      "corpusSha256": "34698ec12254af10968cb7076d0da66405789160f3505b97d45050a5158cca27",
+      "reportSha256": "0715dbf736105d6f7ac530d4416dda728d1c26b56d11efd4900f779b4ab4d654",
+      "candidateRecords": 2566,
+      "retainedRecords": 2566,
+      "sampleMeanExploitabilityBbPerHand": 2.1388237606150424,
+      "maximumRootReconstructionErrorBb": 1.7763568394002505e-15
+    },
+    {
+      "candidate": 7602,
+      "role": "independent_validation",
+      "seed": 16212,
+      "sourceNetworkSha256": "f462c6dc70743d1f645761d80317e4e9e102efcbed875b68090595bbb0fca296",
+      "corpusSha256": "4caea107906a6a49ef5b4c5b4487ab8533e466526b4ba6c84a5c2603f7b3beed",
+      "reportSha256": "154c3f9c77e4c606e60f69b0cbcbb75bf93d36b692950d7ac4b55011a5941c1b",
+      "candidateRecords": 2210,
+      "retainedRecords": 2210,
+      "sampleMeanExploitabilityBbPerHand": 2.9354763254197946,
+      "maximumRootReconstructionErrorBb": 1.7763568394002505e-15
+    }
+  ],
+  "validation": {
+    "allRootReconstructionsBelow2eMinus15Bb": true,
+    "allActionValuesFiniteAndWithinUtilityBounds": true,
+    "allFrozenPoliciesHaveFullSupport": true,
+    "allRustPythonFeatureHashesMatch": true,
+    "maximumPythonProbabilitySumError": 4.6566128730773926e-8,
+    "rustReleaseTests": "100 library and 3 CLI tests passed",
+    "trustRegionUnitTests": 3
+  },
+  "decision": {
+    "studentTrainingStarted": false,
+    "routedEvaluationStarted": false,
+    "reason": "the user requested a combination-focused checkpoint; the combined v51 bundles already exist and this optimizer is not required to create them"
+  }
+}

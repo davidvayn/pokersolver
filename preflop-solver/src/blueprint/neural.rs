@@ -12,7 +12,7 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
 pub const STATE_FEATURE_COUNT: usize = 716;
@@ -49,6 +49,49 @@ pub struct ExploitabilityCertificateConfig {
     pub confidence: f64,
     pub threads: usize,
     pub network_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct CausalPolicyAttributionConfig {
+    pub game: BlueprintConfig,
+    pub deals: u64,
+    pub seed: u64,
+    pub threads: usize,
+    pub network_path: PathBuf,
+    pub public_branches_per_street: u32,
+    pub opponent_samples_per_runout: u32,
+    pub max_records: usize,
+    pub output: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CausalPolicyAttributionReport {
+    pub schema: &'static str,
+    pub method: &'static str,
+    pub depth_bb: f64,
+    pub deals: u64,
+    pub seed: u64,
+    pub network_sha256: String,
+    pub threads: usize,
+    pub public_branches_per_street: u32,
+    pub opponent_samples_per_runout: u32,
+    pub scenarios_per_deal: u64,
+    pub response_tree_nodes: u64,
+    pub attribution_tree_nodes: u64,
+    pub candidate_records: usize,
+    pub retained_records: usize,
+    pub candidate_records_by_street: [usize; 3],
+    pub retained_records_by_street: [usize; 3],
+    pub truncated: bool,
+    pub sample_mean_exploitability_bb: f64,
+    pub maximum_root_value_reconstruction_error_bb: f64,
+    pub minimum_frozen_policy_action_probability: f64,
+    pub maximum_target_probability_sum_error: f64,
+    pub minimum_policy_action_value_bb: f64,
+    pub maximum_policy_action_value_bb: f64,
+    pub output: PathBuf,
+    pub output_sha256: String,
+    pub validation_status: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1748,6 +1791,721 @@ fn causal_sample_game_response_value(
         .sum()
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct CausalResponseInformationSet {
+    public_history: Vec<String>,
+    observed_board: Vec<u8>,
+}
+
+type CausalResponsePlan = BTreeMap<CausalResponseInformationSet, usize>;
+
+fn merge_causal_response_plan(
+    target: &mut CausalResponsePlan,
+    source: CausalResponsePlan,
+) -> Result<(), String> {
+    for (information_set, action) in source {
+        if let Some(previous) = target.insert(information_set, action) {
+            if previous != action {
+                return Err("causal response plan selected conflicting actions".to_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Solve the same nested sample game as the causal certificate while retaining
+/// one deterministic action for every reached responder information set.
+/// Descendant plans below unselected responder actions are deliberately
+/// discarded: the retained map represents one valid subgradient response, not
+/// a collection of independently re-optimized deviations.
+fn solve_causal_response_plan(
+    generator: &SampleGenerator,
+    state: GameState,
+    scenarios: &[Deal],
+    weights: &[f64],
+    responder: usize,
+    visited_nodes: &mut u64,
+) -> Result<(f64, CausalResponsePlan), String> {
+    *visited_nodes += 1;
+    if scenarios.len() != weights.len() {
+        return Err("causal response scenarios and weights differ".to_owned());
+    }
+    if weights.iter().all(|weight| *weight <= 0.0) {
+        return Ok((0.0, BTreeMap::new()));
+    }
+    if state.terminal.is_some() {
+        let value = scenarios
+            .iter()
+            .zip(weights)
+            .map(|(deal, weight)| {
+                let utility_p0 = complete_runout_utility_p0(&state, deal);
+                weight
+                    * if responder == 0 {
+                        utility_p0
+                    } else {
+                        -utility_p0
+                    }
+            })
+            .sum();
+        return Ok((value, BTreeMap::new()));
+    }
+    let actions = state.legal_actions(&generator.config.game);
+    if state.actor == responder {
+        let mut information_sets: BTreeMap<Vec<u8>, Vec<f64>> = BTreeMap::new();
+        for (index, (scenario, reach)) in scenarios.iter().zip(weights).enumerate() {
+            if *reach <= 0.0 {
+                continue;
+            }
+            information_sets
+                .entry(observed_public_board(scenario, state.street))
+                .or_insert_with(|| vec![0.0; scenarios.len()])[index] = *reach;
+        }
+        let mut total = 0.0;
+        let mut plan = BTreeMap::new();
+        for (observed_board, information_set_weights) in information_sets {
+            let mut best: Option<(usize, f64, CausalResponsePlan)> = None;
+            for (action_index, action) in actions.iter().enumerate() {
+                let (value, child_plan) = solve_causal_response_plan(
+                    generator,
+                    state.apply(action, &generator.config.game),
+                    scenarios,
+                    &information_set_weights,
+                    responder,
+                    visited_nodes,
+                )?;
+                if best
+                    .as_ref()
+                    .is_none_or(|(_, best_value, _)| value > *best_value)
+                {
+                    best = Some((action_index, value, child_plan));
+                }
+            }
+            let (selected_action, value, child_plan) =
+                best.ok_or_else(|| "causal responder has no legal action".to_owned())?;
+            total += value;
+            merge_causal_response_plan(&mut plan, child_plan)?;
+            let information_set = CausalResponseInformationSet {
+                public_history: state.public_history.clone(),
+                observed_board,
+            };
+            if let Some(previous) = plan.insert(information_set, selected_action) {
+                if previous != selected_action {
+                    return Err("causal response information set is inconsistent".to_owned());
+                }
+            }
+        }
+        return Ok((total, plan));
+    }
+
+    let mut branch_weights = vec![vec![0.0; scenarios.len()]; actions.len()];
+    for (scenario_index, (deal, reach)) in scenarios.iter().zip(weights).enumerate() {
+        if *reach <= 0.0 {
+            continue;
+        }
+        let strategy = generator.current_strategy(&state, deal, &actions);
+        for (action_index, probability) in strategy.into_iter().enumerate() {
+            branch_weights[action_index][scenario_index] = reach * probability;
+        }
+    }
+    let mut total = 0.0;
+    let mut plan = BTreeMap::new();
+    for (action, child_weights) in actions.iter().zip(branch_weights) {
+        let (value, child_plan) = solve_causal_response_plan(
+            generator,
+            state.apply(action, &generator.config.game),
+            scenarios,
+            &child_weights,
+            responder,
+            visited_nodes,
+        )?;
+        total += value;
+        merge_causal_response_plan(&mut plan, child_plan)?;
+    }
+    Ok((total, plan))
+}
+
+type AttributionReservoirKey = (u64, u64, u64, u8, u64);
+
+struct BoundedCausalAttributionCollector {
+    capacities: [usize; 3],
+    seed: u64,
+    seen_by_street: [usize; 3],
+    records: [BTreeMap<AttributionReservoirKey, Vec<u8>>; 3],
+}
+
+impl BoundedCausalAttributionCollector {
+    fn new(capacities: [usize; 3], seed: u64) -> Self {
+        Self {
+            capacities,
+            seed,
+            seen_by_street: [0; 3],
+            records: std::array::from_fn(|_| BTreeMap::new()),
+        }
+    }
+
+    fn street_index(street: Street) -> usize {
+        match street {
+            Street::Flop => 0,
+            Street::Turn => 1,
+            Street::River => 2,
+            Street::Preflop => unreachable!("causal attribution retains only postflop rows"),
+        }
+    }
+
+    fn consider(
+        &mut self,
+        street: Street,
+        deal_index: u64,
+        responder: usize,
+        candidate_index: u64,
+        record: Vec<u8>,
+    ) {
+        let street_index = Self::street_index(street);
+        self.seen_by_street[street_index] += 1;
+        let capacity = self.capacities[street_index];
+        if capacity == 0 {
+            return;
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"hu-causal-policy-attribution-reservoir-v1");
+        digest.update(self.seed.to_le_bytes());
+        digest.update(deal_index.to_le_bytes());
+        digest.update([responder as u8, street_index as u8]);
+        digest.update(candidate_index.to_le_bytes());
+        digest.update(&record);
+        let bytes = digest.finalize();
+        let key = (
+            u64::from_le_bytes(bytes[..8].try_into().expect("SHA-256 prefix")),
+            u64::from_le_bytes(bytes[8..16].try_into().expect("SHA-256 suffix")),
+            deal_index,
+            responder as u8,
+            candidate_index,
+        );
+        let records = &mut self.records[street_index];
+        if records.len() < capacity {
+            records.insert(key, record);
+            return;
+        }
+        let largest = *records
+            .last_key_value()
+            .expect("positive attribution-record capacity")
+            .0;
+        if key < largest {
+            records.pop_last();
+            records.insert(key, record);
+        }
+    }
+
+    fn into_records(self) -> (Vec<Vec<u8>>, [usize; 3], [usize; 3]) {
+        let retained_by_street = self.records.each_ref().map(BTreeMap::len);
+        let mut output = Vec::with_capacity(retained_by_street.iter().sum());
+        for (street, records) in self.records.into_iter().enumerate() {
+            let retained = records.len();
+            if retained == 0 {
+                continue;
+            }
+            let inclusion_correction = self.seen_by_street[street] as f64 / retained as f64;
+            for record in records.into_values() {
+                let mut value: serde_json::Value = serde_json::from_slice(&record)
+                    .expect("generated causal attribution remains valid JSON");
+                let weight = value["weight"]
+                    .as_f64()
+                    .expect("causal attribution weight is numeric");
+                value["weight"] = serde_json::json!(weight * inclusion_correction);
+                output.push(
+                    serde_json::to_vec(&value)
+                        .expect("corrected causal attribution remains serializable"),
+                );
+            }
+        }
+        (output, self.seen_by_street, retained_by_street)
+    }
+}
+
+struct CausalAttributionWalkStats {
+    attribution_nodes: u64,
+    minimum_policy_probability: f64,
+    maximum_target_sum_error: f64,
+    minimum_policy_value: f64,
+    maximum_policy_value: f64,
+}
+
+impl Default for CausalAttributionWalkStats {
+    fn default() -> Self {
+        Self {
+            attribution_nodes: 0,
+            minimum_policy_probability: f64::INFINITY,
+            maximum_target_sum_error: 0.0,
+            minimum_policy_value: f64::INFINITY,
+            maximum_policy_value: f64::NEG_INFINITY,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixed_causal_response_policy_values(
+    generator: &SampleGenerator,
+    state: GameState,
+    scenarios: &[Deal],
+    weights: &[f64],
+    responder: usize,
+    response_plan: &CausalResponsePlan,
+    deal_index: u64,
+    candidate_index: &mut u64,
+    objective_scale: f64,
+    collector: &mut BoundedCausalAttributionCollector,
+    stats: &mut CausalAttributionWalkStats,
+) -> Result<Vec<f64>, String> {
+    stats.attribution_nodes += 1;
+    if scenarios.len() != weights.len() {
+        return Err("causal attribution scenarios and weights differ".to_owned());
+    }
+    if state.terminal.is_some() {
+        return Ok(scenarios
+            .iter()
+            .map(|deal| {
+                let utility_p0 = complete_runout_utility_p0(&state, deal);
+                if responder == 0 {
+                    utility_p0
+                } else {
+                    -utility_p0
+                }
+            })
+            .collect());
+    }
+    if weights.iter().all(|weight| *weight <= 0.0) {
+        return Ok(vec![0.0; scenarios.len()]);
+    }
+    let actions = state.legal_actions(&generator.config.game);
+    if state.actor == responder {
+        let mut information_sets: BTreeMap<Vec<u8>, Vec<f64>> = BTreeMap::new();
+        for (index, (scenario, reach)) in scenarios.iter().zip(weights).enumerate() {
+            if *reach <= 0.0 {
+                continue;
+            }
+            information_sets
+                .entry(observed_public_board(scenario, state.street))
+                .or_insert_with(|| vec![0.0; scenarios.len()])[index] = *reach;
+        }
+        let mut output = vec![0.0; scenarios.len()];
+        for (observed_board, information_set_weights) in information_sets {
+            let key = CausalResponseInformationSet {
+                public_history: state.public_history.clone(),
+                observed_board,
+            };
+            let selected = *response_plan
+                .get(&key)
+                .ok_or_else(|| "fixed causal response plan is missing a reached node".to_owned())?;
+            if selected >= actions.len() {
+                return Err("fixed causal response selected an illegal action".to_owned());
+            }
+            let child = fixed_causal_response_policy_values(
+                generator,
+                state.apply(&actions[selected], &generator.config.game),
+                scenarios,
+                &information_set_weights,
+                responder,
+                response_plan,
+                deal_index,
+                candidate_index,
+                objective_scale,
+                collector,
+                stats,
+            )?;
+            for (index, reach) in information_set_weights.iter().enumerate() {
+                if *reach > 0.0 {
+                    output[index] = child[index];
+                }
+            }
+        }
+        return Ok(output);
+    }
+
+    let mut strategies = vec![Vec::new(); scenarios.len()];
+    let mut branch_weights = vec![vec![0.0; scenarios.len()]; actions.len()];
+    for (scenario_index, (deal, reach)) in scenarios.iter().zip(weights).enumerate() {
+        if *reach <= 0.0 {
+            continue;
+        }
+        let strategy = generator.current_strategy(&state, deal, &actions);
+        if strategy.len() != actions.len()
+            || strategy
+                .iter()
+                .any(|probability| !probability.is_finite() || *probability <= 0.0)
+        {
+            return Err(
+                "causal attribution requires a finite full-support frozen policy".to_owned(),
+            );
+        }
+        let probability_sum = strategy.iter().sum::<f64>();
+        stats.maximum_target_sum_error = stats
+            .maximum_target_sum_error
+            .max((probability_sum - 1.0).abs());
+        stats.minimum_policy_probability = stats
+            .minimum_policy_probability
+            .min(strategy.iter().copied().fold(f64::INFINITY, f64::min));
+        for (action_index, probability) in strategy.iter().copied().enumerate() {
+            branch_weights[action_index][scenario_index] = reach * probability;
+        }
+        strategies[scenario_index] = strategy;
+    }
+
+    let mut action_values = Vec::with_capacity(actions.len());
+    for (action, child_weights) in actions.iter().zip(branch_weights) {
+        action_values.push(fixed_causal_response_policy_values(
+            generator,
+            state.apply(action, &generator.config.game),
+            scenarios,
+            &child_weights,
+            responder,
+            response_plan,
+            deal_index,
+            candidate_index,
+            objective_scale,
+            collector,
+            stats,
+        )?);
+    }
+
+    let mut output = vec![0.0; scenarios.len()];
+    for (scenario_index, ((deal, reach), strategy)) in
+        scenarios.iter().zip(weights).zip(&strategies).enumerate()
+    {
+        if *reach <= 0.0 {
+            continue;
+        }
+        let responder_values = action_values
+            .iter()
+            .map(|values| values[scenario_index])
+            .collect::<Vec<_>>();
+        if responder_values.iter().any(|value| {
+            !value.is_finite() || value.abs() > generator.config.game.effective_stack_bb + 1e-8
+        }) {
+            return Err("causal attribution produced an invalid action value".to_owned());
+        }
+        output[scenario_index] = strategy
+            .iter()
+            .zip(&responder_values)
+            .map(|(probability, value)| probability * value)
+            .sum();
+        if state.street != Street::Preflop {
+            let policy_values = responder_values
+                .into_iter()
+                .map(|value| -value)
+                .collect::<Vec<_>>();
+            stats.minimum_policy_value = stats
+                .minimum_policy_value
+                .min(policy_values.iter().copied().fold(f64::INFINITY, f64::min));
+            stats.maximum_policy_value = stats.maximum_policy_value.max(
+                policy_values
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max),
+            );
+            let sample = training_sample(
+                SampleKind::AverageStrategy,
+                deal_index,
+                (*reach * objective_scale) as f32,
+                *reach,
+                &state,
+                deal,
+                &actions,
+                strategy.clone(),
+                Some(policy_values),
+                None,
+                &generator.config.game,
+            );
+            collector.consider(
+                state.street,
+                deal_index,
+                responder,
+                *candidate_index,
+                serde_json::to_vec(&sample).expect("causal policy attribution is serializable"),
+            );
+            *candidate_index += 1;
+        }
+    }
+    Ok(output)
+}
+
+fn attribution_street_capacities(capacity: usize) -> [usize; 3] {
+    let flop = (capacity / 4).max(1);
+    let turn = (capacity * 3 / 10).max(1);
+    [flop, turn, capacity - flop - turn]
+}
+
+fn split_attribution_capacities(total: [usize; 3], worker: usize, workers: usize) -> [usize; 3] {
+    total.map(|capacity| capacity / workers + usize::from(worker < capacity % workers))
+}
+
+fn sha256_path(path: &std::path::Path) -> Result<String, Box<dyn Error>> {
+    let mut reader = BufReader::new(fs::File::open(path)?);
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+/// Export policy-player action values from the exact causal sample games used
+/// by the conservative exploitability certificate. The responder plan is
+/// solved once, frozen, and replayed so every row is a valid subgradient of
+/// that same sampled maximum. Values are negated into the policy player's
+/// utility direction and preflop rows are intentionally omitted.
+pub fn generate_causal_policy_attribution(
+    config: CausalPolicyAttributionConfig,
+) -> Result<CausalPolicyAttributionReport, Box<dyn Error>> {
+    if config.deals == 0 {
+        return Err("causal attribution requires at least one deal".into());
+    }
+    if config.threads == 0 {
+        return Err("causal attribution thread count must be positive".into());
+    }
+    if config.public_branches_per_street == 0 || config.opponent_samples_per_runout == 0 {
+        return Err("causal attribution requires public and hidden-hand samples".into());
+    }
+    if config.max_records < 3 {
+        return Err("causal attribution requires at least three retained records".into());
+    }
+    let scenarios_per_deal = u64::from(config.public_branches_per_street)
+        .checked_pow(3)
+        .and_then(|count| count.checked_mul(u64::from(config.opponent_samples_per_runout)))
+        .ok_or("causal attribution scenario count overflows")?;
+    if scenarios_per_deal > 1_000_000 {
+        return Err("causal attribution exceeds one million scenarios per deal".into());
+    }
+    let network_sha256 = sha256_path(&config.network_path)?;
+    let generator = SampleGenerator::new(SampleGenerationConfig {
+        game: config.game.clone(),
+        traversals: 1,
+        start_iteration: 0,
+        seed: config.seed,
+        max_records: 1,
+        output: PathBuf::from("unused-causal-attribution.jsonl.gz"),
+        network_path: Some(config.network_path.clone()),
+        trajectory_sampling: false,
+        evaluate_trajectory_values: false,
+        value_rollouts_per_action: 1,
+        enumerate_turn_river_chance: false,
+    })?;
+    let total_capacities = attribution_street_capacities(config.max_records);
+    if total_capacities[2] == 0 {
+        return Err("causal attribution record budget cannot cover every postflop street".into());
+    }
+    let worker_count = config.threads.min(config.deals as usize).min(
+        *total_capacities
+            .iter()
+            .min()
+            .expect("three street capacities"),
+    );
+    let mut rng = SplitMix64::new(config.seed);
+    let responder_holes = (0..config.deals)
+        .map(|index| (index, Deal::sample(&mut rng).holes))
+        .collect::<Vec<_>>();
+    let chunk_size = responder_holes.len().div_ceil(worker_count);
+    let chunks = responder_holes
+        .chunks(chunk_size)
+        .map(<[(u64, [[u8; 2]; 2])]>::to_vec)
+        .collect::<Vec<_>>();
+    let objective_scale = 1.0 / (2.0 * config.deals as f64);
+    let worker_results = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for (worker, chunk) in chunks.into_iter().enumerate() {
+            let generator = &generator;
+            let game = &config.game;
+            let capacities = split_attribution_capacities(total_capacities, worker, worker_count);
+            handles.push(scope.spawn(move || -> Result<_, String> {
+                let mut collector =
+                    BoundedCausalAttributionCollector::new(capacities, config.seed ^ worker as u64);
+                let mut response_nodes = 0u64;
+                let mut stats = CausalAttributionWalkStats::default();
+                let mut deal_results = Vec::with_capacity(chunk.len());
+                for (index, sampled_holes) in chunk {
+                    let mut responses = [0.0; 2];
+                    let mut maximum_reconstruction_error = 0.0f64;
+                    for responder in 0..2 {
+                        let seed = config.seed
+                            ^ index.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                            ^ (responder as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        let mut scenario_rng = SplitMix64::new(seed);
+                        let scenarios = sample_causal_scenarios(
+                            sampled_holes[responder],
+                            responder,
+                            config.public_branches_per_street,
+                            config.opponent_samples_per_runout,
+                            &mut scenario_rng,
+                        );
+                        let weights = vec![1.0 / scenarios.len() as f64; scenarios.len()];
+                        let (response, plan) = solve_causal_response_plan(
+                            generator,
+                            GameState::initial(game),
+                            &scenarios,
+                            &weights,
+                            responder,
+                            &mut response_nodes,
+                        )?;
+                        let mut candidate_index = 0u64;
+                        let reconstructed_values = fixed_causal_response_policy_values(
+                            generator,
+                            GameState::initial(game),
+                            &scenarios,
+                            &weights,
+                            responder,
+                            &plan,
+                            index,
+                            &mut candidate_index,
+                            objective_scale,
+                            &mut collector,
+                            &mut stats,
+                        )?;
+                        let reconstructed = weights
+                            .iter()
+                            .zip(reconstructed_values)
+                            .map(|(weight, value)| weight * value)
+                            .sum::<f64>();
+                        maximum_reconstruction_error =
+                            maximum_reconstruction_error.max((response - reconstructed).abs());
+                        responses[responder] = response;
+                    }
+                    deal_results.push((
+                        index,
+                        ((responses[0] + responses[1]) / 2.0).clamp(0.0, game.effective_stack_bb),
+                        maximum_reconstruction_error,
+                    ));
+                }
+                Ok((collector, response_nodes, stats, deal_results))
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("causal attribution worker panicked"))
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+
+    let mut records = Vec::new();
+    let mut candidate_records_by_street = [0usize; 3];
+    let mut retained_records_by_street = [0usize; 3];
+    let mut response_tree_nodes = 0u64;
+    let mut attribution_tree_nodes = 0u64;
+    let mut minimum_probability = f64::INFINITY;
+    let mut maximum_sum_error = 0.0f64;
+    let mut minimum_policy_value = f64::INFINITY;
+    let mut maximum_policy_value = f64::NEG_INFINITY;
+    let mut deal_results = Vec::with_capacity(config.deals as usize);
+    for (collector, response_nodes, stats, worker_deals) in worker_results {
+        let (mut worker_records, candidate_by_street, retained_by_street) =
+            collector.into_records();
+        records.append(&mut worker_records);
+        for street in 0..3 {
+            candidate_records_by_street[street] += candidate_by_street[street];
+            retained_records_by_street[street] += retained_by_street[street];
+        }
+        response_tree_nodes += response_nodes;
+        attribution_tree_nodes += stats.attribution_nodes;
+        minimum_probability = minimum_probability.min(stats.minimum_policy_probability);
+        maximum_sum_error = maximum_sum_error.max(stats.maximum_target_sum_error);
+        minimum_policy_value = minimum_policy_value.min(stats.minimum_policy_value);
+        maximum_policy_value = maximum_policy_value.max(stats.maximum_policy_value);
+        deal_results.extend(worker_deals);
+    }
+    deal_results.sort_by_key(|(index, _, _)| *index);
+    let sample_mean_exploitability =
+        deal_results.iter().map(|(_, value, _)| value).sum::<f64>() / config.deals as f64;
+    let maximum_reconstruction_error = deal_results
+        .iter()
+        .map(|(_, _, error)| *error)
+        .fold(0.0f64, f64::max);
+    if records.is_empty()
+        || records.len() > config.max_records
+        || maximum_reconstruction_error > 1e-8 * config.game.effective_stack_bb.max(1.0)
+        || maximum_sum_error > 1e-6
+        || !minimum_probability.is_finite()
+        || minimum_probability <= 0.0
+        || !minimum_policy_value.is_finite()
+        || !maximum_policy_value.is_finite()
+    {
+        return Err("causal attribution failed its integrity gates".into());
+    }
+    if let Some(parent) = config.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = config.output.with_extension("tmp");
+    let file = fs::File::create(&temporary)?;
+    let buffered = BufWriter::new(file);
+    let mut writer = GzEncoder::new(buffered, Compression::fast());
+    let candidate_records = candidate_records_by_street.iter().sum::<usize>();
+    let metadata = serde_json::json!({
+        "record_type": "metadata",
+        "schema": "hu-neural-causal-policy-attribution-jsonl-v1",
+        "state_feature_schema": "hu-cash-trajectory-poker-aware-v4",
+        "state_feature_count": STATE_FEATURE_COUNT,
+        "action_feature_schema": "hu-cash-legal-action-v1",
+        "action_feature_count": ACTION_FEATURE_COUNT,
+        "depth_bb": config.game.effective_stack_bb,
+        "seed": config.seed,
+        "deals": config.deals,
+        "records": records.len(),
+        "candidate_records": candidate_records,
+        "truncated": records.len() < candidate_records,
+        "sampling_mode": "thread_and_street_stratified_bottom_hash_reservoir",
+        "evaluates_trajectory_action_values": true,
+        "action_value_method": "negative_fixed_causal_sample_game_best_response_utility_subgradient",
+        "policy_objective": "maximize_negated_responder_utility_with_a_trust_region",
+        "public_branches_per_street": config.public_branches_per_street,
+        "opponent_samples_per_runout": config.opponent_samples_per_runout,
+        "scenarios_per_deal": scenarios_per_deal,
+        "source_network_sha256": network_sha256,
+        "preflop_policy_frozen": true,
+        "postflop_only": true,
+        "maximum_root_value_reconstruction_error_bb": maximum_reconstruction_error,
+        "action_abstraction": config.game.action_abstraction,
+    });
+    serde_json::to_writer(&mut writer, &metadata)?;
+    writer.write_all(b"\n")?;
+    for record in records {
+        writer.write_all(&record)?;
+        writer.write_all(b"\n")?;
+    }
+    writer.finish()?.flush()?;
+    fs::rename(&temporary, &config.output)?;
+    let output_sha256 = sha256_path(&config.output)?;
+    Ok(CausalPolicyAttributionReport {
+        schema: "hu-neural-causal-policy-attribution-report-v1",
+        method: "fixed_information_set_causal_best_response_policy_action_subgradient",
+        depth_bb: config.game.effective_stack_bb,
+        deals: config.deals,
+        seed: config.seed,
+        network_sha256,
+        threads: worker_count,
+        public_branches_per_street: config.public_branches_per_street,
+        opponent_samples_per_runout: config.opponent_samples_per_runout,
+        scenarios_per_deal,
+        response_tree_nodes,
+        attribution_tree_nodes,
+        candidate_records,
+        retained_records: retained_records_by_street.iter().sum(),
+        candidate_records_by_street,
+        retained_records_by_street,
+        truncated: retained_records_by_street.iter().sum::<usize>() < candidate_records,
+        sample_mean_exploitability_bb: sample_mean_exploitability,
+        maximum_root_value_reconstruction_error_bb: maximum_reconstruction_error,
+        minimum_frozen_policy_action_probability: minimum_probability,
+        maximum_target_probability_sum_error: maximum_sum_error,
+        minimum_policy_action_value_bb: minimum_policy_value,
+        maximum_policy_action_value_bb: maximum_policy_value,
+        output: config.output,
+        output_sha256,
+        validation_status: "accepted_for_trust_region_training",
+    })
+}
+
 fn one_sided_empirical_bernstein_margin(
     sample_variance: f64,
     range: f64,
@@ -2534,6 +3292,114 @@ mod tests {
         assert!(river_groups.len() <= 8);
         assert!(flop_groups.len() <= turn_groups.len());
         assert!(turn_groups.len() <= river_groups.len());
+    }
+
+    #[test]
+    fn causal_policy_attribution_reconstructs_the_certificate_and_is_deterministic() {
+        use flate2::read::GzDecoder;
+        use std::io::BufRead;
+
+        let network = serde_json::json!({
+            "layers": [{
+                "input_size": MODEL_INPUT_COUNT,
+                "output_size": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; MODEL_INPUT_COUNT],
+                "biases": [0.0]
+            }]
+        });
+        let bundle = serde_json::json!({
+            "schema": TRAINING_NETWORK_SCHEMA,
+            "input_size": MODEL_INPUT_COUNT,
+            "strategy_transform": "softmax",
+            "networks": [network.clone(), network]
+        });
+        let prefix = format!("pokersolver-causal-attribution-{}", std::process::id());
+        let directory = std::env::temp_dir();
+        let network_path = directory.join(format!("{prefix}-network.json"));
+        let first_path = directory.join(format!("{prefix}-first.jsonl.gz"));
+        let second_path = directory.join(format!("{prefix}-second.jsonl.gz"));
+        fs::write(&network_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 2.0;
+        let make = |output| CausalPolicyAttributionConfig {
+            game: game.clone(),
+            deals: 2,
+            seed: 79,
+            threads: 2,
+            network_path: network_path.clone(),
+            public_branches_per_street: 1,
+            opponent_samples_per_runout: 1,
+            max_records: 60,
+            output,
+        };
+        let first = generate_causal_policy_attribution(make(first_path.clone())).unwrap();
+        let second = generate_causal_policy_attribution(make(second_path.clone())).unwrap();
+        let certificate = certify_causal_sample_game_exploitability_upper_bound(
+            ExploitabilityCertificateConfig {
+                game,
+                deals: 2,
+                seed: 79,
+                confidence: 0.99,
+                threads: 2,
+                network_path: network_path.clone(),
+            },
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(&first_path).unwrap(),
+            fs::read(&second_path).unwrap()
+        );
+        assert_eq!(first.output_sha256, second.output_sha256);
+        assert!(
+            (first.sample_mean_exploitability_bb - certificate.sample_mean_exploitability_bb).abs()
+                < 1e-12
+        );
+        assert!(first.maximum_root_value_reconstruction_error_bb < 1e-12);
+        assert!(first.candidate_records >= first.retained_records);
+        assert!(first.retained_records > 0);
+        assert!(first.minimum_frozen_policy_action_probability > 0.0);
+        assert!(first.maximum_target_probability_sum_error < 1e-12);
+
+        let reader = BufReader::new(GzDecoder::new(fs::File::open(&first_path).unwrap()));
+        let mut lines = reader.lines();
+        let metadata: serde_json::Value =
+            serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            metadata["schema"],
+            "hu-neural-causal-policy-attribution-jsonl-v1"
+        );
+        assert_eq!(metadata["preflop_policy_frozen"], true);
+        let records = lines
+            .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), first.retained_records);
+        for record in records {
+            assert_ne!(record["state"]["street"], "preflop");
+            let actions = record["actions"].as_array().unwrap();
+            let targets = record["targets"].as_array().unwrap();
+            let values = record["action_values_bb"].as_array().unwrap();
+            let hashes = record["feature_sha256"].as_array().unwrap();
+            assert!(!actions.is_empty());
+            assert_eq!(actions.len(), targets.len());
+            assert_eq!(actions.len(), values.len());
+            assert_eq!(actions.len(), hashes.len());
+            let probability_sum = targets
+                .iter()
+                .map(|value| value.as_f64().unwrap())
+                .sum::<f64>();
+            assert!((probability_sum - 1.0).abs() < 1e-6);
+            assert!(record["weight"].as_f64().unwrap() > 0.0);
+            assert!(values
+                .iter()
+                .all(|value| value.as_f64().unwrap().is_finite()));
+            assert!(hashes.iter().all(|hash| hash.as_str().unwrap().len() == 64));
+        }
+        fs::remove_file(network_path).unwrap();
+        fs::remove_file(first_path).unwrap();
+        fs::remove_file(second_path).unwrap();
     }
 
     #[test]

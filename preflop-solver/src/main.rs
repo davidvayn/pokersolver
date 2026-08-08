@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "blueprint" => run_blueprint(&args[1..]),
         "neural-samples" => run_neural_samples(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
+        "neural-causal-attribution" => run_neural_causal_attribution(&args[1..]),
         "preflop-cache" => run_preflop_cache(&args[1..]),
         "preflop-cache-resolver" => run_preflop_cache_resolver(&args[1..]),
         "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
@@ -1627,6 +1628,52 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_neural_causal_attribution(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("causal-policy-attribution.jsonl.gz"));
+    let report = blueprint::neural::generate_causal_policy_attribution(
+        blueprint::neural::CausalPolicyAttributionConfig {
+            game,
+            deals: parse_or(args, "--deals", 8u64)?,
+            seed: parse_or(args, "--seed", 0xA11CE5EEDu64)?,
+            threads: parse_or(
+                args,
+                "--threads",
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )?,
+            network_path: value(args, "--networks")
+                .map(PathBuf::from)
+                .ok_or("--networks is required for causal attribution")?,
+            public_branches_per_street: parse_or(args, "--public-branches-per-street", 2u32)?,
+            opponent_samples_per_runout: parse_or(args, "--opponent-samples-per-runout", 4u32)?,
+            max_records: parse_or(args, "--max-records", 100_000usize)?,
+            output,
+        },
+    )?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--report").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
+    Ok(())
+}
+
 fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
@@ -1938,6 +1985,7 @@ Usage:
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
   preflop-solver neural-certificate [options]
+  preflop-solver neural-causal-attribution [options]
   preflop-solver preflop-cache [options]
   preflop-solver preflop-cache-resolver [options]
   preflop-solver preflop-cache-compare [options]
