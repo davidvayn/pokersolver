@@ -9,6 +9,7 @@ import numpy as np
 from distill_postflop_policy import (
     bounded_expected_regret_bb,
     corpus_groups,
+    resolved_ev_regret_cap_bb,
     split_indices,
 )
 
@@ -83,6 +84,12 @@ class PostflopPolicyDistillationTest(unittest.TestCase):
             np.asarray([[0.1, 0.9]]), values, masks, 5.0
         )
         self.assertGreater(float(high[0]), float(low[0]))
+
+    def test_default_ev_regret_cap_covers_the_depth_utility_span(self) -> None:
+        self.assertEqual(resolved_ev_regret_cap_bb(None, 20.0), 40.0)
+        self.assertEqual(resolved_ev_regret_cap_bb(5.0, 20.0), 5.0)
+        with self.assertRaisesRegex(ValueError, "positive and finite"):
+            resolved_ev_regret_cap_bb(float("inf"), 20.0)
 
 
 if __name__ == "__main__":

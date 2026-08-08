@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-5)
     parser.add_argument("--cross-seed-replay-probability", type=float, default=0.0)
     parser.add_argument("--ev-regret-scale", type=float, default=0.0)
-    parser.add_argument("--ev-regret-cap-bb", type=float, default=5.0)
+    parser.add_argument("--ev-regret-cap-bb", type=float)
     parser.add_argument("--seed", type=int, default=16_101)
     return parser.parse_args()
 
@@ -136,6 +136,16 @@ def bounded_expected_regret_bb(
     return np.sum(predicted * regrets, axis=1)
 
 
+def resolved_ev_regret_cap_bb(requested: float | None, depth_bb: float) -> float:
+    """Default to the full utility span so capped and reported regret align."""
+    if not np.isfinite(depth_bb) or depth_bb <= 0:
+        raise ValueError("model depth must be positive and finite")
+    cap_bb = 2.0 * depth_bb if requested is None else requested
+    if not np.isfinite(cap_bb) or cap_bb <= 0:
+        raise ValueError("EV-regret cap must be positive and finite")
+    return cap_bb
+
+
 def fit(
     data: dict[str, np.ndarray],
     training: np.ndarray,
@@ -228,8 +238,8 @@ def main() -> None:
         raise ValueError("distillation optimization settings must be positive")
     if not 0 <= args.cross_seed_replay_probability <= 1:
         raise ValueError("--cross-seed-replay-probability must be between zero and one")
-    if args.ev_regret_scale < 0 or args.ev_regret_cap_bb <= 0:
-        raise ValueError("EV-regret scale must be nonnegative and its cap positive")
+    if args.ev_regret_scale < 0:
+        raise ValueError("EV-regret scale must be nonnegative")
     hidden = (hidden_values[0], hidden_values[1])
     args.output_dir.mkdir(parents=True, exist_ok=True)
     loaded: list[tuple[dict[str, Any], dict[str, np.ndarray], np.ndarray, np.ndarray]] = []
@@ -258,6 +268,9 @@ def main() -> None:
         )
     if loaded[0][0]["depth_bb"] != loaded[1][0]["depth_bb"]:
         raise ValueError("paired action teachers use different depths")
+    ev_regret_cap_bb = resolved_ev_regret_cap_bb(
+        args.ev_regret_cap_bb, float(loaded[0][0]["depth_bb"])
+    )
 
     reports: list[dict[str, Any]] = []
     models: list[ActionScorer] = []
@@ -292,7 +305,7 @@ def main() -> None:
             args.batch_size,
             args.learning_rate,
             args.ev_regret_scale,
-            args.ev_regret_cap_bb,
+            ev_regret_cap_bb,
             args.seed + index,
         )
         output = args.output_dir / f"seed-{index}.safetensors"
@@ -329,7 +342,7 @@ def main() -> None:
         "learningRate": args.learning_rate,
         "crossSeedReplayProbability": args.cross_seed_replay_probability,
         "evRegretScale": args.ev_regret_scale,
-        "evRegretCapBb": args.ev_regret_cap_bb,
+        "evRegretCapBb": ev_regret_cap_bb,
         "seed": args.seed,
         "datasets": descriptions,
         "students": reports,

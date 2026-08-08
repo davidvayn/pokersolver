@@ -1,0 +1,192 @@
+{
+  "schema": "hu-20bb-ev-aware-postflop-policy-smoke-v1",
+  "actionEvImplementationCommit": "b1c90bf2c88142a1d0bb6287c802bab87271518b",
+  "depthBb": 20,
+  "status": "accepted_for_200_iteration_target_regeneration",
+  "activationAllowed": false,
+  "modelReleaseAllowed": false,
+  "scope": "deterministic label-export and distillation-objective smoke only",
+  "export": {
+    "settings": {
+      "roots": 1,
+      "turnLeavesPerRoot": 1,
+      "flopIterations": 2,
+      "flopAveragingDelay": 0,
+      "turnRiverIterations": 2,
+      "turnRiverAveragingDelay": 0,
+      "threads": 4,
+      "explorationProbability": 0.05,
+      "maximumRetainedRecords": 10000
+    },
+    "corpora": [
+      {
+        "seed": 16001,
+        "sha256": "a0f8ad7b49a92aa178e6bd4dc33020f0c18b5a87b77058404c6e8fc0aaf3a06f",
+        "reportSha256": "9deb1f03ce8585d73933d4eadca31a8ad8c2642bbe28c10fb18e4e5293efcce7",
+        "sourcePolicySha256": "c5dba74744d817423c94803c2a1c92dc8a3acacd3b5f58094c700704c0fcbf92",
+        "valueNetworkSha256": "4bd8eeac53849e3a69183cfa435ca32446ec8d9372cafe2053e3510e8eadec81",
+        "candidateRecords": 627541,
+        "retainedRecords": 10000,
+        "streetRecords": {
+          "flop": 2500,
+          "turn": 3000,
+          "river": 4500
+        },
+        "maximumFlopLocalExploitabilityBbPerHand": 2.0096758271671735,
+        "maximumTurnRiverLocalExploitabilityBbPerHand": 2.566354451097201
+      },
+      {
+        "seed": 16002,
+        "sha256": "bac5248522c26abab81656235c48d1743f7e560f7d861c1d0a6042ba5fe3ab16",
+        "reportSha256": "dca26a11c5bfd694a6a2503924f917bbdd82257a13dac7d6ae6f6cd2b1d8c73e",
+        "sourcePolicySha256": "bf6a303459f2c853baaef8b62045119ba1a58332792c8e29f0fff6a8cfb0922f",
+        "valueNetworkSha256": "eb065e76fa91bb4d789a59962f7397ac8b4131f30648ac5955ca4ac05a9da9b1",
+        "candidateRecords": 468091,
+        "retainedRecords": 10000,
+        "streetRecords": {
+          "flop": 2500,
+          "turn": 3000,
+          "river": 4500
+        },
+        "maximumFlopLocalExploitabilityBbPerHand": 0.8196219643854281,
+        "maximumTurnRiverLocalExploitabilityBbPerHand": 3.1930250261100817
+      }
+    ],
+    "integrity": {
+      "metadataEvaluatesTrajectoryActionValues": true,
+      "actionValueMethod": "exact_solver_average_profile_counterfactual_values",
+      "repeatExportsByteIdentical": true,
+      "maximumTargetProbabilitySumError": 6.399999996631323e-08,
+      "minimumActionEvBb": -20,
+      "maximumActionEvBb": 20,
+      "allWeightsFiniteAndPositive": true,
+      "allActionValueRowsFiniteAndDimensionMatched": true
+    }
+  },
+  "zeroScaleCompatibility": {
+    "settings": {
+      "steps": 2,
+      "batchSize": 64,
+      "learningRate": 0.00003,
+      "crossSeedReplayProbability": 0.25,
+      "evRegretScale": 0,
+      "evRegretCapBb": 5,
+      "seed": 16101
+    },
+    "repeatedWeightsAndReportsByteIdentical": true,
+    "reportSha256": "4bbdb955c301e8bfc19357d5e3c42250414c37f90a6553af68df4edb55f11aaa",
+    "studentWeightSha256": [
+      "ce658079efe838af38fae10fa91343343ccec643470f55cb016d7b077666f7bc",
+      "6cbc49d08d1cc8294cdf33b0b670be2a3a70acca5c260ae9e94413dae7260742"
+    ]
+  },
+  "objectiveSelection": {
+    "rejected": [
+      {
+        "evRegretScale": 0.25,
+        "evRegretCapBb": 5,
+        "steps": 2,
+        "reportSha256": "2668c4b65bbaef1749b1b82ae4b1df0d8f053bc13b688728ec9fd896cf2a2d2b",
+        "reason": "student 0 expected EV loss regressed on own and cross-seed holdouts"
+      },
+      {
+        "evRegretScale": 1,
+        "evRegretCapBb": 5,
+        "steps": 20,
+        "reportSha256": "b78e53b2d099ec029574ce2d5522922d04bf1ae16ad3b70b4737b796c024feac",
+        "reason": "the 5bb cap saturated action gaps up to 40bb and student 0 own-heldout EV loss regressed"
+      },
+      {
+        "evRegretScale": 0.25,
+        "evRegretCapBb": 40,
+        "steps": 20,
+        "reportSha256": "2fa044c2ab7b08e0a69fb74c51755e6bcc154e0cebc58acb2f741fd8d6c5af85",
+        "reason": "student 0 own-heldout EV loss regressed"
+      },
+      {
+        "evRegretScale": 0.5,
+        "evRegretCapBb": 40,
+        "steps": 20,
+        "reportSha256": "251e7854f76f8b5a3941296065e8ac8ddb5999941e9cc1272cfbec4a2d4976f8",
+        "reason": "student 0 own-heldout EV loss regressed"
+      }
+    ],
+    "selected": {
+      "evRegretScale": 1,
+      "evRegretCapBb": 40,
+      "steps": 20,
+      "batchSize": 64,
+      "learningRate": 0.00003,
+      "crossSeedReplayProbability": 0.25,
+      "seed": 16101,
+      "reportSha256": "a92becfea7e81fdb8ab5bfe67d56e48233b81e41fc5dc1f93e8c0776d81ae991",
+      "studentWeightSha256": [
+        "b91417266622defc7a4a1430990917582a25d779ac2a0ebc24ac04b0b593197f",
+        "6f9e22164d283f653645a321c7dbaba79cc29554a7031480009f2a67ec9a730d"
+      ],
+      "students": [
+        {
+          "student": 0,
+          "ownHeldout": {
+            "expectedEvLossBbBefore": 1.335182547569275,
+            "expectedEvLossBbAfter": 1.3258323669433594,
+            "actionFrequencyMaeBefore": 0.1946486383676529,
+            "actionFrequencyMaeAfter": 0.17186617851257324,
+            "primaryAgreementBefore": 0.6812666058540344,
+            "primaryAgreementAfter": 0.7418074607849121,
+            "maximumAggregateActionDeltaBefore": 0.2477169781923294,
+            "maximumAggregateActionDeltaAfter": 0.17345090210437775
+          },
+          "crossSeedHeldout": {
+            "expectedEvLossBbBefore": 1.8970751762390137,
+            "expectedEvLossBbAfter": 1.8658250570297241,
+            "actionFrequencyMaeBefore": 0.19004160165786743,
+            "actionFrequencyMaeAfter": 0.18538786470890045,
+            "primaryAgreementBefore": 0.7102146744728088,
+            "primaryAgreementAfter": 0.7416988611221313,
+            "maximumAggregateActionDeltaBefore": 0.12476083636283875,
+            "maximumAggregateActionDeltaAfter": 0.14590993523597717
+          }
+        },
+        {
+          "student": 1,
+          "ownHeldout": {
+            "expectedEvLossBbBefore": 1.9026684761047363,
+            "expectedEvLossBbAfter": 1.698635220527649,
+            "actionFrequencyMaeBefore": 0.18145625293254852,
+            "actionFrequencyMaeAfter": 0.15039730072021484,
+            "primaryAgreementBefore": 0.7611463069915771,
+            "primaryAgreementAfter": 0.8487523198127747,
+            "maximumAggregateActionDeltaBefore": 0.11342430859804153,
+            "maximumAggregateActionDeltaAfter": 0.05981467664241791
+          },
+          "crossSeedHeldout": {
+            "expectedEvLossBbBefore": 1.4263137578964233,
+            "expectedEvLossBbAfter": 1.3823059797286987,
+            "actionFrequencyMaeBefore": 0.18355512619018555,
+            "actionFrequencyMaeAfter": 0.18048253655433655,
+            "primaryAgreementBefore": 0.7037376165390015,
+            "primaryAgreementAfter": 0.727008044719696,
+            "maximumAggregateActionDeltaBefore": 0.2593826651573181,
+            "maximumAggregateActionDeltaAfter": 0.2346128672361374
+          }
+        }
+      ]
+    }
+  },
+  "decision": {
+    "accepted": true,
+    "reasons": [
+      "both action-EV corpora are deterministic and structurally valid",
+      "the original zero-scale optimization path remains deterministic",
+      "the full-span scale-1 objective lowered own- and cross-seed expected EV loss for both students while preserving sensible frequency metrics"
+    ],
+    "limitations": [
+      "two-iteration teachers are deliberately unconverged smoke inputs and are not release candidates",
+      "student 0 cross-seed maximum aggregate action delta increased from 0.12476 to 0.14591",
+      "no routed full-game exploitability evaluation was run",
+      "all release gates remain unchanged and unmet"
+    ],
+    "next": "regenerate the paired one-root action-EV targets at the proven 200-iteration v54 settings, then run a short paired scale-1 full-span distillation before any routed evaluation"
+  }
+}
