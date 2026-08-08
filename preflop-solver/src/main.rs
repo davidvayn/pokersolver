@@ -315,6 +315,10 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
             .iter()
             .any(|argument| argument == "--regret-matching-plus"),
         value_network: network,
+        auxiliary_value_networks: values(args, "--auxiliary-value-network")
+            .iter()
+            .map(|path| blueprint::public_belief::PublicValueNetwork::read(Path::new(path)))
+            .collect::<Result<Vec<_>, _>>()?,
         threads: parse_or(
             args,
             "--threads",
@@ -389,6 +393,10 @@ fn run_flop_pbs_convergence(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .iter()
                 .any(|argument| argument == "--regret-matching-plus"),
             value_network: blueprint::public_belief::PublicValueNetwork::read(&network_path)?,
+            auxiliary_value_networks: values(args, "--auxiliary-value-network")
+                .iter()
+                .map(|path| blueprint::public_belief::PublicValueNetwork::read(Path::new(path)))
+                .collect::<Result<Vec<_>, _>>()?,
             threads: parse_or(
                 args,
                 "--threads",
@@ -614,6 +622,10 @@ fn run_postflop_action_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
             max_records: parse_or(args, "--max-records", 100_000usize)?,
             source_policy_path,
             value_network_path,
+            auxiliary_value_network_paths: values(args, "--auxiliary-value-network")
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
             evaluation_value_network_path: value(args, "--evaluation-value-network")
                 .map(PathBuf::from),
             output,

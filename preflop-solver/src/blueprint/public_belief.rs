@@ -2025,6 +2025,11 @@ pub struct FlopResolveConfig {
     pub averaging_delay: u64,
     pub regret_matching_plus: bool,
     pub value_network: PublicValueNetwork,
+    /// Additional independently trained turn value estimates used only while
+    /// optimizing the frozen flop strategy. Their counterfactual values are
+    /// averaged before the single zero-sum projection, so the resolver no
+    /// longer overfits one continuation model's errors.
+    pub auxiliary_value_networks: Vec<PublicValueNetwork>,
     pub threads: usize,
 }
 
@@ -2058,6 +2063,10 @@ pub struct FlopSolution {
     pub value_network_source_dataset_sha256: Option<String>,
     #[serde(default)]
     pub value_network_source_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary_value_network_seeds: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary_value_network_sha256s: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_seed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2101,6 +2110,10 @@ pub struct FlopConvergenceReport {
     pub value_network_sha256: Option<String>,
     pub value_network_source_dataset_sha256: Option<String>,
     pub value_network_source_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary_value_network_seeds: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary_value_network_sha256s: Vec<String>,
     pub evaluation_value_network_seed: u64,
     pub evaluation_value_network_sha256: Option<String>,
     pub evaluation_value_network_source_dataset_sha256: Option<String>,
@@ -2203,6 +2216,10 @@ pub struct FlopRangeResponseReport {
     pub strategy_value_network_sha256: Option<String>,
     pub strategy_value_network_source_dataset_sha256: Option<String>,
     pub strategy_value_network_source_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strategy_auxiliary_value_network_seeds: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strategy_auxiliary_value_network_sha256s: Vec<String>,
     pub evaluation_value_network_seed: u64,
     pub evaluation_value_network_sha256: Option<String>,
     pub evaluation_value_network_source_dataset_sha256: Option<String>,
@@ -2282,6 +2299,23 @@ impl FlopSolver {
     fn new(mut config: FlopResolveConfig) -> Result<Self, String> {
         config.game.validate()?;
         config.value_network.validate()?;
+        for network in &config.auxiliary_value_networks {
+            network.validate()?;
+            if !config.value_network.has_distinct_training_identity(network) {
+                return Err(
+                    "auxiliary turn value networks must have distinct training identities"
+                        .to_owned(),
+                );
+            }
+        }
+        for (index, network) in config.auxiliary_value_networks.iter().enumerate() {
+            if config.auxiliary_value_networks[..index]
+                .iter()
+                .any(|other| !other.has_distinct_training_identity(network))
+            {
+                return Err("auxiliary turn value networks must be pairwise distinct".to_owned());
+            }
+        }
         if config.iterations < 2
             || config.averaging_delay >= config.iterations
             || config.threads == 0
@@ -2955,6 +2989,7 @@ impl FlopSolver {
                     .step_by(worker_count)
                     .collect::<Vec<_>>();
                 let network = &self.config.value_network;
+                let auxiliary_networks = &self.config.auxiliary_value_networks;
                 let conflicts = self.conflicts.clone();
                 let board = self.config.state.board.clone();
                 workers.push(scope.spawn(move || {
@@ -2963,6 +2998,7 @@ impl FlopSolver {
                         .filter_map(|turn| {
                             turn_leaf_card_values(
                                 network,
+                                auxiliary_networks,
                                 &conflicts,
                                 &board,
                                 state.actor,
@@ -3304,16 +3340,17 @@ impl FlopSolver {
             zero_sum_residual_after_projection_bb: (profile_p0 + profile_p1).abs(),
         };
         let mut reasons = Vec::new();
-        if self
-            .config
-            .value_network
-            .source_validation_status
-            .as_deref()
-            != Some("accepted")
+        if std::iter::once(&self.config.value_network)
+            .chain(&self.config.auxiliary_value_networks)
+            .any(|network| network.source_validation_status.as_deref() != Some("accepted"))
         {
-            reasons.push("turn value network was trained from a rejected source corpus".to_owned());
+            reasons
+                .push("a turn value network was trained from a rejected source corpus".to_owned());
         }
-        if !self.config.value_network.uses_exact_ranges {
+        if std::iter::once(&self.config.value_network)
+            .chain(&self.config.auxiliary_value_networks)
+            .any(|network| !network.uses_exact_ranges)
+        {
             reasons
                 .push("range-blind value network is an ablation and cannot be promoted".to_owned());
         }
@@ -3336,6 +3373,21 @@ impl FlopSolver {
         if self.config.regret_matching_plus {
             method.push_str("_regret_matching_plus");
         }
+        if !self.config.auxiliary_value_networks.is_empty() {
+            method.push_str("_mean_independent_turn_cfv_ensemble");
+        }
+        let auxiliary_value_network_seeds = self
+            .config
+            .auxiliary_value_networks
+            .iter()
+            .map(|network| network.seed)
+            .collect();
+        let auxiliary_value_network_sha256s = self
+            .config
+            .auxiliary_value_networks
+            .iter()
+            .filter_map(|network| network.artifact_sha256.clone())
+            .collect();
         FlopSolution {
             schema: "hu-depth-limited-flop-public-belief-solution-v2".to_owned(),
             method,
@@ -3346,6 +3398,8 @@ impl FlopSolver {
             uses_exact_ranges: self.config.value_network.uses_exact_ranges,
             value_network_source_dataset_sha256: self.config.value_network.source_dataset_sha256,
             value_network_source_policy_sha256: self.config.value_network.source_policy_sha256,
+            auxiliary_value_network_seeds,
+            auxiliary_value_network_sha256s,
             evaluation_value_network_seed: None,
             evaluation_value_network_sha256: None,
             evaluation_value_network_source_dataset_sha256: None,
@@ -3513,6 +3567,7 @@ fn equity_units(first: u32, second: u32) -> u16 {
 
 fn turn_leaf_card_values(
     network: &PublicValueNetwork,
+    auxiliary_networks: &[PublicValueNetwork],
     conflicts: &[Vec<usize>],
     flop_board: &[u8],
     actor: usize,
@@ -3524,6 +3579,22 @@ fn turn_leaf_card_values(
     let mut board = flop_board.to_vec();
     board.push(turn);
     let mut predicted = network.predict(&board, actor, invested, &masked);
+    for auxiliary in auxiliary_networks {
+        let auxiliary_prediction = auxiliary.predict(&board, actor, invested, &masked);
+        for player in 0..2 {
+            for combo in 0..COMBO_COUNT {
+                predicted[player][combo] += auxiliary_prediction[player][combo];
+            }
+        }
+    }
+    let inverse_network_count = 1.0 / (auxiliary_networks.len() + 1) as f64;
+    if !auxiliary_networks.is_empty() {
+        for player in &mut predicted {
+            for value in player {
+                *value *= inverse_network_count;
+            }
+        }
+    }
     let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
         (0..COMBO_COUNT)
             .map(|combo| compatible_mass_from_conflicts(&masked[1 - player], conflicts, combo))
@@ -3593,22 +3664,65 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
     Ok(solver.finish())
 }
 
-/// Train the resolver with one frozen leaf model and score its frozen average
-/// strategy with another. The artifact records whether the two models have
-/// distinct training identities; release callers must require that flag.
+fn evaluation_is_distinct_from_optimization_networks(
+    primary: &PublicValueNetwork,
+    auxiliary: &[PublicValueNetwork],
+    evaluation: &PublicValueNetwork,
+) -> bool {
+    std::iter::once(primary)
+        .chain(auxiliary)
+        .all(|network| network.has_distinct_training_identity(evaluation))
+}
+
+fn evaluation_is_distinct_from_frozen_solution(
+    frozen: &FlopSolution,
+    evaluation: &PublicValueNetwork,
+) -> bool {
+    frozen.value_network_seed != evaluation.seed
+        && frozen.value_network_sha256.is_some()
+        && evaluation.artifact_sha256.is_some()
+        && frozen.value_network_sha256.as_ref() != evaluation.artifact_sha256.as_ref()
+        && frozen.auxiliary_value_network_seeds.len()
+            == frozen.auxiliary_value_network_sha256s.len()
+        && frozen
+            .auxiliary_value_network_seeds
+            .iter()
+            .zip(&frozen.auxiliary_value_network_sha256s)
+            .all(|(seed, digest)| {
+                *seed != evaluation.seed && evaluation.artifact_sha256.as_ref() != Some(digest)
+            })
+}
+
+/// Train the resolver with one or more frozen leaf models and score its frozen
+/// average strategy with another. The artifact records whether the evaluation
+/// model is distinct from every optimization model; release callers must
+/// require that flag.
 pub fn solve_flop_cross_evaluated(
     config: FlopResolveConfig,
     evaluation_value_network: PublicValueNetwork,
 ) -> Result<FlopSolution, String> {
     evaluation_value_network.validate()?;
-    let evaluation_has_distinct_training_identity = config
-        .value_network
-        .has_distinct_training_identity(&evaluation_value_network);
+    let evaluation_has_distinct_training_identity =
+        evaluation_is_distinct_from_optimization_networks(
+            &config.value_network,
+            &config.auxiliary_value_networks,
+            &evaluation_value_network,
+        );
     let resolver_seed = config.value_network.seed;
     let resolver_sha256 = config.value_network.artifact_sha256.clone();
     let resolver_uses_exact_ranges = config.value_network.uses_exact_ranges;
     let resolver_source_dataset = config.value_network.source_dataset_sha256.clone();
     let resolver_source_policy = config.value_network.source_policy_sha256.clone();
+    let auxiliary_seeds = config
+        .auxiliary_value_networks
+        .iter()
+        .map(|network| network.seed)
+        .collect::<Vec<_>>();
+    let auxiliary_sha256s = config
+        .auxiliary_value_networks
+        .iter()
+        .filter_map(|network| network.artifact_sha256.clone())
+        .collect::<Vec<_>>();
     let evaluation_seed = evaluation_value_network.seed;
     let evaluation_sha256 = evaluation_value_network.artifact_sha256.clone();
     let evaluation_source_dataset = evaluation_value_network.source_dataset_sha256.clone();
@@ -3617,6 +3731,7 @@ pub fn solve_flop_cross_evaluated(
     let mut solver = FlopSolver::new(config)?;
     solver.train();
     solver.config.value_network = evaluation_value_network;
+    solver.config.auxiliary_value_networks.clear();
     solver.turn_leaf_evaluations.set(0);
     solver.exact_all_in_terminal_evaluations.set(0);
     solver.maximum_leaf_zero_sum_residual.set(0.0);
@@ -3635,6 +3750,8 @@ pub fn solve_flop_cross_evaluated(
     solution.uses_exact_ranges = resolver_uses_exact_ranges;
     solution.value_network_source_dataset_sha256 = resolver_source_dataset;
     solution.value_network_source_policy_sha256 = resolver_source_policy;
+    solution.auxiliary_value_network_seeds = auxiliary_seeds;
+    solution.auxiliary_value_network_sha256s = auxiliary_sha256s;
     solution.evaluation_value_network_seed = Some(evaluation_seed);
     solution.evaluation_value_network_sha256 = evaluation_sha256;
     solution.evaluation_value_network_source_dataset_sha256 = evaluation_source_dataset;
@@ -3652,9 +3769,12 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     checkpoints: &[u64],
 ) -> Result<FlopConvergenceReport, String> {
     evaluation_value_network.validate()?;
-    let evaluation_has_distinct_training_identity = config
-        .value_network
-        .has_distinct_training_identity(&evaluation_value_network);
+    let evaluation_has_distinct_training_identity =
+        evaluation_is_distinct_from_optimization_networks(
+            &config.value_network,
+            &config.auxiliary_value_networks,
+            &evaluation_value_network,
+        );
     if checkpoints.is_empty()
         || checkpoints.iter().any(|checkpoint| *checkpoint < 2)
         || checkpoints.windows(2).any(|pair| pair[0] >= pair[1])
@@ -3671,6 +3791,16 @@ pub fn diagnose_flop_cross_evaluated_convergence(
     let value_network_uses_exact_ranges = config.value_network.uses_exact_ranges;
     let value_network_source_dataset_sha256 = config.value_network.source_dataset_sha256.clone();
     let value_network_source_policy_sha256 = config.value_network.source_policy_sha256.clone();
+    let auxiliary_value_network_seeds = config
+        .auxiliary_value_networks
+        .iter()
+        .map(|network| network.seed)
+        .collect::<Vec<_>>();
+    let auxiliary_value_network_sha256s = config
+        .auxiliary_value_networks
+        .iter()
+        .filter_map(|network| network.artifact_sha256.clone())
+        .collect::<Vec<_>>();
     let evaluation_value_network_seed = evaluation_value_network.seed;
     let evaluation_value_network_sha256 = evaluation_value_network.artifact_sha256.clone();
     let evaluation_value_network_source_dataset_sha256 =
@@ -3693,6 +3823,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         let mut evaluator = solver.clone();
         evaluator.config.iterations = *checkpoint;
         evaluator.config.value_network = evaluation_value_network.clone();
+        evaluator.config.auxiliary_value_networks.clear();
         evaluator.turn_leaf_evaluations.set(0);
         evaluator.exact_all_in_terminal_evaluations.set(0);
         evaluator.maximum_leaf_zero_sum_residual.set(0.0);
@@ -3711,6 +3842,8 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         solution.uses_exact_ranges = value_network_uses_exact_ranges;
         solution.value_network_source_dataset_sha256 = value_network_source_dataset_sha256.clone();
         solution.value_network_source_policy_sha256 = value_network_source_policy_sha256.clone();
+        solution.auxiliary_value_network_seeds = auxiliary_value_network_seeds.clone();
+        solution.auxiliary_value_network_sha256s = auxiliary_value_network_sha256s.clone();
         solution.evaluation_value_network_seed = Some(evaluation_value_network_seed);
         solution.evaluation_value_network_sha256 = evaluation_value_network_sha256.clone();
         solution.evaluation_value_network_source_dataset_sha256 =
@@ -3746,6 +3879,8 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         value_network_sha256,
         value_network_source_dataset_sha256,
         value_network_source_policy_sha256,
+        auxiliary_value_network_seeds,
+        auxiliary_value_network_sha256s,
         evaluation_value_network_seed,
         evaluation_value_network_sha256,
         evaluation_value_network_source_dataset_sha256,
@@ -3807,12 +3942,8 @@ pub fn evaluate_frozen_flop_range_response_convergence(
     threads: usize,
 ) -> Result<FlopRangeResponseReport, String> {
     evaluation_value_network.validate()?;
-    let evaluation_has_distinct_training_identity = frozen.value_network_seed
-        != evaluation_value_network.seed
-        && frozen.value_network_sha256.is_some()
-        && evaluation_value_network.artifact_sha256.is_some()
-        && frozen.value_network_sha256.as_ref()
-            != evaluation_value_network.artifact_sha256.as_ref();
+    let evaluation_has_distinct_training_identity =
+        evaluation_is_distinct_from_frozen_solution(frozen, &evaluation_value_network);
     if frozen.effective_stack_bb > 0.0
         && (frozen.effective_stack_bb - game.effective_stack_bb).abs() > EPSILON
     {
@@ -3838,6 +3969,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         averaging_delay,
         regret_matching_plus: false,
         value_network: evaluation_value_network.clone(),
+        auxiliary_value_networks: Vec::new(),
         threads,
     })?;
     base.load_frozen_average_strategies(&frozen.strategies)?;
@@ -3918,6 +4050,12 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         strategy_value_network_source_policy_sha256: frozen
             .value_network_source_policy_sha256
             .clone(),
+        strategy_auxiliary_value_network_seeds: frozen
+            .auxiliary_value_network_seeds
+            .clone(),
+        strategy_auxiliary_value_network_sha256s: frozen
+            .auxiliary_value_network_sha256s
+            .clone(),
         evaluation_value_network_seed: evaluation_value_network.seed,
         evaluation_value_network_sha256: evaluation_value_network.artifact_sha256,
         evaluation_value_network_source_dataset_sha256: evaluation_value_network
@@ -3953,6 +4091,8 @@ pub fn evaluate_frozen_flop_solution(
     threads: usize,
 ) -> Result<FlopSolution, String> {
     evaluation_value_network.validate()?;
+    let evaluation_has_distinct_training_identity =
+        evaluation_is_distinct_from_frozen_solution(frozen, &evaluation_value_network);
     if frozen.effective_stack_bb > 0.0
         && (frozen.effective_stack_bb - game.effective_stack_bb).abs() > EPSILON
     {
@@ -3965,6 +4105,7 @@ pub fn evaluate_frozen_flop_solution(
         averaging_delay: 0,
         regret_matching_plus: false,
         value_network: evaluation_value_network.clone(),
+        auxiliary_value_networks: Vec::new(),
         threads,
     })?;
     solver.load_frozen_average_strategies(&frozen.strategies)?;
@@ -3981,12 +4122,15 @@ pub fn evaluate_frozen_flop_solution(
     solution.value_network_source_dataset_sha256 =
         frozen.value_network_source_dataset_sha256.clone();
     solution.value_network_source_policy_sha256 = frozen.value_network_source_policy_sha256.clone();
+    solution.auxiliary_value_network_seeds = frozen.auxiliary_value_network_seeds.clone();
+    solution.auxiliary_value_network_sha256s = frozen.auxiliary_value_network_sha256s.clone();
     solution.evaluation_value_network_seed = Some(evaluation_value_network.seed);
     solution.evaluation_value_network_sha256 = evaluation_value_network.artifact_sha256.clone();
     solution.evaluation_value_network_source_dataset_sha256 =
         evaluation_value_network.source_dataset_sha256;
     solution.evaluation_value_network_source_policy_sha256 =
         evaluation_value_network.source_policy_sha256;
+    solution.evaluation_has_distinct_training_identity = evaluation_has_distinct_training_identity;
     solution.strategies = frozen.strategies.clone();
     Ok(solution)
 }
@@ -6332,6 +6476,7 @@ pub struct PostflopActionTargetConfig {
     pub max_records: usize,
     pub source_policy_path: PathBuf,
     pub value_network_path: PathBuf,
+    pub auxiliary_value_network_paths: Vec<PathBuf>,
     pub evaluation_value_network_path: Option<PathBuf>,
     pub output: PathBuf,
     pub range_output: Option<PathBuf>,
@@ -6364,6 +6509,8 @@ pub struct PostflopActionTargetReport {
     pub seed: u64,
     pub source_policy_sha256: String,
     pub value_network_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary_value_network_sha256s: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_sha256: Option<String>,
     #[serde(default)]
@@ -6506,6 +6653,19 @@ pub fn generate_postflop_action_targets(
     let value_bytes = fs::read(&config.value_network_path)?;
     let value_network_sha256 = format!("{:x}", Sha256::digest(&value_bytes));
     let value_network = PublicValueNetwork::read(&config.value_network_path)?;
+    let auxiliary_value_networks = config
+        .auxiliary_value_network_paths
+        .iter()
+        .map(|path| PublicValueNetwork::read(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let auxiliary_value_network_sha256s = config
+        .auxiliary_value_network_paths
+        .iter()
+        .map(fs::read)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        .collect::<Vec<_>>();
     let evaluation_value_network = config
         .evaluation_value_network_path
         .as_ref()
@@ -6577,6 +6737,7 @@ pub fn generate_postflop_action_targets(
             averaging_delay: config.flop_averaging_delay,
             regret_matching_plus: config.flop_regret_matching_plus,
             value_network: value_network.clone(),
+            auxiliary_value_networks: auxiliary_value_networks.clone(),
             threads: config.threads,
         })?;
         let solver_root = flop_solver.config.state.game_state();
@@ -6838,6 +6999,7 @@ pub fn generate_postflop_action_targets(
         "schema": "hu-range-conditioned-postflop-action-teacher-v1",
         "sourcePolicySha256": source_policy_sha256,
         "valueNetworkSha256": value_network_sha256,
+        "auxiliaryValueNetworkSha256s": auxiliary_value_network_sha256s,
         "evaluationValueNetworkSha256": evaluation_value_network_sha256,
         "flopIterations": config.flop_iterations,
         "flopIterationCheckpoints": config.flop_iteration_checkpoints,
@@ -6884,6 +7046,7 @@ pub fn generate_postflop_action_targets(
         seed: config.seed,
         source_policy_sha256,
         value_network_sha256,
+        auxiliary_value_network_sha256s,
         evaluation_value_network_sha256,
         root_offset: config.root_offset,
         roots: roots_solved,
@@ -8375,6 +8538,7 @@ fn solve_resolver_root_leaf_checkpoint(
         averaging_delay: config.resolver_averaging_delay,
         regret_matching_plus: false,
         value_network: network.clone(),
+        auxiliary_value_networks: Vec::new(),
         threads: config.threads,
     })?;
     solver.train();
@@ -9165,9 +9329,17 @@ mod tests {
         network.head[0].biases[COMBO_COUNT..].fill(-0.1);
         let turn = 15;
         let conflicts = combo_conflicts();
-        let (values, residual) =
-            turn_leaf_card_values(&network, &conflicts, &board, 0, [1.0, 1.0], &ranges, turn)
-                .expect("turn is reachable");
+        let (values, residual) = turn_leaf_card_values(
+            &network,
+            &[],
+            &conflicts,
+            &board,
+            0,
+            [1.0, 1.0],
+            &ranges,
+            turn,
+        )
+        .expect("turn is reachable");
 
         for player_values in &values {
             for combo in all_combos()
@@ -9181,6 +9353,47 @@ mod tests {
         assert!(values[0][compatible] > 0.0);
         assert!(values[1][compatible] < 0.0);
         assert!(residual < 1e-10, "zero-sum residual was {residual}");
+    }
+
+    #[test]
+    fn turn_leaf_ensemble_averages_models_before_zero_sum_projection() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut first = zero_value_network();
+        first.seed = 41;
+        first.artifact_sha256 = Some("a".repeat(64));
+        first.head[0].biases[..COMBO_COUNT].fill(0.2);
+        first.head[0].biases[COMBO_COUNT..].fill(-0.1);
+        let mut second = zero_value_network();
+        second.seed = 42;
+        second.artifact_sha256 = Some("b".repeat(64));
+        second.head[0].biases[..COMBO_COUNT].fill(-0.05);
+        second.head[0].biases[COMBO_COUNT..].fill(0.15);
+        let conflicts = combo_conflicts();
+        let turn = 15;
+        let values = |primary: &PublicValueNetwork, auxiliary: &[PublicValueNetwork]| {
+            turn_leaf_card_values(
+                primary,
+                auxiliary,
+                &conflicts,
+                &board,
+                0,
+                [1.0, 1.0],
+                &ranges,
+                turn,
+            )
+            .unwrap()
+            .0
+        };
+        let first_values = values(&first, &[]);
+        let second_values = values(&second, &[]);
+        let ensemble_values = values(&first, &[second]);
+        for player in 0..2 {
+            for combo in 0..COMBO_COUNT {
+                let expected = (first_values[player][combo] + second_values[player][combo]) / 2.0;
+                assert!((ensemble_values[player][combo] - expected).abs() < 1e-10);
+            }
+        }
     }
 
     #[test]
@@ -9872,6 +10085,7 @@ mod tests {
             averaging_delay: 0,
             regret_matching_plus: false,
             value_network: zero_value_network(),
+            auxiliary_value_networks: Vec::new(),
             threads: 1,
         };
         let continuation = solve_flop_continuation_values(config.clone()).unwrap();
@@ -9917,6 +10131,7 @@ mod tests {
             averaging_delay: 0,
             regret_matching_plus: false,
             value_network: resolver_network.clone(),
+            auxiliary_value_networks: Vec::new(),
             threads: 1,
         };
         let ordinary = solve_flop(config.clone()).unwrap();
@@ -9985,6 +10200,7 @@ mod tests {
             averaging_delay: 0,
             regret_matching_plus: false,
             value_network: resolver_network,
+            auxiliary_value_networks: Vec::new(),
             threads: 1,
         };
         let mut evaluation_network = zero_value_network();
@@ -10084,6 +10300,7 @@ mod tests {
             averaging_delay: 0,
             regret_matching_plus: false,
             value_network: resolver_network,
+            auxiliary_value_networks: Vec::new(),
             threads: 1,
         };
         let frozen = solve_flop(config.clone()).unwrap();
@@ -10317,6 +10534,7 @@ mod tests {
             averaging_delay: 0,
             regret_matching_plus: false,
             value_network: zero_shared_value_network(),
+            auxiliary_value_networks: Vec::new(),
             threads: 1,
         })
         .unwrap();
@@ -10476,6 +10694,7 @@ mod tests {
             averaging_delay: 0,
             regret_matching_plus: false,
             value_network: zero_shared_value_network(),
+            auxiliary_value_networks: Vec::new(),
             threads,
         };
         let single_solver = FlopSolver::new(config(1)).unwrap();

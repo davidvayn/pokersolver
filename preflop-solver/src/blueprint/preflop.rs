@@ -1258,6 +1258,7 @@ pub fn build_resolver_continuation_cache(
                             averaging_delay: config.resolver_averaging_delay,
                             regret_matching_plus: config.resolver_regret_matching_plus,
                             value_network: network.clone(),
+                            auxiliary_value_networks: Vec::new(),
                             threads: resolver_threads,
                         };
                         let counterfactual_values_bb = if let Some(evaluation) = &evaluation_network
