@@ -6311,6 +6311,7 @@ pub fn attach_source_policy_baseline(
 pub struct PostflopActionTargetConfig {
     pub game: BlueprintConfig,
     pub roots: usize,
+    pub root_offset: usize,
     pub turn_leaves_per_root: usize,
     pub flop_iterations: u64,
     pub flop_iteration_checkpoints: Vec<u64>,
@@ -6365,6 +6366,8 @@ pub struct PostflopActionTargetReport {
     pub value_network_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_sha256: Option<String>,
+    #[serde(default)]
+    pub root_offset: usize,
     pub roots: usize,
     pub turn_leaves: usize,
     pub flop_regret_matching_plus: bool,
@@ -6413,6 +6416,21 @@ fn sample_flop_root(
     (state.street == Street::Flop && state.terminal.is_none()).then_some((state, line))
 }
 
+fn selected_root_ordinal(
+    root_offset: usize,
+    roots: usize,
+    absolute_root: usize,
+) -> Result<Option<usize>, String> {
+    let end = root_offset
+        .checked_add(roots)
+        .ok_or_else(|| "postflop action target root window overflows".to_owned())?;
+    Ok(if (root_offset..end).contains(&absolute_root) {
+        Some(absolute_root - root_offset)
+    } else {
+        None
+    })
+}
+
 fn sample_reach_weighted_turn_leaves(
     leaves: &[ResolverTurnLeaf],
     count: usize,
@@ -6435,6 +6453,10 @@ pub fn generate_postflop_action_targets(
     config: PostflopActionTargetConfig,
 ) -> Result<PostflopActionTargetReport, Box<dyn Error>> {
     config.game.validate()?;
+    let root_window_end = config
+        .root_offset
+        .checked_add(config.roots)
+        .ok_or("postflop action target root window overflows")?;
     if config.roots == 0
         || config.turn_leaves_per_root == 0
         || config.flop_iterations < 2
@@ -6508,14 +6530,15 @@ pub fn generate_postflop_action_targets(
     let mut flop_convergence = Vec::new();
     let mut flop_range_response = Vec::new();
     let mut attempts = 0usize;
+    let mut absolute_root = 0usize;
 
     while roots_solved < config.roots {
         attempts += 1;
-        if attempts > config.roots * 1_000 {
+        if attempts > root_window_end.saturating_mul(1_000) {
             return Err("could not sample enough authentic nonterminal flop roots".into());
         }
         let true_deal = Deal::sample(&mut chance);
-        let explorer = (config.exploration_probability > 0.0).then_some(roots_solved % 2);
+        let explorer = (config.exploration_probability > 0.0).then_some(absolute_root % 2);
         let Some((flop_state, line)) = sample_flop_root(
             &policy,
             &config.game,
@@ -6538,6 +6561,13 @@ pub fn generate_postflop_action_targets(
             Err(error) if error.contains("zero exact reach") => continue,
             Err(error) => return Err(error.into()),
         };
+        let Some(root_ordinal) =
+            selected_root_ordinal(config.root_offset, config.roots, absolute_root)?
+        else {
+            absolute_root += 1;
+            continue;
+        };
+        debug_assert_eq!(root_ordinal, roots_solved);
         let root_state =
             PublicBeliefState::from_game_state(board.to_vec(), &flop_state, ranges.clone());
         let mut flop_solver = FlopSolver::new(FlopResolveConfig {
@@ -6564,7 +6594,7 @@ pub fn generate_postflop_action_targets(
             let solution = evaluator.finish();
             let accepted = solution.validation.status == "accepted";
             flop_convergence.push(PostflopActionTeacherCheckpoint {
-                root: roots_solved,
+                root: absolute_root,
                 iterations: *checkpoint,
                 depth_limited_exploitability_bb_per_hand: solution
                     .metrics
@@ -6575,7 +6605,7 @@ pub fn generate_postflop_action_targets(
                 "{}",
                 serde_json::to_string(&serde_json::json!({
                     "event": "postflop-action-flop-checkpoint",
-                    "root": roots_solved,
+                    "root": absolute_root,
                     "iterations": checkpoint,
                     "depthLimitedExploitabilityBbPerHand": solution
                         .metrics
@@ -6597,7 +6627,7 @@ pub fn generate_postflop_action_targets(
         let selected_leaves = sample_reach_weighted_turn_leaves(
             &leaves,
             config.turn_leaves_per_root,
-            config.seed ^ (roots_solved as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            config.seed ^ (absolute_root as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         )?;
         let flop_solution = final_flop_solution.expect("nonempty flop iteration checkpoints");
         let mut range_response_usable = !config.require_range_consistent_flop_teachers;
@@ -6621,7 +6651,7 @@ pub fn generate_postflop_action_targets(
                     && final_response.range_consistent_response_gain_bb_per_hand
                         <= config.maximum_flop_range_response_gain_bb_per_hand;
                 flop_range_response.push(PostflopActionRangeResponseCheckpoint {
-                    root: roots_solved,
+                    root: absolute_root,
                     response_iterations: final_response.iterations,
                     range_consistent_response_gain_bb_per_hand: final_response
                         .range_consistent_response_gain_bb_per_hand,
@@ -6632,7 +6662,7 @@ pub fn generate_postflop_action_targets(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
                         "event": "postflop-action-flop-range-response",
-                        "root": roots_solved,
+                        "root": absolute_root,
                         "iterations": final_response.iterations,
                         "rangeConsistentResponseGainBbPerHand": final_response
                             .range_consistent_response_gain_bb_per_hand,
@@ -6664,13 +6694,13 @@ pub fn generate_postflop_action_targets(
             && range_response_usable;
         if !flop_training_usable {
             return Err(format!(
-                "flop action teacher failed the configured quality gate at root {roots_solved}: {}",
+                "flop action teacher failed the configured quality gate at root {absolute_root}: {}",
                 format!(
                     "{}; convergence {:?}",
                     flop_solution.validation.reasons.join("; "),
                     flop_convergence
                         .iter()
-                        .filter(|checkpoint| checkpoint.root == roots_solved)
+                        .filter(|checkpoint| checkpoint.root == absolute_root)
                         .map(|checkpoint| (
                             checkpoint.iterations,
                             checkpoint.depth_limited_exploitability_bb_per_hand
@@ -6741,7 +6771,7 @@ pub fn generate_postflop_action_targets(
                     || turn_solution.validation.status == "accepted");
             if !turn_training_usable {
                 return Err(format!(
-                    "turn-river action teacher failed the configured quality gate at root {roots_solved} leaf {leaves_solved}: {}",
+                    "turn-river action teacher failed the configured quality gate at root {absolute_root} leaf {leaves_solved}: {}",
                     turn_solution.validation.reasons.join("; ")
                 )
                 .into());
@@ -6766,6 +6796,7 @@ pub fn generate_postflop_action_targets(
             leaves_solved += 1;
         }
         roots_solved += 1;
+        absolute_root += 1;
     }
 
     let candidate_records = records.seen;
@@ -6821,6 +6852,7 @@ pub fn generate_postflop_action_targets(
         "requiresAcceptedTurnRiverTeachers": config.require_accepted_turn_river_teachers,
         "turnRiverIterations": config.turn_river_iterations,
         "turnRiverAveragingDelay": config.turn_river_averaging_delay,
+        "rootOffset": config.root_offset,
         "roots": roots_solved,
         "turnLeaves": leaves_solved,
         "explorationProbability": config.exploration_probability,
@@ -6853,6 +6885,7 @@ pub fn generate_postflop_action_targets(
         source_policy_sha256,
         value_network_sha256,
         evaluation_value_network_sha256,
+        root_offset: config.root_offset,
         roots: roots_solved,
         turn_leaves: leaves_solved,
         flop_regret_matching_plus: config.flop_regret_matching_plus,
@@ -10688,6 +10721,18 @@ mod tests {
         for range in &range_record.ranges {
             assert!((range.iter().map(|value| f64::from(*value)).sum::<f64>() - 1.0).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn postflop_action_target_root_window_uses_absolute_ordinals() {
+        assert_eq!(selected_root_ordinal(0, 2, 0).unwrap(), Some(0));
+        assert_eq!(selected_root_ordinal(0, 2, 1).unwrap(), Some(1));
+        assert_eq!(selected_root_ordinal(0, 2, 2).unwrap(), None);
+        assert_eq!(selected_root_ordinal(1, 2, 0).unwrap(), None);
+        assert_eq!(selected_root_ordinal(1, 2, 1).unwrap(), Some(0));
+        assert_eq!(selected_root_ordinal(1, 2, 2).unwrap(), Some(1));
+        assert_eq!(selected_root_ordinal(1, 2, 3).unwrap(), None);
+        assert!(selected_root_ordinal(usize::MAX, 2, usize::MAX).is_err());
     }
 
     #[test]

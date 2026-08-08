@@ -565,6 +565,7 @@ fn run_postflop_action_targets(args: &[String]) -> Result<(), Box<dyn Error>> {
         blueprint::public_belief::PostflopActionTargetConfig {
             game,
             roots: parse_or(args, "--roots", 1usize)?,
+            root_offset: parse_or(args, "--root-offset", 0usize)?,
             turn_leaves_per_root: parse_or(args, "--turn-leaves-per-root", 1usize)?,
             flop_iterations,
             flop_iteration_checkpoints,
@@ -2272,6 +2273,7 @@ Neural exploitability-certificate options:
 Complete turn/river label options:
   postflop-action-targets --networks <source-policy.json>
     --value-network <turn-value.json> --range-output <targets.jsonl.gz>
+    [--root-offset 0] [--roots 1]
     [--evaluation-value-network <independent-turn-value.json>]
     [--flop-checkpoints <csv>] [--flop-response-checkpoints <csv>]
     [--require-range-consistent-flop-teachers]
