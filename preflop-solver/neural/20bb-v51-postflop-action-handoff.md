@@ -3,15 +3,15 @@
 ## Boundary and release state
 
 - Target-export implementation baseline: commit `c888a9c` (`Add range-conditioned postflop policy distillation`).
-- The paired action-target jobs described below completed successfully.
-- The mixed-replay v51 student pilot has now been distilled and evaluated. Its complete evidence is pinned in `neural/20bb-v51-postflop-action-pilot.json`.
+- The paired frequency and exact action-EV target jobs described below completed successfully.
+- The mixed-replay v51 student remains the best routed policy. The complete v51 and rejected v55 evidence is pinned in `neural/20bb-v51-postflop-action-pilot.json` and `neural/20bb-v55-ev-aware-pilot.json`.
 - `activationAllowed` remains `false`. Both full-game means improved, but the required exploitability gates still fail by a wide margin.
 - Continue only the served action-policy correction. Do not add value-oracle, untouched-root, or unrelated diagnostic work.
 - No training or evaluation job is running at this handoff.
 
-## 2026-08-07 wrap-up checkpoint
+## 2026-08-07 implementation checkpoint
 
-The EV-aware policy objective is now implemented but has not yet produced a candidate:
+The EV-aware policy objective is implemented and was evaluated in routed candidates:
 
 - Flop and joint turn/river average strategies carry optional row-major `[combo][action]` counterfactual action EVs. Existing serialized strategy artifacts remain readable through the serde default, and the standalone river solver continues to omit this training-only field.
 - The joint turn/river diagnostic walk preserves observed river chance keys and exact card removal. Every exported value is normalized by compatible opponent mass, finite-checked, and dimension-checked.
@@ -19,7 +19,7 @@ The EV-aware policy objective is now implemented but has not yet produced a cand
 - The Python loader enforces declared EV label dimensions and finiteness. `distill_postflop_policy.py` adds `--ev-regret-scale` (default `0`) and `--ev-regret-cap-bb` (by default the full `2 × depth` utility span). A positive scale combines reach-weighted cross-entropy with bounded expected action regret; scale zero calls the original compiled frequency-only step unchanged.
 - Reports now include `weightedExpectedEvLossBb` whenever EV labels are present. Tests cover masked actions, equal-EV support, dominated-action penalties, caps, both compiled objective paths, solved-policy finiteness, root EV reconstruction, river chance export, and missing labels.
 
-The implementation commit itself did not regenerate corpora, train students, route a full-hand model, or change activation. The subsequent smoke validation below used deliberately unconverged two-iteration teachers only. V51 remains the best measured candidate.
+The implementation was first checked with deliberately unconverged two-iteration teachers, then used to regenerate the converged v54 teachers and evaluate direct and conservative continual v55 updates. No v55 pair improved both routed full-hand means, so v51 remains the best measured candidate.
 
 The current routed v50 candidate is frozen in `neural/20bb-v50-full-hand-candidate-freeze.json`. Its controlled certificate is recorded in `neural/20bb-v50-full-hand-certificate-pilot.json`: paired relaxed means are 2.2582742976 and 2.2056883553 bb/hand, and both one-sided 99% upper bounds are 20 bb/hand. The v26 postflop action student is therefore the measured policy gap this experiment addresses. The v27 preflop students stay frozen.
 
@@ -86,16 +86,24 @@ The exact evidence is pinned in `neural/20bb-v55-ev-aware-smoke.json`. Both one-
 
 Because the observed action gaps span up to 40bb, the original 5bb cap could improve its saturated objective while worsening the uncapped reported EV metric. The distiller now defaults to the full `2 × depth` utility span. On identical 20-step batches, scale 1 with a 40bb cap was the first tested configuration to lower own- and cross-seed expected EV loss for both students while improving the principal frequency metrics. This accepts the objective for a converged-target pilot, not either smoke student for routing or release. Activation remains false.
 
+## Rejected v55 converged EV-aware pilot
+
+The complete evidence, hashes, and settings are pinned in `neural/20bb-v55-ev-aware-pilot.json`. The paired action-EV corpora used the exact v54 one-root, one-leaf, 200-iteration settings. They retained 71,794 and 56,190 finite, dimension-matched rows, reproduced all four v54 local bounds, kept action values within `[-20, 20]` bb, and had maximum target-probability sum errors below `8.5e-8`.
+
+A direct 200-step update from v26 improved all own/cross expected-EV and frequency-fit checks, but its routed means were 2.1590190 and 2.1253586 bb/hand: candidate 7602 regressed by 0.0375941 versus v51. A conservative 20-step continual update from v51 improved expected EV loss for both students, but candidate 7602 again regressed by 0.0238347. Raising cross-seed replay to 50% still regressed candidate 7602 by 0.0213288, so candidate 7601 was skipped under the fail-fast paired rule.
+
+This closes further local action-EV scale, step-count, and replay-mixture sweeps. Exact action values against a frozen local average policy improve that supervised objective but do not reliably reduce bilateral full-game exploitability after both policies change. Every evaluated one-sided 99% upper bound also remained 20 bb/hand. Retain v51 and keep activation false.
+
 ## Exact next sequence
 
-Continue only the EV-aware action-policy experiment; the export and objective smokes are complete, but no routed candidate exists:
+Continue only with policy-action updates aligned to the full-game exploitability certificate:
 
-1. Regenerate paired one-root targets using the proven v54 200-iteration settings, the pinned seed A/B sources above, and action-EV export. Do not add roots or increase solver iterations.
-2. Stream-validate both full corpora exactly as in the smoke and pin their hashes, local bounds, row counts, EV range, and probability error before training.
-3. Run a short paired scale-1 distillation with the full `2 × depth` cap. Select it only if both students improve own- and cross-seed expected EV loss while action-frequency MAE, primary agreement, and aggregate action deltas remain sane.
-4. Route that pair through the unchanged full-hand causal certificate. Retain it only if both routed means improve over v51. Activation remains false unless every existing release gate passes.
+1. Keep the v27 preflop and v51 postflop policies frozen as the baseline.
+2. Instrument the existing full-game causal best-response certificate to attribute information-set-consistent counterfactual action values to certificate-reached policy-player nodes while preserving exact public chance.
+3. Use those values as an exploitability subgradient for a bounded trust-region action update. Generate independent paired sample games for the two policies.
+4. Route each pair through the unchanged certificate and reject it immediately if either mean fails to improve. Activation remains false unless the existing exploitability and normal release gates all pass.
 
-Do not resume more roots, higher DCFR iterations, or longer frequency-only distillation; v52–v54 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
+Do not resume more roots, local solver iterations, frequency-only training, or local fixed-policy EV scale/step/replay sweeps; v52–v55 already falsified those paths. Do not activate any candidate unless every release gate in `neural/20bb-v50-full-hand-candidate-freeze.json` passes.
 
 ## Verification at handoff
 
@@ -103,4 +111,5 @@ Do not resume more roots, higher DCFR iterations, or longer frequency-only disti
 - Full neural unittest discovery is rerun after each EV-aware objective change (186 tests after the full-span default was added).
 - A direct positive-scale compiled-step smoke returned a finite loss.
 - `cargo fmt`, Python byte compilation, and `git diff --check` passed.
-- The smoke corpus and weights live under ignored `neural/runs/20bb-v55-ev-aware-smoke/`; the tracked v55 evidence contains their hashes and selection decision. The next agent must start at the 200-iteration regeneration above.
+- The converged v55 corpora, students, and routed artifacts live under ignored `neural/runs/20bb-v55-*`; the tracked v55 evidence contains their hashes and rejection decision.
+- No training or evaluation process is running. The next agent starts with causal-certificate action-value attribution, not target regeneration or another local-objective sweep.

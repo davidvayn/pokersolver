@@ -1,0 +1,204 @@
+{
+  "schema": "hu-20bb-ev-aware-postflop-policy-pilot-v1",
+  "depthBb": 20,
+  "status": "rejected",
+  "activationAllowed": false,
+  "modelReleaseAllowed": false,
+  "retainedCandidate": "v51",
+  "baseline": {
+    "model": "v51 mixed-replay postflop students routed with frozen v27 preflop students",
+    "sampleMeanExploitabilityBbPerHand": [
+      2.1763580639024402,
+      2.08776451096832
+    ],
+    "oneSided99PercentUpperBoundBbPerHand": [
+      20,
+      20
+    ]
+  },
+  "targets": [
+    {
+      "seed": 16001,
+      "corpusSha256": "5b228a15b7e04d2f6a15ed5198187a5bab7ee3650bf49884cf1ca34fd13fd78d",
+      "reportSha256": "715f47e33fe6bb9005a6ddf2ef7e62f6831372aea68f172d5330d78df9c927a5",
+      "records": 71794,
+      "candidateRecords": 657173,
+      "streetRecords": {
+        "flop": 16916,
+        "turn": 9878,
+        "river": 45000
+      },
+      "maximumFlopLocalExploitabilityBbPerHand": 0.19001213694543656,
+      "maximumTurnRiverLocalExploitabilityBbPerHand": 0.0037944968407110924,
+      "minimumActionEvBb": -20,
+      "maximumActionEvBb": 20,
+      "maximumTargetProbabilitySumError": 8.48000000219784e-08
+    },
+    {
+      "seed": 16002,
+      "corpusSha256": "784ce71dd01b4a04ab1506c03e032c85c77b87b546e4d7678747c87a8495db7b",
+      "reportSha256": "4eef302687234c25eb5b886a82b7d33bd6e2090dbef093cfb3e619bfb5df0399",
+      "records": 56190,
+      "candidateRecords": 214080,
+      "streetRecords": {
+        "flop": 6250,
+        "turn": 4940,
+        "river": 45000
+      },
+      "maximumFlopLocalExploitabilityBbPerHand": 0.08685596498121756,
+      "maximumTurnRiverLocalExploitabilityBbPerHand": 0.001851089361186442,
+      "minimumActionEvBb": -20,
+      "maximumActionEvBb": 20,
+      "maximumTargetProbabilitySumError": 7.999999995789153e-08
+    }
+  ],
+  "targetValidation": {
+    "settingsMatchV54": true,
+    "flopIterations": 200,
+    "flopAveragingDelay": 50,
+    "turnRiverIterations": 200,
+    "turnRiverAveragingDelay": 20,
+    "allWeightsFiniteAndPositive": true,
+    "allActionValueRowsFiniteAndDimensionMatched": true,
+    "metadataEvaluatesTrajectoryActionValues": true,
+    "actionValueMethod": "exact_solver_average_profile_counterfactual_values",
+    "acceptedForTrainingOnly": true
+  },
+  "pilots": [
+    {
+      "name": "direct-v26-scale1-full-span-s200",
+      "initialPolicy": "v26",
+      "settings": {
+        "steps": 200,
+        "batchSize": 512,
+        "learningRate": 0.00003,
+        "crossSeedReplayProbability": 0.25,
+        "evRegretScale": 1,
+        "evRegretCapBb": 40,
+        "seed": 16101
+      },
+      "reportSha256": "56787c0200399a732c683230f0077f95907bec941c0869fc871933f860df3b4a",
+      "studentWeightSha256": [
+        "c63846d9a436f56b59ae47ba48252ff6938ba10987517b5a63dd8387a94c45f2",
+        "dcf61af3785c2086c5d28dfee1471c53f11be81aa711fd96e40d95cf5d0686a9"
+      ],
+      "routedBundleSha256": [
+        "6083bc572637d4cb47001cc99dd39a5b4e4a31d35895278ae576e002e64a2d06",
+        "716f108815417c539d9aa450ea4be2edfc75fda5e258528dc3e23d3ac414bf91"
+      ],
+      "certificateSha256": [
+        "53d22cb20d461e38e602100f7bcc0db66062217bc3acf41b1bfef653ceefc23a",
+        "d6c3e817f6c195325eefb71cffedae1bc80355d4f6d501a5e19e132b55023adf"
+      ],
+      "supervisedSelectionChecksPassed": true,
+      "sampleMeanExploitabilityBbPerHand": [
+        2.159019004514069,
+        2.125358579515269
+      ],
+      "meanDeltaFromV51BbPerHand": [
+        -0.01733905938837121,
+        0.03759406854694891
+      ],
+      "oneSided99PercentUpperBoundBbPerHand": [
+        20,
+        20
+      ],
+      "accepted": false,
+      "reason": "candidate 7602 regressed despite all own/cross supervised metrics improving"
+    },
+    {
+      "name": "v51-continual-scale1-full-span-mix25-s20",
+      "initialPolicy": "v51",
+      "settings": {
+        "steps": 20,
+        "batchSize": 512,
+        "learningRate": 0.00001,
+        "crossSeedReplayProbability": 0.25,
+        "evRegretScale": 1,
+        "evRegretCapBb": 40,
+        "seed": 16101
+      },
+      "reportSha256": "7e5dc642db7fa3c1396033efff2cf64be12cb76e032110aca0ab063a437abe3f",
+      "studentWeightSha256": [
+        "df1fb00877e2bd6bf75c255ff206d910b2a011fb683b75744b371f3c0f0c2e1f",
+        "ce22864a02a0a1a81cd2d32b71118329af16ab6a5191113a60ec4f9daf94539a"
+      ],
+      "routedBundleSha256": [
+        "749673ea469800d59848c391d6d8bb08ee2f30aa8ebfabe6d54dacf579bcd91a",
+        "79abf0d58b841a2f342a06c96b6ef04958174c0b1e266e18bade36b901cd32dc"
+      ],
+      "certificateSha256": [
+        "b9e991b06b44dfb31a75896790569136fb52e9301566f2da56d5a2882a7bf9dd",
+        "5d727e98718fd9cd0646e3eb0c2af652f1f9c7723d10d87abb36ad870509e65e"
+      ],
+      "expectedEvLossImprovedOwnAndCrossForBothStudents": true,
+      "sampleMeanExploitabilityBbPerHand": [
+        2.146110700704682,
+        2.1115991776819105
+      ],
+      "meanDeltaFromV51BbPerHand": [
+        -0.030247363197758004,
+        0.02383466671359047
+      ],
+      "oneSided99PercentUpperBoundBbPerHand": [
+        20,
+        20
+      ],
+      "accepted": false,
+      "reason": "candidate 7602 regressed after the conservative continual update"
+    },
+    {
+      "name": "v51-continual-scale1-full-span-mix50-s20",
+      "initialPolicy": "v51",
+      "settings": {
+        "steps": 20,
+        "batchSize": 512,
+        "learningRate": 0.00001,
+        "crossSeedReplayProbability": 0.5,
+        "evRegretScale": 1,
+        "evRegretCapBb": 40,
+        "seed": 16101
+      },
+      "reportSha256": "521257c466ef0d316d18787261f4f1aea1f9bb4f24fec17644e59309879bbb74",
+      "student1WeightSha256": "e8315dba6aba23c7e4f55a10d4e0c8f4b777b7f2df5cb49a1649f2161c16a152",
+      "candidate7602RoutedBundleSha256": "158aa0f2788f7621ace2591bbc81a29f2a6bf19d303f309c13206620e469b172",
+      "candidate7602CertificateSha256": "af370f1fd42d5761e6ce33a905df0d8500ab8a667a06b01d0a97153f55b41e10",
+      "candidate7602SampleMeanExploitabilityBbPerHand": 2.1090932909228206,
+      "candidate7602MeanDeltaFromV51BbPerHand": 0.021328779954500554,
+      "candidate7602OneSided99PercentUpperBoundBbPerHand": 20,
+      "candidate7601CertificateSkipped": true,
+      "accepted": false,
+      "reason": "fail-fast evaluation found candidate 7602 still regressed; the pair could not qualify"
+    }
+  ],
+  "decision": {
+    "accepted": false,
+    "retainedModel": "v51",
+    "activationAllowed": false,
+    "reasons": [
+      "no v55 pair improved both routed full-hand means",
+      "every v55 one-sided 99% exploitability upper bound remained 20bb",
+      "local fixed-policy action EV improvement is not sufficient evidence of a bilateral exploitability improvement"
+    ],
+    "closedExperiments": [
+      "more roots with the same local teacher",
+      "more DCFR iterations for the same local teacher",
+      "longer frequency-only distillation",
+      "additional local EV scales, step counts, or replay-mixture sweeps"
+    ]
+  },
+  "measuredBlocker": {
+    "name": "objective-to-exploitability misalignment",
+    "evidence": "candidate 7602's own and cross-seed expected action-EV loss improved under both direct and continual v55 training while its routed causal exploitability mean regressed in every evaluated pair",
+    "interpretation": "the exported action EVs are counterfactual values against a frozen local average profile; changing both policies invalidates that fixed-opponent improvement direction and need not reduce NashConv"
+  },
+  "next": {
+    "requiredChange": "export policy-player counterfactual action values under the full-game causal best response used by the certificate, preserving information-set consistency and exact public chance",
+    "trainingRule": "apply a trust-region action update that reduces responder value on certificate-reached policy nodes, using independent paired sample games and rejecting any update that fails either routed mean",
+    "constraints": [
+      "keep v27 preflop and v51 postflop policies frozen as the baseline",
+      "do not add roots, local solver iterations, or local fixed-policy EV sweeps",
+      "keep activation false until the unchanged exploitability and normal release gates pass"
+    ]
+  }
+}
