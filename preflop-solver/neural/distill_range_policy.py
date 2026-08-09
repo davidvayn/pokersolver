@@ -25,17 +25,24 @@ from train_public_value_network import (
     CONTEXT_BOARD_RELATIVE_COUNT,
     QUERY_COUNT,
     QUERY_BOARD_RELATIVE_COUNT,
-    RANGE_POLICY_FEATURE_SCHEMA,
+    RANGE_POLICY_FEATURE_SCHEMA as DATASET_RANGE_POLICY_FEATURE_SCHEMA,
     build_features,
     tower_payload,
 )
 
 DATASET_SCHEMA = "hu-range-conditioned-postflop-policy-dataset-v1"
 NETWORK_SCHEMA = "hu-public-belief-combo-policy-network-v1"
+RANGE_POLICY_FEATURE_SCHEMA = "rank-suit-invariant-combo-policy-query-v2"
 ACTION_FEATURE_SCHEMA = "hu-cash-legal-action-v1"
 ACTION_FEATURE_COUNT = 9
-CONTEXT_SIZE = CONTEXT_COUNT + CONTEXT_BOARD_RELATIVE_COUNT
+BASE_CONTEXT_SIZE = CONTEXT_COUNT + CONTEXT_BOARD_RELATIVE_COUNT
 QUERY_SIZE = QUERY_COUNT + QUERY_BOARD_RELATIVE_COUNT
+MAX_TRAJECTORY_ACTIONS = 32
+TRAJECTORY_FEATURE_COUNT = 15
+PUBLIC_STATE_FEATURE_COUNT = 20 + MAX_TRAJECTORY_ACTIONS * TRAJECTORY_FEATURE_COUNT
+CONTEXT_SIZE = BASE_CONTEXT_SIZE + PUBLIC_STATE_FEATURE_COUNT
+STREETS = ("preflop", "flop", "turn", "river")
+TRAJECTORY_KINDS = ("fold", "check", "call", "bet", "raise", "all_in")
 
 
 def sha256(path: Path) -> str:
@@ -75,8 +82,8 @@ def read_records(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if (
         metadata.get("record_type") != "metadata"
         or metadata.get("schema") != DATASET_SCHEMA
-        or metadata.get("feature_schema") != RANGE_POLICY_FEATURE_SCHEMA
-        or metadata.get("context_size") != CONTEXT_SIZE
+        or metadata.get("feature_schema") != DATASET_RANGE_POLICY_FEATURE_SCHEMA
+        or metadata.get("context_size") != BASE_CONTEXT_SIZE
         or metadata.get("query_size") != QUERY_SIZE
         or metadata.get("action_feature_schema") != ACTION_FEATURE_SCHEMA
         or metadata.get("action_feature_count") != ACTION_FEATURE_COUNT
@@ -131,7 +138,9 @@ def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
         correction = len(candidates) / len(retained)
         for source_record in retained:
             record = dict(source_record)
-            record["weight"] = float(record["weight"]) * correction
+            record["weight"] = float(
+                np.float32(record["weight"]) * np.float32(correction)
+            )
             selected.append(record)
     capped_metadata = dict(metadata)
     capped_metadata["records"] = len(selected)
@@ -155,10 +164,12 @@ def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
 def record_selection_identity(record: dict[str, Any]) -> bytes:
     """Identify a solver target without depending on its attached source policy."""
     return json.dumps(
-        {
-            "state": record.get("state"),
-            "action_labels": record.get("action_labels"),
-        },
+        canonical_training_numbers(
+            {
+                "state": record.get("state"),
+                "action_labels": record.get("action_labels"),
+            }
+        ),
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -305,26 +316,127 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
 
 
 def add_features(dataset: LoadedDataset) -> None:
-    built = [
-        build_features(
+    depth_bb = float(dataset.metadata["depth_bb"])
+    built = []
+    for record, board, actor, invested, ranges, masses in zip(
+        dataset.records,
+        dataset.boards,
+        dataset.actors,
+        dataset.invested,
+        dataset.ranges,
+        dataset.masses,
+        strict=True,
+    ):
+        context, queries = build_features(
             board,
             int(actor),
             invested,
             ranges,
             masses,
-            RANGE_POLICY_FEATURE_SCHEMA,
+            DATASET_RANGE_POLICY_FEATURE_SCHEMA,
         )
-        for board, actor, invested, ranges, masses in zip(
-            dataset.boards,
-            dataset.actors,
-            dataset.invested,
-            dataset.ranges,
-            dataset.masses,
-            strict=True,
+        public_state = range_policy_state_features(record["state"], depth_bb)
+        context = np.concatenate(
+            (context, np.broadcast_to(public_state, (2, len(public_state)))), axis=1
         )
-    ]
+        built.append((context, queries))
     dataset.contexts = np.stack([context for context, _ in built])
     dataset.queries = np.stack([queries for _, queries in built])
+
+
+def range_policy_state_features(
+    state: dict[str, Any], depth_bb: float
+) -> np.ndarray:
+    """Encode the complete public action state used by the policy target.
+
+    Exact ranges alone do not identify whether a passive action closes the
+    street, which player has position, or which perfect-recall betting line
+    reached the belief state.  Keep those public distinctions explicit.
+    """
+    if not np.isfinite(depth_bb) or depth_bb <= 0:
+        raise ValueError("range-policy depth must be finite and positive")
+    street = str(state.get("street", ""))
+    actor = int(state.get("actor", -1))
+    trajectory = state.get("trajectory", [])
+    invested = np.asarray(state.get("invested_bb"), dtype=np.float32)
+    street_invested = np.asarray(
+        state.get("street_invested_bb"), dtype=np.float32
+    )
+    if (
+        street not in STREETS
+        or actor not in (0, 1)
+        or not isinstance(trajectory, list)
+        or len(trajectory) > MAX_TRAJECTORY_ACTIONS
+        or invested.shape != (2,)
+        or street_invested.shape != (2,)
+        or not np.all(np.isfinite(invested))
+        or not np.all(np.isfinite(street_invested))
+    ):
+        raise ValueError("invalid range-policy public action state")
+    opponent = 1 - actor
+    last_full_raise = float(state.get("last_full_raise_bb", 0.0))
+    aggressions = int(state.get("aggressions", -1))
+    checks = int(state.get("checks", -1))
+    board = state.get("board", [])
+    if (
+        not np.isfinite(last_full_raise)
+        or last_full_raise <= 0
+        or aggressions < 0
+        or checks not in (0, 1)
+        or not isinstance(board, list)
+        or len(board) not in (3, 4, 5)
+    ):
+        raise ValueError("invalid range-policy betting state")
+    features = np.zeros(PUBLIC_STATE_FEATURE_COUNT, dtype=np.float32)
+    features[STREETS.index(street)] = 1.0
+    features[4 + actor] = 1.0
+    settled_pot = float(invested.sum() - street_invested.sum())
+    to_call = max(float(street_invested[opponent] - street_invested[actor]), 0.0)
+    features[6:18] = np.asarray(
+        [
+            settled_pot / depth_bb,
+            (depth_bb - float(invested[actor])) / depth_bb,
+            (depth_bb - float(invested[opponent])) / depth_bb,
+            float(street_invested[actor]) / depth_bb,
+            float(street_invested[opponent]) / depth_bb,
+            float(invested[actor]) / depth_bb,
+            float(invested[opponent]) / depth_bb,
+            to_call / depth_bb,
+            last_full_raise / depth_bb,
+            1.0 if state.get("raise_reopened") else 0.0,
+            len(board) / 5.0,
+            len(trajectory) / MAX_TRAJECTORY_ACTIONS,
+        ],
+        dtype=np.float32,
+    )
+    features[18] = aggressions / 2.0
+    features[19] = float(checks)
+    for index, action in enumerate(trajectory):
+        action_actor = int(action.get("actor", -1))
+        action_street = str(action.get("street", ""))
+        kind = str(action.get("kind", ""))
+        amount = float(action.get("amount_bb", float("nan")))
+        amount_to = float(action.get("amount_to_bb") or 0.0)
+        pot_after = float(action.get("pot_after_bb", float("nan")))
+        if (
+            action_actor not in (0, 1)
+            or action_street not in STREETS
+            or kind not in TRAJECTORY_KINDS
+            or not all(np.isfinite(value) for value in (amount, amount_to, pot_after))
+        ):
+            raise ValueError("invalid range-policy trajectory action")
+        offset = 20 + index * TRAJECTORY_FEATURE_COUNT
+        features[offset + action_actor] = 1.0
+        features[offset + 2 + STREETS.index(action_street)] = 1.0
+        features[offset + 6 + TRAJECTORY_KINDS.index(kind)] = 1.0
+        features[offset + 12 : offset + 15] = [
+            amount / depth_bb,
+            amount_to / depth_bb,
+            pot_after / depth_bb,
+        ]
+    if not np.all(np.isfinite(features)):
+        raise ValueError("range-policy public action features are non-finite")
+    return features
 
 
 class RangeConditionedPolicy(nn.Module):

@@ -10,11 +10,20 @@ import train_public_value_network as value_features
 class RangePolicyDistillationTests(unittest.TestCase):
     def test_record_selection_is_source_policy_invariant(self) -> None:
         first = {
-            "state": {"street": "flop", "public_history": ["root"]},
+            "state": {
+                "street": "flop",
+                "public_history": ["root"],
+                "invested_bb": [1.0000000000000002, 2.0],
+            },
             "action_labels": ["check", "bet"],
             "source_policy_probabilities": [0.9, 0.1],
         }
         second = dict(first)
+        second["state"] = {
+            "street": "flop",
+            "public_history": ["root"],
+            "invested_bb": [float(module.np.float32(1.0000000000000002)), 2.0],
+        }
         second["source_policy_probabilities"] = [0.2, 0.8]
         self.assertEqual(
             module.record_selection_identity(first),
@@ -89,7 +98,7 @@ class RangePolicyDistillationTests(unittest.TestCase):
                 masses,
                 value_features.RANGE_POLICY_FEATURE_SCHEMA,
             )
-            self.assertEqual(context.shape, (2, module.CONTEXT_SIZE))
+            self.assertEqual(context.shape, (2, module.BASE_CONTEXT_SIZE))
             self.assertEqual(
                 queries.shape, (2, module.COMBO_COUNT, module.QUERY_SIZE)
             )
@@ -99,6 +108,45 @@ class RangePolicyDistillationTests(unittest.TestCase):
             np.testing.assert_allclose(
                 queries[0, legal, 66:75].sum(axis=1), 1.0, atol=1e-6
             )
+
+    def test_policy_state_features_preserve_markov_state_and_trajectory(self) -> None:
+        state = {
+            "street": "flop",
+            "board": [0, 5, 10],
+            "actor": 0,
+            "invested_bb": [4.0, 4.0],
+            "street_invested_bb": [0.0, 0.0],
+            "last_full_raise_bb": 1.0,
+            "aggressions": 0,
+            "checks": 1,
+            "raise_reopened": True,
+            "trajectory": [
+                {
+                    "actor": 1,
+                    "street": "flop",
+                    "kind": "check",
+                    "amount_bb": 0.0,
+                    "amount_to_bb": None,
+                    "pot_after_bb": 8.0,
+                }
+            ],
+        }
+        features = module.range_policy_state_features(state, 20.0)
+        self.assertEqual(features.shape, (module.PUBLIC_STATE_FEATURE_COUNT,))
+        self.assertEqual(features[1], 1.0)
+        self.assertEqual(features[4], 1.0)
+        self.assertAlmostEqual(float(features[6]), 0.4)
+        self.assertEqual(features[19], 1.0)
+        self.assertEqual(features[21], 1.0)
+        self.assertEqual(features[23], 1.0)
+        self.assertEqual(features[27], 1.0)
+        self.assertAlmostEqual(float(features[34]), 0.4)
+
+        first_check = features.copy()
+        state["checks"] = 0
+        state["trajectory"] = []
+        root = module.range_policy_state_features(state, 20.0)
+        self.assertFalse(np.array_equal(first_check, root))
 
     def test_zero_initialized_residual_preserves_source_probabilities(self) -> None:
         model = module.RangeConditionedPolicy(

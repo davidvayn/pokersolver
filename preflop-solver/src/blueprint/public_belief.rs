@@ -6,7 +6,7 @@
 //! abstraction with alternating CFR, and exports per-combination
 //! counterfactual values. No private cards are sampled by the solver.
 
-use super::neural::FrozenPolicy;
+use super::neural::{FrozenPolicy, MAX_TRAJECTORY_ACTIONS};
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -34,6 +34,12 @@ const SHARED_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-query-v1";
 const SHARED_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-query-v2";
 const SHARED_FEATURE_SCHEMA_V3: &str = "rank-suit-invariant-combo-query-v3";
 const RANGE_POLICY_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-policy-query-v1";
+const RANGE_POLICY_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-policy-query-v2";
+const RANGE_POLICY_TRAJECTORY_FEATURE_COUNT: usize = 15;
+const RANGE_POLICY_PUBLIC_STATE_COUNT: usize =
+    20 + MAX_TRAJECTORY_ACTIONS * RANGE_POLICY_TRAJECTORY_FEATURE_COUNT;
+const RANGE_POLICY_CONTEXT_V2_COUNT: usize =
+    SHARED_CONTEXT_BOARD_RELATIVE_COUNT + RANGE_POLICY_PUBLIC_STATE_COUNT;
 const RANGE_POLICY_SCHEMA_V1: &str = "hu-public-belief-combo-policy-network-v1";
 const RANGE_POLICY_REPLACE: &str = "replace";
 const RANGE_POLICY_SOURCE_LOGIT_RESIDUAL: &str = "source_bundle_logit_residual";
@@ -904,6 +910,76 @@ fn default_range_policy_composition() -> String {
     RANGE_POLICY_REPLACE.to_owned()
 }
 
+fn range_policy_state_features(
+    state: &PublicBeliefState,
+    depth_bb: f64,
+) -> Result<Vec<f32>, String> {
+    if !depth_bb.is_finite() || depth_bb <= 0.0 || state.trajectory.len() > MAX_TRAJECTORY_ACTIONS {
+        return Err("range-policy public action state is incompatible".to_owned());
+    }
+    let mut features = vec![0.0f32; RANGE_POLICY_PUBLIC_STATE_COUNT];
+    let street_index = |street| match street {
+        Street::Preflop => 0,
+        Street::Flop => 1,
+        Street::Turn => 2,
+        Street::River => 3,
+    };
+    let kind_index = |kind| match kind {
+        TrajectoryActionKind::Fold => 0,
+        TrajectoryActionKind::Check => 1,
+        TrajectoryActionKind::Call => 2,
+        TrajectoryActionKind::Bet => 3,
+        TrajectoryActionKind::Raise => 4,
+        TrajectoryActionKind::AllIn => 5,
+    };
+    let actor = state.actor;
+    let opponent = 1 - actor;
+    features[street_index(state.street)] = 1.0;
+    features[4 + actor] = 1.0;
+    let settled_pot =
+        state.invested_bb.iter().sum::<f64>() - state.street_invested_bb.iter().sum::<f64>();
+    let to_call = (state.street_invested_bb[opponent] - state.street_invested_bb[actor]).max(0.0);
+    let scalars = [
+        settled_pot / depth_bb,
+        (depth_bb - state.invested_bb[actor]) / depth_bb,
+        (depth_bb - state.invested_bb[opponent]) / depth_bb,
+        state.street_invested_bb[actor] / depth_bb,
+        state.street_invested_bb[opponent] / depth_bb,
+        state.invested_bb[actor] / depth_bb,
+        state.invested_bb[opponent] / depth_bb,
+        to_call / depth_bb,
+        state.last_full_raise_bb / depth_bb,
+        f64::from(state.raise_reopened),
+        state.board.len() as f64 / 5.0,
+        state.trajectory.len() as f64 / MAX_TRAJECTORY_ACTIONS as f64,
+    ];
+    if scalars.iter().any(|value| !value.is_finite()) {
+        return Err("range-policy public action state is non-finite".to_owned());
+    }
+    for (target, value) in features[6..18].iter_mut().zip(scalars) {
+        *target = value as f32;
+    }
+    features[18] = f32::from(state.aggressions) / 2.0;
+    features[19] = f32::from(state.checks);
+    for (index, action) in state.trajectory.iter().enumerate() {
+        if action.actor > 1
+            || !action.amount_bb.is_finite()
+            || action.amount_to_bb.is_some_and(|value| !value.is_finite())
+            || !action.pot_after_bb.is_finite()
+        {
+            return Err("range-policy trajectory action is invalid".to_owned());
+        }
+        let offset = 20 + index * RANGE_POLICY_TRAJECTORY_FEATURE_COUNT;
+        features[offset + action.actor] = 1.0;
+        features[offset + 2 + street_index(action.street)] = 1.0;
+        features[offset + 6 + kind_index(action.kind)] = 1.0;
+        features[offset + 12] = (action.amount_bb / depth_bb) as f32;
+        features[offset + 13] = (action.amount_to_bb.unwrap_or(0.0) / depth_bb) as f32;
+        features[offset + 14] = (action.pot_after_bb / depth_bb) as f32;
+    }
+    Ok(features)
+}
+
 impl RangeConditionedPolicyNetwork {
     pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
         let bytes = fs::read(path)?;
@@ -914,10 +990,14 @@ impl RangeConditionedPolicyNetwork {
     }
 
     fn validate(&self) -> Result<(), String> {
+        let expected_context_size = match self.feature_schema.as_str() {
+            RANGE_POLICY_FEATURE_SCHEMA_V1 => SHARED_CONTEXT_BOARD_RELATIVE_COUNT,
+            RANGE_POLICY_FEATURE_SCHEMA_V2 => RANGE_POLICY_CONTEXT_V2_COUNT,
+            _ => return Err("range-conditioned policy feature schema is incompatible".to_owned()),
+        };
         if self.schema != RANGE_POLICY_SCHEMA_V1
             || !self.uses_exact_ranges
-            || self.feature_schema != RANGE_POLICY_FEATURE_SCHEMA_V1
-            || self.context_size != SHARED_CONTEXT_BOARD_RELATIVE_COUNT
+            || self.context_size != expected_context_size
             || self.query_size != SHARED_QUERY_BOARD_RELATIVE_COUNT
             || self.action_feature_schema != ACTION_FEATURE_SCHEMA_V1
             || self.action_feature_size != ACTION_FEATURE_COUNT
@@ -1014,15 +1094,21 @@ impl RangeConditionedPolicyNetwork {
             None
         };
         let conflicts = combo_conflicts();
-        let (contexts, queries) = shared_combo_features(
+        let (mut contexts, queries) = shared_combo_features(
             &normalized.board,
             normalized.actor,
             normalized.invested_bb,
             &normalized.ranges,
             &conflicts,
             self.depth_bb,
-            &self.feature_schema,
+            RANGE_POLICY_FEATURE_SCHEMA_V1,
         );
+        if self.feature_schema == RANGE_POLICY_FEATURE_SCHEMA_V2 {
+            let public_state = range_policy_state_features(&normalized, self.depth_bb)?;
+            for context in &mut contexts {
+                context.extend_from_slice(&public_state);
+            }
+        }
         let context_embedding = self
             .context_tower
             .iter()
@@ -9178,6 +9264,37 @@ mod tests {
             policy_composition: RANGE_POLICY_REPLACE.to_owned(),
             source_policy_sha256: None,
         }
+    }
+
+    #[test]
+    fn range_policy_v2_encodes_markov_state_and_perfect_recall_trajectory() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut state = PublicBeliefState::flop_start(board, 0, [4.0, 4.0], ranges);
+        state.checks = 1;
+        state.trajectory = vec![TrajectoryAction {
+            actor: 1,
+            street: Street::Flop,
+            kind: TrajectoryActionKind::Check,
+            amount_bb: 0.0,
+            amount_to_bb: None,
+            pot_after_bb: 8.0,
+        }];
+        let features = range_policy_state_features(&state, 20.0).unwrap();
+        assert_eq!(features.len(), RANGE_POLICY_PUBLIC_STATE_COUNT);
+        assert_eq!(features[1], 1.0);
+        assert_eq!(features[4], 1.0);
+        assert!((features[6] - 0.4).abs() < 1e-7);
+        assert_eq!(features[19], 1.0);
+        assert_eq!(features[21], 1.0);
+        assert_eq!(features[23], 1.0);
+        assert_eq!(features[27], 1.0);
+        assert!((features[34] - 0.4).abs() < 1e-7);
+
+        let mut root = state;
+        root.checks = 0;
+        root.trajectory.clear();
+        assert_ne!(features, range_policy_state_features(&root, 20.0).unwrap());
     }
 
     #[test]
