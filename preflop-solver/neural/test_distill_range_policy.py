@@ -21,17 +21,21 @@ class RangePolicyDistillationTests(unittest.TestCase):
             module.record_selection_identity(second),
         )
 
-    def test_target_identity_is_source_policy_and_f32_weight_invariant(self) -> None:
+    def test_target_identity_is_source_policy_and_f32_tensor_invariant(self) -> None:
         first = {
             "record_type": "range_conditioned_average_strategy",
             "weight": 3.3185869866666664,
-            "state": {"street": "flop", "public_history": ["root"]},
+            "state": {
+                "street": "flop",
+                "public_history": ["root"],
+                "invested_bb": [1.0000000000000002, 2.0],
+            },
             "action_labels": ["check", "bet"],
             "probabilities": [0.7, 0.3],
+            "action_values_bb": [-1.7674874000000002e-17, 0.25],
             "source_policy_probabilities": [0.9, 0.1],
         }
-        second = dict(first)
-        second["weight"] = float(module.np.float32(first["weight"]))
+        second = module.canonical_training_numbers(first)
         second["source_policy_probabilities"] = [0.2, 0.8]
         self.assertEqual(
             module.target_record_identity(first),

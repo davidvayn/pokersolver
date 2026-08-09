@@ -173,11 +173,29 @@ def target_corpus_sha256(dataset: LoadedDataset) -> str:
 
 
 def target_record_identity(record: dict[str, Any]) -> bytes:
-    """Canonicalize a solver target across Rust's typed JSON round trip."""
+    """Canonicalize a solver target across Rust's typed JSON round trip.
+
+    Every numeric tensor is loaded as float32 below.  Canonicalize the hash to
+    that same representation so harmless decimal reformatting by serde does
+    not make a cross-augmented copy look like a different training target.
+    """
     target = dict(record)
     target.pop("source_policy_probabilities", None)
-    target["weight"] = float(np.float32(target["weight"]))
-    return json.dumps(target, sort_keys=True, separators=(",", ":")).encode()
+    return json.dumps(
+        canonical_training_numbers(target), sort_keys=True, separators=(",", ":")
+    ).encode()
+
+
+def canonical_training_numbers(value: Any) -> Any:
+    if isinstance(value, float):
+        return float(np.float32(value))
+    if isinstance(value, list):
+        return [canonical_training_numbers(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: canonical_training_numbers(item) for key, item in value.items()
+        }
+    return value
 
 
 def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
