@@ -633,16 +633,25 @@ def train(
     steps: int,
     batch_size: int,
     learning_rate: float,
+    final_learning_rate: float | None,
     auxiliary_probability: float,
     ev_regret_scale: float,
     architecture: str,
     composition: str,
+    maximum_weighted_kl: float,
+    minimum_primary_agreement: float,
+    maximum_teacher_ev_loss_bb: float,
 ) -> tuple[RangeConditionedPolicy, list[float], dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
     model = RangeConditionedPolicy(architecture, composition)
     mx.eval(model.parameters())
-    optimizer = optim.AdamW(learning_rate=learning_rate, weight_decay=1e-5)
+    schedule = (
+        learning_rate
+        if final_learning_rate is None
+        else optim.cosine_decay(learning_rate, steps, final_learning_rate)
+    )
+    optimizer = optim.AdamW(learning_rate=schedule, weight_decay=1e-5)
 
     def loss_fn(
         current: RangeConditionedPolicy,
@@ -681,7 +690,7 @@ def train(
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     losses: list[float] = []
-    best_rank: tuple[float, float, float] | None = None
+    best_rank: tuple[float, float, float, float] | None = None
     best_parameters: Any = None
     best_selection: dict[str, Any] = {}
     evaluation_interval = min(100, steps)
@@ -700,16 +709,26 @@ def train(
         if step % evaluation_interval == 0 or step == steps:
             own = python_diagnostic(model, primary, primary_heldout)
             other = python_diagnostic(model, auxiliary, auxiliary_heldout)
+            worst_ev = max(
+                own["teacherEvMinusCandidateEvBb"],
+                other["teacherEvMinusCandidateEvBb"],
+            )
+            worst_kl = max(
+                own["weightedTeacherKl"], other["weightedTeacherKl"]
+            )
+            worst_agreement = min(
+                own["reachWeightedPrimaryActionAgreement"],
+                other["reachWeightedPrimaryActionAgreement"],
+            )
             rank = (
                 max(
-                    own["teacherEvMinusCandidateEvBb"],
-                    other["teacherEvMinusCandidateEvBb"],
+                    worst_ev / maximum_teacher_ev_loss_bb,
+                    worst_kl / maximum_weighted_kl,
+                    minimum_primary_agreement / max(worst_agreement, 1e-8),
                 ),
-                max(own["weightedTeacherKl"], other["weightedTeacherKl"]),
-                -min(
-                    own["reachWeightedPrimaryActionAgreement"],
-                    other["reachWeightedPrimaryActionAgreement"],
-                ),
+                worst_ev,
+                worst_kl,
+                -worst_agreement,
             )
             if best_rank is None or rank < best_rank:
                 best_rank = rank
@@ -909,6 +928,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--final-learning-rate", type=float)
     parser.add_argument("--auxiliary-probability", type=float, default=0.25)
     parser.add_argument("--ev-regret-scale", type=float, default=0.02)
     parser.add_argument(
@@ -949,9 +969,16 @@ def main() -> None:
         len(seeds) != 2
         or min(args.steps, args.batch_size) <= 0
         or args.learning_rate <= 0
+        or (
+            args.final_learning_rate is not None
+            and not 0 < args.final_learning_rate <= args.learning_rate
+        )
         or not 0 <= args.auxiliary_probability <= 1
         or args.ev_regret_scale < 0
         or args.maximum_records_per_teacher < 12
+        or args.maximum_weighted_kl <= 0
+        or not 0 < args.minimum_primary_agreement <= 1
+        or args.maximum_teacher_ev_loss_bb <= 0
         or (
             args.composition == "source_bundle_logit_residual"
             and shared_source == paired_sources
@@ -1105,10 +1132,14 @@ def main() -> None:
             args.steps,
             args.batch_size,
             args.learning_rate,
+            args.final_learning_rate,
             args.auxiliary_probability,
             args.ev_regret_scale,
             args.architecture,
             args.composition,
+            args.maximum_weighted_kl,
+            args.minimum_primary_agreement,
+            args.maximum_teacher_ev_loss_bb,
         )
         network = args.output_dir / f"range-policy-seed-{seed}.json"
         export_model(model, network, seed, primary, auxiliary)
@@ -1176,6 +1207,7 @@ def main() -> None:
         "steps": args.steps,
         "batchSize": args.batch_size,
         "learningRate": args.learning_rate,
+        "finalLearningRate": args.final_learning_rate,
         "auxiliaryProbability": args.auxiliary_probability,
         "evRegretScale": args.ev_regret_scale,
         "architecture": args.architecture,
