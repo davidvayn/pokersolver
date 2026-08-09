@@ -13,6 +13,15 @@ import train_public_value_network as value_features
 
 
 class RangePolicyDistillationTests(unittest.TestCase):
+    def test_mixed_teacher_batches_preserve_both_inputs(self) -> None:
+        first = (mx.array([[1.0, 2.0]]), mx.array([[3.0]]))
+        second = (mx.array([[4.0, 5.0]]), mx.array([[6.0]]))
+        combined = module.concatenate_training_batches(first, second)
+        np.testing.assert_array_equal(
+            np.asarray(combined[0]), [[1.0, 2.0], [4.0, 5.0]]
+        )
+        np.testing.assert_array_equal(np.asarray(combined[1]), [[3.0], [6.0]])
+
     def test_feature_cache_array_is_memory_mapped_and_hash_verified(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "features.npy"

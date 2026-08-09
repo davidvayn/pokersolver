@@ -925,6 +925,17 @@ def batch(
     )
 
 
+def concatenate_training_batches(
+    first: tuple[mx.array, ...], second: tuple[mx.array, ...]
+) -> tuple[mx.array, ...]:
+    if len(first) != len(second):
+        raise ValueError("range-policy training batches are incompatible")
+    return tuple(
+        mx.concatenate((left, right), axis=0)
+        for left, right in zip(first, second, strict=True)
+    )
+
+
 def train(
     primary: LoadedDataset,
     auxiliary: LoadedDataset,
@@ -944,6 +955,7 @@ def train(
     maximum_weighted_kl: float,
     minimum_primary_agreement: float,
     maximum_teacher_ev_loss_bb: float,
+    balanced_teacher_batches: bool,
 ) -> tuple[RangeConditionedPolicy, list[float], dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1004,24 +1016,46 @@ def train(
     best_selection: dict[str, Any] = {}
     evaluation_interval = min(100, steps)
     for step_index in range(steps):
-        use_auxiliary = rng.random() < auxiliary_probability
-        selected_dataset = auxiliary if use_auxiliary else primary
-        available = auxiliary_rows if use_auxiliary else primary_rows
-        probabilities = (
-            auxiliary_sampling_probabilities
-            if use_auxiliary
-            else primary_sampling_probabilities
-        )
-        selected = rng.choice(
-            available,
-            size=min(batch_size, len(available)),
-            replace=True,
-            p=probabilities,
-        )
-        loss, gradients = loss_and_grad(
-            model,
-            *batch(selected_dataset, selected, condition_on_node_reach=True),
-        )
+        if balanced_teacher_batches:
+            auxiliary_count = max(
+                1, min(batch_size - 1, round(batch_size * auxiliary_probability))
+            )
+            primary_count = batch_size - auxiliary_count
+            primary_selected = rng.choice(
+                primary_rows,
+                size=primary_count,
+                replace=True,
+                p=primary_sampling_probabilities,
+            )
+            auxiliary_selected = rng.choice(
+                auxiliary_rows,
+                size=auxiliary_count,
+                replace=True,
+                p=auxiliary_sampling_probabilities,
+            )
+            arguments = concatenate_training_batches(
+                batch(primary, primary_selected, condition_on_node_reach=True),
+                batch(auxiliary, auxiliary_selected, condition_on_node_reach=True),
+            )
+        else:
+            use_auxiliary = rng.random() < auxiliary_probability
+            selected_dataset = auxiliary if use_auxiliary else primary
+            available = auxiliary_rows if use_auxiliary else primary_rows
+            probabilities = (
+                auxiliary_sampling_probabilities
+                if use_auxiliary
+                else primary_sampling_probabilities
+            )
+            selected = rng.choice(
+                available,
+                size=min(batch_size, len(available)),
+                replace=True,
+                p=probabilities,
+            )
+            arguments = batch(
+                selected_dataset, selected, condition_on_node_reach=True
+            )
+        loss, gradients = loss_and_grad(model, *arguments)
         optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state, loss)
         losses.append(float(loss.item()))
@@ -1266,6 +1300,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--final-learning-rate", type=float)
     parser.add_argument("--auxiliary-probability", type=float, default=0.25)
+    parser.add_argument("--balanced-teacher-batches", action="store_true")
     parser.add_argument("--ev-regret-scale", type=float, default=0.02)
     parser.add_argument(
         "--architecture", choices=("compact", "wide"), default="compact"
@@ -1310,6 +1345,10 @@ def main() -> None:
             and not 0 < args.final_learning_rate <= args.learning_rate
         )
         or not 0 <= args.auxiliary_probability <= 1
+        or (
+            args.balanced_teacher_batches
+            and (args.batch_size < 2 or not 0 < args.auxiliary_probability < 1)
+        )
         or args.ev_regret_scale < 0
         or args.maximum_records_per_teacher < 12
         or args.feature_workers <= 0
@@ -1473,6 +1512,7 @@ def main() -> None:
             args.maximum_weighted_kl,
             args.minimum_primary_agreement,
             args.maximum_teacher_ev_loss_bb,
+            args.balanced_teacher_batches,
         )
         network = args.output_dir / f"range-policy-seed-{seed}.json"
         export_model(model, network, seed, primary, auxiliary)
@@ -1542,6 +1582,11 @@ def main() -> None:
         "learningRate": args.learning_rate,
         "finalLearningRate": args.final_learning_rate,
         "auxiliaryProbability": args.auxiliary_probability,
+        "teacherBatching": (
+            "exact-proportional-mixed-v1"
+            if args.balanced_teacher_batches
+            else "stochastic-whole-batch-v1"
+        ),
         "evRegretScale": args.ev_regret_scale,
         "architecture": args.architecture,
         "composition": args.composition,
