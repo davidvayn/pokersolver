@@ -1,0 +1,87 @@
+{
+  "schema": "hu-policy-training-experiment-v1",
+  "depthBb": 20,
+  "experiment": "v74-stratified-reach-batches",
+  "sourceReportSha256": "5ab637f6ea5434b93057b243ad0ed7c6c5f763675fd779c1954b46c42adc04a9",
+  "configuration": {
+    "architecture": "wide",
+    "steps": 3000,
+    "batchSize": 16,
+    "learningRate": 0.0003,
+    "finalLearningRate": 0.00003,
+    "teacherBatching": "exact-proportional-mixed-v1",
+    "trainingSampling": "public-node-reach-stratified-combo-conditional-v1"
+  },
+  "exactRustEvaluations": [
+    {
+      "student": 18051,
+      "split": "source",
+      "networkSha256": "75b2266f302ff6c48c46c19f0ada4c994c37a5e9a92632899a8f77f385c0efbb",
+      "records": 5600,
+      "weightedProbabilityMae": 0.04282197070752564,
+      "weightedTeacherKl": 0.07189140020206283,
+      "primaryAgreement": 0.9242923236051784,
+      "teacherEvLossBb": 0.010853100026132222
+    },
+    {
+      "student": 18051,
+      "split": "ownHeldout",
+      "records": 1119,
+      "weightedProbabilityMae": 0.08104713826304463,
+      "weightedTeacherKl": 0.22856319674204026,
+      "primaryAgreement": 0.8239786860174179,
+      "teacherEvLossBb": 0.020849231910874132
+    },
+    {
+      "student": 18051,
+      "split": "crossHeldout",
+      "records": 189,
+      "weightedProbabilityMae": 0.1449473875606629,
+      "weightedTeacherKl": 0.2999321210010455,
+      "primaryAgreement": 0.7619270808945585,
+      "teacherEvLossBb": 0.0801007100369018
+    },
+    {
+      "student": 18052,
+      "split": "source",
+      "networkSha256": "ef3929deb9bfb4aa4f0727bccd2191dac45acb2938b9b80f38a64956cf475214",
+      "records": 950,
+      "weightedProbabilityMae": 0.06392755278175367,
+      "weightedTeacherKl": 0.10192794905146371,
+      "primaryAgreement": 0.8940004569866825,
+      "teacherEvLossBb": 0.019805321861230837
+    },
+    {
+      "student": 18052,
+      "split": "ownHeldout",
+      "records": 189,
+      "weightedProbabilityMae": 0.12547021758597687,
+      "weightedTeacherKl": 0.2433821793991265,
+      "primaryAgreement": 0.8262207195461942,
+      "teacherEvLossBb": 0.05947273572816984
+    },
+    {
+      "student": 18052,
+      "split": "crossHeldout",
+      "records": 1119,
+      "weightedProbabilityMae": 0.06599733018925097,
+      "weightedTeacherKl": 0.19124772633155682,
+      "primaryAgreement": 0.8496014704434799,
+      "teacherEvLossBb": 0.010820479856721134
+    }
+  ],
+  "invariants": {
+    "minimumScoredComboCoverage": 1,
+    "maximumProbabilitySumError": 5.21540641784668e-8
+  },
+  "validation": {
+    "status": "rejected",
+    "reasons": [
+      "Student 18051 cross-heldout EV loss was 0.08010bb, above 0.05bb.",
+      "Student 18052 own-heldout EV loss was 0.05947bb, above 0.05bb.",
+      "Both students regressed heldout action fidelity versus the v72 seed-18031 candidate.",
+      "The stratified sampler was removed rather than retained as unused production surface."
+    ],
+    "nextExperiment": "Measure corpus coverage and the v72 seed-18031 full-game exploitability directly before changing policy training again."
+  }
+}

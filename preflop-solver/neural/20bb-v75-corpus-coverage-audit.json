@@ -1,0 +1,81 @@
+{
+  "schema": "hu-range-policy-corpus-coverage-audit-v1",
+  "depthBb": 20,
+  "datasets": [
+    {
+      "teacherSeed": 17901,
+      "sourcePolicySeed": 7601,
+      "path": "neural/runs/20bb-v63-off-support-root1-seed7601/range-targets.jsonl.gz",
+      "sha256": "63fb68b2025d7a9c59e7024ba38f8d1fd44880ae9a4cfb36faaf4d288fb73769",
+      "records": 5600,
+      "streets": {
+        "flop": {
+          "records": 16,
+          "exactBoards": 1,
+          "publicHistories": 16,
+          "reachWeight": 2.66810421,
+          "reachWeightPercent": 39.43551,
+          "reachWeightEffectiveSampleSize": 3.1648
+        },
+        "turn": {
+          "records": 16,
+          "exactBoards": 1,
+          "publicHistories": 16,
+          "reachWeight": 2.66308336,
+          "reachWeightPercent": 39.3613,
+          "reachWeightEffectiveSampleSize": 3.2123
+        },
+        "river": {
+          "records": 5568,
+          "exactBoards": 48,
+          "publicHistories": 116,
+          "reachWeight": 1.43455211,
+          "reachWeightPercent": 21.20318,
+          "reachWeightEffectiveSampleSize": 355.4216
+        }
+      }
+    },
+    {
+      "teacherSeed": 17902,
+      "sourcePolicySeed": 7602,
+      "path": "neural/runs/20bb-v63-off-support-root1/range-targets.jsonl.gz",
+      "sha256": "0a2f79d02fa01250a2f4aa3e2e9f849416cb01507ffb68d81d1519b8aa2b1c04",
+      "records": 950,
+      "streets": {
+        "flop": {
+          "records": 16,
+          "exactBoards": 1,
+          "publicHistories": 16,
+          "reachWeight": 2.36838661,
+          "reachWeightPercent": 39.52998,
+          "reachWeightEffectiveSampleSize": 3.6522
+        },
+        "turn": {
+          "records": 12,
+          "exactBoards": 1,
+          "publicHistories": 12,
+          "reachWeight": 2.197835,
+          "reachWeightPercent": 36.68335,
+          "reachWeightEffectiveSampleSize": 3.5617
+        },
+        "river": {
+          "records": 922,
+          "exactBoards": 48,
+          "publicHistories": 36,
+          "reachWeight": 1.425147,
+          "reachWeightPercent": 23.78667,
+          "reachWeightEffectiveSampleSize": 328.8725
+        }
+      }
+    }
+  ],
+  "validation": {
+    "status": "insufficient_public_card_coverage",
+    "reasons": [
+      "Each independent corpus contains only one exact flop board and one exact turn board.",
+      "Those under-covered flop and turn rows carry 76.21% to 78.80% of corpus reach weight.",
+      "The observed source-to-cross-seed action-fidelity gap is therefore evidence of public-card generalization failure, not a reason to add more optimization steps on the same corpus."
+    ],
+    "requiredNextEvidence": "Generate independent multi-root authentic corpora before another policy-distillation comparison."
+  }
+}

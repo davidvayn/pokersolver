@@ -1,0 +1,102 @@
+{
+  "schema": "hu-policy-representation-experiment-v1",
+  "depthBb": 20,
+  "experiment": "v73-wide-state-skip",
+  "sourceReportSha256": "da533928f6048384c78f3cf73f02fb28e18c4c18e5a5017d454b53a8a68870ef",
+  "configuration": {
+    "architecture": "wide-state-skip",
+    "steps": 3000,
+    "batchSize": 16,
+    "learningRate": 0.0003,
+    "finalLearningRate": 0.00003,
+    "teacherBatching": "exact-proportional-mixed-v1",
+    "trainingSampling": "public-node-reach-proportional-combo-conditional-v1"
+  },
+  "servingParityCorrection": {
+    "issue": "The experimental public-state embedding was initially concatenated before query/action in Rust but after query/action in MLX.",
+    "resolution": "Corrected exact evaluations used the MLX tensor order and matched the frozen MLX diagnostics. The failed architecture and its serving extension were then removed rather than retained as production surface.",
+    "evidence": {
+      "student0SourceMlx": {
+        "weightedTeacherKl": 0.04085678743125438,
+        "primaryAgreement": 0.9502966030186234,
+        "teacherEvLossBb": 0.0051776825518316015
+      },
+      "student0SourceRust": {
+        "weightedTeacherKl": 0.040886971540468144,
+        "primaryAgreement": 0.9503582091716894,
+        "teacherEvLossBb": 0.005056167681050502
+      }
+    }
+  },
+  "correctedExactRustEvaluations": [
+    {
+      "student": 18041,
+      "split": "source",
+      "networkSha256": "c9f3553bc7ada9ab32463c220d5befe06ac3f33ee1dd45c5f882a54a03705712",
+      "records": 5600,
+      "weightedProbabilityMae": 0.027618359867612553,
+      "weightedTeacherKl": 0.040886971540468144,
+      "primaryAgreement": 0.9503582091716894,
+      "teacherEvLossBb": 0.005056167681050502
+    },
+    {
+      "student": 18041,
+      "split": "ownHeldout",
+      "records": 1119,
+      "weightedProbabilityMae": 0.06278619034881779,
+      "weightedTeacherKl": 0.16519429862282264,
+      "primaryAgreement": 0.854512170526458,
+      "teacherEvLossBb": 0.01405770942771542
+    },
+    {
+      "student": 18041,
+      "split": "crossHeldout",
+      "records": 189,
+      "weightedProbabilityMae": 0.1164544781945993,
+      "weightedTeacherKl": 0.2317941978216801,
+      "primaryAgreement": 0.8343945348358982,
+      "teacherEvLossBb": 0.04190257315209846
+    },
+    {
+      "student": 18042,
+      "split": "source",
+      "networkSha256": "1800a7bfb61e7207a074f5a3c1e64b65910ae326e372e8f572ccfe1b43c9e1e1",
+      "records": 950,
+      "weightedProbabilityMae": 0.0889128268879975,
+      "weightedTeacherKl": 0.1645308386732214,
+      "primaryAgreement": 0.8533190295361108,
+      "teacherEvLossBb": 0.03968054931504034
+    },
+    {
+      "student": 18042,
+      "split": "ownHeldout",
+      "records": 189,
+      "weightedProbabilityMae": 0.16697098213178324,
+      "weightedTeacherKl": 0.42330222509351073,
+      "primaryAgreement": 0.775936965274418,
+      "teacherEvLossBb": 0.13534773092191407
+    },
+    {
+      "student": 18042,
+      "split": "crossHeldout",
+      "records": 1119,
+      "weightedProbabilityMae": 0.08684131404106037,
+      "weightedTeacherKl": 0.2673529407916888,
+      "primaryAgreement": 0.8068501573117954,
+      "teacherEvLossBb": 0.029808365167884637
+    }
+  ],
+  "invariants": {
+    "minimumScoredComboCoverage": 1,
+    "maximumProbabilitySumError": 5.21540641784668e-8
+  },
+  "validation": {
+    "status": "rejected",
+    "reasons": [
+      "Student 18042 own-heldout EV loss was 0.13535bb, above 0.05bb.",
+      "Heldout KL and cross-seed action agreement remained outside the candidate gates.",
+      "The extra state tower amplified seed sensitivity and was removed."
+    ],
+    "nextExperiment": "Retain the v72 wide architecture and reduce iid reach-minibatch variance with unbiased stratified reach sampling."
+  }
+}

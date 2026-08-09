@@ -42,6 +42,36 @@ class RangePolicyDistillationTests(unittest.TestCase):
                     path, values.shape, "0" * 64
                 )
 
+    def test_cross_augmented_dataset_reuses_identical_target_features(self) -> None:
+        contexts = np.zeros((2, 2, module.CONTEXT_SIZE), dtype=np.float32)
+        queries = np.zeros(
+            (2, 2, module.COMBO_COUNT, module.QUERY_SIZE), dtype=np.float32
+        )
+        first = SimpleNamespace(
+            target_corpus_sha256="1" * 64,
+            records=[{}, {}],
+            sha256="a" * 64,
+            contexts=contexts,
+            queries=queries,
+            feature_cache={"enabled": True, "hit": True},
+        )
+        second = SimpleNamespace(
+            target_corpus_sha256="1" * 64,
+            records=[{}, {}],
+            sha256="b" * 64,
+            contexts=None,
+            queries=None,
+            feature_cache=None,
+        )
+        prepared = {}
+        self.assertFalse(module.reuse_target_feature_arrays(first, prepared))
+        self.assertTrue(module.reuse_target_feature_arrays(second, prepared))
+        self.assertIs(second.contexts, contexts)
+        self.assertIs(second.queries, queries)
+        self.assertEqual(
+            second.feature_cache["sharedTargetCorpusSha256"], "1" * 64
+        )
+
     def test_heldout_subset_streams_full_records_from_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "source.jsonl.gz"

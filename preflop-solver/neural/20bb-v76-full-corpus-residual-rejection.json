@@ -1,0 +1,90 @@
+{
+  "schema": "hu-policy-training-experiment-v1",
+  "depthBb": 20,
+  "experiment": "v76-full-corpus-source-bundle-logit-residual",
+  "sourceReportSha256": "39e18ee5d71c41317cccafc6899ceef2cec5250a9d1aec3f7ec7daa6692f4aa9",
+  "configuration": {
+    "architecture": "wide",
+    "composition": "source_bundle_logit_residual",
+    "steps": 3000,
+    "batchSize": 16,
+    "learningRate": 0.0003,
+    "finalLearningRate": 0.00003,
+    "teacherBatching": "exact-proportional-mixed-v1",
+    "trainingSampling": "public-node-reach-proportional-combo-conditional-v1"
+  },
+  "exactRustEvaluations": [
+    {
+      "student": 18061,
+      "split": "source",
+      "networkSha256": "56d6ba8d80c29202f6754f492066fefddd2bc714c3e939c91a2e96a322cd20c5",
+      "records": 5600,
+      "weightedProbabilityMae": 0.03271156701666959,
+      "weightedTeacherKl": 0.053770980580526435,
+      "primaryAgreement": 0.9423082497852519,
+      "teacherEvLossBb": 0.007537595958447365
+    },
+    {
+      "student": 18061,
+      "split": "ownHeldout",
+      "records": 1119,
+      "weightedProbabilityMae": 0.0713543455884887,
+      "weightedTeacherKl": 0.19046752976081924,
+      "primaryAgreement": 0.8414303588784131,
+      "teacherEvLossBb": 0.020392947101729373
+    },
+    {
+      "student": 18061,
+      "split": "crossHeldout",
+      "records": 189,
+      "weightedProbabilityMae": 0.13725194786398412,
+      "weightedTeacherKl": 0.2646914268612101,
+      "primaryAgreement": 0.8148399190632084,
+      "teacherEvLossBb": 0.06939339782404733
+    },
+    {
+      "student": 18062,
+      "split": "source",
+      "networkSha256": "dd711fa7eae28d86dc91edd77fe9e6aa4248b53d97665b59369a1618f40d611b",
+      "records": 950,
+      "weightedProbabilityMae": 0.062954697122826,
+      "weightedTeacherKl": 0.10312811696924123,
+      "primaryAgreement": 0.8890826269051547,
+      "teacherEvLossBb": 0.025339382764596515
+    },
+    {
+      "student": 18062,
+      "split": "ownHeldout",
+      "records": 189,
+      "weightedProbabilityMae": 0.1331536791600592,
+      "weightedTeacherKl": 0.2723562030578595,
+      "primaryAgreement": 0.7926642306785044,
+      "teacherEvLossBb": 0.07169732509174215
+    },
+    {
+      "student": 18062,
+      "split": "crossHeldout",
+      "records": 1119,
+      "weightedProbabilityMae": 0.07297758976304937,
+      "weightedTeacherKl": 0.20064221269476257,
+      "primaryAgreement": 0.8437959948784427,
+      "teacherEvLossBb": 0.030372915951331295
+    }
+  ],
+  "invariants": {
+    "minimumScoredComboCoverage": 1,
+    "maximumProbabilitySumError": 5.21540641784668e-8,
+    "maximumStoredSourceProbabilityDifference": 2.9802322387695312e-8
+  },
+  "validation": {
+    "status": "rejected",
+    "reasons": [
+      "Student 18061 cross-heldout EV loss was 0.06939bb, above 0.05bb.",
+      "Student 18062 own-heldout EV loss was 0.07170bb, above 0.05bb.",
+      "Every heldout weighted KL exceeded the 0.10 gate.",
+      "Residual composition on the same single-flop/single-turn teacher corpora did not resolve public-card generalization."
+    ],
+    "activationAllowed": false,
+    "nextExperiment": "Generate paired authentic multi-root corpora before another replacement-policy candidate."
+  }
+}

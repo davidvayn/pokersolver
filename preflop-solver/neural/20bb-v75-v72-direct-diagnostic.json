@@ -1,0 +1,43 @@
+{
+  "schema": "hu-range-policy-direct-diagnostic-v1",
+  "depthBb": 20,
+  "candidate": {
+    "model": "v72-seed-18031",
+    "sourcePolicySha256": "310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3",
+    "rangePolicySha256": "84a67d06f8466f0cc5fde31e3bcf6b7140ef304537e4da319fe44d05f6dfe3f4"
+  },
+  "servingRegression": {
+    "symptom": "The first deterministic certificate attempt panicked while conditioning a reachable rare public line with total reach below the generic game epsilon.",
+    "cause": "Range normalization treated positive reach at or below 1e-12 as impossible even though conditioning is scale invariant.",
+    "fix": "Reject only non-finite or genuinely non-positive reach; retain fail-closed rejection for exactly zero reach.",
+    "regressionTests": [
+      "public_range_normalization_is_scale_invariant_for_rare_lines",
+      "public_range_normalization_still_rejects_impossible_lines"
+    ]
+  },
+  "certificate": {
+    "path": "neural/runs/20bb-v75-v72-direct-diagnostic/causal-certificate-seed18031-8x1x1.json",
+    "sha256": "0f2eca56e995e846697127a2fb40b52786190d6e286b10b95394ef70189d2f40",
+    "deals": 8,
+    "seed": 1803102,
+    "threads": 8,
+    "publicBranchesPerStreet": 1,
+    "opponentSamplesPerRunout": 1,
+    "scenariosPerDeal": 1,
+    "exactBettingTreeNodes": 140320,
+    "sampleMeanExploitabilityBb": 6.369215022086008,
+    "sampleStandardErrorBb": 1.1141113839940107,
+    "confidence": 0.99,
+    "exploitabilityUpperBoundBb": 20.0
+  },
+  "validation": {
+    "status": "rejected",
+    "reasons": [
+      "The sampled mean is orders of magnitude above the 0.05bb/hand release target.",
+      "The one-sided 99% upper bound is 20bb/hand, above the 0.10bb/hand release gate.",
+      "The small diagnostic is intentionally noisy, but no plausible sampling uncertainty can make a 6.37bb/hand mean release evidence."
+    ],
+    "activationAllowed": false,
+    "nextPolicyChange": "Replace single-board teacher coverage with independent multi-root authentic flop and turn corpora before another replacement-policy candidate."
+  }
+}

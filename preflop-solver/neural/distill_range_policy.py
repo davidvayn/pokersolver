@@ -609,6 +609,33 @@ def add_features(
     }
 
 
+def reuse_target_feature_arrays(
+    dataset: LoadedDataset,
+    prepared: dict[str, LoadedDataset],
+) -> bool:
+    """Reuse features when only the attached source-policy baseline differs."""
+    identity = target_corpus_sha256(dataset)
+    source = prepared.get(identity)
+    if source is None:
+        prepared[identity] = dataset
+        return False
+    if (
+        source.contexts is None
+        or source.queries is None
+        or len(source.records) != len(dataset.records)
+    ):
+        raise RuntimeError("shared range-policy target features are incompatible")
+    dataset.contexts = source.contexts
+    dataset.queries = source.queries
+    dataset.feature_cache = {
+        "enabled": source.feature_cache is not None,
+        "hit": True,
+        "sharedTargetCorpusSha256": identity,
+        "sourceDatasetSha256": source.sha256,
+    }
+    return True
+
+
 def range_policy_state_features(
     state: dict[str, Any], depth_bb: float
 ) -> np.ndarray:
@@ -1457,6 +1484,7 @@ def main() -> None:
     datasets_to_prepare = (
         primary_datasets + cross_datasets if paired_sources else primary_datasets
     )
+    prepared_features: dict[str, LoadedDataset] = {}
     for dataset, source_network in zip(
         datasets_to_prepare, expected_sources, strict=True
     ):
@@ -1474,7 +1502,8 @@ def main() -> None:
             raise ValueError(
                 "residual policy datasets require pinned source probabilities"
             )
-        add_features(dataset, args.feature_cache_dir, args.feature_workers)
+        if not reuse_target_feature_arrays(dataset, prepared_features):
+            add_features(dataset, args.feature_cache_dir, args.feature_workers)
     primary_splits = [split_rows(dataset) for dataset in primary_datasets]
     cross_splits = (
         [split_rows(dataset) for dataset in cross_datasets]

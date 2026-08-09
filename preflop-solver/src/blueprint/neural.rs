@@ -465,7 +465,10 @@ fn normalize_ranges_for_board(ranges: &mut [Vec<f64>; 2], board: &[u8]) -> Resul
             }
         }
         let total = ranges[player].iter().sum::<f64>();
-        if !total.is_finite() || total <= EPSILON {
+        // Public-action reach is a scale factor, not a probability after each
+        // observed action. Rare but reachable lines may legitimately carry
+        // less than the game's comparison epsilon before conditioning.
+        if !total.is_finite() || total <= 0.0 {
             return Err("range policy public action has zero conditional reach".to_owned());
         }
         for weight in &mut ranges[player] {
@@ -3730,6 +3733,31 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_range_normalization_is_scale_invariant_for_rare_lines() {
+        let mut ranges = [vec![1.0e-16; COMBO_COUNT], vec![2.0e-16; COMBO_COUNT]];
+        normalize_ranges_for_board(&mut ranges, &[0, 5, 10])
+            .expect("positive rare-line reach remains conditionable");
+
+        for range in ranges {
+            assert!((range.iter().sum::<f64>() - 1.0).abs() <= 1.0e-12);
+            for combo in all_combos() {
+                if combo.cards().iter().any(|card| [0, 5, 10].contains(card)) {
+                    assert_eq!(range[combo.key()], 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn public_range_normalization_still_rejects_impossible_lines() {
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![1.0; COMBO_COUNT]];
+        assert_eq!(
+            normalize_ranges_for_board(&mut ranges, &[0, 5, 10]),
+            Err("range policy public action has zero conditional reach".to_owned())
+        );
+    }
 
     #[test]
     fn exact_feature_encoder_matches_the_pinned_shape_and_initial_scalars() {
