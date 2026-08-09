@@ -1,4 +1,9 @@
+import gzip
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
@@ -8,6 +13,53 @@ import train_public_value_network as value_features
 
 
 class RangePolicyDistillationTests(unittest.TestCase):
+    def test_feature_cache_array_is_memory_mapped_and_hash_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "features.npy"
+            values = np.arange(12, dtype=np.float32).reshape(3, 4)
+            np.save(path, values, allow_pickle=False)
+            loaded = module.validate_feature_cache_array(
+                path, values.shape, module.sha256(path)
+            )
+            self.assertIsInstance(loaded, np.memmap)
+            np.testing.assert_array_equal(loaded, values)
+            with path.open("r+b") as stream:
+                stream.seek(-1, 2)
+                byte = stream.read(1)
+                stream.seek(-1, 2)
+                stream.write(bytes([byte[0] ^ 1]))
+            with self.assertRaisesRegex(RuntimeError, "integrity failure"):
+                module.validate_feature_cache_array(
+                    path, values.shape, "0" * 64
+                )
+
+    def test_heldout_subset_streams_full_records_from_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source.jsonl.gz"
+            output = Path(temporary) / "heldout.jsonl.gz"
+            metadata = {"records": 3, "schema": "test"}
+            records = [
+                {"index": index, "large_tensor": [index] * 10}
+                for index in range(3)
+            ]
+            with gzip.open(source, "wt", encoding="utf-8") as stream:
+                stream.write(json.dumps(metadata) + "\n")
+                for record in records:
+                    stream.write(json.dumps(record) + "\n")
+            dataset = SimpleNamespace(
+                metadata=metadata,
+                sha256="1" * 64,
+                path=source,
+                records=[{"index": index} for index in range(3)],
+            )
+            module.write_subset(dataset, np.asarray([0, 2]), output)
+            with gzip.open(output, "rt", encoding="utf-8") as stream:
+                subset_metadata = json.loads(next(stream))
+                subset_records = [json.loads(line) for line in stream]
+            self.assertEqual(subset_metadata["records"], 2)
+            self.assertEqual(subset_metadata["subset_of_sha256"], "1" * 64)
+            self.assertEqual(subset_records, [records[0], records[2]])
+
     def test_reach_priority_cap_preserves_weights_and_street_coverage(self) -> None:
         records = []
         for street_index, street in enumerate(("flop", "turn", "river")):

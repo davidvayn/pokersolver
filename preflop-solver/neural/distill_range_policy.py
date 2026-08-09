@@ -7,7 +7,9 @@ import argparse
 import gzip
 import hashlib
 import json
+import shutil
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,7 @@ PUBLIC_STATE_FEATURE_COUNT = 20 + MAX_TRAJECTORY_ACTIONS * TRAJECTORY_FEATURE_CO
 CONTEXT_SIZE = BASE_CONTEXT_SIZE + PUBLIC_STATE_FEATURE_COUNT
 STREETS = ("preflop", "flop", "turn", "river")
 TRAJECTORY_KINDS = ("fold", "check", "call", "bet", "raise", "all_in")
+FEATURE_CACHE_IMPLEMENTATION = "range-policy-features-v2-public-trajectory-1"
 
 
 def sha256(path: Path) -> str:
@@ -71,6 +74,8 @@ class LoadedDataset:
     targets: np.ndarray
     action_values: np.ndarray
     combo_weights: np.ndarray
+    target_corpus_sha256: str = ""
+    feature_cache: dict[str, Any] | None = None
     contexts: np.ndarray | None = None
     queries: np.ndarray | None = None
 
@@ -96,10 +101,45 @@ def read_records(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return metadata, records
 
 
+def inspect_dataset(path: Path) -> tuple[dict[str, Any], int]:
+    """Validate a dataset stream without retaining its large target tensors."""
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        metadata = json.loads(next(stream))
+        if (
+            metadata.get("record_type") != "metadata"
+            or metadata.get("schema") != DATASET_SCHEMA
+            or metadata.get("feature_schema") != DATASET_RANGE_POLICY_FEATURE_SCHEMA
+            or metadata.get("context_size") != BASE_CONTEXT_SIZE
+            or metadata.get("query_size") != QUERY_SIZE
+            or metadata.get("action_feature_schema") != ACTION_FEATURE_SCHEMA
+            or metadata.get("action_feature_count") != ACTION_FEATURE_COUNT
+            or metadata.get("teacher", {}).get("validation", {}).get("status")
+            != "accepted_for_training"
+            or not isinstance(metadata.get("records"), int)
+            or metadata["records"] <= 0
+        ):
+            raise ValueError(f"incompatible or unvalidated range-policy dataset: {path}")
+        maximum_actions = 0
+        records = 0
+        for line in stream:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            maximum_actions = max(
+                maximum_actions, len(record.get("action_labels", []))
+            )
+            records += 1
+    if records != metadata["records"] or maximum_actions <= 0:
+        raise ValueError(f"range-policy dataset record count mismatch: {path}")
+    return metadata, maximum_actions
+
+
 def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
-    metadata, records = read_records(source)
-    if len(records) <= capacity:
+    with gzip.open(source, "rt", encoding="utf-8") as stream:
+        header = json.loads(next(stream))
+    if isinstance(header.get("records"), int) and header["records"] <= capacity:
         return source
+    metadata, records = read_records(source)
     if capacity < 12:
         raise ValueError("range-policy corpus cap must leave room for every street")
     grouped = {
@@ -204,11 +244,9 @@ def record_selection_identity(record: dict[str, Any]) -> bytes:
 
 
 def target_corpus_sha256(dataset: LoadedDataset) -> str:
-    digest = hashlib.sha256(b"hu-range-policy-target-corpus-v1\0")
-    for record in dataset.records:
-        digest.update(target_record_identity(record))
-        digest.update(b"\n")
-    return digest.hexdigest()
+    if len(dataset.target_corpus_sha256) != 64:
+        raise ValueError("range-policy target corpus hash is unavailable")
+    return dataset.target_corpus_sha256
 
 
 def target_record_identity(record: dict[str, Any]) -> bytes:
@@ -240,6 +278,8 @@ def canonical_training_numbers(value: Any) -> Any:
 def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
     metadata, records = read_records(path)
     count = len(records)
+    target_digest = hashlib.sha256(b"hu-range-policy-target-corpus-v1\0")
+    record_summaries: list[dict[str, Any]] = []
     boards: list[np.ndarray] = []
     actors = np.empty(count, dtype=np.int32)
     invested = np.empty((count, 2), dtype=np.float32)
@@ -253,6 +293,8 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
     action_values = np.zeros_like(targets)
     node_weights = np.empty(count, dtype=np.float64)
     for index, record in enumerate(records):
+        target_digest.update(target_record_identity(record))
+        target_digest.update(b"\n")
         state = record.get("state", {})
         action_count = len(record.get("action_labels", []))
         record_ranges = np.asarray(record.get("ranges"), dtype=np.float32)
@@ -307,6 +349,15 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
         node_weights[index] = float(record.get("weight", 0.0))
         if not np.isfinite(node_weights[index]) or node_weights[index] <= 0:
             raise ValueError(f"invalid reach weight in record {index} of {path}")
+        record_summaries.append(
+            {
+                "record_type": record["record_type"],
+                "weight": record["weight"],
+                "state": state,
+                "action_labels": record["action_labels"],
+            }
+        )
+    del records
     masses = np.maximum(
         ranges.sum(axis=2)[:, ::-1, None]
         - ranges[:, ::-1, :][:, :, COMBO_CONFLICTS].sum(axis=3),
@@ -327,7 +378,7 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
         path=path,
         sha256=sha256(path),
         metadata=metadata,
-        records=records,
+        records=record_summaries,
         boards=boards,
         actors=actors,
         invested=invested,
@@ -340,36 +391,222 @@ def load_dataset(path: Path, maximum_actions: int) -> LoadedDataset:
         targets=targets,
         action_values=action_values,
         combo_weights=combo_weights,
+        target_corpus_sha256=target_digest.hexdigest(),
     )
 
 
-def add_features(dataset: LoadedDataset) -> None:
+def build_range_feature_task(
+    task: tuple[
+        dict[str, Any],
+        np.ndarray,
+        int,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        float,
+    ]
+) -> tuple[np.ndarray, np.ndarray]:
+    state, board, actor, invested, ranges, masses, depth_bb = task
+    context, queries = build_features(
+        board,
+        actor,
+        invested,
+        ranges,
+        masses,
+        DATASET_RANGE_POLICY_FEATURE_SCHEMA,
+    )
+    public_state = range_policy_state_features(state, depth_bb)
+    context = np.concatenate(
+        (context, np.broadcast_to(public_state, (2, len(public_state)))), axis=1
+    )
+    return context, queries
+
+
+def range_feature_cache_key(dataset: LoadedDataset) -> str:
+    payload = {
+        "implementation": FEATURE_CACHE_IMPLEMENTATION,
+        "datasetSha256": dataset.sha256,
+        "featureSchema": RANGE_POLICY_FEATURE_SCHEMA,
+        "contextSize": CONTEXT_SIZE,
+        "querySize": QUERY_SIZE,
+        "records": len(dataset.records),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def validate_feature_cache_array(
+    path: Path,
+    expected_shape: tuple[int, ...],
+    expected_sha256: str,
+) -> np.memmap:
+    if not path.is_file() or sha256(path) != expected_sha256:
+        raise RuntimeError(f"range-policy feature cache integrity failure: {path}")
+    values = np.load(path, mmap_mode="r", allow_pickle=False)
+    if values.shape != expected_shape or values.dtype != np.float32:
+        raise RuntimeError(f"range-policy feature cache shape mismatch: {path}")
+    return values
+
+
+def add_features(
+    dataset: LoadedDataset,
+    cache_dir: Path | None = None,
+    workers: int = 1,
+) -> None:
+    if workers <= 0:
+        raise ValueError("range-policy feature workers must be positive")
     depth_bb = float(dataset.metadata["depth_bb"])
-    built = []
-    for record, board, actor, invested, ranges, masses in zip(
-        dataset.records,
-        dataset.boards,
-        dataset.actors,
-        dataset.invested,
-        dataset.ranges,
-        dataset.masses,
-        strict=True,
-    ):
-        context, queries = build_features(
-            board,
-            int(actor),
-            invested,
-            ranges,
-            masses,
-            DATASET_RANGE_POLICY_FEATURE_SCHEMA,
+    count = len(dataset.records)
+    context_shape = (count, 2, CONTEXT_SIZE)
+    query_shape = (count, 2, COMBO_COUNT, QUERY_SIZE)
+    if cache_dir is None:
+        built = [
+            build_range_feature_task(
+                (
+                    record["state"],
+                    board,
+                    int(actor),
+                    invested,
+                    ranges,
+                    masses,
+                    depth_bb,
+                )
+            )
+            for record, board, actor, invested, ranges, masses in zip(
+                dataset.records,
+                dataset.boards,
+                dataset.actors,
+                dataset.invested,
+                dataset.ranges,
+                dataset.masses,
+                strict=True,
+            )
+        ]
+        dataset.contexts = np.stack([context for context, _ in built])
+        dataset.queries = np.stack([queries for _, queries in built])
+        dataset.feature_cache = {"enabled": False, "hit": False}
+        return
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = range_feature_cache_key(dataset)
+    context_path = cache_dir / f"{key}-contexts.npy"
+    query_path = cache_dir / f"{key}-queries.npy"
+    metadata_path = cache_dir / f"{key}.json"
+    expected = {
+        "schema": "hu-range-policy-feature-cache-v1",
+        "key": key,
+        "implementation": FEATURE_CACHE_IMPLEMENTATION,
+        "datasetSha256": dataset.sha256,
+        "featureSchema": RANGE_POLICY_FEATURE_SCHEMA,
+        "records": count,
+        "contextShape": list(context_shape),
+        "queryShape": list(query_shape),
+        "dtype": "float32",
+    }
+    if metadata_path.is_file():
+        metadata = json.loads(metadata_path.read_text())
+        for field, value in expected.items():
+            if metadata.get(field) != value:
+                raise RuntimeError(
+                    f"range-policy feature cache metadata mismatch for {field}"
+                )
+        dataset.contexts = validate_feature_cache_array(
+            context_path, context_shape, metadata["contextsSha256"]
         )
-        public_state = range_policy_state_features(record["state"], depth_bb)
-        context = np.concatenate(
-            (context, np.broadcast_to(public_state, (2, len(public_state)))), axis=1
+        dataset.queries = validate_feature_cache_array(
+            query_path, query_shape, metadata["queriesSha256"]
         )
-        built.append((context, queries))
-    dataset.contexts = np.stack([context for context, _ in built])
-    dataset.queries = np.stack([queries for _, queries in built])
+        dataset.feature_cache = {
+            "enabled": True,
+            "hit": True,
+            "key": key,
+            "metadata": str(metadata_path),
+            "bytes": context_path.stat().st_size + query_path.stat().st_size,
+        }
+        return
+
+    projected_bytes = (
+        int(np.prod(context_shape)) + int(np.prod(query_shape))
+    ) * np.dtype(np.float32).itemsize
+    if projected_bytes > 20 * 1024**3:
+        raise RuntimeError("range-policy feature cache exceeds the 20GB safety ceiling")
+    free_bytes = shutil.disk_usage(cache_dir).free
+    if free_bytes < projected_bytes + 1024**3:
+        raise RuntimeError("insufficient disk headroom for range-policy feature cache")
+
+    context_temporary = Path(f"{context_path}.tmp")
+    query_temporary = Path(f"{query_path}.tmp")
+    context_temporary.unlink(missing_ok=True)
+    query_temporary.unlink(missing_ok=True)
+    contexts = np.lib.format.open_memmap(
+        context_temporary,
+        mode="w+",
+        dtype=np.float32,
+        shape=context_shape,
+    )
+    queries = np.lib.format.open_memmap(
+        query_temporary,
+        mode="w+",
+        dtype=np.float32,
+        shape=query_shape,
+    )
+
+    def task(row: int) -> tuple[Any, ...]:
+        return (
+            dataset.records[row]["state"],
+            dataset.boards[row],
+            int(dataset.actors[row]),
+            dataset.invested[row],
+            dataset.ranges[row],
+            dataset.masses[row],
+            depth_bb,
+        )
+
+    executor = ProcessPoolExecutor(max_workers=workers) if workers > 1 else None
+    chunk_size = max(1, workers * 2)
+    try:
+        for start in range(0, count, chunk_size):
+            end = min(count, start + chunk_size)
+            tasks = [task(row) for row in range(start, end)]
+            results = (
+                executor.map(build_range_feature_task, tasks, chunksize=1)
+                if executor is not None
+                else map(build_range_feature_task, tasks)
+            )
+            for row, (context, query) in zip(range(start, end), results, strict=True):
+                contexts[row] = context
+                queries[row] = query
+        contexts.flush()
+        queries.flush()
+    except BaseException:
+        del contexts, queries
+        context_temporary.unlink(missing_ok=True)
+        query_temporary.unlink(missing_ok=True)
+        raise
+    finally:
+        if executor is not None:
+            executor.shutdown()
+    del contexts, queries
+    context_temporary.replace(context_path)
+    query_temporary.replace(query_path)
+    metadata = {
+        **expected,
+        "contextsSha256": sha256(context_path),
+        "queriesSha256": sha256(query_path),
+    }
+    metadata_temporary = Path(f"{metadata_path}.tmp")
+    metadata_temporary.write_text(json.dumps(metadata, indent=2) + "\n")
+    metadata_temporary.replace(metadata_path)
+    dataset.contexts = np.load(context_path, mmap_mode="r", allow_pickle=False)
+    dataset.queries = np.load(query_path, mmap_mode="r", allow_pickle=False)
+    dataset.feature_cache = {
+        "enabled": True,
+        "hit": False,
+        "key": key,
+        "metadata": str(metadata_path),
+        "bytes": context_path.stat().st_size + query_path.stat().st_size,
+    }
 
 
 def range_policy_state_features(
@@ -962,20 +1199,34 @@ def export_model(
 def write_subset(
     dataset: LoadedDataset, rows: np.ndarray, path: Path
 ) -> None:
+    selected = {int(row) for row in rows}
+    if len(selected) != len(rows) or min(selected, default=-1) < 0 or max(
+        selected, default=-1
+    ) >= len(dataset.records):
+        raise ValueError("invalid deterministic heldout row selection")
     metadata = dict(dataset.metadata)
     metadata["records"] = int(len(rows))
     metadata["subset_of_sha256"] = dataset.sha256
     metadata["subset"] = "deterministic_heldout"
     temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("wb") as raw:
+    written = 0
+    with gzip.open(dataset.path, "rb") as source, temporary.open("wb") as raw:
+        next(source)
         with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
             compressed.write(
                 (json.dumps(metadata, separators=(",", ":")) + "\n").encode()
             )
-            for row in rows:
-                compressed.write(
-                    (json.dumps(dataset.records[int(row)], separators=(",", ":")) + "\n").encode()
-                )
+            row = 0
+            for line in source:
+                if not line.strip():
+                    continue
+                if row in selected:
+                    compressed.write(line)
+                    written += 1
+                row += 1
+    if written != len(selected):
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError("heldout stream did not contain every selected row")
     temporary.replace(path)
 
 
@@ -1008,6 +1259,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-b", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--rust-evaluator", type=Path, required=True)
+    parser.add_argument("--feature-cache-dir", type=Path)
+    parser.add_argument("--feature-workers", type=int, default=1)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -1059,6 +1312,7 @@ def main() -> None:
         or not 0 <= args.auxiliary_probability <= 1
         or args.ev_regret_scale < 0
         or args.maximum_records_per_teacher < 12
+        or args.feature_workers <= 0
         or args.maximum_weighted_kl <= 0
         or not 0 < args.minimum_primary_agreement <= 1
         or args.maximum_teacher_ev_loss_bb <= 0
@@ -1113,14 +1367,10 @@ def main() -> None:
         if paired_sources
         else primary_paths
     )
-    loaded_records = [read_records(path) for path in primary_paths + cross_paths]
-    metadata_a, records_a = loaded_records[0]
-    metadata_b, records_b = loaded_records[1]
-    maximum_actions = max(
-        len(record["action_labels"])
-        for _, records in loaded_records
-        for record in records
-    )
+    paths_to_inspect = primary_paths + (cross_paths if paired_sources else [])
+    inspections = [inspect_dataset(path) for path in paths_to_inspect]
+    metadata_a, metadata_b = inspections[0][0], inspections[1][0]
+    maximum_actions = max(maximum for _, maximum in inspections)
     primary_datasets = [
         load_dataset(primary_paths[0], maximum_actions),
         load_dataset(primary_paths[1], maximum_actions),
@@ -1185,7 +1435,7 @@ def main() -> None:
             raise ValueError(
                 "residual policy datasets require pinned source probabilities"
             )
-        add_features(dataset)
+        add_features(dataset, args.feature_cache_dir, args.feature_workers)
     primary_splits = [split_rows(dataset) for dataset in primary_datasets]
     cross_splits = (
         [split_rows(dataset) for dataset in cross_datasets]
@@ -1296,6 +1546,8 @@ def main() -> None:
         "architecture": args.architecture,
         "composition": args.composition,
         "trainingSampling": "public-node-reach-proportional-combo-conditional-v1",
+        "featureWorkers": args.feature_workers,
+        "featureCaches": [dataset.feature_cache for dataset in primary_datasets],
         "sourceNetwork": str(args.source_network) if args.source_network else None,
         "sourceNetworks": [
             str(source_network) if source_network else None
