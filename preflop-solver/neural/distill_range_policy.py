@@ -112,41 +112,17 @@ def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
     }
     if any(not candidates for candidates in grouped.values()):
         raise ValueError("range-policy source corpus must contain every postflop street")
-    capacities = {
-        "flop": min(len(grouped["flop"]), max(1, capacity // 4)),
-        "turn": min(len(grouped["turn"]), max(1, capacity * 3 // 10)),
-    }
-    capacities["river"] = min(
-        len(grouped["river"]), capacity - capacities["flop"] - capacities["turn"]
-    )
-    remaining = capacity - sum(capacities.values())
-    for street in ("river", "flop", "turn"):
-        added = min(remaining, len(grouped[street]) - capacities[street])
-        capacities[street] += added
-        remaining -= added
-    selected: list[dict[str, Any]] = []
-    for street in ("flop", "turn", "river"):
-        candidates = grouped[street]
-        candidates.sort(
-            key=lambda record: hashlib.sha256(
-                b"hu-range-policy-python-cap-v2-source-invariant"
-                + str(metadata["seed"]).encode()
-                + record_selection_identity(record)
-            ).digest()
-        )
-        retained = candidates[: capacities[street]]
-        correction = len(candidates) / len(retained)
-        for source_record in retained:
-            record = dict(source_record)
-            record["weight"] = float(
-                np.float32(record["weight"]) * np.float32(correction)
-            )
-            selected.append(record)
+    selected = reach_priority_cap(records, capacity)
+    source_reach = sum(float(record["weight"]) for record in records)
+    retained_reach = sum(float(record["weight"]) for record in selected)
     capped_metadata = dict(metadata)
     capped_metadata["records"] = len(selected)
     capped_metadata["subset_of_sha256"] = sha256(source)
-    capped_metadata["subset"] = "deterministic_street_stratified_hash_reservoir"
-    capped_metadata["inverse_inclusion_weight_correction"] = True
+    capped_metadata["subset"] = "deterministic_authentic_reach_priority_v1"
+    capped_metadata["inverse_inclusion_weight_correction"] = False
+    capped_metadata["retained_authentic_reach_fraction"] = (
+        retained_reach / source_reach
+    )
     temporary = output.with_suffix(output.suffix + ".tmp")
     with temporary.open("wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
@@ -159,6 +135,58 @@ def cap_dataset(source: Path, output: Path, capacity: int) -> Path:
                 )
     temporary.replace(output)
     return output
+
+
+def reach_priority_cap(
+    records: list[dict[str, Any]], capacity: int
+) -> list[dict[str, Any]]:
+    """Retain the action states carrying the most authentic public reach.
+
+    A uniform reservoir is not representative when a complete betting tree's
+    node reaches span many orders of magnitude.  Inverse-count correction is
+    also invalid for a deterministic corpus because it can multiply the mass
+    of a retained high-reach node.  Reserve enough rows for train/heldout
+    coverage on every street, then fill the cap by authentic reach without
+    changing any retained weight.
+    """
+    if capacity < 6 or capacity >= len(records):
+        raise ValueError("reach-priority cap must remove records and cover streets")
+
+    def rank(index: int) -> tuple[float, bytes]:
+        weight = float(records[index].get("weight", float("nan")))
+        if not np.isfinite(weight) or weight <= 0:
+            raise ValueError("range-policy cap needs positive authentic reach")
+        tie_break = hashlib.sha256(
+            b"hu-range-policy-reach-priority-v1\0"
+            + record_selection_identity(records[index])
+        ).digest()
+        return -weight, tie_break
+
+    streets = ("flop", "turn", "river")
+    by_street = {
+        street: [
+            index
+            for index, record in enumerate(records)
+            if record.get("state", {}).get("street") == street
+        ]
+        for street in streets
+    }
+    if any(len(indices) < 2 for indices in by_street.values()):
+        raise ValueError("range-policy cap needs two or more rows per street")
+    selected_indices: set[int] = set()
+    minimum_per_street = min(4, capacity // len(streets))
+    for street in streets:
+        retained = sorted(by_street[street], key=rank)[
+            : min(minimum_per_street, len(by_street[street]))
+        ]
+        selected_indices.update(retained)
+    for index in sorted(range(len(records)), key=rank):
+        if len(selected_indices) >= capacity:
+            break
+        selected_indices.add(index)
+    if len(selected_indices) != capacity:
+        raise RuntimeError("reach-priority cap did not select the requested capacity")
+    return [records[index] for index in sorted(selected_indices, key=rank)]
 
 
 def record_selection_identity(record: dict[str, Any]) -> bytes:
@@ -606,8 +634,46 @@ def split_rows(dataset: LoadedDataset) -> tuple[np.ndarray, np.ndarray]:
     return np.sort(np.asarray(training)), np.sort(np.asarray(heldout))
 
 
-def batch(dataset: LoadedDataset, rows: np.ndarray) -> tuple[mx.array, ...]:
+def reach_sampling_probabilities(
+    combo_weights: np.ndarray, rows: np.ndarray
+) -> np.ndarray:
+    """Sample public nodes in proportion to their authentic reach mass.
+
+    ``combo_weights`` already contains public-node reach multiplied by the
+    acting player's conditional hand reach.  Sampling rows uniformly and then
+    dividing by each minibatch's sampled mass is a biased self-normalized
+    estimator when node reaches are highly skewed.  Sampling by node mass and
+    conditioning the per-combo weights below gives an unbiased estimator of
+    the reach-weighted policy objective.
+    """
+    masses = np.asarray(combo_weights[rows].sum(axis=1), dtype=np.float64)
+    total = float(masses.sum())
+    if (
+        masses.shape != (len(rows),)
+        or not np.all(np.isfinite(masses))
+        or np.any(masses <= 0)
+        or not np.isfinite(total)
+        or total <= 0
+    ):
+        raise ValueError("range-policy training rows need positive reach mass")
+    return masses / total
+
+
+def batch(
+    dataset: LoadedDataset,
+    rows: np.ndarray,
+    condition_on_node_reach: bool = False,
+) -> tuple[mx.array, ...]:
     assert dataset.contexts is not None and dataset.queries is not None
+    combo_weights = dataset.combo_weights[rows]
+    if condition_on_node_reach:
+        node_masses = combo_weights.sum(axis=1, keepdims=True)
+        if (
+            not np.all(np.isfinite(node_masses))
+            or np.any(node_masses <= 0)
+        ):
+            raise ValueError("range-policy batch needs positive node reach mass")
+        combo_weights = combo_weights / node_masses
     return (
         mx.array(dataset.contexts[rows]),
         mx.array(dataset.queries[rows]),
@@ -617,7 +683,7 @@ def batch(dataset: LoadedDataset, rows: np.ndarray) -> tuple[mx.array, ...]:
         mx.array(dataset.action_masks[rows]),
         mx.array(dataset.targets[rows]),
         mx.array(dataset.action_values[rows]),
-        mx.array(dataset.combo_weights[rows]),
+        mx.array(combo_weights),
         mx.array(dataset.source_probabilities[rows]),
     )
 
@@ -652,6 +718,12 @@ def train(
         else optim.cosine_decay(learning_rate, steps, final_learning_rate)
     )
     optimizer = optim.AdamW(learning_rate=schedule, weight_decay=1e-5)
+    primary_sampling_probabilities = reach_sampling_probabilities(
+        primary.combo_weights, primary_rows
+    )
+    auxiliary_sampling_probabilities = reach_sampling_probabilities(
+        auxiliary.combo_weights, auxiliary_rows
+    )
 
     def loss_fn(
         current: RangeConditionedPolicy,
@@ -698,10 +770,21 @@ def train(
         use_auxiliary = rng.random() < auxiliary_probability
         selected_dataset = auxiliary if use_auxiliary else primary
         available = auxiliary_rows if use_auxiliary else primary_rows
-        selected = rng.choice(
-            available, size=min(batch_size, len(available)), replace=True
+        probabilities = (
+            auxiliary_sampling_probabilities
+            if use_auxiliary
+            else primary_sampling_probabilities
         )
-        loss, gradients = loss_and_grad(model, *batch(selected_dataset, selected))
+        selected = rng.choice(
+            available,
+            size=min(batch_size, len(available)),
+            replace=True,
+            p=probabilities,
+        )
+        loss, gradients = loss_and_grad(
+            model,
+            *batch(selected_dataset, selected, condition_on_node_reach=True),
+        )
         optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state, loss)
         losses.append(float(loss.item()))
@@ -1212,6 +1295,7 @@ def main() -> None:
         "evRegretScale": args.ev_regret_scale,
         "architecture": args.architecture,
         "composition": args.composition,
+        "trainingSampling": "public-node-reach-proportional-combo-conditional-v1",
         "sourceNetwork": str(args.source_network) if args.source_network else None,
         "sourceNetworks": [
             str(source_network) if source_network else None

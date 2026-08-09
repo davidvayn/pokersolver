@@ -1,0 +1,87 @@
+{
+  "schema": "hu-range-policy-weighting-pilot-v1",
+  "depthBb": 20.0,
+  "status": "rejected",
+  "activationAllowed": false,
+  "frozenGates": {
+    "maximumWeightedKl": 0.1,
+    "minimumPrimaryAgreement": 0.7,
+    "maximumTeacherEvLossBb": 0.05,
+    "minimumScoredComboCoverage": 0.999999,
+    "maximumProbabilitySumError": 1e-6
+  },
+  "diagnosis": {
+    "sourceRecords": 5600,
+    "cappedRecords": 950,
+    "oldHashCapAuthenticReachFraction": 0.8185053504357085,
+    "reachPriorityCapAuthenticReachFraction": 0.9889909967334852,
+    "fullCorpusNodeReachEffectiveSampleSizes": [
+      10.256739,
+      12.385644
+    ],
+    "cause": "Uniform public-node minibatches with per-batch reach normalization optimized a biased near-uniform-node objective. The old deterministic hash cap also multiplied retained node weights by count-based inclusion factors even though authentic node reaches span multiple orders of magnitude. Correcting both aligns seen-state training with exact Rust evaluation, but a 950-state cap still lacks enough disjoint public-state coverage for the held-out gate."
+  },
+  "experiments": [
+    {
+      "name": "v66-uniform-hash-cap-baseline",
+      "report": "neural/runs/20bb-v66-trajectory-policy/distilled-v2-wide-replace-s12000-b8-cos3e4-3e5-r950/report.json",
+      "reportSha256": "8e494d30938b44f7a0284bae9e05b2702b20929f739eb4ff7d03b4d724d88234",
+      "steps": 12000,
+      "students": [
+        {
+          "seed": 17971,
+          "sourceFull": {"weightedKl": 0.09045535552190961, "primaryAgreement": 0.9147645290547107, "evLossBb": 0.007892788190488522},
+          "ownHeldout": {"weightedKl": 0.17969945436803378, "primaryAgreement": 0.8445062749344063, "evLossBb": 0.010966167092580414},
+          "crossHeldout": {"weightedKl": 0.194494112700436, "primaryAgreement": 0.8525828620742559, "evLossBb": 0.039076755059126785}
+        },
+        {
+          "seed": 17972,
+          "sourceFull": {"weightedKl": 0.36426798964993135, "primaryAgreement": 0.728770134023817, "evLossBb": 0.0998984137295561},
+          "ownHeldout": {"weightedKl": 0.2332060631999178, "primaryAgreement": 0.8407523362240537, "evLossBb": 0.06820109510971939},
+          "crossHeldout": {"weightedKl": 0.2307211892137589, "primaryAgreement": 0.8318505679694185, "evLossBb": 0.02981637047756439}
+        }
+      ]
+    },
+    {
+      "name": "v67-reach-sampling-only",
+      "report": "neural/runs/20bb-v67-reach-weighted-policy/distilled-v2-wide-replace-s4000-b8-cos3e4-3e5-r950/report.json",
+      "reportSha256": "93eeae671f8cfdba1aeaaf425537eeb214bcd42fa0b184b2996bfc922381dd52",
+      "steps": 4000,
+      "students": [
+        {
+          "seed": 17981,
+          "sourceFull": {"weightedKl": 0.06030877041186193, "primaryAgreement": 0.94269941744927, "evLossBb": 0.006652089485178855},
+          "ownHeldout": {"weightedKl": 0.2669275670884675, "primaryAgreement": 0.8162997210966663, "evLossBb": 0.02881781449933954},
+          "crossHeldout": {"weightedKl": 0.26658511785334316, "primaryAgreement": 0.8172549635374919, "evLossBb": 0.05484928579591924}
+        },
+        {
+          "seed": 17982,
+          "sourceFull": {"weightedKl": 0.15828472731076534, "primaryAgreement": 0.8495606534930619, "evLossBb": 0.03244543884633682},
+          "ownHeldout": {"weightedKl": 0.272058984662025, "primaryAgreement": 0.7897730415933244, "evLossBb": 0.06852619709342307},
+          "crossHeldout": {"weightedKl": 0.2771269241953949, "primaryAgreement": 0.8176837040963113, "evLossBb": 0.026141853763227346}
+        }
+      ]
+    },
+    {
+      "name": "v68-reach-sampling-and-reach-priority-cap",
+      "report": "neural/runs/20bb-v68-reach-priority-policy/distilled-v2-wide-replace-s4000-b8-cos3e4-3e5-r950/report.json",
+      "reportSha256": "af889cffd0193ededb5c1b36f7c3ba6fb606ddec777edab472e9cc5904951204",
+      "steps": 4000,
+      "students": [
+        {
+          "seed": 17991,
+          "sourceFull": {"weightedKl": 0.09834311951743885, "primaryAgreement": 0.8914563642428107, "evLossBb": 0.012801267784915258},
+          "ownHeldout": {"weightedKl": 0.21169009027815433, "primaryAgreement": 0.8146574829152026, "evLossBb": 0.022184672327660176},
+          "crossHeldout": {"weightedKl": 0.3089108628248925, "primaryAgreement": 0.7871559864268576, "evLossBb": 0.1039833036673221}
+        },
+        {
+          "seed": 17992,
+          "sourceFull": {"weightedKl": 0.11490021271048004, "primaryAgreement": 0.8846314824878662, "evLossBb": 0.022609079662929573},
+          "ownHeldout": {"weightedKl": 0.24482772009788353, "primaryAgreement": 0.8102199735999385, "evLossBb": 0.05490479481059584},
+          "crossHeldout": {"weightedKl": 0.17568920151511339, "primaryAgreement": 0.836001298441091, "evLossBb": 0.015217124597309045}
+        }
+      ]
+    }
+  ],
+  "decision": "Keep the corrected reach objective and authentic reach-priority fallback cap. Do not run a full-game certificate or activate either pair. Implement disk-backed full-corpus features and train against all 5600 available teacher states before repeating the paired exact gates."
+}

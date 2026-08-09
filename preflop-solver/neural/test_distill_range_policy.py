@@ -8,6 +8,93 @@ import train_public_value_network as value_features
 
 
 class RangePolicyDistillationTests(unittest.TestCase):
+    def test_reach_priority_cap_preserves_weights_and_street_coverage(self) -> None:
+        records = []
+        for street_index, street in enumerate(("flop", "turn", "river")):
+            for index in range(6):
+                records.append(
+                    {
+                        "weight": float(100 * street_index + index + 1),
+                        "state": {
+                            "street": street,
+                            "board": [street_index, index],
+                        },
+                        "action_labels": ["check"],
+                    }
+                )
+        selected = module.reach_priority_cap(records, 12)
+        self.assertEqual(len(selected), 12)
+        self.assertEqual(
+            {record["state"]["street"] for record in selected},
+            {"flop", "turn", "river"},
+        )
+        selected_weights = [record["weight"] for record in selected]
+        self.assertEqual(
+            selected_weights,
+            [206.0, 205.0, 204.0, 203.0, 106.0, 105.0, 104.0, 103.0, 6.0, 5.0, 4.0, 3.0],
+        )
+
+    def test_reach_sampling_matches_global_combo_weight_objective(self) -> None:
+        combo_weights = np.asarray(
+            [
+                [0.1, 0.3, 0.0],
+                [0.6, 0.9, 0.1],
+                [0.0, 0.2, 0.2],
+            ],
+            dtype=np.float32,
+        )
+        rows = np.asarray([0, 2], dtype=np.int64)
+        probabilities = module.reach_sampling_probabilities(combo_weights, rows)
+        np.testing.assert_allclose(probabilities, [0.5, 0.5])
+
+        all_probabilities = module.reach_sampling_probabilities(
+            combo_weights, np.arange(3)
+        )
+        np.testing.assert_allclose(all_probabilities, [1 / 6, 2 / 3, 1 / 6])
+
+    def test_training_batch_conditions_combo_weights_on_sampled_node(self) -> None:
+        combo_weights = np.zeros((2, module.COMBO_COUNT), dtype=np.float32)
+        combo_weights[0, :2] = [0.1, 0.3]
+        combo_weights[1, :2] = [0.6, 0.2]
+        dataset = module.LoadedDataset(
+            path=module.Path("unused"),
+            sha256="0" * 64,
+            metadata={},
+            records=[],
+            boards=[],
+            actors=np.zeros(2, dtype=np.int32),
+            invested=np.zeros((2, 2), dtype=np.float32),
+            ranges=np.zeros((2, 2, module.COMBO_COUNT), dtype=np.float32),
+            masses=np.zeros((2, 2, module.COMBO_COUNT), dtype=np.float32),
+            projection_weights=np.zeros(
+                (2, 2, module.COMBO_COUNT), dtype=np.float32
+            ),
+            actions=np.zeros((2, 1, module.ACTION_FEATURE_COUNT), dtype=np.float32),
+            action_masks=np.ones((2, 1), dtype=np.float32),
+            source_probabilities=np.zeros(
+                (2, module.COMBO_COUNT, 1), dtype=np.float32
+            ),
+            targets=np.zeros((2, module.COMBO_COUNT, 1), dtype=np.float32),
+            action_values=np.zeros(
+                (2, module.COMBO_COUNT, 1), dtype=np.float32
+            ),
+            combo_weights=combo_weights,
+            contexts=np.zeros((2, 2, module.CONTEXT_SIZE), dtype=np.float32),
+            queries=np.zeros(
+                (2, 2, module.COMBO_COUNT, module.QUERY_SIZE), dtype=np.float32
+            ),
+        )
+        conditioned = np.asarray(
+            module.batch(
+                dataset,
+                np.asarray([0, 1]),
+                condition_on_node_reach=True,
+            )[-2]
+        )
+        np.testing.assert_allclose(conditioned.sum(axis=1), 1.0)
+        np.testing.assert_allclose(conditioned[0, :2], [0.25, 0.75])
+        np.testing.assert_allclose(conditioned[1, :2], [0.75, 0.25])
+
     def test_record_selection_is_source_policy_invariant(self) -> None:
         first = {
             "state": {
