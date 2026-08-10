@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import mlx.core as mx
+import mlx.nn as nn
 import numpy as np
 
 import distill_range_policy as module
@@ -230,7 +231,12 @@ class RangePolicyDistillationTests(unittest.TestCase):
         )
 
     def test_network_scores_every_combo_and_masks_padded_actions(self) -> None:
-        for architecture in ("compact", "wide"):
+        for architecture in (
+            "compact",
+            "wide",
+            "xwide-layernorm",
+            "xwide-residual-layernorm",
+        ):
             with self.subTest(architecture=architecture):
                 model = module.RangeConditionedPolicy(architecture)
                 logits = model(
@@ -249,6 +255,25 @@ class RangePolicyDistillationTests(unittest.TestCase):
                 probabilities = np.asarray(mx.softmax(logits, axis=2))
                 np.testing.assert_allclose(probabilities[:, :, :3].sum(axis=2), 1.0)
                 np.testing.assert_allclose(probabilities[:, :, 3], 0.0)
+
+    def test_layer_normalized_architecture_exports_normalization_parameters(self) -> None:
+        model = module.RangeConditionedPolicy("xwide-layernorm")
+        tower = model.context_tower
+        layers = list(tower.layers)
+        normalizers = [layer for layer in layers if isinstance(layer, nn.LayerNorm)]
+        self.assertEqual(len(normalizers), 3)
+        self.assertEqual(normalizers[0].dims, 512)
+        np.testing.assert_allclose(np.asarray(normalizers[0].weight), 1.0)
+        np.testing.assert_allclose(np.asarray(normalizers[0].bias), 0.0)
+
+        residual = module.ResidualNormalizedPolicyLayer(4)
+        residual.linear.weight = mx.zeros_like(residual.linear.weight)
+        residual.linear.bias = mx.zeros_like(residual.linear.bias)
+        inputs = mx.array([[1.0, 2.0, 3.0, 4.0]])
+        expected = residual.activation(residual.normalization(inputs))
+        measured = residual(inputs)
+        mx.eval(expected, measured)
+        np.testing.assert_allclose(np.asarray(measured), np.asarray(expected))
 
     def test_policy_features_support_flop_turn_and_river(self) -> None:
         for board in (

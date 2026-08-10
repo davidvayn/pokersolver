@@ -307,10 +307,35 @@ struct ValueNetworkLayer {
     activation: String,
     weights: Vec<f32>,
     biases: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    normalization: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    normalization_weights: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    normalization_biases: Vec<f32>,
+    #[serde(default)]
+    normalization_epsilon: f32,
+    #[serde(default)]
+    residual: bool,
 }
 
 impl ValueNetworkLayer {
     fn validate(&self, expected_input: usize) -> Result<usize, String> {
+        let normalization_is_valid = match self.normalization.as_deref() {
+            None => self.normalization_weights.is_empty() && self.normalization_biases.is_empty(),
+            Some("layernorm") => {
+                self.normalization_weights.len() == self.output_size
+                    && self.normalization_biases.len() == self.output_size
+                    && self.normalization_epsilon.is_finite()
+                    && self.normalization_epsilon > 0.0
+                    && self
+                        .normalization_weights
+                        .iter()
+                        .chain(&self.normalization_biases)
+                        .all(|value| value.is_finite())
+            }
+            _ => false,
+        };
         if self.input_size != expected_input
             || self.output_size == 0
             || self.weights.len() != self.input_size * self.output_size
@@ -324,6 +349,8 @@ impl ValueNetworkLayer {
                 self.activation.as_str(),
                 "relu" | "linear" | "tanh" | "gelu-fast"
             )
+            || !normalization_is_valid
+            || (self.residual && self.input_size != self.output_size)
         {
             return Err("public value network contains an invalid dense layer".to_owned());
         }
@@ -349,7 +376,39 @@ impl ValueNetworkLayer {
                 .zip(input)
                 .map(|(weight, value)| weight * value)
                 .sum::<f32>();
-            *out = self.activate(*out);
+        }
+        if self.residual {
+            for (value, skip) in output.iter_mut().zip(input) {
+                *value += skip;
+            }
+        }
+        self.normalize(output);
+        for value in output {
+            *value = self.activate(*value);
+        }
+    }
+
+    fn normalize(&self, values: &mut [f32]) {
+        if self.normalization.as_deref() != Some("layernorm") {
+            return;
+        }
+        let denominator = values.len() as f32;
+        let mean = values.iter().sum::<f32>() / denominator;
+        let variance = values
+            .iter()
+            .map(|value| {
+                let centered = *value - mean;
+                centered * centered
+            })
+            .sum::<f32>()
+            / denominator;
+        let inverse_stddev = 1.0 / (variance + self.normalization_epsilon).sqrt();
+        for ((value, scale), bias) in values
+            .iter_mut()
+            .zip(&self.normalization_weights)
+            .zip(&self.normalization_biases)
+        {
+            *value = (*value - mean) * inverse_stddev * scale + bias;
         }
     }
 
@@ -396,9 +455,21 @@ fn forward_batch_layer_into(
             1,
         );
     }
-    for row in output.chunks_exact_mut(layer.output_size) {
+    for (row, input_row) in output
+        .chunks_exact_mut(layer.output_size)
+        .zip(input.chunks_exact(layer.input_size))
+    {
         for (value, bias) in row.iter_mut().zip(&layer.biases) {
-            *value = layer.activate(*value + bias);
+            *value += bias;
+        }
+        if layer.residual {
+            for (value, skip) in row.iter_mut().zip(input_row) {
+                *value += skip;
+            }
+        }
+        layer.normalize(row);
+        for value in row {
+            *value = layer.activate(*value);
         }
     }
 }
@@ -464,9 +535,25 @@ fn forward_batch_head(
                     .sum::<f32>()
             })
             .collect::<Vec<_>>();
-        for row in scratch[0].chunks_exact_mut(first.output_size) {
+        for (sample, row) in scratch[0].chunks_exact_mut(first.output_size).enumerate() {
             for (value, offset) in row.iter_mut().zip(&context_offsets) {
-                *value = first.activate(*value + offset);
+                *value += offset;
+            }
+            if first.residual {
+                for (value, skip) in row.iter_mut().take(context.len()).zip(context) {
+                    *value += skip;
+                }
+                for (value, skip) in row
+                    .iter_mut()
+                    .skip(context.len())
+                    .zip(&query[sample * query_size..(sample + 1) * query_size])
+                {
+                    *value += skip;
+                }
+            }
+            first.normalize(row);
+            for value in row {
+                *value = first.activate(*value);
             }
         }
     }
@@ -9172,6 +9259,11 @@ mod tests {
             activation: activation.to_owned(),
             weights: vec![0.0; input_size * output_size],
             biases: vec![0.0; output_size],
+            normalization: None,
+            normalization_weights: Vec::new(),
+            normalization_biases: Vec::new(),
+            normalization_epsilon: 0.0,
+            residual: false,
         };
         PublicValueNetwork {
             artifact_sha256: None,
@@ -9205,6 +9297,11 @@ mod tests {
             activation: activation.to_owned(),
             weights: vec![0.0; input_size * output_size],
             biases: vec![0.0; output_size],
+            normalization: None,
+            normalization_weights: Vec::new(),
+            normalization_biases: Vec::new(),
+            normalization_epsilon: 0.0,
+            residual: false,
         };
         PublicValueNetwork {
             artifact_sha256: None,
@@ -9238,6 +9335,11 @@ mod tests {
             activation: "linear".to_owned(),
             weights: vec![0.0; input_size * output_size],
             biases: vec![0.0; output_size],
+            normalization: None,
+            normalization_weights: Vec::new(),
+            normalization_biases: Vec::new(),
+            normalization_epsilon: 0.0,
+            residual: false,
         };
         let mut action = zero_layer(ACTION_FEATURE_COUNT, 1);
         action.weights[1] = 1.0;
@@ -9434,6 +9536,11 @@ mod tests {
             activation: activation.to_owned(),
             weights: vec![0.0; input_size * output_size],
             biases: vec![0.0; output_size],
+            normalization: None,
+            normalization_weights: Vec::new(),
+            normalization_biases: Vec::new(),
+            normalization_epsilon: 0.0,
+            residual: false,
         };
         let mut network = zero_shared_value_network();
         network.schema = "hu-public-belief-combo-value-network-v5".to_owned();
@@ -9546,6 +9653,11 @@ mod tests {
                 biases: (0..output_size)
                     .map(|index| ((index + offset) % 5) as f32 * 0.009 - 0.017)
                     .collect(),
+                normalization: None,
+                normalization_weights: Vec::new(),
+                normalization_biases: Vec::new(),
+                normalization_epsilon: 0.0,
+                residual: false,
             }
         };
         let samples = 4;
@@ -9586,6 +9698,53 @@ mod tests {
         for (left, right) in scalar.iter().zip(&batched_head) {
             assert!((left - right).abs() < 1e-6, "{left} != {right}");
         }
+    }
+
+    #[test]
+    fn dense_layer_applies_exported_layer_normalization_before_activation() {
+        let layer = ValueNetworkLayer {
+            input_size: 2,
+            output_size: 2,
+            activation: "linear".to_owned(),
+            weights: vec![1.0, 0.0, 0.0, 1.0],
+            biases: vec![0.0, 0.0],
+            normalization: Some("layernorm".to_owned()),
+            normalization_weights: vec![2.0, 3.0],
+            normalization_biases: vec![0.5, -0.5],
+            normalization_epsilon: 1e-5,
+            residual: false,
+        };
+        layer.validate(2).unwrap();
+        let measured = layer.forward(&[1.0, 3.0]);
+        let inverse = 1.0f32 / (1.0f32 + 1e-5f32).sqrt();
+        let expected = [-inverse * 2.0 + 0.5, inverse * 3.0 - 0.5];
+        for (left, right) in measured.iter().zip(expected) {
+            assert!((left - right).abs() < 1e-6, "{left} != {right}");
+        }
+
+        let mut invalid = layer;
+        invalid.normalization_weights.pop();
+        assert!(invalid.validate(2).is_err());
+
+        let residual = ValueNetworkLayer {
+            input_size: 2,
+            output_size: 2,
+            activation: "linear".to_owned(),
+            weights: vec![1.0, 0.0, 0.0, 1.0],
+            biases: vec![0.0, 0.0],
+            normalization: None,
+            normalization_weights: Vec::new(),
+            normalization_biases: Vec::new(),
+            normalization_epsilon: 0.0,
+            residual: true,
+        };
+        assert_eq!(residual.forward(&[1.0, 3.0]), vec![2.0, 6.0]);
+
+        let mut mismatched = residual;
+        mismatched.output_size = 1;
+        mismatched.weights.truncate(2);
+        mismatched.biases.truncate(1);
+        assert!(mismatched.validate(2).is_err());
     }
 
     #[test]

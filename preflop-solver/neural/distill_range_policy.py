@@ -29,7 +29,7 @@ from train_public_value_network import (
     QUERY_BOARD_RELATIVE_COUNT,
     RANGE_POLICY_FEATURE_SCHEMA as DATASET_RANGE_POLICY_FEATURE_SCHEMA,
     build_features,
-    tower_payload,
+    layer_payload,
 )
 
 DATASET_SCHEMA = "hu-range-conditioned-postflop-policy-dataset-v1"
@@ -731,6 +731,19 @@ def range_policy_state_features(
     return features
 
 
+class ResidualNormalizedPolicyLayer(nn.Module):
+    """Dense residual block matching the skip used by Deep CFR."""
+
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.linear = nn.Linear(width, width)
+        self.normalization = nn.LayerNorm(width)
+        self.activation = nn.GELU(approx="fast")
+
+    def __call__(self, inputs: mx.array) -> mx.array:
+        return self.activation(self.normalization(self.linear(inputs) + inputs))
+
+
 class RangeConditionedPolicy(nn.Module):
     def __init__(
         self, architecture: str = "compact", composition: str = "replace"
@@ -795,6 +808,100 @@ class RangeConditionedPolicy(nn.Module):
                 nn.Linear(128, 64),
                 nn.GELU(approx="fast"),
                 nn.Linear(64, 1),
+            )
+        elif architecture == "xwide-layernorm":
+            # ReBeL's released implementation applies LayerNorm between every
+            # hidden affine transform and GELU. Deep CFR likewise reports that
+            # normalized hidden features were important for fast convergence.
+            # Keep the final policy logit linear so exact serving inference can
+            # compose it with softmax (or a future pinned source policy).
+            self.embedding_size = 256
+            self.action_embedding_size = 128
+            self.context_tower = nn.Sequential(
+                nn.Linear(CONTEXT_SIZE, 512),
+                nn.LayerNorm(512),
+                nn.GELU(approx="fast"),
+                nn.Linear(512, 512),
+                nn.LayerNorm(512),
+                nn.GELU(approx="fast"),
+                nn.Linear(512, self.embedding_size),
+                nn.LayerNorm(self.embedding_size),
+                nn.GELU(approx="fast"),
+            )
+            self.query_tower = nn.Sequential(
+                nn.Linear(QUERY_SIZE, 256),
+                nn.LayerNorm(256),
+                nn.GELU(approx="fast"),
+                nn.Linear(256, 256),
+                nn.LayerNorm(256),
+                nn.GELU(approx="fast"),
+                nn.Linear(256, self.embedding_size),
+                nn.LayerNorm(self.embedding_size),
+                nn.GELU(approx="fast"),
+            )
+            self.action_tower = nn.Sequential(
+                nn.Linear(ACTION_FEATURE_COUNT, 128),
+                nn.LayerNorm(128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, self.action_embedding_size),
+                nn.LayerNorm(self.action_embedding_size),
+                nn.GELU(approx="fast"),
+            )
+            self.head = nn.Sequential(
+                nn.Linear(self.embedding_size * 4 + self.action_embedding_size, 512),
+                nn.LayerNorm(512),
+                nn.GELU(approx="fast"),
+                nn.Linear(512, 512),
+                nn.LayerNorm(512),
+                nn.GELU(approx="fast"),
+                nn.Linear(512, 256),
+                nn.LayerNorm(256),
+                nn.GELU(approx="fast"),
+                nn.Linear(256, 128),
+                nn.LayerNorm(128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, 1),
+            )
+        elif architecture == "xwide-residual-layernorm":
+            # Preserve v79's normalized towers while adding the equal-width
+            # residual paths that Deep CFR found useful for policy fitting.
+            self.embedding_size = 256
+            self.action_embedding_size = 128
+            self.context_tower = nn.Sequential(
+                nn.Linear(CONTEXT_SIZE, 512),
+                nn.LayerNorm(512),
+                nn.GELU(approx="fast"),
+                ResidualNormalizedPolicyLayer(512),
+                nn.Linear(512, self.embedding_size),
+                nn.LayerNorm(self.embedding_size),
+                nn.GELU(approx="fast"),
+            )
+            self.query_tower = nn.Sequential(
+                nn.Linear(QUERY_SIZE, 256),
+                nn.LayerNorm(256),
+                nn.GELU(approx="fast"),
+                ResidualNormalizedPolicyLayer(256),
+                ResidualNormalizedPolicyLayer(256),
+            )
+            self.action_tower = nn.Sequential(
+                nn.Linear(ACTION_FEATURE_COUNT, 128),
+                nn.LayerNorm(128),
+                nn.GELU(approx="fast"),
+                ResidualNormalizedPolicyLayer(self.action_embedding_size),
+            )
+            self.head = nn.Sequential(
+                nn.Linear(self.embedding_size * 4 + self.action_embedding_size, 512),
+                nn.LayerNorm(512),
+                nn.GELU(approx="fast"),
+                ResidualNormalizedPolicyLayer(512),
+                nn.Linear(512, 256),
+                nn.LayerNorm(256),
+                nn.GELU(approx="fast"),
+                ResidualNormalizedPolicyLayer(256),
+                nn.Linear(256, 128),
+                nn.LayerNorm(128),
+                nn.GELU(approx="fast"),
+                nn.Linear(128, 1),
             )
         else:
             raise ValueError(f"unknown range-policy architecture {architecture}")
@@ -983,6 +1090,7 @@ def train(
     minimum_primary_agreement: float,
     maximum_teacher_ev_loss_bb: float,
     balanced_teacher_batches: bool,
+    maximum_gradient_norm: float,
 ) -> tuple[RangeConditionedPolicy, list[float], dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1083,6 +1191,8 @@ def train(
                 selected_dataset, selected, condition_on_node_reach=True
             )
         loss, gradients = loss_and_grad(model, *arguments)
+        if maximum_gradient_norm > 0:
+            gradients, _ = optim.clip_grad_norm(gradients, maximum_gradient_norm)
         optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state, loss)
         losses.append(float(loss.item()))
@@ -1227,6 +1337,70 @@ def export_model(
     primary: LoadedDataset,
     auxiliary: LoadedDataset,
 ) -> None:
+    def normalized_tower_payload(
+        tower: nn.Sequential, final_activation: str
+    ) -> list[dict[str, Any]]:
+        layers = list(tower.layers)
+        dense_positions = [
+            index
+            for index, layer in enumerate(layers)
+            if isinstance(layer, (nn.Linear, ResidualNormalizedPolicyLayer))
+        ]
+        payload = []
+        for linear_index, position in enumerate(dense_positions):
+            layer = layers[position]
+            if isinstance(layer, ResidualNormalizedPolicyLayer):
+                dense = layer_payload(layer.linear, "gelu-fast")
+                dense.update(
+                    {
+                        "residual": True,
+                        "normalization": "layernorm",
+                        "normalizationWeights": np.asarray(
+                            layer.normalization.weight, dtype=np.float32
+                        ).tolist(),
+                        "normalizationBiases": np.asarray(
+                            layer.normalization.bias, dtype=np.float32
+                        ).tolist(),
+                        "normalizationEpsilon": float(layer.normalization.eps),
+                    }
+                )
+                payload.append(dense)
+                continue
+            next_position = (
+                dense_positions[linear_index + 1]
+                if linear_index + 1 < len(dense_positions)
+                else len(layers)
+            )
+            dense = layer_payload(
+                layer,
+                final_activation
+                if linear_index + 1 == len(dense_positions)
+                else "gelu-fast",
+            )
+            normalizers = [
+                layer
+                for layer in layers[position + 1 : next_position]
+                if isinstance(layer, nn.LayerNorm)
+            ]
+            if len(normalizers) > 1:
+                raise ValueError("a dense policy layer has multiple normalizers")
+            if normalizers:
+                normalizer = normalizers[0]
+                dense.update(
+                    {
+                        "normalization": "layernorm",
+                        "normalizationWeights": np.asarray(
+                            normalizer.weight, dtype=np.float32
+                        ).tolist(),
+                        "normalizationBiases": np.asarray(
+                            normalizer.bias, dtype=np.float32
+                        ).tolist(),
+                        "normalizationEpsilon": float(normalizer.eps),
+                    }
+                )
+            payload.append(dense)
+        return payload
+
     payload = {
         "schema": NETWORK_SCHEMA,
         "architecture": model.architecture,
@@ -1247,10 +1421,10 @@ def export_model(
         "sourcePolicySha256": primary.metadata.get("source_policy_baseline", {}).get(
             "sha256"
         ),
-        "contextTower": tower_payload(model.context_tower, "gelu-fast", "gelu-fast"),
-        "queryTower": tower_payload(model.query_tower, "gelu-fast", "gelu-fast"),
-        "actionTower": tower_payload(model.action_tower, "gelu-fast", "gelu-fast"),
-        "head": tower_payload(model.head, "gelu-fast", "linear"),
+        "contextTower": normalized_tower_payload(model.context_tower, "gelu-fast"),
+        "queryTower": normalized_tower_payload(model.query_tower, "gelu-fast"),
+        "actionTower": normalized_tower_payload(model.action_tower, "gelu-fast"),
+        "head": normalized_tower_payload(model.head, "linear"),
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -1330,7 +1504,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--balanced-teacher-batches", action="store_true")
     parser.add_argument("--ev-regret-scale", type=float, default=0.02)
     parser.add_argument(
-        "--architecture", choices=("compact", "wide"), default="compact"
+        "--architecture",
+        choices=(
+            "compact",
+            "wide",
+            "xwide-layernorm",
+            "xwide-residual-layernorm",
+        ),
+        default="compact",
     )
     parser.add_argument(
         "--composition",
@@ -1355,6 +1536,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-weighted-kl", type=float, default=0.10)
     parser.add_argument("--minimum-primary-agreement", type=float, default=0.70)
     parser.add_argument("--maximum-teacher-ev-loss-bb", type=float, default=0.05)
+    parser.add_argument("--maximum-gradient-norm", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -1382,6 +1564,7 @@ def main() -> None:
         or args.maximum_weighted_kl <= 0
         or not 0 < args.minimum_primary_agreement <= 1
         or args.maximum_teacher_ev_loss_bb <= 0
+        or args.maximum_gradient_norm < 0
         or (
             args.composition == "source_bundle_logit_residual"
             and shared_source == paired_sources
@@ -1542,6 +1725,7 @@ def main() -> None:
             args.minimum_primary_agreement,
             args.maximum_teacher_ev_loss_bb,
             args.balanced_teacher_batches,
+            args.maximum_gradient_norm,
         )
         network = args.output_dir / f"range-policy-seed-{seed}.json"
         export_model(model, network, seed, primary, auxiliary)
@@ -1617,6 +1801,7 @@ def main() -> None:
             else "stochastic-whole-batch-v1"
         ),
         "evRegretScale": args.ev_regret_scale,
+        "maximumGradientNorm": args.maximum_gradient_norm,
         "architecture": args.architecture,
         "composition": args.composition,
         "trainingSampling": "public-node-reach-proportional-combo-conditional-v1",
