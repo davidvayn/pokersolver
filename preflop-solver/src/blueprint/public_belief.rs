@@ -985,6 +985,8 @@ pub struct RangeConditionedPolicyNetwork {
     action_tower: Vec<ValueNetworkLayer>,
     head: Vec<ValueNetworkLayer>,
     source_dataset_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auxiliary_dataset_sha256: Option<String>,
     source_dataset_schema: String,
     source_validation_status: String,
     #[serde(default = "default_range_policy_composition")]
@@ -1095,6 +1097,10 @@ impl RangeConditionedPolicyNetwork {
             || self.action_tower.is_empty()
             || self.head.is_empty()
             || self.source_dataset_sha256.len() != 64
+            || self
+                .auxiliary_dataset_sha256
+                .as_ref()
+                .is_some_and(|sha256| sha256.len() != 64)
             || self.source_dataset_schema != "hu-range-conditioned-postflop-policy-dataset-v1"
             || self.source_validation_status != "accepted_for_training"
             || !matches!(
@@ -1392,11 +1398,9 @@ pub fn evaluate_range_conditioned_policy_dataset(
     }
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = depth;
-    if let Ok(action_abstraction) =
+    game.action_abstraction =
         serde_json::from_value(metadata["teacher"]["actionAbstraction"].clone())
-    {
-        game.action_abstraction = action_abstraction;
-    }
+            .map_err(|_| "range policy evaluation action abstraction is invalid")?;
     game.validate()?;
     let conflicts = combo_conflicts();
     let mut records = 0usize;
@@ -1616,6 +1620,386 @@ pub fn evaluate_range_conditioned_policy_dataset(
         minimum_scored_combo_coverage: minimum_coverage,
         maximum_stored_source_probability_difference: maximum_source_difference,
         validation,
+    })
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePolicyCrossSeedReport {
+    pub schema: String,
+    pub network_sha256s: [String; 2],
+    pub dataset_sha256s: Vec<String>,
+    pub dataset_parent_sha256s: Vec<String>,
+    pub records: usize,
+    pub action_probabilities: usize,
+    pub action_frequency_mae: f64,
+    pub primary_action_agreement: f64,
+    pub maximum_aggregate_action_delta: f64,
+    pub aggregate_action_deltas: BTreeMap<String, f64>,
+    pub maximum_probability_sum_error: f64,
+    pub lookup_coverage: f64,
+    pub gates: BTreeMap<String, bool>,
+    pub validation: BlueprintValidation,
+}
+
+#[derive(Default)]
+struct RangePolicyPairSums {
+    records: usize,
+    action_probabilities: usize,
+    weight: f64,
+    absolute_probability_error: f64,
+    primary_agreement: f64,
+    action_kind_mass: [[f64; 6]; 2],
+    maximum_probability_sum_error: f64,
+}
+
+fn range_policy_action_kind(label: &str) -> Result<usize, Box<dyn Error>> {
+    let kind = if label == "fold" {
+        0
+    } else if label == "check" {
+        1
+    } else if label == "call" || label == "call_all_in" {
+        2
+    } else if label.contains("_all_in_to_") {
+        5
+    } else if label.starts_with("bet_to_") {
+        3
+    } else if label.starts_with("raise_to_") {
+        4
+    } else {
+        return Err(format!("unknown range-policy action label {label}").into());
+    };
+    Ok(kind)
+}
+
+fn range_policy_source(
+    network: &RangeConditionedPolicyNetwork,
+    source_path: Option<&Path>,
+) -> Result<Option<FrozenPolicy>, Box<dyn Error>> {
+    if !network.requires_source_policy() {
+        return Ok(None);
+    }
+    let path = source_path.ok_or("residual range-policy comparison requires its source network")?;
+    let source = FrozenPolicy::load(path)?;
+    network.validate_source_policy_sha256(source.bundle_sha256())?;
+    Ok(Some(source))
+}
+
+fn compare_range_policy_dataset(
+    networks: [&RangeConditionedPolicyNetwork; 2],
+    sources: [Option<&FrozenPolicy>; 2],
+    dataset_path: &Path,
+) -> Result<(RangePolicyPairSums, String, String), Box<dyn Error>> {
+    let dataset_bytes = fs::read(dataset_path)?;
+    let dataset_sha256 = format!("{:x}", Sha256::digest(&dataset_bytes));
+    let decoder = GzDecoder::new(dataset_bytes.as_slice());
+    let mut lines = BufReader::new(decoder).lines();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&lines.next().ok_or("range policy dataset is empty")??)?;
+    if metadata["record_type"] != "metadata"
+        || metadata["schema"] != "hu-range-conditioned-postflop-policy-dataset-v1"
+        || metadata["feature_schema"] != RANGE_POLICY_FEATURE_SCHEMA_V1
+        || metadata["context_size"] != SHARED_CONTEXT_BOARD_RELATIVE_COUNT
+        || metadata["query_size"] != SHARED_QUERY_BOARD_RELATIVE_COUNT
+        || metadata["action_feature_schema"] != ACTION_FEATURE_SCHEMA_V1
+        || metadata["action_feature_count"] != ACTION_FEATURE_COUNT
+        || metadata["teacher"]["validation"]["status"] != "accepted_for_training"
+        || metadata["records"].as_u64().unwrap_or(0) == 0
+    {
+        return Err("range policy comparison dataset is incompatible or unvalidated".into());
+    }
+    let parent_sha256 = metadata["subset_of_sha256"]
+        .as_str()
+        .unwrap_or(&dataset_sha256)
+        .to_owned();
+    for network in networks {
+        if network.source_dataset_sha256 != parent_sha256
+            && network.auxiliary_dataset_sha256.as_deref() != Some(parent_sha256.as_str())
+        {
+            return Err("range policy was not trained against the comparison corpus".into());
+        }
+    }
+    let depth = metadata["depth_bb"]
+        .as_f64()
+        .ok_or("range policy comparison dataset omits its depth")?;
+    if networks
+        .iter()
+        .any(|network| (network.depth_bb - depth).abs() > EPSILON)
+    {
+        return Err("range policies and comparison dataset use different depths".into());
+    }
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = depth;
+    game.action_abstraction =
+        serde_json::from_value(metadata["teacher"]["actionAbstraction"].clone())
+            .map_err(|_| "range policy comparison action abstraction is invalid")?;
+    game.validate()?;
+    let conflicts = combo_conflicts();
+    let mut sums = RangePolicyPairSums::default();
+    for line in lines {
+        let record: RangeConditionedPolicyRecord = serde_json::from_str(&line?)?;
+        if record.record_type != "range_conditioned_average_strategy"
+            || !record.weight.is_finite()
+            || record.weight <= 0.0
+            || record.ranges.iter().any(|range| range.len() != COMBO_COUNT)
+        {
+            return Err("range policy comparison contains an invalid record".into());
+        }
+        let state = PublicBeliefState {
+            street: record.state.street,
+            board: record.state.board,
+            actor: record.state.actor,
+            invested_bb: record.state.invested_bb,
+            street_invested_bb: record.state.street_invested_bb,
+            last_full_raise_bb: record.state.last_full_raise_bb,
+            aggressions: record.state.aggressions,
+            checks: record.state.checks,
+            raise_reopened: record.state.raise_reopened,
+            public_history: record.state.public_history,
+            ranges: std::array::from_fn(|player| {
+                record.ranges[player]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect()
+            }),
+            trajectory: record.state.trajectory,
+        };
+        let normalized =
+            state.validate_street_and_normalize(&game, state.street, state.street.board_len())?;
+        let game_state = normalized.game_state();
+        let actions = game_state.legal_actions(&game);
+        let action_count = actions.len();
+        if action_count == 0
+            || record.action_labels
+                != actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err("range policy comparison legal actions do not match".into());
+        }
+        let source_probabilities = [
+            sources[0]
+                .map(|source| {
+                    source.bundle_strategy_matrix(&game_state, &normalized.board, &actions, &game)
+                })
+                .transpose()?,
+            sources[1]
+                .map(|source| {
+                    source.bundle_strategy_matrix(&game_state, &normalized.board, &actions, &game)
+                })
+                .transpose()?,
+        ];
+        let policies = [
+            networks[0].strategy(&normalized, &game, source_probabilities[0].as_deref())?,
+            networks[1].strategy(&normalized, &game, source_probabilities[1].as_deref())?,
+        ];
+        let actor = normalized.actor;
+        let masses = (0..COMBO_COUNT)
+            .map(|combo| {
+                compatible_mass_from_conflicts(&normalized.ranges[1 - actor], &conflicts, combo)
+            })
+            .collect::<Vec<_>>();
+        let joint_mass = normalized.ranges[actor]
+            .iter()
+            .zip(&masses)
+            .map(|(reach, mass)| reach * mass)
+            .sum::<f64>();
+        if joint_mass <= EPSILON {
+            return Err("range policy comparison record has no compatible deals".into());
+        }
+        for combo in 0..COMBO_COUNT {
+            let private_weight = normalized.ranges[actor][combo] * masses[combo] / joint_mass;
+            if private_weight <= EPSILON {
+                continue;
+            }
+            let weight = f64::from(record.weight) * private_weight;
+            let offset = combo * action_count;
+            let probabilities = [
+                &policies[0][offset..offset + action_count],
+                &policies[1][offset..offset + action_count],
+            ];
+            for policy in probabilities {
+                let sum = policy.iter().sum::<f64>();
+                sums.maximum_probability_sum_error =
+                    sums.maximum_probability_sum_error.max((sum - 1.0).abs());
+                if (sum - 1.0).abs() > 1e-6
+                    || policy
+                        .iter()
+                        .any(|probability| !probability.is_finite() || *probability < 0.0)
+                {
+                    return Err("range policy comparison produced invalid probabilities".into());
+                }
+            }
+            sums.absolute_probability_error += weight
+                * probabilities[0]
+                    .iter()
+                    .zip(probabilities[1])
+                    .map(|(first, second)| (first - second).abs())
+                    .sum::<f64>()
+                / action_count as f64;
+            let primaries = probabilities.map(|policy| {
+                policy
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .expect("range policy has a legal action")
+                    .0
+            });
+            sums.primary_agreement += weight
+                * if primaries[0] == primaries[1] {
+                    1.0
+                } else {
+                    0.0
+                };
+            for (action_index, label) in record.action_labels.iter().enumerate() {
+                let kind = range_policy_action_kind(label)?;
+                for policy in 0..2 {
+                    sums.action_kind_mass[policy][kind] +=
+                        weight * probabilities[policy][action_index];
+                }
+            }
+            sums.weight += weight;
+            sums.action_probabilities += action_count;
+        }
+        sums.records += 1;
+    }
+    if sums.records != metadata["records"].as_u64().unwrap_or(0) as usize || sums.weight <= EPSILON
+    {
+        return Err("range policy comparison record count or reach is invalid".into());
+    }
+    Ok((sums, dataset_sha256, parent_sha256))
+}
+
+/// Compare two served range policies on the same independently held-out
+/// authentic states. Each teacher seed receives equal aggregate weight.
+pub fn compare_range_conditioned_policies(
+    network_paths: [&Path; 2],
+    source_paths: [Option<&Path>; 2],
+    dataset_paths: &[PathBuf],
+) -> Result<RangePolicyCrossSeedReport, Box<dyn Error>> {
+    if dataset_paths.len() != 2 || dataset_paths[0] == dataset_paths[1] {
+        return Err("range policy comparison requires two independent datasets".into());
+    }
+    let networks = [
+        RangeConditionedPolicyNetwork::read(network_paths[0])?,
+        RangeConditionedPolicyNetwork::read(network_paths[1])?,
+    ];
+    if networks[0].artifact_sha256 == networks[1].artifact_sha256 {
+        return Err("range policy comparison requires independent networks".into());
+    }
+    let sources = [
+        range_policy_source(&networks[0], source_paths[0])?,
+        range_policy_source(&networks[1], source_paths[1])?,
+    ];
+    let mut dataset_sha256s = Vec::new();
+    let mut dataset_parent_sha256s = Vec::new();
+    let mut records = 0usize;
+    let mut action_probabilities = 0usize;
+    let mut action_frequency_mae = 0.0;
+    let mut primary_action_agreement = 0.0;
+    let mut aggregate_action_mass = [[0.0f64; 6]; 2];
+    let mut maximum_probability_sum_error = 0.0f64;
+    for dataset in dataset_paths {
+        let (sums, dataset_sha256, parent_sha256) = compare_range_policy_dataset(
+            [&networks[0], &networks[1]],
+            [sources[0].as_ref(), sources[1].as_ref()],
+            dataset,
+        )?;
+        dataset_sha256s.push(dataset_sha256);
+        dataset_parent_sha256s.push(parent_sha256);
+        records += sums.records;
+        action_probabilities += sums.action_probabilities;
+        action_frequency_mae += 0.5 * sums.absolute_probability_error / sums.weight;
+        primary_action_agreement += 0.5 * sums.primary_agreement / sums.weight;
+        for policy in 0..2 {
+            for kind in 0..6 {
+                aggregate_action_mass[policy][kind] +=
+                    0.5 * sums.action_kind_mass[policy][kind] / sums.weight;
+            }
+        }
+        maximum_probability_sum_error =
+            maximum_probability_sum_error.max(sums.maximum_probability_sum_error);
+    }
+    if dataset_parent_sha256s[0] == dataset_parent_sha256s[1] {
+        return Err("range policy comparison datasets are not independent".into());
+    }
+    let action_kinds = ["fold", "check", "call", "bet", "raise", "all_in"];
+    let aggregate_action_deltas = action_kinds
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            (
+                (*kind).to_owned(),
+                (aggregate_action_mass[0][index] - aggregate_action_mass[1][index]).abs(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let maximum_aggregate_action_delta = aggregate_action_deltas
+        .values()
+        .copied()
+        .fold(0.0f64, f64::max);
+    let lookup_coverage = 1.0;
+    let gates = BTreeMap::from([
+        (
+            "action_frequency_mae_at_most_0_05".to_owned(),
+            action_frequency_mae <= 0.05,
+        ),
+        (
+            "primary_action_agreement_at_least_0_85".to_owned(),
+            primary_action_agreement >= 0.85,
+        ),
+        (
+            "aggregate_action_delta_at_most_0_03".to_owned(),
+            maximum_aggregate_action_delta <= 0.03,
+        ),
+        (
+            "probabilities_valid".to_owned(),
+            maximum_probability_sum_error <= 1e-6,
+        ),
+        (
+            "coverage_at_least_0_9999".to_owned(),
+            lookup_coverage >= 0.9999,
+        ),
+    ]);
+    let accepted = gates.values().all(|passed| *passed);
+    Ok(RangePolicyCrossSeedReport {
+        schema: "hu-range-conditioned-policy-cross-seed-v1".to_owned(),
+        network_sha256s: [
+            networks[0]
+                .artifact_sha256
+                .clone()
+                .expect("read network has an artifact hash"),
+            networks[1]
+                .artifact_sha256
+                .clone()
+                .expect("read network has an artifact hash"),
+        ],
+        dataset_sha256s,
+        dataset_parent_sha256s,
+        records,
+        action_probabilities,
+        action_frequency_mae,
+        primary_action_agreement,
+        maximum_aggregate_action_delta,
+        aggregate_action_deltas,
+        maximum_probability_sum_error,
+        lookup_coverage,
+        gates,
+        validation: BlueprintValidation {
+            status: if accepted {
+                "accepted_for_full_game_pilot"
+            } else {
+                "rejected"
+            }
+            .to_owned(),
+            reasons: vec![if accepted {
+                "paired exact Rust serving policies passed every declared cross-seed action gate; this is not release activation"
+            } else {
+                "paired exact Rust serving policies failed at least one declared cross-seed action gate"
+            }
+            .to_owned()],
+        },
     })
 }
 
@@ -9361,6 +9745,7 @@ mod tests {
             action_tower: vec![action],
             head: vec![head],
             source_dataset_sha256: "1".repeat(64),
+            auxiliary_dataset_sha256: None,
             source_dataset_schema: "hu-range-conditioned-postflop-policy-dataset-v1".to_owned(),
             source_validation_status: "accepted_for_training".to_owned(),
             policy_composition: RANGE_POLICY_REPLACE.to_owned(),
@@ -9397,6 +9782,24 @@ mod tests {
         root.checks = 0;
         root.trajectory.clear();
         assert_ne!(features, range_policy_state_features(&root, 20.0).unwrap());
+    }
+
+    #[test]
+    fn range_policy_cross_seed_action_families_match_served_labels() {
+        let labels = [
+            ("fold", 0),
+            ("check", 1),
+            ("call", 2),
+            ("call_all_in", 2),
+            ("bet_to_3.000bb", 3),
+            ("raise_to_9.000bb", 4),
+            ("bet_all_in_to_20.000bb", 5),
+            ("raise_all_in_to_20.000bb", 5),
+        ];
+        for (label, expected) in labels {
+            assert_eq!(range_policy_action_kind(label).unwrap(), expected);
+        }
+        assert!(range_policy_action_kind("unknown").is_err());
     }
 
     #[test]

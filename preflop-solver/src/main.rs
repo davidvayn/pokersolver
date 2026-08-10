@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "postflop-action-targets" => run_postflop_action_targets(&args[1..]),
         "range-policy-add-baseline" => run_range_policy_add_baseline(&args[1..]),
         "range-policy-evaluate" => run_range_policy_evaluate(&args[1..]),
+        "range-policy-compare" => run_range_policy_compare(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
@@ -672,6 +673,42 @@ fn run_range_policy_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
         fs::write(&path, format!("{serialized}\n"))?;
         eprintln!(
             "wrote exact Rust range-policy evaluation {}",
+            path.display()
+        );
+    } else {
+        println!("{serialized}");
+    }
+    Ok(())
+}
+
+fn run_range_policy_compare(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let network_a = value(args, "--network-a")
+        .map(PathBuf::from)
+        .ok_or("--network-a is required")?;
+    let network_b = value(args, "--network-b")
+        .map(PathBuf::from)
+        .ok_or("--network-b is required")?;
+    let datasets = values(args, "--dataset")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let source_a = value(args, "--source-network-a").map(PathBuf::from);
+    let source_b = value(args, "--source-network-b").map(PathBuf::from);
+    let report = blueprint::public_belief::compare_range_conditioned_policies(
+        [&network_a, &network_b],
+        [source_a.as_deref(), source_b.as_deref()],
+        &datasets,
+    )?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{serialized}\n"))?;
+        eprintln!(
+            "wrote exact Rust range-policy comparison {}",
             path.display()
         );
     } else {
@@ -2294,6 +2331,9 @@ Complete turn/river label options:
     --dataset <targets.jsonl.gz> --output <augmented.jsonl.gz>
   range-policy-evaluate --network <residual-policy.json>
     --source-network <source-policy.json> --dataset <targets.jsonl.gz>
+  range-policy-compare --network-a <policy-a.json> --network-b <policy-b.json>
+    --dataset <heldout-a.jsonl.gz> --dataset <heldout-b.jsonl.gz>
+    [--source-network-a <source-a.json> --source-network-b <source-b.json>]
   flop-pbs-convergence --board <3-card-csv> --value-network <json>
     --evaluation-value-network <json> --checkpoints <csv>
     [--pot-bb 4] [--actor 1] [--averaging-delay N] [--threads N]
