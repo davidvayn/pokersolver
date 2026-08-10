@@ -1322,6 +1322,48 @@ impl RangeConditionedPolicyNetwork {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RangePolicyEvSensitivityDiagnostic {
+    pub action_ev_spread: String,
+    pub weighted_combo_fraction: f64,
+    pub weighted_teacher_kl: f64,
+    pub teacher_kl_fraction: f64,
+    pub teacher_ev_minus_candidate_ev_bb: f64,
+    pub teacher_best_action_ev_loss_bb: f64,
+    pub candidate_best_action_ev_loss_bb: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePolicyStateDiagnostic {
+    pub record_index: usize,
+    pub street: Street,
+    pub actor: usize,
+    pub board: Vec<u8>,
+    pub public_history: Vec<String>,
+    pub action_labels: Vec<String>,
+    pub objective_weight_fraction: f64,
+    pub weighted_teacher_kl: f64,
+    pub teacher_ev_minus_candidate_ev_bb: f64,
+    pub teacher_best_action_ev_loss_bb: f64,
+    pub candidate_best_action_ev_loss_bb: f64,
+    pub teacher_action_frequencies: Vec<f64>,
+    pub candidate_action_frequencies: Vec<f64>,
+    pub action_ev_bb: Vec<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePolicySourceBaselineDiagnostic {
+    pub source_policy_sha256: String,
+    pub weighted_teacher_kl: f64,
+    pub reach_weighted_primary_action_agreement: f64,
+    pub teacher_ev_minus_source_ev_bb: f64,
+    pub source_best_action_ev_loss_bb: f64,
+    pub maximum_probability_sum_error: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RangePolicyEvaluationReport {
     pub schema: String,
     pub network_sha256: String,
@@ -1338,10 +1380,50 @@ pub struct RangePolicyEvaluationReport {
     pub maximum_combo_teacher_kl: f64,
     pub reach_weighted_primary_action_agreement: f64,
     pub teacher_ev_minus_candidate_ev_bb: f64,
+    #[serde(default)]
+    pub teacher_best_action_ev_loss_bb: f64,
+    #[serde(default)]
+    pub candidate_best_action_ev_loss_bb: f64,
+    #[serde(default)]
+    pub ev_sensitivity_diagnostics: Vec<RangePolicyEvSensitivityDiagnostic>,
+    #[serde(default)]
+    pub top_teacher_kl_states: Vec<RangePolicyStateDiagnostic>,
+    #[serde(default)]
+    pub top_candidate_ev_loss_states: Vec<RangePolicyStateDiagnostic>,
     pub maximum_probability_sum_error: f64,
     pub minimum_scored_combo_coverage: f64,
     pub maximum_stored_source_probability_difference: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_baseline_diagnostic: Option<RangePolicySourceBaselineDiagnostic>,
     pub validation: BlueprintValidation,
+}
+
+const RANGE_POLICY_EV_SENSITIVITY_LABELS: [&str; 4] = [
+    "at_most_0.01bb",
+    "above_0.01bb_through_0.05bb",
+    "above_0.05bb_through_0.25bb",
+    "above_0.25bb",
+];
+
+fn action_ev_sensitivity_bin(spread_bb: f64) -> usize {
+    if spread_bb <= 0.01 {
+        0
+    } else if spread_bb <= 0.05 {
+        1
+    } else if spread_bb <= 0.25 {
+        2
+    } else {
+        3
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RangePolicyEvSensitivityAccumulator {
+    weight: f64,
+    teacher_kl: f64,
+    teacher_ev_minus_candidate_ev_bb: f64,
+    teacher_best_action_ev_loss_bb: f64,
+    candidate_best_action_ev_loss_bb: f64,
 }
 
 /// Evaluate a frozen range-conditioned policy using Rust serving inference.
@@ -1357,15 +1439,13 @@ pub fn evaluate_range_conditioned_policy_dataset(
     let dataset_bytes = fs::read(dataset_path)?;
     let dataset_sha256 = format!("{:x}", Sha256::digest(&dataset_bytes));
     let network = RangeConditionedPolicyNetwork::read(network_path)?;
-    let source_policy = if network.requires_source_policy() {
-        let path = source_policy_path
+    let source_policy = source_policy_path.map(FrozenPolicy::load).transpose()?;
+    if network.requires_source_policy() {
+        let policy = source_policy
+            .as_ref()
             .ok_or("range-conditioned residual evaluation requires a source network")?;
-        let policy = FrozenPolicy::load(path)?;
         network.validate_source_policy_sha256(policy.bundle_sha256())?;
-        Some(policy)
-    } else {
-        None
-    };
+    }
     let source_dataset_match = network.source_dataset_sha256 == dataset_sha256;
     if !source_dataset_match && !allow_independent_dataset {
         return Err("range policy source dataset hash does not match evaluation corpus".into());
@@ -1396,6 +1476,14 @@ pub fn evaluate_range_conditioned_policy_dataset(
     if (depth - network.depth_bb).abs() > EPSILON {
         return Err("range policy dataset and network use different depths".into());
     }
+    if let Some(policy) = &source_policy {
+        let expected_source = metadata["source_policy_baseline"]["sha256"]
+            .as_str()
+            .ok_or("range policy dataset omits its source-policy baseline hash")?;
+        if expected_source != policy.bundle_sha256() {
+            return Err("range policy dataset and source-policy baseline hashes differ".into());
+        }
+    }
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = depth;
     game.action_abstraction =
@@ -1413,9 +1501,18 @@ pub fn evaluate_range_conditioned_policy_dataset(
     let mut maximum_kl = 0.0f64;
     let mut primary_agreement = 0.0f64;
     let mut ev_loss = 0.0f64;
+    let mut teacher_best_action_ev_loss = 0.0f64;
+    let mut candidate_best_action_ev_loss = 0.0f64;
+    let mut ev_sensitivity = [RangePolicyEvSensitivityAccumulator::default(); 4];
     let mut maximum_sum_error = 0.0f64;
     let mut minimum_coverage = 1.0f64;
     let mut maximum_source_difference = 0.0f64;
+    let mut source_cross_entropy = 0.0f64;
+    let mut source_primary_agreement = 0.0f64;
+    let mut source_ev_loss = 0.0f64;
+    let mut source_best_action_ev_loss = 0.0f64;
+    let mut maximum_source_sum_error = 0.0f64;
+    let mut state_diagnostics = Vec::new();
     for line in lines {
         let record: RangeConditionedPolicyRecord = serde_json::from_str(&line?)?;
         if record.record_type != "range_conditioned_average_strategy"
@@ -1514,6 +1611,15 @@ pub fn evaluate_range_conditioned_policy_dataset(
         }
         let mut scored = 0usize;
         let mut reachable = 0usize;
+        let combo_weight_before_record = combo_weight;
+        let cross_entropy_before_record = cross_entropy;
+        let teacher_entropy_before_record = teacher_entropy;
+        let ev_loss_before_record = ev_loss;
+        let teacher_best_loss_before_record = teacher_best_action_ev_loss;
+        let candidate_best_loss_before_record = candidate_best_action_ev_loss;
+        let mut teacher_action_frequencies = vec![0.0; action_count];
+        let mut candidate_action_frequencies = vec![0.0; action_count];
+        let mut action_ev_bb = vec![0.0; action_count];
         for combo in 0..COMBO_COUNT {
             let private_weight = normalized.ranges[actor][combo] * masses[combo] / joint_mass;
             if private_weight <= EPSILON {
@@ -1523,6 +1629,9 @@ pub fn evaluate_range_conditioned_policy_dataset(
             let offset = combo * action_count;
             let teacher = &record.probabilities[offset..offset + action_count];
             let predicted = &candidate[offset..offset + action_count];
+            let source = source_probabilities
+                .as_ref()
+                .map(|probabilities| &probabilities[offset..offset + action_count]);
             let teacher_sum = teacher.iter().map(|value| f64::from(*value)).sum::<f64>();
             let predicted_sum = predicted.iter().sum::<f64>();
             maximum_sum_error = maximum_sum_error
@@ -1546,6 +1655,9 @@ pub fn evaluate_range_conditioned_policy_dataset(
             let mut local_entropy = 0.0;
             let mut teacher_ev = 0.0;
             let mut predicted_ev = 0.0;
+            let mut source_ev = 0.0;
+            let mut minimum_action_ev = f64::INFINITY;
+            let mut maximum_action_ev = f64::NEG_INFINITY;
             for action in 0..action_count {
                 let target = f64::from(teacher[action]);
                 let policy = predicted[action].max(1e-12);
@@ -1560,8 +1672,56 @@ pub fn evaluate_range_conditioned_policy_dataset(
                 }
                 teacher_ev += target * value;
                 predicted_ev += policy * value;
+                if let Some(source) = source {
+                    source_ev += source[action] * value;
+                    if target > 0.0 {
+                        source_cross_entropy -= weight * target * source[action].max(1e-12).ln();
+                    }
+                }
+                teacher_action_frequencies[action] += weight * target;
+                candidate_action_frequencies[action] += weight * policy;
+                action_ev_bb[action] += weight * value;
+                minimum_action_ev = minimum_action_ev.min(value);
+                maximum_action_ev = maximum_action_ev.max(value);
             }
             let local_kl = (local_cross_entropy - local_entropy).max(0.0);
+            let teacher_best_loss = (maximum_action_ev - teacher_ev).max(0.0);
+            let candidate_best_loss = (maximum_action_ev - predicted_ev).max(0.0);
+            if let Some(source) = source {
+                let source_sum = source.iter().sum::<f64>();
+                maximum_source_sum_error = maximum_source_sum_error.max((source_sum - 1.0).abs());
+                if (source_sum - 1.0).abs() > 1e-6
+                    || source
+                        .iter()
+                        .any(|value| !value.is_finite() || *value < 0.0)
+                {
+                    return Err("source-policy baseline contains invalid probability mass".into());
+                }
+                source_ev_loss += weight * (teacher_ev - source_ev);
+                source_best_action_ev_loss += weight * (maximum_action_ev - source_ev).max(0.0);
+                let source_primary = source
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .expect("non-empty source actions")
+                    .0;
+                let teacher_primary = teacher
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .expect("non-empty teacher actions")
+                    .0;
+                if teacher_primary == source_primary {
+                    source_primary_agreement += weight;
+                }
+            }
+            let sensitivity = &mut ev_sensitivity
+                [action_ev_sensitivity_bin((maximum_action_ev - minimum_action_ev).max(0.0))];
+            sensitivity.weight += weight;
+            sensitivity.teacher_kl += weight * local_kl;
+            sensitivity.teacher_ev_minus_candidate_ev_bb += weight * (teacher_ev - predicted_ev);
+            sensitivity.teacher_best_action_ev_loss_bb += weight * teacher_best_loss;
+            sensitivity.candidate_best_action_ev_loss_bb += weight * candidate_best_loss;
             maximum_kl = maximum_kl.max(local_kl);
             combo_weight += weight;
             absolute_probability_error += weight * local_l1 / action_count as f64;
@@ -1569,6 +1729,8 @@ pub fn evaluate_range_conditioned_policy_dataset(
             cross_entropy += weight * local_cross_entropy;
             teacher_entropy += weight * local_entropy;
             ev_loss += weight * (teacher_ev - predicted_ev);
+            teacher_best_action_ev_loss += weight * teacher_best_loss;
+            candidate_best_action_ev_loss += weight * candidate_best_loss;
             let teacher_primary = teacher
                 .iter()
                 .enumerate()
@@ -1585,6 +1747,43 @@ pub fn evaluate_range_conditioned_policy_dataset(
                 primary_agreement += weight;
             }
         }
+        let record_combo_weight = combo_weight - combo_weight_before_record;
+        if record_combo_weight <= EPSILON {
+            return Err("range policy record has no scored objective weight".into());
+        }
+        for values in [
+            &mut teacher_action_frequencies,
+            &mut candidate_action_frequencies,
+            &mut action_ev_bb,
+        ] {
+            for value in values {
+                *value /= record_combo_weight;
+            }
+        }
+        state_diagnostics.push(RangePolicyStateDiagnostic {
+            record_index: records,
+            street: record.state.street,
+            actor: record.state.actor,
+            board: record.state.board,
+            public_history: record.state.public_history,
+            action_labels: record.action_labels,
+            objective_weight_fraction: record_combo_weight,
+            weighted_teacher_kl: ((cross_entropy - cross_entropy_before_record)
+                - (teacher_entropy - teacher_entropy_before_record))
+                .max(0.0)
+                / record_combo_weight,
+            teacher_ev_minus_candidate_ev_bb: (ev_loss - ev_loss_before_record)
+                / record_combo_weight,
+            teacher_best_action_ev_loss_bb: (teacher_best_action_ev_loss
+                - teacher_best_loss_before_record)
+                / record_combo_weight,
+            candidate_best_action_ev_loss_bb: (candidate_best_action_ev_loss
+                - candidate_best_loss_before_record)
+                / record_combo_weight,
+            teacher_action_frequencies,
+            candidate_action_frequencies,
+            action_ev_bb,
+        });
         minimum_coverage = minimum_coverage.min(scored as f64 / reachable.max(1) as f64);
         public_weight += f64::from(record.weight);
         records += 1;
@@ -1597,10 +1796,67 @@ pub fn evaluate_range_conditioned_policy_dataset(
         reasons: vec![
             "exact Rust serving inference covered every reachable teacher combo with valid probability mass; release activation still requires paired full-game gates"
                 .to_owned(),
+            "teacher KL is a policy-compression diagnostic rather than an exploitability certificate; EV-sensitivity and top-state attribution identify whether its disagreement is strategically material"
+                .to_owned(),
         ],
     };
+    let total_local_kl = ev_sensitivity
+        .iter()
+        .map(|bucket| bucket.teacher_kl)
+        .sum::<f64>();
+    let ev_sensitivity_diagnostics = ev_sensitivity
+        .iter()
+        .zip(RANGE_POLICY_EV_SENSITIVITY_LABELS)
+        .map(|(bucket, label)| {
+            let denominator = bucket.weight.max(EPSILON);
+            RangePolicyEvSensitivityDiagnostic {
+                action_ev_spread: label.to_owned(),
+                weighted_combo_fraction: bucket.weight / combo_weight,
+                weighted_teacher_kl: bucket.teacher_kl / denominator,
+                teacher_kl_fraction: if total_local_kl > EPSILON {
+                    bucket.teacher_kl / total_local_kl
+                } else {
+                    0.0
+                },
+                teacher_ev_minus_candidate_ev_bb: bucket.teacher_ev_minus_candidate_ev_bb
+                    / denominator,
+                teacher_best_action_ev_loss_bb: bucket.teacher_best_action_ev_loss_bb / denominator,
+                candidate_best_action_ev_loss_bb: bucket.candidate_best_action_ev_loss_bb
+                    / denominator,
+            }
+        })
+        .collect();
+    for state in &mut state_diagnostics {
+        state.objective_weight_fraction /= combo_weight;
+    }
+    let mut top_teacher_kl_states = state_diagnostics.clone();
+    top_teacher_kl_states.sort_by(|left, right| {
+        (right.objective_weight_fraction * right.weighted_teacher_kl)
+            .total_cmp(&(left.objective_weight_fraction * left.weighted_teacher_kl))
+            .then_with(|| left.record_index.cmp(&right.record_index))
+    });
+    top_teacher_kl_states.truncate(20);
+    let mut top_candidate_ev_loss_states = state_diagnostics;
+    top_candidate_ev_loss_states.sort_by(|left, right| {
+        (right.objective_weight_fraction * right.candidate_best_action_ev_loss_bb)
+            .total_cmp(&(left.objective_weight_fraction * left.candidate_best_action_ev_loss_bb))
+            .then_with(|| left.record_index.cmp(&right.record_index))
+    });
+    top_candidate_ev_loss_states.truncate(20);
+    let source_baseline_diagnostic =
+        source_policy
+            .as_ref()
+            .map(|policy| RangePolicySourceBaselineDiagnostic {
+                source_policy_sha256: policy.bundle_sha256().to_owned(),
+                weighted_teacher_kl: (source_cross_entropy - teacher_entropy).max(0.0)
+                    / combo_weight,
+                reach_weighted_primary_action_agreement: source_primary_agreement / combo_weight,
+                teacher_ev_minus_source_ev_bb: source_ev_loss / combo_weight,
+                source_best_action_ev_loss_bb: source_best_action_ev_loss / combo_weight,
+                maximum_probability_sum_error: maximum_source_sum_error,
+            });
     Ok(RangePolicyEvaluationReport {
-        schema: "hu-range-conditioned-policy-rust-evaluation-v1".to_owned(),
+        schema: "hu-range-conditioned-policy-rust-evaluation-v2".to_owned(),
         network_sha256,
         dataset_sha256,
         source_dataset_match,
@@ -1616,9 +1872,15 @@ pub fn evaluate_range_conditioned_policy_dataset(
         maximum_combo_teacher_kl: maximum_kl,
         reach_weighted_primary_action_agreement: primary_agreement / combo_weight,
         teacher_ev_minus_candidate_ev_bb: ev_loss / combo_weight,
+        teacher_best_action_ev_loss_bb: teacher_best_action_ev_loss / combo_weight,
+        candidate_best_action_ev_loss_bb: candidate_best_action_ev_loss / combo_weight,
+        ev_sensitivity_diagnostics,
+        top_teacher_kl_states,
+        top_candidate_ev_loss_states,
         maximum_probability_sum_error: maximum_sum_error,
         minimum_scored_combo_coverage: minimum_coverage,
         maximum_stored_source_probability_difference: maximum_source_difference,
+        source_baseline_diagnostic,
         validation,
     })
 }
@@ -9625,6 +9887,17 @@ fn joint_compatibility_mass(ranges: &[Vec<f64>; 2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn range_policy_ev_sensitivity_bins_cover_gate_boundaries() {
+        assert_eq!(action_ev_sensitivity_bin(0.0), 0);
+        assert_eq!(action_ev_sensitivity_bin(0.01), 0);
+        assert_eq!(action_ev_sensitivity_bin(0.010_000_1), 1);
+        assert_eq!(action_ev_sensitivity_bin(0.05), 1);
+        assert_eq!(action_ev_sensitivity_bin(0.050_000_1), 2);
+        assert_eq!(action_ev_sensitivity_bin(0.25), 2);
+        assert_eq!(action_ev_sensitivity_bin(0.250_000_1), 3);
+    }
 
     fn tiny_game() -> BlueprintConfig {
         let mut game = BlueprintConfig::default();
