@@ -1,0 +1,149 @@
+{
+  "schema": "hu-20bb-range-self-play-pilot-v1",
+  "depth_bb": 20.0,
+  "baseline": "v82 residual range policies over the retained v57 direct networks",
+  "purpose": "test whether deterministic current-profile external-sampling regret rows produce paired range-policy updates that lower full-game exploitability",
+  "training_corpora": [
+    {
+      "name": "A",
+      "seed": 18911,
+      "traversals": 32,
+      "records": 580,
+      "records_by_street": [108, 196, 276],
+      "value_rollouts_per_action": 8,
+      "maximum_action_value_standard_error_bb": 6.1419225,
+      "truncated": false,
+      "source_range_policy_sha256": "6b511a44610882a45b1506dbe2ca3e0fe8a950e06f72192d81d944f007d26746",
+      "dataset_sha256": "5bb4af869686063b38c359b68d4d9ea3a0b9f6ae34dc8d0556066ec0a53a5830",
+      "report_sha256": "e4280b95d6df89b00248a883d6f52e75f6516bc72edf82bbd6d3674ba274dd0c"
+    },
+    {
+      "name": "B",
+      "seed": 18912,
+      "traversals": 32,
+      "records": 417,
+      "records_by_street": [102, 141, 174],
+      "value_rollouts_per_action": 8,
+      "maximum_action_value_standard_error_bb": 5.823389,
+      "truncated": false,
+      "source_range_policy_sha256": "111454bc7d05ad72a536acdad8bcdf945a6ecd20850cb1da7a34150b015ab006",
+      "dataset_sha256": "40bb48fd803c516db7f05d1389aa8414efab93481880ebfe2df369bcc7603336",
+      "report_sha256": "5ce454243445337006eb44c0c3653afa53716d82a0dfd8a1f73aa8cb9f89d677"
+    }
+  ],
+  "correctness_fixes": [
+    "range-self-play-only generation no longer retains unused legacy rows or computes value rollouts after the bounded output corpus is full",
+    "strictly positive counterfactual focal-combo reach is accepted even below the generic floating-point epsilon; exact zero remains invalid",
+    "candidate provenance records the self-play regret dataset hashes instead of claiming causal-attribution input",
+    "self-play candidate selection uses the one-sided 99 percent lower bound from independent per-action rollout uncertainty",
+    "full-corpus gradient accumulation covers every retained row without materializing the complete MLX graph"
+  ],
+  "paired_full_game_pilot": {
+    "seeds": [19101, 19102],
+    "deals_per_seed": 2,
+    "public_branches_per_street": 1,
+    "opponent_samples_per_runout": 1,
+    "threads_per_candidate": 2,
+    "interpretation": "paired directional screen only; too small for release certification",
+    "parent_mean_exploitability_bb": [8.209943599220036, 1.1705828767642554],
+    "parent_report_sha256": [
+      "6e9b5c8cda646bb621d469e6a1276cddec3d17b204ee47667104c9536c5f2561",
+      "321e7f4e5b8ea8de3ed30354f4212e9000e5ee9e003f805b72f9df97f41e66a4"
+    ]
+  },
+  "experiments": [
+    {
+      "name": "eight_minibatch_steps",
+      "steps": 8,
+      "batch_size": 16,
+      "learning_rate": 0.000001,
+      "full_corpus_gradient": false,
+      "report_sha256": "aba5c8fe01137ca0589532c6a7cd06c6841d68cc5bf19daccb3263652e4d7581",
+      "candidates": [
+        {
+          "name": "A",
+          "seed": 19011,
+          "candidate_range_policy_sha256": "8b515428e836fa0ac7772b760a7bf9cd8d7c41dcd4cb0e1bb4d27cec15493ab1",
+          "exact_directional_value_gains_bb": [0.014135412727126654, 0.008682747642025743],
+          "candidate_mean_exploitability_bb": 8.26398423760968,
+          "candidate_delta_bb": 0.0540406383896439,
+          "pilot_report_sha256": "03723791924364ec5556a27e612adb90f187e064996092b49a5d7f2c08d74d58",
+          "decision": "rejected"
+        },
+        {
+          "name": "B",
+          "seed": 19012,
+          "candidate_range_policy_sha256": "31957e25e4b95d74798b30ff66e63497955b019ad2e1462df1ae93821b9f80a6",
+          "exact_directional_value_gains_bb": [0.0037247902044577714, 0.007273790574270727],
+          "candidate_mean_exploitability_bb": 1.178774515259914,
+          "candidate_delta_bb": 0.008191638495658626,
+          "pilot_report_sha256": "91ea5b5be6d7e61820dfe6bbe742bb5bbb4a4042386ce6224229ecb0c9bd50df",
+          "decision": "rejected"
+        }
+      ]
+    },
+    {
+      "name": "one_minibatch_step",
+      "steps": 1,
+      "batch_size": 16,
+      "learning_rate": 0.000001,
+      "full_corpus_gradient": false,
+      "report_sha256": "3ca48bd588535db984e8e5b1d0013bb765cbbb8a2769aeba1c4d5b9269bc68a9",
+      "candidates": [
+        {
+          "name": "A",
+          "seed": 19021,
+          "candidate_range_policy_sha256": "d392537768cdfa0447f301328f643fe1eff3f13bf0f721f283d0f4e29f6b1b84",
+          "exact_directional_value_gains_bb": [0.0012249102757054208, 0.00081427175071343],
+          "candidate_mean_exploitability_bb": 8.214274416325708,
+          "candidate_delta_bb": 0.004330817105671514,
+          "pilot_report_sha256": "eb401d662c2ba869aaaf35c9df6148a32a842df792d69a744865cb19f746e521",
+          "decision": "rejected"
+        },
+        {
+          "name": "B",
+          "seed": 19022,
+          "candidate_range_policy_sha256": "6cb15a011ee6bb0689f34f0d23be7f5814908cb40542f16d8b013abccb8f8c91",
+          "exact_directional_value_gains_bb": [0.0011271707639463142, 0.0013759560113588245],
+          "candidate_mean_exploitability_bb": 1.1704963393120713,
+          "candidate_delta_bb": -0.00008653745218412112,
+          "pilot_report_sha256": "46dc02135311bd86ac5221f91cd225df72582aec1f3939c8774984f1ff9d5d17",
+          "decision": "rejected_with_pair"
+        }
+      ]
+    },
+    {
+      "name": "one_full_corpus_step",
+      "steps": 1,
+      "batch_size": 16,
+      "learning_rate": 0.000001,
+      "full_corpus_gradient": true,
+      "report_sha256": "ec15ce9daed141b0562588c635897844a8f9cbae1bb3de84485ca3ccf6140544",
+      "candidates": [
+        {
+          "name": "A",
+          "seed": 19031,
+          "candidate_range_policy_sha256": "800ce29503c5b1a8b0be0e7c0639c1210467e20fdc5ba94963d001e6d597c673",
+          "exact_directional_value_gains_bb": [0.004409112298579961, 0.0019949263705938618],
+          "candidate_mean_exploitability_bb": 8.221355302780285,
+          "candidate_delta_bb": 0.011411703560249009,
+          "pilot_report_sha256": "4b3defb5f406b3dc341318acb22df199189c6d6e1c5f9fa0ffb95eb216c91dc6",
+          "decision": "rejected"
+        },
+        {
+          "name": "B",
+          "seed": 19032,
+          "candidate_range_policy_sha256": "765c6cb5baac545e09ffde9def946f8c813f3502fb3f778067a6e627c47287c6",
+          "exact_directional_value_gains_bb": [0.0012223784872564725, 0.004169578675888147],
+          "candidate_mean_exploitability_bb": 1.1721383591432244,
+          "candidate_delta_bb": 0.0015554823789689642,
+          "pilot_report_sha256": "900f72f227ec1f05448ab7ab0a40039305e9fe43569b4d2c1c21b9a7298ee8bb",
+          "decision": "rejected"
+        }
+      ]
+    }
+  ],
+  "conclusion": "All six candidates passed paired exact directional gates, but five of six worsened their matching tiny full-game screen and the only improvement was not paired. Removing minibatch noise with a complete-corpus gradient did not fix the mismatch. Do not promote these weights or continue shrinking the same static current-profile mirror step; the next policy update must be response-aware or otherwise target full-game exploitability.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}

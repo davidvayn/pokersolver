@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import gzip
 import hashlib
 import json
@@ -18,7 +19,7 @@ import mlx.optimizers as optim
 from mlx.utils import tree_map
 import numpy as np
 
-from distill_causal_policy import categorical_kl, mirror_descent_targets
+from distill_causal_policy import mirror_descent_targets
 from distill_range_policy import (
     ACTION_FEATURE_COUNT,
     ACTION_FEATURE_SCHEMA,
@@ -26,8 +27,6 @@ from distill_range_policy import (
     COMBO_COUNT,
     CONTEXT_SIZE,
     LoadedDataset,
-    NETWORK_SCHEMA,
-    QUERY_SIZE,
     RANGE_POLICY_FEATURE_SCHEMA,
     RangeConditionedPolicy,
     add_features,
@@ -37,7 +36,12 @@ from distill_range_policy import (
 )
 
 CAUSAL_SCHEMA = "hu-range-conditioned-causal-policy-attribution-jsonl-v1"
-REPORT_SCHEMA = "hu-paired-range-conditioned-causal-trust-region-v1"
+SELF_PLAY_SCHEMA = "hu-range-conditioned-self-play-regret-jsonl-v1"
+DIRECTIONAL_RECORD_TYPES = {
+    CAUSAL_SCHEMA: "range_conditioned_causal_policy_attribution",
+    SELF_PLAY_SCHEMA: "range_conditioned_self_play_regret",
+}
+REPORT_SCHEMA = "hu-paired-range-conditioned-directional-trust-region-v2"
 MAXIMUM_SOURCE_PARITY_ABSOLUTE_ERROR = 0.0025
 MAXIMUM_SOURCE_PARITY_WEIGHTED_KL = 1e-6
 # MLX/Metal and the scalar Rust evaluator accumulate compact-network matrix
@@ -46,6 +50,7 @@ MAXIMUM_SOURCE_PARITY_WEIGHTED_KL = 1e-6
 # exact candidate acceptance is still decided by the Rust evaluator below.
 MAXIMUM_SOURCE_PARITY_NODE_KL = 2e-5
 REALIZED_TRUST_REGION_SELECTION_FRACTION = 0.95
+ONE_SIDED_99_PERCENT_Z = 2.3263478740408408
 
 
 @dataclass
@@ -60,6 +65,7 @@ class CausalRangeDataset:
     focal_combos: np.ndarray
     current: np.ndarray
     action_values: np.ndarray
+    action_value_standard_errors: np.ndarray | None
     weights: np.ndarray
 
     @property
@@ -135,7 +141,7 @@ def load_dataset(
         records = [json.loads(line) for line in stream if line.strip()]
     if (
         metadata.get("record_type") != "metadata"
-        or metadata.get("schema") != CAUSAL_SCHEMA
+        or metadata.get("schema") not in DIRECTIONAL_RECORD_TYPES
         or metadata.get("state_feature_schema") != RANGE_POLICY_FEATURE_SCHEMA
         or metadata.get("state_feature_count") != CONTEXT_SIZE
         or metadata.get("action_feature_schema") != ACTION_FEATURE_SCHEMA
@@ -151,6 +157,7 @@ def load_dataset(
     ):
         raise ValueError(f"incompatible causal range-policy dataset: {path}")
     records = _cap_records(records, maximum_records)
+    expected_record_type = DIRECTIONAL_RECORD_TYPES[metadata["schema"]]
     count = len(records)
     maximum_actions = max(len(record.get("action_labels", [])) for record in records)
     if maximum_actions <= 0:
@@ -165,6 +172,9 @@ def load_dataset(
     focal_combos = np.empty(count, dtype=np.int32)
     current = np.zeros((count, maximum_actions), dtype=np.float32)
     action_values = np.zeros_like(current)
+    action_value_standard_errors = (
+        np.zeros_like(current) if metadata["schema"] == SELF_PLAY_SCHEMA else None
+    )
     weights = np.empty(count, dtype=np.float64)
     summaries: list[dict[str, Any]] = []
     for index, record in enumerate(records):
@@ -174,18 +184,32 @@ def load_dataset(
         record_actions = np.asarray(record.get("action_features"), dtype=np.float32)
         record_current = np.asarray(record.get("probabilities"), dtype=np.float32)
         record_values = np.asarray(record.get("action_values_bb"), dtype=np.float32)
+        record_standard_errors = (
+            np.asarray(
+                record.get("action_value_standard_errors_bb"), dtype=np.float32
+            )
+            if action_value_standard_errors is not None
+            else None
+        )
         board = np.asarray(state.get("board"), dtype=np.int16)
         actor = int(state.get("actor", -1))
         focal = int(record.get("focal_combo", -1))
         weight = float(record.get("weight", float("nan")))
         if (
-            record.get("record_type")
-            != "range_conditioned_causal_policy_attribution"
+            record.get("record_type") != expected_record_type
             or not 0 < action_count <= maximum_actions
             or record_ranges.shape != (2, COMBO_COUNT)
             or record_actions.shape != (action_count, ACTION_FEATURE_COUNT)
             or record_current.shape != (action_count,)
             or record_values.shape != (action_count,)
+            or (
+                record_standard_errors is not None
+                and (
+                    record_standard_errors.shape != (action_count,)
+                    or not np.all(np.isfinite(record_standard_errors))
+                    or not np.all(record_standard_errors >= 0)
+                )
+            )
             or board.shape not in ((3,), (4,), (5,))
             or actor not in (0, 1)
             or not 0 <= focal < COMBO_COUNT
@@ -211,6 +235,9 @@ def load_dataset(
         focal_combos[index] = focal
         current[index, :action_count] = record_current
         action_values[index, :action_count] = record_values
+        if action_value_standard_errors is not None:
+            assert record_standard_errors is not None
+            action_value_standard_errors[index, :action_count] = record_standard_errors
         weights[index] = weight
         summaries.append({"state": state})
 
@@ -256,6 +283,7 @@ def load_dataset(
         focal_combos=focal_combos,
         current=current,
         action_values=action_values,
+        action_value_standard_errors=action_value_standard_errors,
         weights=weights,
     )
 
@@ -327,6 +355,22 @@ def metrics(
             )
         ),
     }
+    if dataset.action_value_standard_errors is not None:
+        node_variances = np.sum(
+            np.square(candidate - frozen)
+            * np.square(dataset.action_value_standard_errors),
+            axis=1,
+        )
+        gain_standard_error = float(
+            np.sqrt(np.sum(np.square(normalized) * node_variances))
+        )
+        result["weightedPolicyValueGainActionRolloutStandardErrorBb"] = (
+            gain_standard_error
+        )
+        result["weightedPolicyValueGainActionRolloutLowerBound99Bb"] = (
+            result["weightedPolicyValueGainBb"]
+            - ONE_SIDED_99_PERCENT_Z * gain_standard_error
+        )
     if full_candidate is not None and full_source is not None:
         source = np.maximum(full_source, 1e-30)
         candidate_full = np.maximum(full_candidate, 1e-30)
@@ -394,10 +438,16 @@ def rust_evaluate(
     ]
     completed = subprocess.run(
         command,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(
+            "Rust directional range-policy evaluation failed"
+            + (f": {detail}" if detail else " without diagnostics")
+        )
     report = json.loads(completed.stdout)
     if (
         report.get("schema")
@@ -426,6 +476,7 @@ def train_candidate(
     anchor_scale: float,
     maximum_gradient_norm: float,
     evaluation_interval: int,
+    full_corpus_gradient: bool = False,
 ) -> tuple[RangeConditionedPolicy, dict[str, Any], dict[str, Any]]:
     source_payload = json.loads(source_path.read_text())
     model = RangeConditionedPolicy(
@@ -475,18 +526,24 @@ def train_candidate(
         focal_combos: mx.array,
         target: mx.array,
         frozen_full: mx.array,
+        row_weights: mx.array,
     ) -> mx.array:
         logits = current_model(contexts, queries, projection, actors, actions, masks)
         log_probabilities = logits - mx.logsumexp(logits, axis=2, keepdims=True)
         selected = mx.take_along_axis(
             log_probabilities, focal_combos[:, None, None], axis=1
         ).squeeze(1)
-        focal_loss = -mx.mean(mx.sum(target * selected, axis=1))
+        denominator = mx.maximum(mx.sum(row_weights), 1e-8)
+        focal_loss = -mx.sum(
+            row_weights * mx.sum(target * selected, axis=1)
+        ) / denominator
         selector = mx.stack((actors == 0, actors == 1), axis=1)[:, :, None]
         actor_reach = mx.sum(projection * selector, axis=1)
         actor_reach /= mx.maximum(mx.sum(actor_reach, axis=1, keepdims=True), 1e-8)
         anchor_cross_entropy = -mx.sum(frozen_full * log_probabilities, axis=2)
-        anchor_loss = mx.mean(mx.sum(actor_reach * anchor_cross_entropy, axis=1))
+        anchor_loss = mx.sum(
+            row_weights * mx.sum(actor_reach * anchor_cross_entropy, axis=1)
+        ) / denominator
         return focal_loss + anchor_scale * anchor_loss
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
@@ -496,25 +553,61 @@ def train_candidate(
     losses: list[float] = []
     checkpoints: list[dict[str, Any]] = []
     for step_index in range(steps):
-        rows = rng.choice(
-            len(training.records),
-            size=min(batch_size, len(training.records)),
-            replace=True,
-            p=sampling,
-        )
-        arguments = _model_arguments(training, rows)
-        loss, gradients = loss_and_grad(
-            model,
-            *arguments,
-            mx.array(training.focal_combos[rows]),
-            mx.array(targets[rows]),
-            mx.array(full_source_training[rows]),
-        )
+        if full_corpus_gradient:
+            gradients = None
+            step_loss = 0.0
+            total_weight = float(training.weights.sum())
+            for start in range(0, len(training.records), batch_size):
+                rows = np.arange(
+                    start, min(start + batch_size, len(training.records))
+                )
+                row_weights = training.weights[rows].astype(np.float32)
+                chunk_fraction = float(row_weights.sum()) / total_weight
+                loss, chunk_gradients = loss_and_grad(
+                    model,
+                    *_model_arguments(training, rows),
+                    mx.array(training.focal_combos[rows]),
+                    mx.array(targets[rows]),
+                    mx.array(full_source_training[rows]),
+                    mx.array(row_weights),
+                )
+                chunk_gradients = tree_map(
+                    lambda value: value * chunk_fraction, chunk_gradients
+                )
+                gradients = (
+                    chunk_gradients
+                    if gradients is None
+                    else tree_map(
+                        lambda accumulated, value: accumulated + value,
+                        gradients,
+                        chunk_gradients,
+                    )
+                )
+                mx.eval(gradients, loss)
+                step_loss += float(loss.item()) * chunk_fraction
+            assert gradients is not None
+        else:
+            rows = rng.choice(
+                len(training.records),
+                size=min(batch_size, len(training.records)),
+                replace=True,
+                p=sampling,
+            )
+            loss, gradients = loss_and_grad(
+                model,
+                *_model_arguments(training, rows),
+                mx.array(training.focal_combos[rows]),
+                mx.array(targets[rows]),
+                mx.array(full_source_training[rows]),
+                mx.ones((len(rows),)),
+            )
+            mx.eval(loss, gradients)
+            step_loss = float(loss.item())
         if maximum_gradient_norm > 0:
             gradients, _ = optim.clip_grad_norm(gradients, maximum_gradient_norm)
         optimizer.update(model, gradients)
-        mx.eval(model.parameters(), optimizer.state, loss)
-        losses.append(float(loss.item()))
+        mx.eval(model.parameters(), optimizer.state)
+        losses.append(step_loss)
         step = step_index + 1
         if step > 4 and step % evaluation_interval != 0 and step != steps:
             continue
@@ -543,11 +636,17 @@ def train_candidate(
             * REALIZED_TRUST_REGION_SELECTION_FRACTION
             for measured in (training_metrics, validation_metrics)
         )
+        def conservative_gain(measured: dict[str, float]) -> float:
+            return measured.get(
+                "weightedPolicyValueGainActionRolloutLowerBound99Bb",
+                measured["weightedPolicyValueGainBb"],
+            )
+
         rank = (
             int(feasible),
             min(
-                training_metrics["weightedPolicyValueGainBb"],
-                validation_metrics["weightedPolicyValueGainBb"],
+                conservative_gain(training_metrics),
+                conservative_gain(validation_metrics),
             ),
             -max(
                 training_metrics["weightedReverseKlFromFrozen"],
@@ -604,6 +703,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--anchor-scale", type=float, default=0.25)
     parser.add_argument("--maximum-gradient-norm", type=float, default=1.0)
     parser.add_argument("--evaluation-interval", type=int, default=25)
+    parser.add_argument("--full-corpus-gradient", action="store_true")
     parser.add_argument("--seeds", default="18301,18302")
     parser.add_argument(
         "--rust-evaluator",
@@ -661,6 +761,13 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     students = []
     attribution_hashes = [dataset.sha256 for dataset in datasets]
+    dataset_schemas = {dataset.metadata["schema"] for dataset in datasets}
+    if dataset_schemas == {SELF_PLAY_SCHEMA}:
+        provenance_key = "selfPlayRegretDatasetSha256s"
+    elif dataset_schemas == {CAUSAL_SCHEMA}:
+        provenance_key = "causalAttributionSha256s"
+    else:
+        provenance_key = "directionalDatasetSha256s"
     for index, seed in enumerate(seeds):
         model, source_payload, diagnostics = train_candidate(
             sources[index],
@@ -677,6 +784,7 @@ def main() -> None:
             args.anchor_scale,
             args.maximum_gradient_norm,
             args.evaluation_interval,
+            args.full_corpus_gradient,
         )
         output = args.output_dir / f"range-policy-seed-{seed}.json"
         export_model_from_source(
@@ -686,11 +794,17 @@ def main() -> None:
             seed,
             sha256(sources[index]),
             attribution_hashes,
+            provenance_key,
         )
         selected = diagnostics["selectedCheckpoint"]
         measurements = [selected["training"], selected["validation"]]
         python_accepted = all(
             value["weightedPolicyValueGainBb"]
+            >= args.minimum_policy_value_gain_bb
+            and value.get(
+                "weightedPolicyValueGainActionRolloutLowerBound99Bb",
+                value["weightedPolicyValueGainBb"],
+            )
             >= args.minimum_policy_value_gain_bb
             and value["maximumReverseKlFromFrozen"]
             <= args.maximum_realized_node_kl
@@ -698,8 +812,8 @@ def main() -> None:
             <= args.maximum_realized_weighted_kl
             for value in measurements
         )
-        rust_evaluations = [
-            rust_evaluate(
+        def exact_evaluation(dataset_index: int) -> dict[str, Any]:
+            return rust_evaluate(
                 args.rust_evaluator,
                 output,
                 sources[index],
@@ -709,8 +823,9 @@ def main() -> None:
                 args.maximum_realized_node_kl,
                 args.maximum_realized_weighted_kl,
             )
-            for dataset_index in range(2)
-        ]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            rust_evaluations = list(executor.map(exact_evaluation, range(2)))
         accepted = python_accepted and all(
             evaluation["validation"]["status"]
             == "accepted_for_directional_evaluation"
@@ -724,9 +839,9 @@ def main() -> None:
                 "network": str(output),
                 "networkSha256": sha256(output),
                 "diagnostics": diagnostics,
-                "pythonPairedCausalTrustGate": python_accepted,
+                "pythonPairedDirectionalTrustGate": python_accepted,
                 "rustEvaluations": rust_evaluations,
-                "passesPairedCausalTrustGate": accepted,
+                "passesPairedDirectionalTrustGate": accepted,
             }
         )
         del model
@@ -738,6 +853,7 @@ def main() -> None:
             {
                 "path": str(dataset.path),
                 "sha256": dataset.sha256,
+                "schema": dataset.metadata["schema"],
                 "seed": dataset.metadata["seed"],
                 "sourceRangePolicySha256": dataset.metadata[
                     "source_range_policy_sha256"
@@ -757,9 +873,10 @@ def main() -> None:
         "realizedTrustRegionSelectionFraction": REALIZED_TRUST_REGION_SELECTION_FRACTION,
         "minimumPolicyValueGainBb": args.minimum_policy_value_gain_bb,
         "anchorScale": args.anchor_scale,
+        "fullCorpusGradient": args.full_corpus_gradient,
         "students": students,
         "acceptedForDirectionalEvaluation": all(
-            student["passesPairedCausalTrustGate"] for student in students
+            student["passesPairedDirectionalTrustGate"] for student in students
         ),
         "activationEligible": False,
         "activationReason": "full-game exploitability and release gates remain mandatory",

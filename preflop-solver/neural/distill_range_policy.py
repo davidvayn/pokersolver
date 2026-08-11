@@ -1513,19 +1513,32 @@ def export_model_from_source(
     seed: int,
     parent_sha256: str,
     causal_attribution_sha256s: list[str],
+    provenance_key: str = "causalAttributionSha256s",
 ) -> None:
     if len(parent_sha256) != 64 or any(
         len(value) != 64 for value in causal_attribution_sha256s
     ):
         raise ValueError("causal range-policy provenance hashes are invalid")
+    if provenance_key not in {
+        "causalAttributionSha256s",
+        "selfPlayRegretDatasetSha256s",
+        "directionalDatasetSha256s",
+    }:
+        raise ValueError("range-policy provenance key is invalid")
     payload = dict(source_payload)
+    for key in (
+        "causalAttributionSha256s",
+        "selfPlayRegretDatasetSha256s",
+        "directionalDatasetSha256s",
+    ):
+        payload.pop(key, None)
     payload.update(
         {
             "seed": seed,
             "architecture": model.architecture,
             "policyComposition": model.composition,
             "parentRangePolicySha256": parent_sha256,
-            "causalAttributionSha256s": causal_attribution_sha256s,
+            provenance_key: causal_attribution_sha256s,
             "contextTower": normalized_tower_payload(
                 model.context_tower, "gelu-fast"
             ),

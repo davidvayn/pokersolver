@@ -18,6 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "neural-certificate" => run_neural_certificate(&args[1..]),
         "neural-causal-attribution" => run_neural_causal_attribution(&args[1..]),
         "neural-causal-attribution-evaluate" => run_neural_causal_attribution_evaluate(&args[1..]),
+        "range-policy-self-play-samples" => run_range_policy_self_play_samples(&args[1..]),
         "preflop-cache" => run_preflop_cache(&args[1..]),
         "preflop-cache-resolver" => run_preflop_cache_resolver(&args[1..]),
         "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
@@ -1877,6 +1878,51 @@ fn run_neural_causal_attribution(args: &[String]) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+fn run_range_policy_self_play_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("range-policy-self-play.jsonl.gz"));
+    let report = blueprint::neural::generate_range_self_play_samples(
+        blueprint::neural::RangeSelfPlaySampleConfig {
+            game,
+            traversals: parse_or(args, "--traversals", 100u64)?,
+            start_iteration: parse_or(args, "--start-iteration", 0u64)?,
+            seed: parse_or(args, "--seed", 0x5E1F_91A7u64)?,
+            max_records: parse_or(args, "--max-records", 50_000usize)?,
+            network_path: value(args, "--networks")
+                .map(PathBuf::from)
+                .ok_or("--networks is required for range self-play")?,
+            range_policy_path: value(args, "--range-policy")
+                .map(PathBuf::from)
+                .ok_or("--range-policy is required for range self-play")?,
+            value_rollouts_per_action: parse_or(args, "--value-rollouts-per-action", 4u32)?,
+            enumerate_turn_river_chance: args
+                .iter()
+                .any(|argument| argument == "--enumerate-turn-river-chance"),
+            output,
+        },
+    )?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--report").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
+    Ok(())
+}
+
 fn run_neural_causal_attribution_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
     let evaluation = blueprint::neural::evaluate_causal_attribution_policy(
         blueprint::neural::CausalAttributionPolicyEvaluationConfig {
@@ -2221,6 +2267,7 @@ Usage:
   preflop-solver neural-certificate [options]
   preflop-solver neural-causal-attribution [options]
   preflop-solver neural-causal-attribution-evaluate [options]
+  preflop-solver range-policy-self-play-samples [options]
   preflop-solver preflop-cache [options]
   preflop-solver preflop-cache-resolver [options]
   preflop-solver preflop-cache-compare [options]
@@ -2314,6 +2361,20 @@ Neural sample options:
   --sample-turn-rivers            Sample instead of enumerating turn rivers
   --compact-serving-grid          Opt-in reduced open grid
   --output <path>                 Default: neural-samples.jsonl.gz
+
+Range-policy self-play sample options:
+  --effective-stack-bb <number>   Default: 20
+  --traversals <integer>          Default: 100 alternating traversers
+  --start-iteration <integer>     Global iteration used for deterministic weighting
+  --seed <integer>                Deterministic chance and rollout seed
+  --max-records <integer>         Default: 50000 bounded output guard
+  --networks <path>               Required frozen routed policy JSON
+  --range-policy <path>           Required frozen range-policy JSON
+  --value-rollouts-per-action <N> Default: 4 independent value samples
+  --enumerate-turn-river-chance   Enumerate later-street chance during rollouts
+  --compact-serving-grid          Match an opt-in reduced-open model
+  --output <path>                 Default: range-policy-self-play.jsonl.gz
+  --report <path>                 Optional generation report JSON
 
 Neural certificate options:
   --effective-stack-bb <number>   Default: 20

@@ -72,6 +72,45 @@ pub struct CausalPolicyAttributionConfig {
     pub output: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+pub struct RangeSelfPlaySampleConfig {
+    pub game: BlueprintConfig,
+    pub traversals: u64,
+    pub start_iteration: u64,
+    pub seed: u64,
+    pub max_records: usize,
+    pub network_path: PathBuf,
+    pub range_policy_path: PathBuf,
+    pub value_rollouts_per_action: u32,
+    pub enumerate_turn_river_chance: bool,
+    pub output: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RangeSelfPlaySampleReport {
+    pub schema: &'static str,
+    pub method: &'static str,
+    pub depth_bb: f64,
+    pub traversals: u64,
+    pub start_iteration: u64,
+    pub seed: u64,
+    pub network_sha256: String,
+    pub range_policy_sha256: String,
+    pub value_rollouts_per_action: u32,
+    pub candidate_records: usize,
+    pub retained_records: usize,
+    pub retained_records_by_street: [usize; 3],
+    pub truncated: bool,
+    pub minimum_policy_action_probability: f64,
+    pub maximum_probability_sum_error: f64,
+    pub minimum_action_value_bb: f64,
+    pub maximum_action_value_bb: f64,
+    pub maximum_action_value_standard_error_bb: f64,
+    pub output: PathBuf,
+    pub output_sha256: String,
+    pub validation_status: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CausalPolicyAttributionReport {
     pub schema: &'static str,
@@ -904,6 +943,9 @@ struct SampleGenerator {
     rng: SplitMix64,
     records: Vec<TrainingSample>,
     attempted_records: usize,
+    range_records: Vec<Vec<u8>>,
+    attempted_range_records: usize,
+    range_self_play_only: bool,
 }
 
 impl SampleGenerator {
@@ -942,6 +984,9 @@ impl SampleGenerator {
             rng: SplitMix64::new(config.seed),
             records: Vec::with_capacity(config.max_records.min(65_536)),
             attempted_records: 0,
+            range_records: Vec::with_capacity(config.max_records.min(65_536)),
+            attempted_range_records: 0,
+            range_self_play_only: false,
             config,
             networks,
         })
@@ -949,7 +994,16 @@ impl SampleGenerator {
 
     fn run(
         mut self,
-    ) -> Result<(SampleGenerationConfig, Vec<TrainingSample>, usize), Box<dyn Error>> {
+    ) -> Result<
+        (
+            SampleGenerationConfig,
+            Vec<TrainingSample>,
+            usize,
+            Vec<Vec<u8>>,
+            usize,
+        ),
+        Box<dyn Error>,
+    > {
         for offset in 0..self.config.traversals {
             let iteration = self.config.start_iteration + offset;
             let deal = Deal::sample(&mut self.rng);
@@ -971,7 +1025,13 @@ impl SampleGenerator {
                 );
             }
         }
-        Ok((self.config, self.records, self.attempted_records))
+        Ok((
+            self.config,
+            self.records,
+            self.attempted_records,
+            self.range_records,
+            self.attempted_range_records,
+        ))
     }
 
     fn current_strategy(
@@ -1020,8 +1080,16 @@ impl SampleGenerator {
 
     fn push_record(&mut self, sample: TrainingSample) {
         self.attempted_records += 1;
-        if self.records.len() < self.config.max_records {
+        if !self.range_self_play_only && self.records.len() < self.config.max_records {
             self.records.push(sample);
+        }
+    }
+
+    fn push_range_record(&mut self, record: Option<Vec<u8>>) {
+        self.attempted_range_records += 1;
+        if let Some(record) = record {
+            debug_assert!(self.range_records.len() < self.config.max_records);
+            self.range_records.push(record);
         }
     }
 
@@ -1221,49 +1289,82 @@ impl SampleGenerator {
                 .zip(&values)
                 .map(|(probability, value)| probability * value)
                 .sum::<f64>();
-            let (action_value_targets, action_value_standard_errors) = self.action_value_estimates(
-                &state,
-                deal,
-                &actions,
-                traverser,
-                iteration,
-                Some(&values),
-            );
-            self.push_record(training_sample(
-                if traverser == 0 {
-                    SampleKind::AdvantageP0
+            let is_range_node = state.street != Street::Preflop
+                && self
+                    .networks
+                    .as_ref()
+                    .is_some_and(|policy| policy.range_policy.is_some());
+            let retain_range_record =
+                is_range_node && self.range_records.len() < self.config.max_records;
+            let (action_value_targets, action_value_standard_errors) =
+                if !self.range_self_play_only || retain_range_record {
+                    self.action_value_estimates(
+                        &state,
+                        deal,
+                        &actions,
+                        traverser,
+                        iteration,
+                        Some(&values),
+                    )
                 } else {
-                    SampleKind::AdvantageP1
-                },
-                iteration,
-                1.0,
-                reach_probability,
-                &state,
-                deal,
-                &actions,
-                values.iter().map(|value| value - node_value).collect(),
-                Some(action_value_targets),
-                action_value_standard_errors,
-                &self.config.game,
-            ));
+                    (values.clone(), None)
+                };
+            if is_range_node {
+                let record = retain_range_record.then(|| {
+                    range_policy_directional_record_bytes(
+                        "range_conditioned_self_play_regret",
+                        self,
+                        &state,
+                        deal,
+                        &actions,
+                        &strategy,
+                        &action_value_targets,
+                        action_value_standard_errors.as_deref(),
+                        1.0,
+                    )
+                    .expect("validated range-conditioned self-play record")
+                });
+                self.push_range_record(record);
+            }
+            if !self.range_self_play_only {
+                self.push_record(training_sample(
+                    if traverser == 0 {
+                        SampleKind::AdvantageP0
+                    } else {
+                        SampleKind::AdvantageP1
+                    },
+                    iteration,
+                    1.0,
+                    reach_probability,
+                    &state,
+                    deal,
+                    &actions,
+                    values.iter().map(|value| value - node_value).collect(),
+                    Some(action_value_targets),
+                    action_value_standard_errors,
+                    &self.config.game,
+                ));
+            }
             node_value
         } else {
             let iteration_weight = ((iteration + 1) as f64)
                 .powf(self.config.game.dcfr.strategy_exponent)
                 .min(f32::MAX as f64) as f32;
-            self.push_record(training_sample(
-                SampleKind::AverageStrategy,
-                iteration,
-                iteration_weight,
-                reach_probability,
-                &state,
-                deal,
-                &actions,
-                strategy.clone(),
-                None,
-                None,
-                &self.config.game,
-            ));
+            if !self.range_self_play_only {
+                self.push_record(training_sample(
+                    SampleKind::AverageStrategy,
+                    iteration,
+                    iteration_weight,
+                    reach_probability,
+                    &state,
+                    deal,
+                    &actions,
+                    strategy.clone(),
+                    None,
+                    None,
+                    &self.config.game,
+                ));
+            }
             let selected = sample_index(&strategy, &mut self.rng);
             let baselines = self.sampled_value_baseline(&state, deal, &actions, traverser);
             let sampled_value = self.external_sampling_after_action(
@@ -1907,7 +2008,7 @@ fn trajectory_kind_index(kind: TrajectoryActionKind) -> usize {
 }
 
 pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Error>> {
-    let (config, records, attempted_records) = SampleGenerator::new(config)?.run()?;
+    let (config, records, attempted_records, _, _) = SampleGenerator::new(config)?.run()?;
     if let Some(parent) = config.output.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
@@ -1949,6 +2050,205 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
     writer.finish()?.flush()?;
     fs::rename(temporary, config.output)?;
     Ok(())
+}
+
+/// Export postflop focal-combo action values from alternating-traverser
+/// external-sampling self-play. Unlike fixed-response attribution, these rows
+/// follow both players' current policy and therefore can be regenerated after
+/// every accepted policy update without freezing a stale opponent response.
+pub fn generate_range_self_play_samples(
+    config: RangeSelfPlaySampleConfig,
+) -> Result<RangeSelfPlaySampleReport, Box<dyn Error>> {
+    if config.traversals < 2 || config.max_records < 3 {
+        return Err("range self-play requires two traversals and three records".into());
+    }
+    if config.value_rollouts_per_action < 2 {
+        return Err("range self-play action values require at least two rollouts".into());
+    }
+    let network_sha256 = sha256_path(&config.network_path)?;
+    let range_policy_sha256 = sha256_path(&config.range_policy_path)?;
+    let generator_config = SampleGenerationConfig {
+        game: config.game.clone(),
+        traversals: config.traversals,
+        start_iteration: config.start_iteration,
+        seed: config.seed,
+        max_records: config.max_records,
+        output: PathBuf::from("unused-range-self-play.jsonl.gz"),
+        network_path: Some(config.network_path.clone()),
+        trajectory_sampling: false,
+        evaluate_trajectory_values: false,
+        value_rollouts_per_action: config.value_rollouts_per_action,
+        enumerate_turn_river_chance: config.enumerate_turn_river_chance,
+    };
+    let mut generator =
+        SampleGenerator::new_with_range(generator_config, Some(&config.range_policy_path))?;
+    generator.range_self_play_only = true;
+    generator.records = Vec::new();
+    let (_, _, _, records, attempted_records) = generator.run()?;
+    if records.is_empty() || records.len() > config.max_records {
+        return Err("range self-play produced no bounded records".into());
+    }
+
+    let mut retained_records_by_street = [0usize; 3];
+    let mut minimum_probability = f64::INFINITY;
+    let mut maximum_sum_error = 0.0f64;
+    let mut minimum_action_value = f64::INFINITY;
+    let mut maximum_action_value = f64::NEG_INFINITY;
+    let mut maximum_standard_error = 0.0f64;
+    for encoded in &records {
+        let record: serde_json::Value = serde_json::from_slice(encoded)?;
+        if record["record_type"] != "range_conditioned_self_play_regret"
+            || record["weight"].as_f64().is_none_or(|weight| weight <= 0.0)
+        {
+            return Err("range self-play record header is invalid".into());
+        }
+        let actor = record["state"]["actor"]
+            .as_u64()
+            .filter(|actor| *actor < 2)
+            .ok_or("range self-play actor is invalid")? as usize;
+        let focal_combo = record["focal_combo"]
+            .as_u64()
+            .filter(|combo| *combo < super::public_belief::COMBO_COUNT as u64)
+            .ok_or("range self-play focal combo is invalid")? as usize;
+        let focal_reach = record["ranges"][actor][focal_combo]
+            .as_f64()
+            .ok_or("range self-play focal reach is absent")?;
+        if !focal_reach.is_finite() || focal_reach <= 0.0 {
+            return Err("range self-play focal combo has no reach".into());
+        }
+        let street = match record["state"]["street"].as_str() {
+            Some("flop") => 0,
+            Some("turn") => 1,
+            Some("river") => 2,
+            _ => return Err("range self-play retained a non-postflop street".into()),
+        };
+        retained_records_by_street[street] += 1;
+        let probabilities = record["probabilities"]
+            .as_array()
+            .ok_or("range self-play probabilities are absent")?;
+        let values = record["action_values_bb"]
+            .as_array()
+            .ok_or("range self-play action values are absent")?;
+        let standard_errors = record["action_value_standard_errors_bb"]
+            .as_array()
+            .ok_or("range self-play standard errors are absent")?;
+        if probabilities.is_empty()
+            || probabilities.len() != values.len()
+            || probabilities.len() != standard_errors.len()
+        {
+            return Err("range self-play action vectors differ".into());
+        }
+        let mut sum = 0.0;
+        for probability in probabilities {
+            let probability = probability
+                .as_f64()
+                .ok_or("range self-play probability is not numeric")?;
+            if !probability.is_finite() || probability <= 0.0 {
+                return Err("range self-play policy lacks finite full support".into());
+            }
+            minimum_probability = minimum_probability.min(probability);
+            sum += probability;
+        }
+        maximum_sum_error = maximum_sum_error.max((sum - 1.0).abs());
+        for value in values {
+            let value = value
+                .as_f64()
+                .ok_or("range self-play action value is not numeric")?;
+            if !value.is_finite() || value.abs() > config.game.effective_stack_bb + 1e-6 {
+                return Err("range self-play action value is invalid".into());
+            }
+            minimum_action_value = minimum_action_value.min(value);
+            maximum_action_value = maximum_action_value.max(value);
+        }
+        for standard_error in standard_errors {
+            let standard_error = standard_error
+                .as_f64()
+                .ok_or("range self-play standard error is not numeric")?;
+            if !standard_error.is_finite() || standard_error < 0.0 {
+                return Err("range self-play standard error is invalid".into());
+            }
+            maximum_standard_error = maximum_standard_error.max(standard_error);
+        }
+    }
+    if retained_records_by_street.contains(&0)
+        || maximum_sum_error > 1e-6
+        || !minimum_probability.is_finite()
+        || !minimum_action_value.is_finite()
+        || !maximum_action_value.is_finite()
+    {
+        return Err("range self-play failed its integrity gates".into());
+    }
+
+    if let Some(parent) = config.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = config.output.with_extension("tmp");
+    let file = fs::File::create(&temporary)?;
+    let buffered = BufWriter::new(file);
+    let mut writer = GzEncoder::new(buffered, Compression::fast());
+    let metadata = serde_json::json!({
+        "record_type": "metadata",
+        "schema": "hu-range-conditioned-self-play-regret-jsonl-v1",
+        "state_feature_schema": RANGE_POLICY_FEATURE_SCHEMA_V2,
+        "state_feature_count": RANGE_POLICY_CONTEXT_V2_COUNT,
+        "action_feature_schema": "hu-cash-legal-action-v1",
+        "action_feature_count": ACTION_FEATURE_COUNT,
+        "depth_bb": config.game.effective_stack_bb,
+        "seed": config.seed,
+        "start_iteration": config.start_iteration,
+        "traversals": config.traversals,
+        "deals": config.traversals,
+        "records": records.len(),
+        "candidate_records": attempted_records,
+        "truncated": records.len() < attempted_records,
+        "sampling_mode": "alternating_traverser_external_sampling_current_profile",
+        "evaluates_trajectory_action_values": true,
+        "value_rollouts_per_action": config.value_rollouts_per_action,
+        "action_value_method": "independent_external_sampling_current_profile_mean",
+        "policy_objective": "bilateral_range_conditioned_self_play_mirror_descent",
+        "source_network_sha256": network_sha256,
+        "source_range_policy_sha256": range_policy_sha256,
+        "uses_exact_ranges": true,
+        "focal_combo_attribution": true,
+        "preflop_policy_frozen": true,
+        "postflop_only": true,
+        "enumerates_turn_river_chance": config.enumerate_turn_river_chance,
+        "action_abstraction": config.game.action_abstraction,
+    });
+    serde_json::to_writer(&mut writer, &metadata)?;
+    writer.write_all(b"\n")?;
+    for record in &records {
+        writer.write_all(record)?;
+        writer.write_all(b"\n")?;
+    }
+    writer.finish()?.flush()?;
+    fs::rename(&temporary, &config.output)?;
+    let output_sha256 = sha256_path(&config.output)?;
+    Ok(RangeSelfPlaySampleReport {
+        schema: "hu-range-conditioned-self-play-regret-report-v1",
+        method: "alternating_traverser_external_sampling_with_exact_public_range_reconstruction",
+        depth_bb: config.game.effective_stack_bb,
+        traversals: config.traversals,
+        start_iteration: config.start_iteration,
+        seed: config.seed,
+        network_sha256,
+        range_policy_sha256,
+        value_rollouts_per_action: config.value_rollouts_per_action,
+        candidate_records: attempted_records,
+        retained_records: records.len(),
+        retained_records_by_street,
+        truncated: records.len() < attempted_records,
+        minimum_policy_action_probability: minimum_probability,
+        maximum_probability_sum_error: maximum_sum_error,
+        minimum_action_value_bb: minimum_action_value,
+        maximum_action_value_bb: maximum_action_value,
+        maximum_action_value_standard_error_bb: maximum_standard_error,
+        output: config.output,
+        output_sha256,
+        validation_status: "accepted_for_directional_training",
+    })
 }
 
 fn clairvoyant_response_value(
@@ -2531,15 +2831,20 @@ struct CausalRangePolicyAttributionRecord {
     action_features: Vec<Vec<f32>>,
     probabilities: Vec<f32>,
     action_values_bb: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_value_standard_errors_bb: Option<Vec<f32>>,
 }
 
-fn causal_range_policy_record_bytes(
+#[allow(clippy::too_many_arguments)]
+fn range_policy_directional_record_bytes(
+    record_type: &'static str,
     generator: &SampleGenerator,
     state: &GameState,
     deal: &Deal,
     actions: &[LegalAction],
     probabilities: &[f64],
     action_values_bb: &[f64],
+    action_value_standard_errors_bb: Option<&[f64]>,
     weight: f32,
 ) -> Result<Vec<u8>, String> {
     let policy = generator
@@ -2549,7 +2854,7 @@ fn causal_range_policy_record_bytes(
     let public = policy.range_public_state(state, deal, actions, &generator.config.game)?;
     let focal_combo = Combo::new(deal.holes[state.actor][0], deal.holes[state.actor][1]).key();
     let record = CausalRangePolicyAttributionRecord {
-        record_type: "range_conditioned_causal_policy_attribution",
+        record_type,
         weight,
         state: CausalRangePolicyState {
             board: public.board,
@@ -2578,6 +2883,8 @@ fn causal_range_policy_record_bytes(
             .collect(),
         probabilities: probabilities.iter().map(|value| *value as f32).collect(),
         action_values_bb: action_values_bb.iter().map(|value| *value as f32).collect(),
+        action_value_standard_errors_bb: action_value_standard_errors_bb
+            .map(|values| values.iter().map(|value| *value as f32).collect::<Vec<_>>()),
     };
     serde_json::to_vec(&record)
         .map_err(|error| format!("causal range attribution is not serializable: {error}"))
@@ -2761,13 +3068,15 @@ fn fixed_causal_response_policy_values(
                 .as_ref()
                 .is_some_and(|policy| policy.range_policy.is_some())
             {
-                causal_range_policy_record_bytes(
+                range_policy_directional_record_bytes(
+                    "range_conditioned_causal_policy_attribution",
                     generator,
                     &state,
                     deal,
                     &actions,
                     strategy,
                     &policy_values,
+                    None,
                     record_weight,
                 )?
             } else {
@@ -4746,6 +5055,10 @@ mod tests {
         let network_path = directory.join(format!("{prefix}-network.json"));
         let range_path = directory.join(format!("{prefix}-range.json"));
         let output_path = directory.join(format!("{prefix}.jsonl.gz"));
+        let self_play_first_path = directory.join(format!("{prefix}-self-play-first.jsonl.gz"));
+        let self_play_second_path = directory.join(format!("{prefix}-self-play-second.jsonl.gz"));
+        let self_play_tiny_reach_path =
+            directory.join(format!("{prefix}-self-play-tiny-reach.jsonl.gz"));
         fs::write(&network_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let range_bytes = serde_json::to_vec(&range_policy).unwrap();
         fs::write(&range_path, &range_bytes).unwrap();
@@ -4766,7 +5079,7 @@ mod tests {
         .unwrap();
         let certificate = certify_causal_sample_game_exploitability_upper_bound(
             ExploitabilityCertificateConfig {
-                game,
+                game: game.clone(),
                 deals: 2,
                 seed: 83,
                 confidence: 0.99,
@@ -4854,9 +5167,123 @@ mod tests {
         assert!(evaluation.maximum_reverse_kl_from_frozen < 1e-12);
         assert!(evaluation.maximum_stored_source_probability_difference < 1e-6);
         assert_eq!(evaluation.validation.status, "rejected");
+
+        let self_play_config = |output| RangeSelfPlaySampleConfig {
+            game: game.clone(),
+            traversals: 8,
+            start_iteration: 0,
+            seed: 89,
+            max_records: 200,
+            network_path: network_path.clone(),
+            range_policy_path: range_path.clone(),
+            value_rollouts_per_action: 2,
+            enumerate_turn_river_chance: false,
+            output,
+        };
+        let first_self_play =
+            generate_range_self_play_samples(self_play_config(self_play_first_path.clone()))
+                .unwrap();
+        let second_self_play =
+            generate_range_self_play_samples(self_play_config(self_play_second_path.clone()))
+                .unwrap();
+        assert_eq!(
+            fs::read(&self_play_first_path).unwrap(),
+            fs::read(&self_play_second_path).unwrap()
+        );
+        assert_eq!(
+            first_self_play.output_sha256,
+            second_self_play.output_sha256
+        );
+        assert_eq!(first_self_play.retained_records_by_street.len(), 3);
+        assert!(first_self_play
+            .retained_records_by_street
+            .iter()
+            .all(|count| *count > 0));
+        assert!(first_self_play.minimum_policy_action_probability > 0.0);
+        assert!(first_self_play.maximum_probability_sum_error < 1e-6);
+        assert!(first_self_play.maximum_action_value_standard_error_bb >= 0.0);
+        let reader = BufReader::new(GzDecoder::new(
+            fs::File::open(&self_play_first_path).unwrap(),
+        ));
+        let mut lines = reader.lines();
+        let self_play_metadata: serde_json::Value =
+            serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            self_play_metadata["schema"],
+            "hu-range-conditioned-self-play-regret-jsonl-v1"
+        );
+        let first_record: serde_json::Value =
+            serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            first_record["record_type"],
+            "range_conditioned_self_play_regret"
+        );
+        assert_eq!(
+            first_record["action_values_bb"].as_array().unwrap().len(),
+            first_record["action_value_standard_errors_bb"]
+                .as_array()
+                .unwrap()
+                .len()
+        );
+        let self_play_evaluation = crate::blueprint::public_belief::evaluate_causal_range_policy(
+            crate::blueprint::public_belief::CausalRangePolicyEvaluationConfig {
+                network_path: range_path.clone(),
+                frozen_network_path: range_path.clone(),
+                attribution_network_path: range_path.clone(),
+                dataset_path: self_play_first_path.clone(),
+                source_policy_path: None,
+                minimum_policy_value_gain_bb: 0.000001,
+                maximum_node_kl: 0.005,
+                maximum_weighted_kl: 0.0015,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            self_play_evaluation.records,
+            first_self_play.retained_records
+        );
+        assert!(self_play_evaluation.weighted_policy_value_gain_bb.abs() < 1e-12);
+        assert_eq!(self_play_evaluation.validation.status, "rejected");
+        let reader = BufReader::new(GzDecoder::new(
+            fs::File::open(&self_play_first_path).unwrap(),
+        ));
+        let mut payloads = reader
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        let actor = payloads[1]["state"]["actor"].as_u64().unwrap() as usize;
+        let focal = payloads[1]["focal_combo"].as_u64().unwrap() as usize;
+        payloads[1]["ranges"][actor][focal] = serde_json::json!(1e-13);
+        let file = fs::File::create(&self_play_tiny_reach_path).unwrap();
+        let mut writer = GzEncoder::new(BufWriter::new(file), Compression::fast());
+        for payload in &payloads {
+            serde_json::to_writer(&mut writer, payload).unwrap();
+            writer.write_all(b"\n").unwrap();
+        }
+        writer.finish().unwrap().flush().unwrap();
+        let tiny_reach_evaluation = crate::blueprint::public_belief::evaluate_causal_range_policy(
+            crate::blueprint::public_belief::CausalRangePolicyEvaluationConfig {
+                network_path: range_path.clone(),
+                frozen_network_path: range_path.clone(),
+                attribution_network_path: range_path.clone(),
+                dataset_path: self_play_tiny_reach_path.clone(),
+                source_policy_path: None,
+                minimum_policy_value_gain_bb: 0.000001,
+                maximum_node_kl: 0.005,
+                maximum_weighted_kl: 0.0015,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            tiny_reach_evaluation.records,
+            first_self_play.retained_records
+        );
         fs::remove_file(network_path).unwrap();
         fs::remove_file(range_path).unwrap();
         fs::remove_file(output_path).unwrap();
+        fs::remove_file(self_play_first_path).unwrap();
+        fs::remove_file(self_play_second_path).unwrap();
+        fs::remove_file(self_play_tiny_reach_path).unwrap();
     }
 
     #[test]
@@ -4893,8 +5320,8 @@ mod tests {
             value_rollouts_per_action: 1,
             enumerate_turn_river_chance: false,
         };
-        let (_, first, attempted) = SampleGenerator::new(make()).unwrap().run().unwrap();
-        let (_, second, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
+        let (_, first, attempted, _, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
+        let (_, second, _, _, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
         assert!(attempted >= first.len());
         assert!(first.len() <= 32);
         assert_eq!(
@@ -4937,8 +5364,8 @@ mod tests {
             value_rollouts_per_action,
             enumerate_turn_river_chance: false,
         };
-        let (_, primary, _) = SampleGenerator::new(make(1)).unwrap().run().unwrap();
-        let (_, averaged, _) = SampleGenerator::new(make(4)).unwrap().run().unwrap();
+        let (_, primary, _, _, _) = SampleGenerator::new(make(1)).unwrap().run().unwrap();
+        let (_, averaged, _, _, _) = SampleGenerator::new(make(4)).unwrap().run().unwrap();
         assert_eq!(primary.len(), averaged.len());
         let mut value_target_changed = false;
         for (first, second) in primary.iter().zip(&averaged) {
@@ -4994,7 +5421,7 @@ mod tests {
             value_rollouts_per_action: 1,
             enumerate_turn_river_chance: false,
         };
-        let (_, records, attempted) = SampleGenerator::new(config).unwrap().run().unwrap();
+        let (_, records, attempted, _, _) = SampleGenerator::new(config).unwrap().run().unwrap();
         assert_eq!(attempted, records.len());
         assert!(records.len() >= 4);
         assert!(records
@@ -5025,8 +5452,8 @@ mod tests {
             value_rollouts_per_action: 3,
             enumerate_turn_river_chance: false,
         };
-        let (_, first, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
-        let (_, second, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
+        let (_, first, _, _, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
+        let (_, second, _, _, _) = SampleGenerator::new(make()).unwrap().run().unwrap();
         assert_eq!(
             serde_json::to_vec(&first).unwrap(),
             serde_json::to_vec(&second).unwrap()

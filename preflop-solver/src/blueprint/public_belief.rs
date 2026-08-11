@@ -1509,8 +1509,20 @@ pub fn evaluate_causal_range_policy(
             .next()
             .ok_or("causal range-policy dataset is empty")??,
     )?;
+    let expected_record_type = match metadata["schema"].as_str() {
+        Some("hu-range-conditioned-causal-policy-attribution-jsonl-v1") => {
+            "range_conditioned_causal_policy_attribution"
+        }
+        Some("hu-range-conditioned-self-play-regret-jsonl-v1") => {
+            "range_conditioned_self_play_regret"
+        }
+        _ => return Err("causal range-policy metadata is incompatible".into()),
+    };
+    let directional_row_description = match expected_record_type {
+        "range_conditioned_self_play_regret" => "full-game self-play regret row",
+        _ => "full-game causal-attribution row",
+    };
     if metadata["record_type"] != "metadata"
-        || metadata["schema"] != "hu-range-conditioned-causal-policy-attribution-jsonl-v1"
         || metadata["state_feature_schema"] != RANGE_POLICY_FEATURE_SCHEMA_V2
         || metadata["state_feature_count"] != RANGE_POLICY_CONTEXT_V2_COUNT
         || metadata["action_feature_schema"] != ACTION_FEATURE_SCHEMA_V1
@@ -1551,7 +1563,7 @@ pub fn evaluate_causal_range_policy(
     let mut maximum_source_difference = 0.0f64;
     for line in lines {
         let record: CausalRangePolicyAttributionRecord = serde_json::from_str(&line?)?;
-        if record.record_type != "range_conditioned_causal_policy_attribution"
+        if record.record_type != expected_record_type
             || !record.weight.is_finite()
             || record.weight <= 0.0
             || record.focal_combo >= COMBO_COUNT
@@ -1580,7 +1592,11 @@ pub fn evaluate_causal_range_policy(
         };
         let normalized =
             state.validate_street_and_normalize(&game, state.street, state.street.board_len())?;
-        if normalized.ranges[normalized.actor][record.focal_combo] <= EPSILON {
+        // Counterfactual traversal intentionally reaches branches that the
+        // acting player's current policy assigns vanishingly small reach.
+        // Those focal combos are still valid CFR updates; only exact zero is
+        // unreachable. An epsilon cutoff silently discarded rare actions.
+        if normalized.ranges[normalized.actor][record.focal_combo] <= 0.0 {
             return Err("causal range-policy focal combo has no reach".into());
         }
         let game_state = normalized.game_state();
@@ -1721,7 +1737,9 @@ pub fn evaluate_causal_range_policy(
                 "rejected".to_owned()
             },
             reasons: vec![
-                "exact Rust serving inference re-scored every focal full-game causal-attribution row against its pinned attribution policy and measured the candidate against its frozen parent".to_owned(),
+                format!(
+                    "exact Rust serving inference re-scored every focal {directional_row_description} against its pinned attribution policy and measured the candidate against its frozen parent"
+                ),
                 "acceptance is only a trust-region gate; full-game exploitability and every release gate remain mandatory".to_owned(),
             ],
         },

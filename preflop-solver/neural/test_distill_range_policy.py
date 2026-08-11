@@ -316,6 +316,22 @@ class RangePolicyDistillationTests(unittest.TestCase):
             self.assertEqual(updated["seed"], 92)
             self.assertEqual(updated["parentRangePolicySha256"], module.sha256(path))
             self.assertEqual(updated["causalAttributionSha256s"], ["c" * 64, "d" * 64])
+            self_play_path = Path(temporary) / "self-play-updated.json"
+            module.export_model_from_source(
+                restored,
+                updated,
+                self_play_path,
+                47,
+                module.sha256(path),
+                ["e" * 64, "f" * 64],
+                "selfPlayRegretDatasetSha256s",
+            )
+            self_play = json.loads(self_play_path.read_text())
+            self.assertNotIn("causalAttributionSha256s", self_play)
+            self.assertEqual(
+                self_play["selfPlayRegretDatasetSha256s"],
+                ["e" * 64, "f" * 64],
+            )
             second = module.RangeConditionedPolicy("compact", "replace")
             module.load_exported_model(second, updated_path)
             second_values = second(*arguments)
