@@ -16,6 +16,39 @@ import train_public_value_network as value_features
 
 
 class CausalRangePolicyTests(unittest.TestCase):
+    def test_cached_exact_dataset_parity_must_pin_every_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / "source.json"
+            attribution = directory / "attribution.json"
+            source.write_text("source")
+            attribution.write_text("attribution")
+            dataset = SimpleNamespace(sha256="d" * 64, records=[{}])
+            exact = {
+                "schema": "hu-range-conditioned-causal-policy-rust-evaluation-v1",
+                "networkSha256": module.sha256(source),
+                "frozenNetworkSha256": module.sha256(source),
+                "attributionNetworkSha256": module.sha256(attribution),
+                "datasetSha256": dataset.sha256,
+                "records": 1,
+                "maximumStoredSourceProbabilityDifference": 1e-7,
+                "maximumProbabilitySumError": 1e-8,
+            }
+            report = directory / "report.json"
+            report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
+            self.assertEqual(
+                module.reuse_exact_dataset_parity(
+                    report, [dataset], [source], [attribution]
+                ),
+                [exact],
+            )
+            exact["datasetSha256"] = "0" * 64
+            report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
+            with self.assertRaisesRegex(ValueError, "not pinned"):
+                module.reuse_exact_dataset_parity(
+                    report, [dataset], [source], [attribution]
+                )
+
     def test_rust_evaluator_report_must_pin_every_artifact(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -85,9 +118,7 @@ class CausalRangePolicyTests(unittest.TestCase):
                 stderr="Error: focal combo has no reach\n",
             )
             with patch.object(module.subprocess, "run", return_value=completed):
-                with self.assertRaisesRegex(
-                    RuntimeError, "focal combo has no reach"
-                ):
+                with self.assertRaisesRegex(RuntimeError, "focal combo has no reach"):
                     module.rust_evaluate(
                         Path("solver"),
                         paths[0],
@@ -103,7 +134,9 @@ class CausalRangePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "causal.jsonl.gz"
             records = []
-            for index, street in enumerate(("flop", "flop", "turn", "turn", "river", "river")):
+            for index, street in enumerate(
+                ("flop", "flop", "turn", "turn", "river", "river")
+            ):
                 board = [0, 5, 10, 15, 20][: {"flop": 3, "turn": 4, "river": 5}[street]]
                 blocked = np.isin(value_features.COMBO_CARDS[:, 0], board) | np.isin(
                     value_features.COMBO_CARDS[:, 1], board
@@ -221,15 +254,11 @@ class CausalRangePolicyTests(unittest.TestCase):
             self.assertAlmostEqual(local_control["weightedPolicyValueGainBb"], 0.0)
             self.assertAlmostEqual(local_control["weightedReverseKlFromFrozen"], 0.0)
             self.assertAlmostEqual(local_control["weightedL1ActionDelta"], 0.0)
-            arithmetic_drift = np.tile([0.5005, 0.4995], (6, 1)).astype(
-                np.float32
-            )
+            arithmetic_drift = np.tile([0.5005, 0.4995], (6, 1)).astype(np.float32)
             self.assertTrue(
                 module.source_parity_metrics(arithmetic_drift, dataset)["accepted"]
             )
-            primary_drift = np.tile([0.4995, 0.5005], (6, 1)).astype(
-                np.float32
-            )
+            primary_drift = np.tile([0.4995, 0.5005], (6, 1)).astype(np.float32)
             self.assertFalse(
                 module.source_parity_metrics(primary_drift, dataset)["accepted"]
             )
@@ -277,7 +306,11 @@ class CausalRangePolicyTests(unittest.TestCase):
                 ),
                 SimpleNamespace(sha256="d" * 64),
             )
-            for full_corpus_gradient in (False, True):
+            for full_corpus_gradient, paired_corpus_gradient in (
+                (False, False),
+                (True, False),
+                (True, True),
+            ):
                 trained, _, diagnostics = module.train_candidate(
                     source_path,
                     dataset,
@@ -294,12 +327,55 @@ class CausalRangePolicyTests(unittest.TestCase):
                     1.0,
                     1,
                     full_corpus_gradient,
+                    None,
+                    paired_corpus_gradient,
                 )
                 self.assertLess(
                     diagnostics["sourceParity"]["maximumAbsoluteError"], 1e-6
                 )
                 self.assertEqual(diagnostics["selectedCheckpoint"]["step"], 1)
+                self.assertEqual(
+                    diagnostics["pairedCorpusGradient"], paired_corpus_gradient
+                )
                 del trained
+
+            attribution_path = Path(temporary) / "attribution.json"
+            attribution_payload = json.loads(source_path.read_text())
+            attribution_payload["seed"] = 109
+            attribution_path.write_text(json.dumps(attribution_payload) + "\n")
+            self.assertNotEqual(
+                module.sha256(source_path), module.sha256(attribution_path)
+            )
+            trained, _, diagnostics = module.train_candidate(
+                source_path,
+                dataset,
+                dataset,
+                111,
+                1,
+                2,
+                1e-5,
+                0.1,
+                0.002,
+                0.005,
+                0.0015,
+                0.25,
+                1.0,
+                1,
+                False,
+                attribution_path,
+            )
+            self.assertIsNone(diagnostics["sourceParity"])
+            self.assertFalse(diagnostics["attributionParityRequiredForTraining"])
+            self.assertTrue(diagnostics["attributionParity"]["accepted"])
+            self.assertEqual(
+                diagnostics["attributionRangePolicySha256"],
+                module.sha256(attribution_path),
+            )
+            self.assertEqual(
+                diagnostics["targetAnchorRangePolicySha256"],
+                module.sha256(source_path),
+            )
+            del trained
 
     def test_cap_preserves_two_rows_per_street(self):
         records = [

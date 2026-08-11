@@ -99,9 +99,7 @@ def _record_identity(record: dict[str, Any]) -> bytes:
     ).encode()
 
 
-def _cap_records(
-    records: list[dict[str, Any]], capacity: int
-) -> list[dict[str, Any]]:
+def _cap_records(records: list[dict[str, Any]], capacity: int) -> list[dict[str, Any]]:
     if capacity <= 0 or len(records) <= capacity:
         return records
     if capacity < 6:
@@ -127,7 +125,9 @@ def _cap_records(
         if len(selected) >= capacity:
             break
         selected.add(index)
-    return [records[index] for index in sorted(selected, key=lambda row: rank(records[row]))]
+    return [
+        records[index] for index in sorted(selected, key=lambda row: rank(records[row]))
+    ]
 
 
 def load_dataset(
@@ -185,9 +185,7 @@ def load_dataset(
         record_current = np.asarray(record.get("probabilities"), dtype=np.float32)
         record_values = np.asarray(record.get("action_values_bb"), dtype=np.float32)
         record_standard_errors = (
-            np.asarray(
-                record.get("action_value_standard_errors_bb"), dtype=np.float32
-            )
+            np.asarray(record.get("action_value_standard_errors_bb"), dtype=np.float32)
             if action_value_standard_errors is not None
             else None
         )
@@ -350,8 +348,7 @@ def metrics(
         ),
         "primaryActionAgreement": float(
             np.sum(
-                normalized
-                * (np.argmax(candidate, axis=1) == np.argmax(frozen, axis=1))
+                normalized * (np.argmax(candidate, axis=1) == np.argmax(frozen, axis=1))
             )
         ),
     }
@@ -378,7 +375,9 @@ def metrics(
         actor_projection = dataset.projection_weights[
             np.arange(len(dataset.records)), dataset.actors
         ].astype(np.float64)
-        actor_projection /= np.maximum(actor_projection.sum(axis=1, keepdims=True), 1e-30)
+        actor_projection /= np.maximum(
+            actor_projection.sum(axis=1, keepdims=True), 1e-30
+        )
         node_kl = np.sum(actor_projection * local, axis=1)
         result["weightedAllComboAnchorKl"] = float(np.sum(normalized * node_kl))
         result["maximumAllComboAnchorKl"] = float(np.max(node_kl))
@@ -398,10 +397,8 @@ def source_parity_metrics(
     )
     result["accepted"] = bool(
         result["maximumAbsoluteError"] <= MAXIMUM_SOURCE_PARITY_ABSOLUTE_ERROR
-        and result["weightedReverseKlFromFrozen"]
-        <= MAXIMUM_SOURCE_PARITY_WEIGHTED_KL
-        and result["maximumReverseKlFromFrozen"]
-        <= MAXIMUM_SOURCE_PARITY_NODE_KL
+        and result["weightedReverseKlFromFrozen"] <= MAXIMUM_SOURCE_PARITY_WEIGHTED_KL
+        and result["maximumReverseKlFromFrozen"] <= MAXIMUM_SOURCE_PARITY_NODE_KL
         and result["primaryActionAgreement"] >= 1.0 - 1e-12
         and result["maximumProbabilitySumError"] <= 1e-6
     )
@@ -450,8 +447,7 @@ def rust_evaluate(
         )
     report = json.loads(completed.stdout)
     if (
-        report.get("schema")
-        != "hu-range-conditioned-causal-policy-rust-evaluation-v1"
+        report.get("schema") != "hu-range-conditioned-causal-policy-rust-evaluation-v1"
         or report.get("networkSha256") != sha256(candidate)
         or report.get("frozenNetworkSha256") != sha256(frozen)
         or report.get("attributionNetworkSha256") != sha256(attribution)
@@ -459,6 +455,35 @@ def rust_evaluate(
     ):
         raise RuntimeError("Rust causal range-policy evaluation is not pinned")
     return report
+
+
+def reuse_exact_dataset_parity(
+    report_path: Path,
+    datasets: list[CausalRangeDataset],
+    sources: list[Path],
+    attributions: list[Path],
+) -> list[dict[str, Any]]:
+    payload = json.loads(report_path.read_text())
+    reports = payload.get("exactRustDatasetParity")
+    if not isinstance(reports, list) or len(reports) != len(datasets):
+        raise ValueError("cached exact Rust dataset parity is incomplete")
+    for report, dataset, source, attribution in zip(
+        reports, datasets, sources, attributions, strict=True
+    ):
+        if (
+            report.get("schema")
+            != "hu-range-conditioned-causal-policy-rust-evaluation-v1"
+            or report.get("networkSha256") != sha256(source)
+            or report.get("frozenNetworkSha256") != sha256(source)
+            or report.get("attributionNetworkSha256") != sha256(attribution)
+            or report.get("datasetSha256") != dataset.sha256
+            or report.get("records") != len(dataset.records)
+            or report.get("maximumStoredSourceProbabilityDifference", float("inf"))
+            > 1e-6
+            or report.get("maximumProbabilitySumError", float("inf")) > 1e-6
+        ):
+            raise ValueError("cached exact Rust dataset parity is not pinned")
+    return reports
 
 
 def train_candidate(
@@ -477,7 +502,11 @@ def train_candidate(
     maximum_gradient_norm: float,
     evaluation_interval: int,
     full_corpus_gradient: bool = False,
+    attribution_path: Path | None = None,
+    paired_corpus_gradient: bool = False,
 ) -> tuple[RangeConditionedPolicy, dict[str, Any], dict[str, Any]]:
+    if paired_corpus_gradient and not full_corpus_gradient:
+        raise ValueError("paired-corpus gradient requires full-corpus accumulation")
     source_payload = json.loads(source_path.read_text())
     model = RangeConditionedPolicy(
         str(source_payload["architecture"]),
@@ -485,13 +514,32 @@ def train_candidate(
     )
     load_exported_model(model, source_path)
     source_training, full_source_training = predict(model, training, batch_size, True)
-    source_validation, full_source_validation = predict(model, validation, batch_size, True)
+    source_validation, full_source_validation = predict(
+        model, validation, batch_size, True
+    )
     assert full_source_training is not None and full_source_validation is not None
-    source_parity = source_parity_metrics(source_training, training)
-    if not source_parity["accepted"]:
+    attribution_path = attribution_path or source_path
+    source_sha256 = sha256(source_path)
+    attribution_sha256 = sha256(attribution_path)
+    same_attribution_policy = attribution_sha256 == source_sha256
+    if same_attribution_policy:
+        attribution_training = source_training
+    else:
+        attribution_payload = json.loads(attribution_path.read_text())
+        attribution_model = RangeConditionedPolicy(
+            str(attribution_payload["architecture"]),
+            str(attribution_payload.get("policyComposition", "replace")),
+        )
+        load_exported_model(attribution_model, attribution_path)
+        attribution_training, _ = predict(
+            attribution_model, training, batch_size, False
+        )
+        del attribution_model
+    attribution_parity = source_parity_metrics(attribution_training, training)
+    if same_attribution_policy and not attribution_parity["accepted"]:
         raise ValueError(
-            "Rust/MLX source policy behavior parity failed: "
-            f"{json.dumps(source_parity, sort_keys=True)}"
+            "Rust/MLX attribution policy behavior parity failed: "
+            f"{json.dumps(attribution_parity, sort_keys=True)}"
         )
     targets = mirror_descent_targets(
         source_training,
@@ -500,15 +548,25 @@ def train_candidate(
         mirror_step_per_bb,
         maximum_target_node_kl,
     )
+    validation_targets = mirror_descent_targets(
+        source_validation,
+        validation.action_values,
+        validation.action_masks,
+        mirror_step_per_bb,
+        maximum_target_node_kl,
+    )
     target_metrics = metrics(targets, training, frozen=source_training)
-    if (
-        target_metrics["maximumReverseKlFromFrozen"]
-        > maximum_target_node_kl + 1e-6
-        or target_metrics["weightedPolicyValueGainBb"] < -1e-9
+    validation_target_metrics = metrics(
+        validation_targets, validation, frozen=source_validation
+    )
+    if any(
+        measured["maximumReverseKlFromFrozen"] > maximum_target_node_kl + 1e-6
+        or measured["weightedPolicyValueGainBb"] < -1e-9
+        for measured in (target_metrics, validation_target_metrics)
     ):
         raise RuntimeError(
             "causal range-policy mirror targets are invalid: "
-            f"{json.dumps(target_metrics, sort_keys=True)}"
+            f"{json.dumps({'training': target_metrics, 'validation': validation_target_metrics}, sort_keys=True)}"
         )
 
     mx.random.seed(seed)
@@ -534,16 +592,17 @@ def train_candidate(
             log_probabilities, focal_combos[:, None, None], axis=1
         ).squeeze(1)
         denominator = mx.maximum(mx.sum(row_weights), 1e-8)
-        focal_loss = -mx.sum(
-            row_weights * mx.sum(target * selected, axis=1)
-        ) / denominator
+        focal_loss = (
+            -mx.sum(row_weights * mx.sum(target * selected, axis=1)) / denominator
+        )
         selector = mx.stack((actors == 0, actors == 1), axis=1)[:, :, None]
         actor_reach = mx.sum(projection * selector, axis=1)
         actor_reach /= mx.maximum(mx.sum(actor_reach, axis=1, keepdims=True), 1e-8)
         anchor_cross_entropy = -mx.sum(frozen_full * log_probabilities, axis=2)
-        anchor_loss = mx.sum(
-            row_weights * mx.sum(actor_reach * anchor_cross_entropy, axis=1)
-        ) / denominator
+        anchor_loss = (
+            mx.sum(row_weights * mx.sum(actor_reach * anchor_cross_entropy, axis=1))
+            / denominator
+        )
         return focal_loss + anchor_scale * anchor_loss
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
@@ -556,35 +615,44 @@ def train_candidate(
         if full_corpus_gradient:
             gradients = None
             step_loss = 0.0
-            total_weight = float(training.weights.sum())
-            for start in range(0, len(training.records), batch_size):
-                rows = np.arange(
-                    start, min(start + batch_size, len(training.records))
-                )
-                row_weights = training.weights[rows].astype(np.float32)
-                chunk_fraction = float(row_weights.sum()) / total_weight
-                loss, chunk_gradients = loss_and_grad(
-                    model,
-                    *_model_arguments(training, rows),
-                    mx.array(training.focal_combos[rows]),
-                    mx.array(targets[rows]),
-                    mx.array(full_source_training[rows]),
-                    mx.array(row_weights),
-                )
-                chunk_gradients = tree_map(
-                    lambda value: value * chunk_fraction, chunk_gradients
-                )
-                gradients = (
-                    chunk_gradients
-                    if gradients is None
-                    else tree_map(
-                        lambda accumulated, value: accumulated + value,
-                        gradients,
-                        chunk_gradients,
+            corpora = [
+                (training, targets, full_source_training),
+            ]
+            if paired_corpus_gradient:
+                corpora.append((validation, validation_targets, full_source_validation))
+            corpus_mass = 1.0 / len(corpora)
+            for corpus, corpus_targets, corpus_source in corpora:
+                corpus_weight = float(corpus.weights.sum())
+                for start in range(0, len(corpus.records), batch_size):
+                    rows = np.arange(
+                        start, min(start + batch_size, len(corpus.records))
                     )
-                )
-                mx.eval(gradients, loss)
-                step_loss += float(loss.item()) * chunk_fraction
+                    row_weights = corpus.weights[rows].astype(np.float32)
+                    chunk_fraction = (
+                        corpus_mass * float(row_weights.sum()) / corpus_weight
+                    )
+                    loss, chunk_gradients = loss_and_grad(
+                        model,
+                        *_model_arguments(corpus, rows),
+                        mx.array(corpus.focal_combos[rows]),
+                        mx.array(corpus_targets[rows]),
+                        mx.array(corpus_source[rows]),
+                        mx.array(row_weights),
+                    )
+                    chunk_gradients = tree_map(
+                        lambda value: value * chunk_fraction, chunk_gradients
+                    )
+                    gradients = (
+                        chunk_gradients
+                        if gradients is None
+                        else tree_map(
+                            lambda accumulated, value: accumulated + value,
+                            gradients,
+                            chunk_gradients,
+                        )
+                    )
+                    mx.eval(gradients, loss)
+                    step_loss += float(loss.item()) * chunk_fraction
             assert gradients is not None
         else:
             rows = rng.choice(
@@ -632,10 +700,10 @@ def train_candidate(
             measured["maximumReverseKlFromFrozen"]
             <= maximum_realized_node_kl * REALIZED_TRUST_REGION_SELECTION_FRACTION
             and measured["weightedReverseKlFromFrozen"]
-            <= maximum_realized_weighted_kl
-            * REALIZED_TRUST_REGION_SELECTION_FRACTION
+            <= maximum_realized_weighted_kl * REALIZED_TRUST_REGION_SELECTION_FRACTION
             for measured in (training_metrics, validation_metrics)
         )
+
         def conservative_gain(measured: dict[str, float]) -> float:
             return measured.get(
                 "weightedPolicyValueGainActionRolloutLowerBound99Bb",
@@ -672,8 +740,14 @@ def train_candidate(
     model.update(tree_map(mx.array, best_parameters))
     mx.eval(model.parameters())
     diagnostics = {
-        "sourceParity": source_parity,
+        "sourceParity": (attribution_parity if same_attribution_policy else None),
+        "attributionParity": attribution_parity,
+        "attributionParityRequiredForTraining": same_attribution_policy,
+        "attributionRangePolicySha256": attribution_sha256,
+        "targetAnchorRangePolicySha256": source_sha256,
         "target": target_metrics,
+        "validationTarget": validation_target_metrics,
+        "pairedCorpusGradient": paired_corpus_gradient,
         "firstLoss": losses[0],
         "finalLoss": losses[-1],
         "checkpoints": checkpoints,
@@ -688,6 +762,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-b", type=Path, required=True)
     parser.add_argument("--source-a", type=Path, required=True)
     parser.add_argument("--source-b", type=Path, required=True)
+    parser.add_argument(
+        "--attribution-a",
+        type=Path,
+        help="policy that generated dataset A; defaults to source A",
+    )
+    parser.add_argument(
+        "--attribution-b",
+        type=Path,
+        help="policy that generated dataset B; defaults to source B",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--feature-cache-dir", type=Path)
     parser.add_argument("--feature-workers", type=int, default=4)
@@ -704,11 +788,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-gradient-norm", type=float, default=1.0)
     parser.add_argument("--evaluation-interval", type=int, default=25)
     parser.add_argument("--full-corpus-gradient", action="store_true")
+    parser.add_argument("--paired-corpus-gradient", action="store_true")
     parser.add_argument("--seeds", default="18301,18302")
     parser.add_argument(
         "--rust-evaluator",
         type=Path,
         default=Path("target/release/preflop-solver"),
+    )
+    parser.add_argument(
+        "--reuse-exact-dataset-parity",
+        type=Path,
+        help="reuse fully pinned exactRustDatasetParity from an earlier report",
     )
     return parser.parse_args()
 
@@ -739,6 +829,8 @@ def main() -> None:
     ):
         if not np.isfinite(value) or value <= 0:
             raise ValueError("causal range-policy bounds must be positive")
+    if args.paired_corpus_gradient and not args.full_corpus_gradient:
+        raise ValueError("paired-corpus gradient requires --full-corpus-gradient")
 
     datasets = [
         load_dataset(
@@ -750,13 +842,51 @@ def main() -> None:
         for path in (args.dataset_a, args.dataset_b)
     ]
     sources = [args.source_a, args.source_b]
+    attributions = [
+        args.attribution_a or args.source_a,
+        args.attribution_b or args.source_b,
+    ]
     if datasets[0].metadata["seed"] == datasets[1].metadata["seed"]:
         raise ValueError("causal range-policy datasets need independent seeds")
     if datasets[0].metadata["depth_bb"] != datasets[1].metadata["depth_bb"]:
         raise ValueError("causal range-policy dataset depths differ")
-    for dataset, source in zip(datasets, sources, strict=True):
-        if dataset.metadata["source_range_policy_sha256"] != sha256(source):
-            raise ValueError("causal attribution does not pin its source policy")
+    for dataset, attribution in zip(datasets, attributions, strict=True):
+        if dataset.metadata["source_range_policy_sha256"] != sha256(attribution):
+            raise ValueError("directional dataset does not pin its attribution policy")
+
+    if args.reuse_exact_dataset_parity is not None:
+        exact_dataset_parity_reports = reuse_exact_dataset_parity(
+            args.reuse_exact_dataset_parity,
+            datasets,
+            sources,
+            attributions,
+        )
+        exact_dataset_parity_source = str(args.reuse_exact_dataset_parity)
+    else:
+
+        def exact_dataset_parity(dataset_index: int) -> dict[str, Any]:
+            report = rust_evaluate(
+                args.rust_evaluator,
+                sources[dataset_index],
+                sources[dataset_index],
+                attributions[dataset_index],
+                datasets[dataset_index].path,
+                args.minimum_policy_value_gain_bb,
+                args.maximum_realized_node_kl,
+                args.maximum_realized_weighted_kl,
+            )
+            if (
+                report["maximumStoredSourceProbabilityDifference"] > 1e-6
+                or report["maximumProbabilitySumError"] > 1e-6
+            ):
+                raise RuntimeError("exact Rust directional-dataset parity failed")
+            return report
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            exact_dataset_parity_reports = list(
+                executor.map(exact_dataset_parity, range(2))
+            )
+        exact_dataset_parity_source = "computed"
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     students = []
@@ -785,6 +915,8 @@ def main() -> None:
             args.maximum_gradient_norm,
             args.evaluation_interval,
             args.full_corpus_gradient,
+            attributions[index],
+            args.paired_corpus_gradient,
         )
         output = args.output_dir / f"range-policy-seed-{seed}.json"
         export_model_from_source(
@@ -799,52 +931,74 @@ def main() -> None:
         selected = diagnostics["selectedCheckpoint"]
         measurements = [selected["training"], selected["validation"]]
         python_accepted = all(
-            value["weightedPolicyValueGainBb"]
-            >= args.minimum_policy_value_gain_bb
+            value["weightedPolicyValueGainBb"] >= args.minimum_policy_value_gain_bb
             and value.get(
                 "weightedPolicyValueGainActionRolloutLowerBound99Bb",
                 value["weightedPolicyValueGainBb"],
             )
             >= args.minimum_policy_value_gain_bb
-            and value["maximumReverseKlFromFrozen"]
-            <= args.maximum_realized_node_kl
+            and value["maximumReverseKlFromFrozen"] <= args.maximum_realized_node_kl
             and value["weightedReverseKlFromFrozen"]
             <= args.maximum_realized_weighted_kl
             for value in measurements
-        )
-        def exact_evaluation(dataset_index: int) -> dict[str, Any]:
-            return rust_evaluate(
-                args.rust_evaluator,
-                output,
-                sources[index],
-                sources[dataset_index],
-                datasets[dataset_index].path,
-                args.minimum_policy_value_gain_bb,
-                args.maximum_realized_node_kl,
-                args.maximum_realized_weighted_kl,
-            )
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            rust_evaluations = list(executor.map(exact_evaluation, range(2)))
-        accepted = python_accepted and all(
-            evaluation["validation"]["status"]
-            == "accepted_for_directional_evaluation"
-            for evaluation in rust_evaluations
         )
         students.append(
             {
                 "seed": seed,
                 "source": str(sources[index]),
                 "sourceSha256": sha256(sources[index]),
+                "attribution": str(attributions[index]),
+                "attributionSha256": sha256(attributions[index]),
                 "network": str(output),
                 "networkSha256": sha256(output),
                 "diagnostics": diagnostics,
                 "pythonPairedDirectionalTrustGate": python_accepted,
-                "rustEvaluations": rust_evaluations,
-                "passesPairedDirectionalTrustGate": accepted,
             }
         )
         del model
+
+    evaluation_tasks = [
+        (student_index, dataset_index)
+        for student_index in range(2)
+        for dataset_index in range(2)
+    ]
+
+    def exact_evaluation(task: tuple[int, int]) -> tuple[int, int, dict[str, Any]]:
+        student_index, dataset_index = task
+        evaluation = rust_evaluate(
+            args.rust_evaluator,
+            Path(students[student_index]["network"]),
+            sources[student_index],
+            attributions[dataset_index],
+            datasets[dataset_index].path,
+            args.minimum_policy_value_gain_bb,
+            args.maximum_realized_node_kl,
+            args.maximum_realized_weighted_kl,
+        )
+        return student_index, dataset_index, evaluation
+
+    rust_evaluations: list[list[dict[str, Any] | None]] = [
+        [None, None],
+        [None, None],
+    ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        for student_index, dataset_index, evaluation in executor.map(
+            exact_evaluation, evaluation_tasks
+        ):
+            rust_evaluations[student_index][dataset_index] = evaluation
+    for student, evaluations in zip(students, rust_evaluations, strict=True):
+        if any(evaluation is None for evaluation in evaluations):
+            raise RuntimeError("paired exact Rust evaluation is incomplete")
+        complete = [evaluation for evaluation in evaluations if evaluation is not None]
+        student["rustEvaluations"] = complete
+        student["passesPairedDirectionalTrustGate"] = bool(
+            student["pythonPairedDirectionalTrustGate"]
+            and all(
+                evaluation["validation"]["status"]
+                == "accepted_for_directional_evaluation"
+                for evaluation in complete
+            )
+        )
 
     report = {
         "schema": REPORT_SCHEMA,
@@ -858,10 +1012,11 @@ def main() -> None:
                 "sourceRangePolicySha256": dataset.metadata[
                     "source_range_policy_sha256"
                 ],
+                "attributionRangePolicySha256": sha256(attributions[dataset_index]),
                 "records": len(dataset.records),
                 "featureCache": dataset.feature_dataset.feature_cache,
             }
-            for dataset in datasets
+            for dataset_index, dataset in enumerate(datasets)
         ],
         "steps": args.steps,
         "batchSize": args.batch_size,
@@ -874,6 +1029,20 @@ def main() -> None:
         "minimumPolicyValueGainBb": args.minimum_policy_value_gain_bb,
         "anchorScale": args.anchor_scale,
         "fullCorpusGradient": args.full_corpus_gradient,
+        "pairedCorpusGradient": args.paired_corpus_gradient,
+        "pairedCorpusWeighting": (
+            "equal_corpus_mass" if args.paired_corpus_gradient else None
+        ),
+        "exactRustDatasetParity": exact_dataset_parity_reports,
+        "exactRustDatasetParitySource": exact_dataset_parity_source,
+        "updateOperator": (
+            "mirror_prox_corrector_from_frozen_parent"
+            if any(
+                sha256(source) != sha256(attribution)
+                for source, attribution in zip(sources, attributions, strict=True)
+            )
+            else "current_profile_mirror_descent"
+        ),
         "students": students,
         "acceptedForDirectionalEvaluation": all(
             student["passesPairedDirectionalTrustGate"] for student in students

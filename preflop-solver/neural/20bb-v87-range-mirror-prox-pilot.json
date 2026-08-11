@@ -1,0 +1,161 @@
+{
+  "schema": "hu-20bb-range-mirror-prox-pilot-v1",
+  "depth_bb": 20.0,
+  "baseline": "v82 residual range policies over the retained v57 direct networks",
+  "purpose": "test whether a frozen-parent Mirror-Prox-style correction generated from independent v86 look-ahead profiles lowers paired full-game exploitability",
+  "research_basis": [
+    {
+      "name": "Stable-Predictive Optimistic Counterfactual Regret Minimization",
+      "url": "https://proceedings.mlr.press/v97/farina19a.html"
+    },
+    {
+      "name": "Last-iterate convergence in extensive-form games",
+      "url": "https://proceedings.neurips.cc/paper/2021/hash/77bb14f6132ea06dea456584b7d5581e-Abstract.html"
+    },
+    {
+      "name": "Optimistic regret minimization with dilated distance-generating functions",
+      "url": "https://arxiv.org/abs/1910.10906"
+    }
+  ],
+  "scope_note": "The implementation is an empirical sampled neural adaptation. The cited tabular optimistic-regret and last-iterate guarantees do not directly transfer through sampled action values, function approximation, or distillation.",
+  "corrector_corpora": [
+    {
+      "name": "A",
+      "seed": 19211,
+      "start_iteration": 32,
+      "traversals": 32,
+      "records": 573,
+      "records_by_street": [143, 185, 245],
+      "value_rollouts_per_action": 8,
+      "maximum_action_value_standard_error_bb": 6.1419225,
+      "truncated": false,
+      "lookahead_range_policy_sha256": "800ce29503c5b1a8b0be0e7c0639c1210467e20fdc5ba94963d001e6d597c673",
+      "dataset_sha256": "e9aed3068d7aca06e7ff5025b1eccb3172efaf983e5976f2adcf6858b9a3607f",
+      "report_sha256": "d6fa526a8000a8b06979cccc3299ec5fa0c0cee459e0fec4f27c27580ee7eb25"
+    },
+    {
+      "name": "B",
+      "seed": 19212,
+      "start_iteration": 32,
+      "traversals": 32,
+      "records": 488,
+      "records_by_street": [114, 165, 209],
+      "value_rollouts_per_action": 8,
+      "maximum_action_value_standard_error_bb": 6.7531524,
+      "truncated": false,
+      "lookahead_range_policy_sha256": "765c6cb5baac545e09ffde9def946f8c813f3502fb3f778067a6e627c47287c6",
+      "dataset_sha256": "4eed426f09e9a9d940afbfee711106ed4cbec2d4cd669c1fb25bb68d7347948e",
+      "report_sha256": "2761038932addecc6f56f5a435a63d113f4b966a22ba611a9beae282b24ec4b5"
+    }
+  ],
+  "implementation": {
+    "update_operator": "mirror_prox_corrector_from_frozen_parent",
+    "frozen_parent_target_anchor": true,
+    "separate_lookahead_attribution_policy": true,
+    "exact_dataset_parity_preflight": true,
+    "cached_parity_requires_all_artifact_hashes_and_numeric_bounds": true,
+    "parallel_exact_cross_evaluations": 4,
+    "paired_corpus_gradient": {
+      "enabled": true,
+      "weighting": "equal_corpus_mass"
+    },
+    "exact_dataset_parity": [
+      {
+        "maximum_stored_source_probability_difference": 8.900125645916468e-7,
+        "maximum_probability_sum_error": 4.470348358154297e-8
+      },
+      {
+        "maximum_stored_source_probability_difference": 6.960255372057134e-7,
+        "maximum_probability_sum_error": 3.994773578597233e-8
+      }
+    ]
+  },
+  "paired_full_game_screen": {
+    "seeds": [19101, 19102],
+    "deals_per_seed": 2,
+    "public_branches_per_street": 1,
+    "opponent_samples_per_runout": 1,
+    "threads_per_candidate": 2,
+    "interpretation": "deterministic paired directional screen only; too small for release certification",
+    "parent_mean_exploitability_bb": [8.209943599220036, 1.1705828767642554],
+    "parent_report_sha256": [
+      "6e9b5c8cda646bb621d469e6a1276cddec3d17b204ee47667104c9536c5f2561",
+      "321e7f4e5b8ea8de3ed30354f4212e9000e5ee9e003f805b72f9df97f41e66a4"
+    ]
+  },
+  "experiments": [
+    {
+      "name": "independent_own_corpus_correctors",
+      "steps": 1,
+      "batch_size": 16,
+      "learning_rate": 0.000001,
+      "full_corpus_gradient": true,
+      "paired_corpus_gradient": false,
+      "report_sha256": "7dcbafcd75c9df0a2488e00918f11bf536e96ee14dcee346b030c4a95883822c",
+      "candidates": [
+        {
+          "name": "A",
+          "seed": 19301,
+          "candidate_range_policy_sha256": "9850b8cf522b988b2abdf7277d54433c928c9aac226399bce0925e3b4c641983",
+          "exact_directional_value_gains_bb": [0.005221629679661492, -0.00016955519236381766],
+          "passes_paired_directional_gate": false,
+          "candidate_mean_exploitability_bb": 8.217891039522625,
+          "candidate_delta_bb": 0.007947440302589,
+          "pilot_report_sha256": "7fbee7eaf6cedb5b76a7672d034841f5e949473dff40c1402ad449c47835772e",
+          "decision": "rejected"
+        },
+        {
+          "name": "B",
+          "seed": 19302,
+          "candidate_range_policy_sha256": "97af0bf914b55f9b85cb682fac317b531b180bad62dd44523d5687a84c068865",
+          "exact_directional_value_gains_bb": [0.0003726903175606094, 0.005247368558168322],
+          "passes_paired_directional_gate": true,
+          "candidate_mean_exploitability_bb": 1.167630807939326,
+          "candidate_delta_bb": -0.0029520688249294,
+          "pilot_report_sha256": "7530b5ba8eef47050553bbc6a8f02a90719a50260ce68b2085fce1846b29ffa3",
+          "decision": "rejected_with_pair"
+        }
+      ]
+    },
+    {
+      "name": "joint_equal_mass_correctors",
+      "steps": 1,
+      "batch_size": 16,
+      "learning_rate": 0.000001,
+      "full_corpus_gradient": true,
+      "paired_corpus_gradient": true,
+      "report_sha256": "8c65f3c1085162e7b9ab53c94e31403b02b8b3fc20edb3833df50289fe919a63",
+      "candidates": [
+        {
+          "name": "A",
+          "seed": 19401,
+          "candidate_range_policy_sha256": "681afa8fcadfcad3b4789568ec827dc5de190b9fd064d4fd278b2a9ddc995269",
+          "exact_directional_value_gains_bb": [0.003656733489604709, 0.0034853638781091475],
+          "maximum_reverse_kl_from_frozen": 0.0003334095624826898,
+          "weighted_reverse_kl_from_frozen": 0.00000808222957241863,
+          "passes_paired_directional_gate": true,
+          "candidate_mean_exploitability_bb": 8.210134466263936,
+          "candidate_delta_bb": 0.00019086704389970066,
+          "pilot_report_sha256": "e4e34ef9accd21e2bf19cd0469f0d249ad6ad89f6aaf0636d7ff6e2c5a13a7f5",
+          "decision": "rejected"
+        },
+        {
+          "name": "B",
+          "seed": 19402,
+          "candidate_range_policy_sha256": "ae01b5b2183217f5ef35b05c059a49b52b0441f99f9572db906cea9ef31b9681",
+          "exact_directional_value_gains_bb": [0.002771265955062369, 0.004261326510881321],
+          "maximum_reverse_kl_from_frozen": 0.0004501183930292422,
+          "weighted_reverse_kl_from_frozen": 0.000008990750802376715,
+          "passes_paired_directional_gate": true,
+          "candidate_mean_exploitability_bb": 1.1683019960562677,
+          "candidate_delta_bb": -0.0022808807079877096,
+          "pilot_report_sha256": "b6f305256b1cd9e566de1a47f7db8330ae0e07a43a1ff4da61af1f7a0b9debb6",
+          "decision": "rejected_with_pair"
+        }
+      ]
+    }
+  ],
+  "conclusion": "Equal-mass joint-corpus accumulation fixed the independent-corpus cross-seed failure and both candidates passed exact policy-action gates. It did not produce a paired full-game win: candidate A worsened by 0.000190867 bb/hand while candidate B improved by 0.002280881 bb/hand. Do not promote, average, or enlarge this candidate pair. The result closes random step-size tuning of the same local operator; the next update must optimize response-aware full-game causal values rather than corpus-local value gain alone.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}
