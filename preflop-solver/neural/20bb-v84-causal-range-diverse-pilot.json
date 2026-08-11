@@ -1,0 +1,85 @@
+{
+  "schema": "hu-20bb-causal-range-diverse-pilot-v1",
+  "depth_bb": 20.0,
+  "baseline": "v82 residual range policies over the retained v57 direct networks",
+  "training": {
+    "steps": 200,
+    "batch_size": 2,
+    "learning_rate": 0.000001,
+    "selected_step": 4,
+    "maximum_realized_node_kl": 0.005,
+    "maximum_realized_weighted_kl": 0.0015,
+    "attribution_corpora": [
+      {
+        "seed": 18501,
+        "deals": 8,
+        "records": 832,
+        "sha256": "8243d2329517fc4e14a1ce602019d91842a865e24dfc4d5565c0e47636f9e94c"
+      },
+      {
+        "seed": 18502,
+        "deals": 8,
+        "records": 956,
+        "sha256": "4d3c7233521c624453ed556dd63a81181ddfd740164161063c5dd37c7d92072a"
+      }
+    ],
+    "report_sha256": "211c8c39682debb9cee279d37cf1201c6d57ebf17c3aae4f054df714ae4f8f56"
+  },
+  "candidates": [
+    {
+      "name": "A",
+      "seed": 18601,
+      "source_range_policy_sha256": "6b511a44610882a45b1506dbe2ca3e0fe8a950e06f72192d81d944f007d26746",
+      "candidate_range_policy_sha256": "7811182e1cc802dff8ae4579c741521eff9c4e6634b4d4e29a5b446f87865d9f",
+      "new_corpus_value_gains_bb": [
+        0.009549919785846916,
+        0.006003755900023989
+      ],
+      "old_untouched_corpus_value_gains_bb": [
+        -0.001875420229328624,
+        0.0013650491592370815
+      ],
+      "full_game_pilot": {
+        "seed": 18701,
+        "deals": 2,
+        "public_branches_per_street": 1,
+        "opponent_samples_per_runout": 1,
+        "parent_mean_exploitability_bb": 6.469139991952135,
+        "candidate_mean_exploitability_bb": 6.477193937752871,
+        "candidate_delta_bb": 0.008053945800736,
+        "parent_report_sha256": "ddb59e5760d36b1f136e621ded1ce7c7a43cc4b704e4cdb7fe1ce15f80adc134",
+        "candidate_report_sha256": "c7edb30011c5092e2da50fdfc3e002201e4310e7147b55a2e1caa2daa8cea739"
+      },
+      "decision": "rejected"
+    },
+    {
+      "name": "B",
+      "seed": 18602,
+      "source_range_policy_sha256": "111454bc7d05ad72a536acdad8bcdf945a6ecd20850cb1da7a34150b015ab006",
+      "candidate_range_policy_sha256": "10b3dcea91c5dd81ff035cafea3546a222e4b2391d4f691ff757c955bef19713",
+      "new_corpus_value_gains_bb": [
+        0.003345486630755624,
+        0.006381872525546023
+      ],
+      "old_untouched_corpus_value_gains_bb": [
+        0.003427909810822072,
+        0.006127908057569955
+      ],
+      "full_game_pilot": {
+        "seed": 18702,
+        "deals": 2,
+        "public_branches_per_street": 1,
+        "opponent_samples_per_runout": 1,
+        "parent_mean_exploitability_bb": 13.196985745205836,
+        "candidate_mean_exploitability_bb": 13.201522158098314,
+        "candidate_delta_bb": 0.004536412892478,
+        "parent_report_sha256": "18dc1d61651903331fd5313207959050f81a89f4fde2bf421b52426ddd530133",
+        "candidate_report_sha256": "279e47deae9eade47daa5dabeb75094fae831b9e69919abb25d139c18f63d396"
+      },
+      "decision": "rejected"
+    }
+  ],
+  "conclusion": "Four-times-more causal root diversity still produced fixed-response improvements that regressed paired untouched full-game exploitability. Do not promote either candidate or run larger certification. Further static fixed-response distillation is not the release path.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}

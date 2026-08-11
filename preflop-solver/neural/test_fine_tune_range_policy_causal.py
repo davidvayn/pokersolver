@@ -2,6 +2,7 @@ import gzip
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -158,6 +159,31 @@ class CausalRangePolicyTests(unittest.TestCase):
             self.assertFalse(
                 module.source_parity_metrics(primary_drift, dataset)["accepted"]
             )
+            skewed_current = dataset.current.copy()
+            skewed_current[0] = [0.001, 0.999]
+            skewed_measured = skewed_current.copy()
+            skewed_measured[0] = [0.0034, 0.9966]
+            skewed_dataset = replace(
+                dataset,
+                current=skewed_current,
+                weights=np.asarray([1e-6, 1, 1, 1, 1, 1], dtype=np.float64),
+            )
+            excessive_backend_drift = module.source_parity_metrics(
+                skewed_measured, skewed_dataset
+            )
+            self.assertLessEqual(
+                excessive_backend_drift["maximumAbsoluteError"],
+                module.MAXIMUM_SOURCE_PARITY_ABSOLUTE_ERROR,
+            )
+            self.assertLessEqual(
+                excessive_backend_drift["weightedReverseKlFromFrozen"],
+                module.MAXIMUM_SOURCE_PARITY_WEIGHTED_KL,
+            )
+            self.assertGreater(
+                excessive_backend_drift["maximumReverseKlFromFrozen"],
+                module.MAXIMUM_SOURCE_PARITY_NODE_KL,
+            )
+            self.assertFalse(excessive_backend_drift["accepted"])
 
             source_path = Path(temporary) / "source.json"
             source_model = distill.RangeConditionedPolicy("compact", "replace")

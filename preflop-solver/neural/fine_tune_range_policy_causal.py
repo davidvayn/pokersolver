@@ -40,7 +40,11 @@ CAUSAL_SCHEMA = "hu-range-conditioned-causal-policy-attribution-jsonl-v1"
 REPORT_SCHEMA = "hu-paired-range-conditioned-causal-trust-region-v1"
 MAXIMUM_SOURCE_PARITY_ABSOLUTE_ERROR = 0.0025
 MAXIMUM_SOURCE_PARITY_WEIGHTED_KL = 1e-6
-MAXIMUM_SOURCE_PARITY_NODE_KL = 1e-5
+# MLX/Metal and the scalar Rust evaluator accumulate compact-network matrix
+# products in a different order. Keep the local parity gate tight enough to
+# catch behavioral mismatches while allowing the measured backend-only drift;
+# exact candidate acceptance is still decided by the Rust evaluator below.
+MAXIMUM_SOURCE_PARITY_NODE_KL = 2e-5
 REALIZED_TRUST_REGION_SELECTION_FRACTION = 0.95
 
 
