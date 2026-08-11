@@ -275,6 +275,55 @@ class RangePolicyDistillationTests(unittest.TestCase):
         mx.eval(expected, measured)
         np.testing.assert_allclose(np.asarray(measured), np.asarray(expected))
 
+    def test_served_json_round_trip_restores_exact_mlx_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "source.json"
+            updated_path = Path(temporary) / "updated.json"
+            model = module.RangeConditionedPolicy("compact", "replace")
+            primary = SimpleNamespace(
+                metadata={"depth_bb": 20.0, "source_policy_baseline": {}},
+                sha256="a" * 64,
+            )
+            auxiliary = SimpleNamespace(sha256="b" * 64)
+            module.export_model(model, path, 91, primary, auxiliary)
+            restored = module.RangeConditionedPolicy("compact", "replace")
+            source_payload = module.load_exported_model(restored, path)
+
+            arguments = (
+                mx.zeros((1, 2, module.CONTEXT_SIZE)),
+                mx.zeros((1, 2, module.COMBO_COUNT, module.QUERY_SIZE)),
+                mx.ones((1, 2, module.COMBO_COUNT)),
+                mx.array([1]),
+                mx.zeros((1, 3, module.ACTION_FEATURE_COUNT)),
+                mx.ones((1, 3)),
+            )
+            expected = model(*arguments)
+            measured = restored(*arguments)
+            mx.eval(expected, measured)
+            np.testing.assert_array_equal(
+                np.asarray(measured), np.asarray(expected)
+            )
+
+            module.export_model_from_source(
+                restored,
+                source_payload,
+                updated_path,
+                92,
+                module.sha256(path),
+                ["c" * 64, "d" * 64],
+            )
+            updated = json.loads(updated_path.read_text())
+            self.assertEqual(updated["seed"], 92)
+            self.assertEqual(updated["parentRangePolicySha256"], module.sha256(path))
+            self.assertEqual(updated["causalAttributionSha256s"], ["c" * 64, "d" * 64])
+            second = module.RangeConditionedPolicy("compact", "replace")
+            module.load_exported_model(second, updated_path)
+            second_values = second(*arguments)
+            mx.eval(second_values)
+            np.testing.assert_array_equal(
+                np.asarray(second_values), np.asarray(expected)
+            )
+
     def test_policy_features_support_flop_turn_and_river(self) -> None:
         for board in (
             np.asarray([0, 5, 10]),

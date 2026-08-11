@@ -1330,6 +1330,219 @@ def source_policy_diagnostic(
     }
 
 
+def normalized_tower_payload(
+    tower: nn.Sequential, final_activation: str
+) -> list[dict[str, Any]]:
+    layers = list(tower.layers)
+    dense_positions = [
+        index
+        for index, layer in enumerate(layers)
+        if isinstance(layer, (nn.Linear, ResidualNormalizedPolicyLayer))
+    ]
+    payload = []
+    for linear_index, position in enumerate(dense_positions):
+        layer = layers[position]
+        if isinstance(layer, ResidualNormalizedPolicyLayer):
+            dense = layer_payload(layer.linear, "gelu-fast")
+            dense.update(
+                {
+                    "residual": True,
+                    "normalization": "layernorm",
+                    "normalizationWeights": np.asarray(
+                        layer.normalization.weight, dtype=np.float32
+                    ).tolist(),
+                    "normalizationBiases": np.asarray(
+                        layer.normalization.bias, dtype=np.float32
+                    ).tolist(),
+                    "normalizationEpsilon": float(layer.normalization.eps),
+                }
+            )
+            payload.append(dense)
+            continue
+        next_position = (
+            dense_positions[linear_index + 1]
+            if linear_index + 1 < len(dense_positions)
+            else len(layers)
+        )
+        dense = layer_payload(
+            layer,
+            final_activation
+            if linear_index + 1 == len(dense_positions)
+            else "gelu-fast",
+        )
+        normalizers = [
+            layer
+            for layer in layers[position + 1 : next_position]
+            if isinstance(layer, nn.LayerNorm)
+        ]
+        if len(normalizers) > 1:
+            raise ValueError("a dense policy layer has multiple normalizers")
+        if normalizers:
+            normalizer = normalizers[0]
+            dense.update(
+                {
+                    "normalization": "layernorm",
+                    "normalizationWeights": np.asarray(
+                        normalizer.weight, dtype=np.float32
+                    ).tolist(),
+                    "normalizationBiases": np.asarray(
+                        normalizer.bias, dtype=np.float32
+                    ).tolist(),
+                    "normalizationEpsilon": float(normalizer.eps),
+                }
+            )
+        payload.append(dense)
+    return payload
+
+
+def load_exported_model(
+    model: RangeConditionedPolicy, path: Path
+) -> dict[str, Any]:
+    """Load a served JSON artifact back into the matching MLX architecture."""
+    payload = json.loads(path.read_text())
+    if (
+        payload.get("schema") != NETWORK_SCHEMA
+        or payload.get("architecture") != model.architecture
+        or payload.get("policyComposition", "replace") != model.composition
+        or payload.get("featureSchema") != RANGE_POLICY_FEATURE_SCHEMA
+        or payload.get("contextSize") != CONTEXT_SIZE
+        or payload.get("querySize") != QUERY_SIZE
+        or payload.get("actionFeatureSchema") != ACTION_FEATURE_SCHEMA
+        or payload.get("actionFeatureSize") != ACTION_FEATURE_COUNT
+    ):
+        raise ValueError("exported range-policy architecture is incompatible")
+
+    def assign_linear(layer: nn.Linear, exported: dict[str, Any]) -> None:
+        weights = np.asarray(exported.get("weights"), dtype=np.float32)
+        biases = np.asarray(exported.get("biases"), dtype=np.float32)
+        expected = tuple(int(value) for value in layer.weight.shape)
+        if (
+            exported.get("inputSize") != expected[1]
+            or exported.get("outputSize") != expected[0]
+            or weights.shape != (expected[0] * expected[1],)
+            or biases.shape != (expected[0],)
+            or not np.all(np.isfinite(weights))
+            or not np.all(np.isfinite(biases))
+        ):
+            raise ValueError("exported range-policy dense layer is incompatible")
+        layer.weight = mx.array(weights.reshape(expected))
+        layer.bias = mx.array(biases)
+
+    def assign_normalization(
+        layer: nn.LayerNorm, exported: dict[str, Any]
+    ) -> None:
+        weights = np.asarray(
+            exported.get("normalizationWeights"), dtype=np.float32
+        )
+        biases = np.asarray(
+            exported.get("normalizationBiases"), dtype=np.float32
+        )
+        if (
+            exported.get("normalization") != "layernorm"
+            or weights.shape != tuple(layer.weight.shape)
+            or biases.shape != tuple(layer.bias.shape)
+            or not np.all(np.isfinite(weights))
+            or not np.all(np.isfinite(biases))
+            or not np.isclose(
+                float(exported.get("normalizationEpsilon", float("nan"))),
+                float(layer.eps),
+            )
+        ):
+            raise ValueError("exported range-policy normalization is incompatible")
+        layer.weight = mx.array(weights)
+        layer.bias = mx.array(biases)
+
+    def load_tower(tower: nn.Sequential, exported: Any) -> None:
+        if not isinstance(exported, list):
+            raise ValueError("exported range-policy tower is missing")
+        layers = list(tower.layers)
+        dense_positions = [
+            index
+            for index, layer in enumerate(layers)
+            if isinstance(layer, (nn.Linear, ResidualNormalizedPolicyLayer))
+        ]
+        if len(exported) != len(dense_positions):
+            raise ValueError("exported range-policy tower depth differs")
+        for dense_index, (position, layer_payload_value) in enumerate(
+            zip(dense_positions, exported, strict=True)
+        ):
+            if not isinstance(layer_payload_value, dict):
+                raise ValueError("exported range-policy layer is invalid")
+            layer = layers[position]
+            if isinstance(layer, ResidualNormalizedPolicyLayer):
+                if not layer_payload_value.get("residual"):
+                    raise ValueError("exported residual range-policy layer changed")
+                assign_linear(layer.linear, layer_payload_value)
+                assign_normalization(layer.normalization, layer_payload_value)
+                continue
+            if layer_payload_value.get("residual", False):
+                raise ValueError("exported range-policy residual shape changed")
+            assign_linear(layer, layer_payload_value)
+            next_position = (
+                dense_positions[dense_index + 1]
+                if dense_index + 1 < len(dense_positions)
+                else len(layers)
+            )
+            normalizers = [
+                candidate
+                for candidate in layers[position + 1 : next_position]
+                if isinstance(candidate, nn.LayerNorm)
+            ]
+            if len(normalizers) > 1:
+                raise ValueError("range-policy layer has multiple normalizers")
+            if normalizers:
+                assign_normalization(normalizers[0], layer_payload_value)
+            elif layer_payload_value.get("normalization") is not None:
+                raise ValueError("exported range-policy added normalization")
+
+    for attribute, key in (
+        ("context_tower", "contextTower"),
+        ("query_tower", "queryTower"),
+        ("action_tower", "actionTower"),
+        ("head", "head"),
+    ):
+        load_tower(getattr(model, attribute), payload.get(key))
+    mx.eval(model.parameters())
+    return payload
+
+
+def export_model_from_source(
+    model: RangeConditionedPolicy,
+    source_payload: dict[str, Any],
+    path: Path,
+    seed: int,
+    parent_sha256: str,
+    causal_attribution_sha256s: list[str],
+) -> None:
+    if len(parent_sha256) != 64 or any(
+        len(value) != 64 for value in causal_attribution_sha256s
+    ):
+        raise ValueError("causal range-policy provenance hashes are invalid")
+    payload = dict(source_payload)
+    payload.update(
+        {
+            "seed": seed,
+            "architecture": model.architecture,
+            "policyComposition": model.composition,
+            "parentRangePolicySha256": parent_sha256,
+            "causalAttributionSha256s": causal_attribution_sha256s,
+            "contextTower": normalized_tower_payload(
+                model.context_tower, "gelu-fast"
+            ),
+            "queryTower": normalized_tower_payload(
+                model.query_tower, "gelu-fast"
+            ),
+            "actionTower": normalized_tower_payload(
+                model.action_tower, "gelu-fast"
+            ),
+            "head": normalized_tower_payload(model.head, "linear"),
+        }
+    )
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
+    temporary.replace(path)
+
+
 def export_model(
     model: RangeConditionedPolicy,
     path: Path,
@@ -1337,69 +1550,6 @@ def export_model(
     primary: LoadedDataset,
     auxiliary: LoadedDataset,
 ) -> None:
-    def normalized_tower_payload(
-        tower: nn.Sequential, final_activation: str
-    ) -> list[dict[str, Any]]:
-        layers = list(tower.layers)
-        dense_positions = [
-            index
-            for index, layer in enumerate(layers)
-            if isinstance(layer, (nn.Linear, ResidualNormalizedPolicyLayer))
-        ]
-        payload = []
-        for linear_index, position in enumerate(dense_positions):
-            layer = layers[position]
-            if isinstance(layer, ResidualNormalizedPolicyLayer):
-                dense = layer_payload(layer.linear, "gelu-fast")
-                dense.update(
-                    {
-                        "residual": True,
-                        "normalization": "layernorm",
-                        "normalizationWeights": np.asarray(
-                            layer.normalization.weight, dtype=np.float32
-                        ).tolist(),
-                        "normalizationBiases": np.asarray(
-                            layer.normalization.bias, dtype=np.float32
-                        ).tolist(),
-                        "normalizationEpsilon": float(layer.normalization.eps),
-                    }
-                )
-                payload.append(dense)
-                continue
-            next_position = (
-                dense_positions[linear_index + 1]
-                if linear_index + 1 < len(dense_positions)
-                else len(layers)
-            )
-            dense = layer_payload(
-                layer,
-                final_activation
-                if linear_index + 1 == len(dense_positions)
-                else "gelu-fast",
-            )
-            normalizers = [
-                layer
-                for layer in layers[position + 1 : next_position]
-                if isinstance(layer, nn.LayerNorm)
-            ]
-            if len(normalizers) > 1:
-                raise ValueError("a dense policy layer has multiple normalizers")
-            if normalizers:
-                normalizer = normalizers[0]
-                dense.update(
-                    {
-                        "normalization": "layernorm",
-                        "normalizationWeights": np.asarray(
-                            normalizer.weight, dtype=np.float32
-                        ).tolist(),
-                        "normalizationBiases": np.asarray(
-                            normalizer.bias, dtype=np.float32
-                        ).tolist(),
-                        "normalizationEpsilon": float(normalizer.eps),
-                    }
-                )
-            payload.append(dense)
-        return payload
 
     payload = {
         "schema": NETWORK_SCHEMA,

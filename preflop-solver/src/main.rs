@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "postflop-action-targets" => run_postflop_action_targets(&args[1..]),
         "range-policy-add-baseline" => run_range_policy_add_baseline(&args[1..]),
         "range-policy-evaluate" => run_range_policy_evaluate(&args[1..]),
+        "range-policy-causal-evaluate" => run_range_policy_causal_evaluate(&args[1..]),
         "range-policy-compare" => run_range_policy_compare(&args[1..]),
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
@@ -673,6 +674,51 @@ fn run_range_policy_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
         fs::write(&path, format!("{serialized}\n"))?;
         eprintln!(
             "wrote exact Rust range-policy evaluation {}",
+            path.display()
+        );
+    } else {
+        println!("{serialized}");
+    }
+    Ok(())
+}
+
+fn run_range_policy_causal_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let frozen_network_path = value(args, "--frozen-network")
+        .map(PathBuf::from)
+        .ok_or("--frozen-network is required")?;
+    let attribution_network_path = value(args, "--attribution-network")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| frozen_network_path.clone());
+    let report = blueprint::public_belief::evaluate_causal_range_policy(
+        blueprint::public_belief::CausalRangePolicyEvaluationConfig {
+            network_path: value(args, "--network")
+                .map(PathBuf::from)
+                .ok_or("--network is required")?,
+            frozen_network_path,
+            attribution_network_path,
+            dataset_path: value(args, "--dataset")
+                .map(PathBuf::from)
+                .ok_or("--dataset is required")?,
+            source_policy_path: value(args, "--source-network").map(PathBuf::from),
+            minimum_policy_value_gain_bb: parse_or(
+                args,
+                "--minimum-policy-value-gain-bb",
+                0.000001f64,
+            )?,
+            maximum_node_kl: parse_or(args, "--maximum-node-kl", 0.005f64)?,
+            maximum_weighted_kl: parse_or(args, "--maximum-weighted-kl", 0.0015f64)?,
+        },
+    )?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&path, format!("{serialized}\n"))?;
+        eprintln!(
+            "wrote exact Rust causal range-policy evaluation {}",
             path.display()
         );
     } else {
@@ -1811,6 +1857,7 @@ fn run_neural_causal_attribution(args: &[String]) -> Result<(), Box<dyn Error>> 
             network_path: value(args, "--networks")
                 .map(PathBuf::from)
                 .ok_or("--networks is required for causal attribution")?,
+            range_policy_path: value(args, "--range-policy").map(PathBuf::from),
             public_branches_per_street: parse_or(args, "--public-branches-per-street", 2u32)?,
             opponent_samples_per_runout: parse_or(args, "--opponent-samples-per-runout", 4u32)?,
             max_records: parse_or(args, "--max-records", 100_000usize)?,
@@ -2199,6 +2246,8 @@ Usage:
   preflop-solver postflop-action-targets [options]
   preflop-solver range-policy-add-baseline [options]
   preflop-solver range-policy-evaluate [options]
+  preflop-solver range-policy-causal-evaluate [options]
+  preflop-solver range-policy-compare [options]
 
 Solve options:
   --small-blind-bb <number>       Default: 0.5
@@ -2331,6 +2380,12 @@ Complete turn/river label options:
     --dataset <targets.jsonl.gz> --output <augmented.jsonl.gz>
   range-policy-evaluate --network <residual-policy.json>
     --source-network <source-policy.json> --dataset <targets.jsonl.gz>
+  range-policy-causal-evaluate --network <candidate.json>
+    --frozen-network <candidate-parent.json>
+    [--attribution-network <dataset-source.json>]
+    --dataset <causal-attribution.jsonl.gz>
+    [--minimum-policy-value-gain-bb 0.000001]
+    [--maximum-node-kl 0.005] [--maximum-weighted-kl 0.0015]
   range-policy-compare --network-a <policy-a.json> --network-b <policy-b.json>
     --dataset <heldout-a.jsonl.gz> --dataset <heldout-b.jsonl.gz>
     [--source-network-a <source-a.json> --source-network-b <source-b.json>]

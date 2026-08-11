@@ -16,7 +16,10 @@ use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use super::public_belief::{PublicBeliefState, RangeConditionedPolicyNetwork, COMBO_COUNT};
+use super::public_belief::{
+    PublicBeliefState, RangeConditionedPolicyNetwork, COMBO_COUNT, RANGE_POLICY_CONTEXT_V2_COUNT,
+    RANGE_POLICY_FEATURE_SCHEMA_V2,
+};
 
 pub const STATE_FEATURE_COUNT: usize = 716;
 pub const ACTION_FEATURE_COUNT: usize = 9;
@@ -62,6 +65,7 @@ pub struct CausalPolicyAttributionConfig {
     pub seed: u64,
     pub threads: usize,
     pub network_path: PathBuf,
+    pub range_policy_path: Option<PathBuf>,
     pub public_branches_per_street: u32,
     pub opponent_samples_per_runout: u32,
     pub max_records: usize,
@@ -76,6 +80,8 @@ pub struct CausalPolicyAttributionReport {
     pub deals: u64,
     pub seed: u64,
     pub network_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range_policy_sha256: Option<String>,
     pub threads: usize,
     pub public_branches_per_street: u32,
     pub opponent_samples_per_runout: u32,
@@ -194,11 +200,13 @@ pub(super) struct FrozenPolicy {
     bundle_sha256: String,
     range_policy: Option<RangeConditionedPolicyNetwork>,
     range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
+    preflop_range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
 }
 
 struct RangePolicyCachedNode {
     action_labels: Vec<String>,
     probabilities: Vec<f64>,
+    ranges: [Vec<f64>; 2],
 }
 
 impl FrozenPolicy {
@@ -212,6 +220,7 @@ impl FrozenPolicy {
             bundle_sha256,
             range_policy: None,
             range_cache: Mutex::new(BTreeMap::new()),
+            preflop_range_cache: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -250,6 +259,17 @@ impl FrozenPolicy {
         actions: &[LegalAction],
         config: &BlueprintConfig,
     ) -> Result<Vec<f64>, String> {
+        self.range_node(state, deal, actions, config)?
+            .range_for_deal(state, deal, actions)
+    }
+
+    fn range_node(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Result<Arc<RangePolicyCachedNode>, String> {
         let range_policy = self
             .range_policy
             .as_ref()
@@ -262,8 +282,158 @@ impl FrozenPolicy {
             .get(&key)
             .cloned()
         {
-            return cached.range_for_deal(state, deal, actions);
+            return Ok(cached);
         }
+        let ranges = self.ranges_for_state(state, deal, config)?;
+        let public = PublicBeliefState::from_game_state(
+            deal.board[..state.street.board_len()].to_vec(),
+            state,
+            ranges,
+        );
+        let source = range_policy
+            .requires_source_policy()
+            .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
+            .transpose()?;
+        let probabilities = range_policy.strategy(&public, config, source.as_deref())?;
+        let cached = Arc::new(RangePolicyCachedNode {
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities,
+            ranges: public.ranges,
+        });
+        {
+            let mut cache = self.range_cache.lock().expect("range policy cache");
+            if cache.len() >= 4_096 {
+                if let Some(oldest) = cache.keys().next().copied() {
+                    cache.remove(&oldest);
+                }
+            }
+            cache.insert(key, cached.clone());
+        }
+        Ok(cached)
+    }
+
+    fn policy_node(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Result<Arc<RangePolicyCachedNode>, String> {
+        if state.street != Street::Preflop {
+            return self.range_node(state, deal, actions, config);
+        }
+        let key = range_policy_cache_key(state, deal);
+        if let Some(cached) = self
+            .preflop_range_cache
+            .lock()
+            .expect("preflop range cache")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+        let ranges = self.ranges_for_state(state, deal, config)?;
+        let mut probabilities = vec![0.0; COMBO_COUNT * actions.len()];
+        for combo in all_combos() {
+            let synthetic = deal_for_policy_combo(combo, state.actor);
+            let strategy = strategy_from_bundle(&self.bundle, state, &synthetic, actions, config);
+            let offset = combo.key() * actions.len();
+            probabilities[offset..offset + actions.len()].copy_from_slice(&strategy);
+        }
+        let cached = Arc::new(RangePolicyCachedNode {
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities,
+            ranges,
+        });
+        let mut cache = self
+            .preflop_range_cache
+            .lock()
+            .expect("preflop range cache");
+        if cache.len() >= 256 {
+            if let Some(oldest) = cache.keys().next().copied() {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(key, cached.clone());
+        Ok(cached)
+    }
+
+    fn ranges_for_state(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        config: &BlueprintConfig,
+    ) -> Result<[Vec<f64>; 2], String> {
+        let key = range_policy_cache_key(state, deal);
+        let cached = if state.street == Street::Preflop {
+            self.preflop_range_cache
+                .lock()
+                .expect("preflop range cache")
+                .get(&key)
+                .cloned()
+        } else {
+            self.range_cache
+                .lock()
+                .expect("range policy cache")
+                .get(&key)
+                .cloned()
+        };
+        if let Some(cached) = cached {
+            return Ok(cached.ranges.clone());
+        }
+        if state.trajectory.is_empty() {
+            let uniform = 1.0 / COMBO_COUNT as f64;
+            let mut ranges = [vec![uniform; COMBO_COUNT], vec![uniform; COMBO_COUNT]];
+            normalize_ranges_for_board(&mut ranges, &deal.board[..state.street.board_len()])?;
+            return Ok(ranges);
+        }
+
+        let last = state.trajectory.last().expect("nonempty range trajectory");
+        let mut parent = GameState::initial(config);
+        for observed in &state.trajectory[..state.trajectory.len() - 1] {
+            let legal = parent.legal_actions(config);
+            let selected = legal
+                .iter()
+                .position(|action| trajectory_action_matches(&parent, action, observed, config))
+                .ok_or_else(|| "range policy could not replay a trajectory prefix".to_owned())?;
+            parent = parent.apply(&legal[selected], config);
+        }
+        let parent_actions = parent.legal_actions(config);
+        let selected = parent_actions
+            .iter()
+            .position(|action| trajectory_action_matches(&parent, action, last, config))
+            .ok_or_else(|| {
+                "range policy could not replay the final trajectory action".to_owned()
+            })?;
+        let reconstructed = parent.apply(&parent_actions[selected], config);
+        if reconstructed.public_history != state.public_history
+            || reconstructed.street != state.street
+            || reconstructed.actor != state.actor
+        {
+            return Err("range policy replay did not reconstruct the requested state".to_owned());
+        }
+        let parent_node = self.policy_node(&parent, deal, &parent_actions, config)?;
+        let mut ranges = parent_node.ranges.clone();
+        let actor = parent.actor;
+        for combo in 0..COMBO_COUNT {
+            ranges[actor][combo] *=
+                parent_node.probabilities[combo * parent_actions.len() + selected];
+        }
+        normalize_ranges_for_board(&mut ranges, &deal.board[..state.street.board_len()])?;
+        Ok(ranges)
+    }
+
+    #[cfg(test)]
+    fn replay_ranges_from_root(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        config: &BlueprintConfig,
+    ) -> Result<[Vec<f64>; 2], String> {
+        let range_policy = self
+            .range_policy
+            .as_ref()
+            .ok_or_else(|| "range-conditioned policy is unavailable".to_owned())?;
         let mut cursor = GameState::initial(config);
         let uniform = 1.0 / COMBO_COUNT as f64;
         let mut ranges = [vec![uniform; COMBO_COUNT], vec![uniform; COMBO_COUNT]];
@@ -310,30 +480,22 @@ impl FrozenPolicy {
             return Err("range policy replay did not reconstruct the requested state".to_owned());
         }
         normalize_ranges_for_board(&mut ranges, &deal.board[..state.street.board_len()])?;
-        let public = PublicBeliefState::from_game_state(
+        Ok(ranges)
+    }
+
+    fn range_public_state(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Result<PublicBeliefState, String> {
+        let cached = self.range_node(state, deal, actions, config)?;
+        Ok(PublicBeliefState::from_game_state(
             deal.board[..state.street.board_len()].to_vec(),
             state,
-            ranges,
-        );
-        let source = range_policy
-            .requires_source_policy()
-            .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
-            .transpose()?;
-        let probabilities = range_policy.strategy(&public, config, source.as_deref())?;
-        let cached = Arc::new(RangePolicyCachedNode {
-            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
-            probabilities,
-        });
-        {
-            let mut cache = self.range_cache.lock().expect("range policy cache");
-            if cache.len() >= 4_096 {
-                if let Some(oldest) = cache.keys().next().copied() {
-                    cache.remove(&oldest);
-                }
-            }
-            cache.insert(key, cached.clone());
-        }
-        cached.range_for_deal(state, deal, actions)
+            cached.ranges.clone(),
+        ))
     }
 
     pub(super) fn bundle_sha256(&self) -> &str {
@@ -2343,6 +2505,84 @@ struct CausalAttributionWalkStats {
     maximum_policy_value: f64,
 }
 
+#[derive(Serialize)]
+struct CausalRangePolicyState {
+    board: Vec<u8>,
+    street: Street,
+    actor: usize,
+    invested_bb: [f64; 2],
+    street_invested_bb: [f64; 2],
+    last_full_raise_bb: f64,
+    aggressions: u8,
+    checks: u8,
+    raise_reopened: bool,
+    public_history: Vec<String>,
+    trajectory: Vec<TrajectoryAction>,
+}
+
+#[derive(Serialize)]
+struct CausalRangePolicyAttributionRecord {
+    record_type: &'static str,
+    weight: f32,
+    state: CausalRangePolicyState,
+    ranges: [Vec<f32>; 2],
+    focal_combo: usize,
+    action_labels: Vec<String>,
+    action_features: Vec<Vec<f32>>,
+    probabilities: Vec<f32>,
+    action_values_bb: Vec<f32>,
+}
+
+fn causal_range_policy_record_bytes(
+    generator: &SampleGenerator,
+    state: &GameState,
+    deal: &Deal,
+    actions: &[LegalAction],
+    probabilities: &[f64],
+    action_values_bb: &[f64],
+    weight: f32,
+) -> Result<Vec<u8>, String> {
+    let policy = generator
+        .networks
+        .as_ref()
+        .ok_or_else(|| "causal range attribution requires a frozen policy".to_owned())?;
+    let public = policy.range_public_state(state, deal, actions, &generator.config.game)?;
+    let focal_combo = Combo::new(deal.holes[state.actor][0], deal.holes[state.actor][1]).key();
+    let record = CausalRangePolicyAttributionRecord {
+        record_type: "range_conditioned_causal_policy_attribution",
+        weight,
+        state: CausalRangePolicyState {
+            board: public.board,
+            street: public.street,
+            actor: public.actor,
+            invested_bb: public.invested_bb,
+            street_invested_bb: public.street_invested_bb,
+            last_full_raise_bb: public.last_full_raise_bb,
+            aggressions: public.aggressions,
+            checks: public.checks,
+            raise_reopened: public.raise_reopened,
+            public_history: public.public_history,
+            trajectory: public.trajectory,
+        },
+        ranges: public.ranges.map(|range| {
+            range
+                .into_iter()
+                .map(|value| value as f32)
+                .collect::<Vec<_>>()
+        }),
+        focal_combo,
+        action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+        action_features: actions
+            .iter()
+            .map(|action| encode_action_features(state, action, &generator.config.game))
+            .collect(),
+        probabilities: probabilities.iter().map(|value| *value as f32).collect(),
+        action_values_bb: action_values_bb.iter().map(|value| *value as f32).collect(),
+    };
+    serde_json::to_vec(&record)
+        .map_err(|error| format!("causal range attribution is not serializable: {error}"))
+}
+
 impl Default for CausalAttributionWalkStats {
     fn default() -> Self {
         Self {
@@ -2515,25 +2755,43 @@ fn fixed_causal_response_policy_values(
                     .copied()
                     .fold(f64::NEG_INFINITY, f64::max),
             );
-            let sample = training_sample(
-                SampleKind::AverageStrategy,
-                deal_index,
-                (*reach * objective_scale) as f32,
-                *reach,
-                &state,
-                deal,
-                &actions,
-                strategy.clone(),
-                Some(policy_values),
-                None,
-                &generator.config.game,
-            );
+            let record_weight = (*reach * objective_scale) as f32;
+            let record = if generator
+                .networks
+                .as_ref()
+                .is_some_and(|policy| policy.range_policy.is_some())
+            {
+                causal_range_policy_record_bytes(
+                    generator,
+                    &state,
+                    deal,
+                    &actions,
+                    strategy,
+                    &policy_values,
+                    record_weight,
+                )?
+            } else {
+                let sample = training_sample(
+                    SampleKind::AverageStrategy,
+                    deal_index,
+                    record_weight,
+                    *reach,
+                    &state,
+                    deal,
+                    &actions,
+                    strategy.clone(),
+                    Some(policy_values),
+                    None,
+                    &generator.config.game,
+                );
+                serde_json::to_vec(&sample).expect("causal policy attribution is serializable")
+            };
             collector.consider(
                 state.street,
                 deal_index,
                 responder,
                 *candidate_index,
-                serde_json::to_vec(&sample).expect("causal policy attribution is serializable"),
+                record,
             );
             *candidate_index += 1;
         }
@@ -2593,19 +2851,27 @@ pub fn generate_causal_policy_attribution(
         return Err("causal attribution exceeds one million scenarios per deal".into());
     }
     let network_sha256 = sha256_path(&config.network_path)?;
-    let generator = SampleGenerator::new(SampleGenerationConfig {
-        game: config.game.clone(),
-        traversals: 1,
-        start_iteration: 0,
-        seed: config.seed,
-        max_records: 1,
-        output: PathBuf::from("unused-causal-attribution.jsonl.gz"),
-        network_path: Some(config.network_path.clone()),
-        trajectory_sampling: false,
-        evaluate_trajectory_values: false,
-        value_rollouts_per_action: 1,
-        enumerate_turn_river_chance: false,
-    })?;
+    let range_policy_sha256 = config
+        .range_policy_path
+        .as_ref()
+        .map(|path| sha256_path(path))
+        .transpose()?;
+    let generator = SampleGenerator::new_with_range(
+        SampleGenerationConfig {
+            game: config.game.clone(),
+            traversals: 1,
+            start_iteration: 0,
+            seed: config.seed,
+            max_records: 1,
+            output: PathBuf::from("unused-causal-attribution.jsonl.gz"),
+            network_path: Some(config.network_path.clone()),
+            trajectory_sampling: false,
+            evaluate_trajectory_values: false,
+            value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
+        },
+        config.range_policy_path.as_deref(),
+    )?;
     let total_capacities = attribution_street_capacities(config.max_records);
     if total_capacities[2] == 0 {
         return Err("causal attribution record budget cannot cover every postflop street".into());
@@ -2754,11 +3020,24 @@ pub fn generate_causal_policy_attribution(
     let buffered = BufWriter::new(file);
     let mut writer = GzEncoder::new(buffered, Compression::fast());
     let candidate_records = candidate_records_by_street.iter().sum::<usize>();
+    let range_conditioned = range_policy_sha256.is_some();
     let metadata = serde_json::json!({
         "record_type": "metadata",
-        "schema": "hu-neural-causal-policy-attribution-jsonl-v1",
-        "state_feature_schema": "hu-cash-trajectory-poker-aware-v4",
-        "state_feature_count": STATE_FEATURE_COUNT,
+        "schema": if range_conditioned {
+            "hu-range-conditioned-causal-policy-attribution-jsonl-v1"
+        } else {
+            "hu-neural-causal-policy-attribution-jsonl-v1"
+        },
+        "state_feature_schema": if range_conditioned {
+            RANGE_POLICY_FEATURE_SCHEMA_V2
+        } else {
+            "hu-cash-trajectory-poker-aware-v4"
+        },
+        "state_feature_count": if range_conditioned {
+            RANGE_POLICY_CONTEXT_V2_COUNT
+        } else {
+            STATE_FEATURE_COUNT
+        },
         "action_feature_schema": "hu-cash-legal-action-v1",
         "action_feature_count": ACTION_FEATURE_COUNT,
         "depth_bb": config.game.effective_stack_bb,
@@ -2775,6 +3054,9 @@ pub fn generate_causal_policy_attribution(
         "opponent_samples_per_runout": config.opponent_samples_per_runout,
         "scenarios_per_deal": scenarios_per_deal,
         "source_network_sha256": network_sha256,
+        "source_range_policy_sha256": range_policy_sha256,
+        "uses_exact_ranges": range_conditioned,
+        "focal_combo_attribution": range_conditioned,
         "preflop_policy_frozen": true,
         "postflop_only": true,
         "maximum_root_value_reconstruction_error_bb": maximum_reconstruction_error,
@@ -2796,6 +3078,7 @@ pub fn generate_causal_policy_attribution(
         deals: config.deals,
         seed: config.seed,
         network_sha256,
+        range_policy_sha256,
         threads: worker_count,
         public_branches_per_street: config.public_branches_per_street,
         opponent_samples_per_runout: config.opponent_samples_per_runout,
@@ -4031,7 +4314,45 @@ mod tests {
         assert_eq!(first, second);
         let expected = std::f64::consts::E / (std::f64::consts::E + actions.len() as f64 - 1.0);
         assert!((first[0] - expected).abs() < 1e-6);
-        assert_eq!(policy.range_cache.lock().unwrap().len(), 1);
+        for _ in 0..2 {
+            let legal = state.legal_actions(&game);
+            let check = legal.iter().find(|action| action.label == "check").unwrap();
+            state = state.apply(check, &game);
+        }
+        assert_eq!(state.street, Street::Turn);
+        let turn_actions = state.legal_actions(&game);
+        let cached_public = policy
+            .range_public_state(&state, &deal, &turn_actions, &game)
+            .unwrap();
+        let replayed_ranges = policy
+            .replay_ranges_from_root(&state, &deal, &game)
+            .unwrap();
+        let maximum_range_difference = cached_public
+            .ranges
+            .iter()
+            .flatten()
+            .zip(replayed_ranges.iter().flatten())
+            .map(|(cached, replayed)| (cached - replayed).abs())
+            .fold(0.0f64, f64::max);
+        assert!(maximum_range_difference < 1e-15);
+        let cached_turn = policy.strategy(&state, &deal, &turn_actions, &game);
+        let replay_public = PublicBeliefState::from_game_state(
+            deal.board[..state.street.board_len()].to_vec(),
+            &state,
+            replayed_ranges,
+        );
+        let replay_matrix = policy
+            .range_policy
+            .as_ref()
+            .unwrap()
+            .strategy(&replay_public, &game, None)
+            .unwrap();
+        let combo = Combo::new(deal.holes[state.actor][0], deal.holes[state.actor][1]).key();
+        assert_eq!(
+            cached_turn,
+            replay_matrix[combo * turn_actions.len()..(combo + 1) * turn_actions.len()]
+        );
+        assert!(policy.range_cache.lock().unwrap().len() >= 3);
         fs::remove_file(bundle_path).unwrap();
         fs::remove_file(range_path).unwrap();
     }
@@ -4278,6 +4599,7 @@ mod tests {
             seed: 79,
             threads: 2,
             network_path: network_path.clone(),
+            range_policy_path: None,
             public_branches_per_street: 1,
             opponent_samples_per_runout: 1,
             max_records: 60,
@@ -4366,6 +4688,175 @@ mod tests {
         fs::remove_file(network_path).unwrap();
         fs::remove_file(first_path).unwrap();
         fs::remove_file(second_path).unwrap();
+    }
+
+    #[test]
+    fn range_conditioned_causal_attribution_records_beliefs_and_focal_combos() {
+        use flate2::read::GzDecoder;
+        use std::io::BufRead;
+
+        let direct_layer = serde_json::json!({
+            "layers": [{
+                "input_size": MODEL_INPUT_COUNT,
+                "output_size": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; MODEL_INPUT_COUNT],
+                "biases": [0.0]
+            }]
+        });
+        let bundle = serde_json::json!({
+            "schema": TRAINING_NETWORK_SCHEMA,
+            "input_size": MODEL_INPUT_COUNT,
+            "strategy_transform": "softmax",
+            "networks": [direct_layer.clone(), direct_layer]
+        });
+        let layer = |input_size: usize| {
+            serde_json::json!({
+                "inputSize": input_size,
+                "outputSize": 1,
+                "activation": "linear",
+                "weights": vec![0.0f32; input_size],
+                "biases": [0.0]
+            })
+        };
+        let range_policy = serde_json::json!({
+            "schema": "hu-public-belief-combo-policy-network-v1",
+            "seed": 83,
+            "depthBb": 2.0,
+            "usesExactRanges": true,
+            "featureSchema": RANGE_POLICY_FEATURE_SCHEMA_V2,
+            "contextSize": RANGE_POLICY_CONTEXT_V2_COUNT,
+            "querySize": 124,
+            "actionFeatureSchema": "hu-cash-legal-action-v1",
+            "actionFeatureSize": ACTION_FEATURE_COUNT,
+            "contextTower": [layer(RANGE_POLICY_CONTEXT_V2_COUNT)],
+            "queryTower": [layer(124)],
+            "actionTower": [layer(ACTION_FEATURE_COUNT)],
+            "head": [layer(5)],
+            "sourceDatasetSha256": "a".repeat(64),
+            "sourceDatasetSchema": "hu-range-conditioned-postflop-policy-dataset-v1",
+            "sourceValidationStatus": "accepted_for_training",
+            "policyComposition": "replace"
+        });
+        let prefix = format!(
+            "pokersolver-range-causal-attribution-{}",
+            std::process::id()
+        );
+        let directory = std::env::temp_dir();
+        let network_path = directory.join(format!("{prefix}-network.json"));
+        let range_path = directory.join(format!("{prefix}-range.json"));
+        let output_path = directory.join(format!("{prefix}.jsonl.gz"));
+        fs::write(&network_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let range_bytes = serde_json::to_vec(&range_policy).unwrap();
+        fs::write(&range_path, &range_bytes).unwrap();
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 2.0;
+        let attribution = generate_causal_policy_attribution(CausalPolicyAttributionConfig {
+            game: game.clone(),
+            deals: 2,
+            seed: 83,
+            threads: 2,
+            network_path: network_path.clone(),
+            range_policy_path: Some(range_path.clone()),
+            public_branches_per_street: 1,
+            opponent_samples_per_runout: 1,
+            max_records: 60,
+            output: output_path.clone(),
+        })
+        .unwrap();
+        let certificate = certify_causal_sample_game_exploitability_upper_bound(
+            ExploitabilityCertificateConfig {
+                game,
+                deals: 2,
+                seed: 83,
+                confidence: 0.99,
+                threads: 2,
+                network_path: network_path.clone(),
+                range_policy_path: Some(range_path.clone()),
+            },
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            attribution.range_policy_sha256,
+            Some(format!("{:x}", Sha256::digest(&range_bytes)))
+        );
+        assert!(
+            (attribution.sample_mean_exploitability_bb - certificate.sample_mean_exploitability_bb)
+                .abs()
+                < 1e-12
+        );
+        assert!(attribution.maximum_root_value_reconstruction_error_bb < 1e-12);
+
+        let reader = BufReader::new(GzDecoder::new(fs::File::open(&output_path).unwrap()));
+        let mut lines = reader.lines();
+        let metadata: serde_json::Value =
+            serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            metadata["schema"],
+            "hu-range-conditioned-causal-policy-attribution-jsonl-v1"
+        );
+        assert_eq!(metadata["uses_exact_ranges"], true);
+        assert_eq!(metadata["focal_combo_attribution"], true);
+        let records = lines
+            .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), attribution.retained_records);
+        assert!(!records.is_empty());
+        for record in records {
+            assert_eq!(
+                record["record_type"],
+                "range_conditioned_causal_policy_attribution"
+            );
+            assert_ne!(record["state"]["street"], "preflop");
+            assert!(record["focal_combo"].as_u64().unwrap() < COMBO_COUNT as u64);
+            let ranges = record["ranges"].as_array().unwrap();
+            assert_eq!(ranges.len(), 2);
+            for range in ranges {
+                assert_eq!(range.as_array().unwrap().len(), COMBO_COUNT);
+                let sum = range
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_f64().unwrap())
+                    .sum::<f64>();
+                assert!((sum - 1.0).abs() < 1e-5);
+            }
+            let actions = record["action_labels"].as_array().unwrap();
+            let probabilities = record["probabilities"].as_array().unwrap();
+            let values = record["action_values_bb"].as_array().unwrap();
+            assert!(!actions.is_empty());
+            assert_eq!(actions.len(), probabilities.len());
+            assert_eq!(actions.len(), values.len());
+            let probability_sum = probabilities
+                .iter()
+                .map(|value| value.as_f64().unwrap())
+                .sum::<f64>();
+            assert!((probability_sum - 1.0).abs() < 1e-6);
+            assert!(record["weight"].as_f64().unwrap() > 0.0);
+        }
+        let evaluation = crate::blueprint::public_belief::evaluate_causal_range_policy(
+            crate::blueprint::public_belief::CausalRangePolicyEvaluationConfig {
+                network_path: range_path.clone(),
+                frozen_network_path: range_path.clone(),
+                attribution_network_path: range_path.clone(),
+                dataset_path: output_path.clone(),
+                source_policy_path: None,
+                minimum_policy_value_gain_bb: 0.000001,
+                maximum_node_kl: 0.005,
+                maximum_weighted_kl: 0.0015,
+            },
+        )
+        .unwrap();
+        assert_eq!(evaluation.records, attribution.retained_records);
+        assert!(evaluation.weighted_policy_value_gain_bb.abs() < 1e-12);
+        assert!(evaluation.maximum_reverse_kl_from_frozen < 1e-12);
+        assert!(evaluation.maximum_stored_source_probability_difference < 1e-6);
+        assert_eq!(evaluation.validation.status, "rejected");
+        fs::remove_file(network_path).unwrap();
+        fs::remove_file(range_path).unwrap();
+        fs::remove_file(output_path).unwrap();
     }
 
     #[test]

@@ -34,11 +34,11 @@ const SHARED_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-query-v1";
 const SHARED_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-query-v2";
 const SHARED_FEATURE_SCHEMA_V3: &str = "rank-suit-invariant-combo-query-v3";
 const RANGE_POLICY_FEATURE_SCHEMA_V1: &str = "rank-suit-invariant-combo-policy-query-v1";
-const RANGE_POLICY_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-policy-query-v2";
+pub(super) const RANGE_POLICY_FEATURE_SCHEMA_V2: &str = "rank-suit-invariant-combo-policy-query-v2";
 const RANGE_POLICY_TRAJECTORY_FEATURE_COUNT: usize = 15;
 const RANGE_POLICY_PUBLIC_STATE_COUNT: usize =
     20 + MAX_TRAJECTORY_ACTIONS * RANGE_POLICY_TRAJECTORY_FEATURE_COUNT;
-const RANGE_POLICY_CONTEXT_V2_COUNT: usize =
+pub(super) const RANGE_POLICY_CONTEXT_V2_COUNT: usize =
     SHARED_CONTEXT_BOARD_RELATIVE_COUNT + RANGE_POLICY_PUBLIC_STATE_COUNT;
 const RANGE_POLICY_SCHEMA_V1: &str = "hu-public-belief-combo-policy-network-v1";
 const RANGE_POLICY_REPLACE: &str = "replace";
@@ -971,6 +971,8 @@ impl PublicValueNetwork {
 pub struct RangeConditionedPolicyNetwork {
     #[serde(skip)]
     artifact_sha256: Option<String>,
+    #[serde(skip)]
+    prevalidated: bool,
     schema: String,
     seed: u64,
     depth_bb: f64,
@@ -1075,6 +1077,7 @@ impl RangeConditionedPolicyNetwork {
         let mut network: Self = serde_json::from_slice(&bytes)?;
         network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
         network.validate()?;
+        network.prevalidated = true;
         Ok(network)
     }
 
@@ -1156,7 +1159,13 @@ impl RangeConditionedPolicyNetwork {
         game: &BlueprintConfig,
         source_policy: Option<&[f64]>,
     ) -> Result<Vec<f64>, String> {
-        self.validate()?;
+        // Served artifacts are immutable and validated once by `read`. Walking
+        // every weight again at every public node dominates full-game response
+        // evaluation without adding any safety. Directly constructed internal
+        // values retain the old fail-closed validation path.
+        if !self.prevalidated {
+            self.validate()?;
+        }
         game.validate()?;
         if (game.effective_stack_bb - self.depth_bb).abs() > EPSILON {
             return Err("range-conditioned policy depth does not match the game".to_owned());
@@ -1396,6 +1405,327 @@ pub struct RangePolicyEvaluationReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_baseline_diagnostic: Option<RangePolicySourceBaselineDiagnostic>,
     pub validation: BlueprintValidation,
+}
+
+#[derive(Clone, Debug)]
+pub struct CausalRangePolicyEvaluationConfig {
+    pub network_path: PathBuf,
+    pub frozen_network_path: PathBuf,
+    pub attribution_network_path: PathBuf,
+    pub dataset_path: PathBuf,
+    pub source_policy_path: Option<PathBuf>,
+    pub minimum_policy_value_gain_bb: f64,
+    pub maximum_node_kl: f64,
+    pub maximum_weighted_kl: f64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CausalRangePolicyAttributionRecord {
+    record_type: String,
+    weight: f32,
+    state: RangeConditionedPolicyState,
+    ranges: [Vec<f32>; 2],
+    focal_combo: usize,
+    action_labels: Vec<String>,
+    action_features: Vec<Vec<f32>>,
+    probabilities: Vec<f32>,
+    action_values_bb: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CausalRangePolicyEvaluationReport {
+    pub schema: &'static str,
+    pub network_sha256: String,
+    pub frozen_network_sha256: String,
+    pub attribution_network_sha256: String,
+    pub dataset_sha256: String,
+    pub records: usize,
+    pub total_objective_weight: f64,
+    pub weighted_policy_value_gain_bb: f64,
+    pub weighted_reverse_kl_from_frozen: f64,
+    pub maximum_reverse_kl_from_frozen: f64,
+    pub weighted_l1_action_delta: f64,
+    pub weighted_primary_action_agreement: f64,
+    pub maximum_probability_sum_error: f64,
+    pub maximum_stored_source_probability_difference: f64,
+    pub minimum_policy_value_gain_bb: f64,
+    pub maximum_node_kl: f64,
+    pub maximum_weighted_kl: f64,
+    pub validation: BlueprintValidation,
+}
+
+/// Evaluate a causal trust-region update with exact Rust serving inference.
+/// The attributed policy is re-scored on every focal information set so stored
+/// probabilities cannot drift from their pinned source. Candidate changes are
+/// measured against its own frozen parent, which may differ across seed data.
+pub fn evaluate_causal_range_policy(
+    config: CausalRangePolicyEvaluationConfig,
+) -> Result<CausalRangePolicyEvaluationReport, Box<dyn Error>> {
+    for value in [
+        config.minimum_policy_value_gain_bb,
+        config.maximum_node_kl,
+        config.maximum_weighted_kl,
+    ] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err("causal range-policy evaluation bounds must be positive".into());
+        }
+    }
+    let dataset_bytes = fs::read(&config.dataset_path)?;
+    let dataset_sha256 = format!("{:x}", Sha256::digest(&dataset_bytes));
+    let network = RangeConditionedPolicyNetwork::read(&config.network_path)?;
+    let frozen = RangeConditionedPolicyNetwork::read(&config.frozen_network_path)?;
+    let attribution = RangeConditionedPolicyNetwork::read(&config.attribution_network_path)?;
+    let network_sha256 = network
+        .artifact_sha256
+        .clone()
+        .expect("read candidate range policy has a hash");
+    let frozen_network_sha256 = frozen
+        .artifact_sha256
+        .clone()
+        .expect("read frozen range policy has a hash");
+    let attribution_network_sha256 = attribution
+        .artifact_sha256
+        .clone()
+        .expect("read attribution range policy has a hash");
+    let source_policy = config
+        .source_policy_path
+        .as_deref()
+        .map(FrozenPolicy::load)
+        .transpose()?;
+    for policy in [&network, &frozen, &attribution] {
+        if policy.requires_source_policy() {
+            let source = source_policy
+                .as_ref()
+                .ok_or("residual causal range-policy evaluation requires a source bundle")?;
+            policy.validate_source_policy_sha256(source.bundle_sha256())?;
+        }
+    }
+
+    let decoder = GzDecoder::new(dataset_bytes.as_slice());
+    let mut lines = BufReader::new(decoder).lines();
+    let metadata: serde_json::Value = serde_json::from_str(
+        &lines
+            .next()
+            .ok_or("causal range-policy dataset is empty")??,
+    )?;
+    if metadata["record_type"] != "metadata"
+        || metadata["schema"] != "hu-range-conditioned-causal-policy-attribution-jsonl-v1"
+        || metadata["state_feature_schema"] != RANGE_POLICY_FEATURE_SCHEMA_V2
+        || metadata["state_feature_count"] != RANGE_POLICY_CONTEXT_V2_COUNT
+        || metadata["action_feature_schema"] != ACTION_FEATURE_SCHEMA_V1
+        || metadata["action_feature_count"] != ACTION_FEATURE_COUNT
+        || metadata["uses_exact_ranges"] != true
+        || metadata["focal_combo_attribution"] != true
+        || metadata["postflop_only"] != true
+        || metadata["preflop_policy_frozen"] != true
+        || metadata["source_range_policy_sha256"].as_str()
+            != Some(attribution_network_sha256.as_str())
+        || metadata["records"].as_u64().unwrap_or(0) == 0
+    {
+        return Err("causal range-policy metadata is incompatible".into());
+    }
+    let depth = metadata["depth_bb"]
+        .as_f64()
+        .ok_or("causal range-policy dataset omits its depth")?;
+    if (network.depth_bb - depth).abs() > EPSILON
+        || (frozen.depth_bb - depth).abs() > EPSILON
+        || (attribution.depth_bb - depth).abs() > EPSILON
+    {
+        return Err("causal range-policy depths differ".into());
+    }
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = depth;
+    game.action_abstraction = serde_json::from_value(metadata["action_abstraction"].clone())
+        .map_err(|_| "causal range-policy action abstraction is invalid")?;
+    game.validate()?;
+
+    let mut records = 0usize;
+    let mut total_weight = 0.0f64;
+    let mut gain = 0.0f64;
+    let mut reverse_kl = 0.0f64;
+    let mut maximum_reverse_kl = 0.0f64;
+    let mut l1 = 0.0f64;
+    let mut primary_agreement = 0.0f64;
+    let mut maximum_sum_error = 0.0f64;
+    let mut maximum_source_difference = 0.0f64;
+    for line in lines {
+        let record: CausalRangePolicyAttributionRecord = serde_json::from_str(&line?)?;
+        if record.record_type != "range_conditioned_causal_policy_attribution"
+            || !record.weight.is_finite()
+            || record.weight <= 0.0
+            || record.focal_combo >= COMBO_COUNT
+            || record.ranges.iter().any(|range| range.len() != COMBO_COUNT)
+        {
+            return Err("causal range-policy record is invalid".into());
+        }
+        let state = PublicBeliefState {
+            street: record.state.street,
+            board: record.state.board.clone(),
+            actor: record.state.actor,
+            invested_bb: record.state.invested_bb,
+            street_invested_bb: record.state.street_invested_bb,
+            last_full_raise_bb: record.state.last_full_raise_bb,
+            aggressions: record.state.aggressions,
+            checks: record.state.checks,
+            raise_reopened: record.state.raise_reopened,
+            public_history: record.state.public_history.clone(),
+            ranges: std::array::from_fn(|player| {
+                record.ranges[player]
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect()
+            }),
+            trajectory: record.state.trajectory.clone(),
+        };
+        let normalized =
+            state.validate_street_and_normalize(&game, state.street, state.street.board_len())?;
+        if normalized.ranges[normalized.actor][record.focal_combo] <= EPSILON {
+            return Err("causal range-policy focal combo has no reach".into());
+        }
+        let game_state = normalized.game_state();
+        let actions = game_state.legal_actions(&game);
+        let action_count = actions.len();
+        if action_count == 0
+            || record.action_labels
+                != actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>()
+            || record.action_features.len() != action_count
+            || record.probabilities.len() != action_count
+            || record.action_values_bb.len() != action_count
+        {
+            return Err("causal range-policy actions do not match the game".into());
+        }
+        for (stored, action) in record.action_features.iter().zip(&actions) {
+            let exact = super::neural::encode_action_features(&game_state, action, &game);
+            if stored.len() != ACTION_FEATURE_COUNT
+                || stored
+                    .iter()
+                    .zip(exact)
+                    .any(|(left, right)| (left - right).abs() > 1e-6)
+            {
+                return Err("causal range-policy action features fail Rust parity".into());
+            }
+        }
+        let source_probabilities = source_policy
+            .as_ref()
+            .map(|policy| {
+                policy.bundle_strategy_matrix(&game_state, &normalized.board, &actions, &game)
+            })
+            .transpose()?;
+        let candidate = network.strategy(&normalized, &game, source_probabilities.as_deref())?;
+        let frozen_probabilities =
+            frozen.strategy(&normalized, &game, source_probabilities.as_deref())?;
+        let attribution_probabilities =
+            attribution.strategy(&normalized, &game, source_probabilities.as_deref())?;
+        let offset = record.focal_combo * action_count;
+        let candidate = &candidate[offset..offset + action_count];
+        let frozen_probabilities = &frozen_probabilities[offset..offset + action_count];
+        let attribution_probabilities = &attribution_probabilities[offset..offset + action_count];
+        let stored_sum = record
+            .probabilities
+            .iter()
+            .map(|value| f64::from(*value))
+            .sum::<f64>();
+        let candidate_sum = candidate.iter().sum::<f64>();
+        let frozen_sum = frozen_probabilities.iter().sum::<f64>();
+        let attribution_sum = attribution_probabilities.iter().sum::<f64>();
+        maximum_sum_error = maximum_sum_error
+            .max((stored_sum - 1.0).abs())
+            .max((candidate_sum - 1.0).abs())
+            .max((frozen_sum - 1.0).abs())
+            .max((attribution_sum - 1.0).abs());
+        let mut local_gain = 0.0;
+        let mut local_kl = 0.0;
+        let mut local_l1 = 0.0;
+        for action in 0..action_count {
+            let stored = f64::from(record.probabilities[action]);
+            let source = frozen_probabilities[action];
+            let attributed = attribution_probabilities[action];
+            let measured = candidate[action];
+            let value = f64::from(record.action_values_bb[action]);
+            if !stored.is_finite()
+                || stored <= 0.0
+                || !source.is_finite()
+                || source <= 0.0
+                || !attributed.is_finite()
+                || attributed <= 0.0
+                || !measured.is_finite()
+                || measured <= 0.0
+                || !value.is_finite()
+            {
+                return Err("causal range-policy probabilities or values are invalid".into());
+            }
+            maximum_source_difference = maximum_source_difference.max((stored - attributed).abs());
+            local_gain += (measured - source) * value;
+            local_kl += measured * (measured / source).ln();
+            local_l1 += (measured - source).abs();
+        }
+        let candidate_primary = candidate
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.total_cmp(right.1))
+            .expect("causal range-policy actions are nonempty")
+            .0;
+        let frozen_primary = frozen_probabilities
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.total_cmp(right.1))
+            .expect("causal range-policy actions are nonempty")
+            .0;
+        let weight = f64::from(record.weight);
+        total_weight += weight;
+        gain += weight * local_gain;
+        reverse_kl += weight * local_kl.max(0.0);
+        maximum_reverse_kl = maximum_reverse_kl.max(local_kl.max(0.0));
+        l1 += weight * local_l1;
+        if candidate_primary == frozen_primary {
+            primary_agreement += weight;
+        }
+        records += 1;
+    }
+    if records != metadata["records"].as_u64().unwrap_or(0) as usize || total_weight <= EPSILON {
+        return Err("causal range-policy record count or weight differs".into());
+    }
+    let weighted_gain = gain / total_weight;
+    let weighted_kl = reverse_kl / total_weight;
+    let passed = weighted_gain >= config.minimum_policy_value_gain_bb
+        && weighted_kl <= config.maximum_weighted_kl
+        && maximum_reverse_kl <= config.maximum_node_kl
+        && maximum_sum_error <= 1e-6
+        && maximum_source_difference <= 1e-6;
+    Ok(CausalRangePolicyEvaluationReport {
+        schema: "hu-range-conditioned-causal-policy-rust-evaluation-v1",
+        network_sha256,
+        frozen_network_sha256,
+        attribution_network_sha256,
+        dataset_sha256,
+        records,
+        total_objective_weight: total_weight,
+        weighted_policy_value_gain_bb: weighted_gain,
+        weighted_reverse_kl_from_frozen: weighted_kl,
+        maximum_reverse_kl_from_frozen: maximum_reverse_kl,
+        weighted_l1_action_delta: l1 / total_weight,
+        weighted_primary_action_agreement: primary_agreement / total_weight,
+        maximum_probability_sum_error: maximum_sum_error,
+        maximum_stored_source_probability_difference: maximum_source_difference,
+        minimum_policy_value_gain_bb: config.minimum_policy_value_gain_bb,
+        maximum_node_kl: config.maximum_node_kl,
+        maximum_weighted_kl: config.maximum_weighted_kl,
+        validation: BlueprintValidation {
+            status: if passed {
+                "accepted_for_directional_evaluation".to_owned()
+            } else {
+                "rejected".to_owned()
+            },
+            reasons: vec![
+                "exact Rust serving inference re-scored every focal full-game causal-attribution row against its pinned attribution policy and measured the candidate against its frozen parent".to_owned(),
+                "acceptance is only a trust-region gate; full-game exploitability and every release gate remain mandatory".to_owned(),
+            ],
+        },
+    })
 }
 
 const RANGE_POLICY_EV_SENSITIVITY_LABELS: [&str; 4] = [
@@ -10004,6 +10334,7 @@ mod tests {
         head.weights[4] = 1.0;
         RangeConditionedPolicyNetwork {
             artifact_sha256: None,
+            prevalidated: false,
             schema: RANGE_POLICY_SCHEMA_V1.to_owned(),
             seed: 71,
             depth_bb: 20.0,
@@ -10109,6 +10440,24 @@ mod tests {
     }
 
     #[test]
+    fn prevalidated_range_policy_has_exact_strategy_parity() {
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let state = PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges);
+        let unmarked = check_preferring_range_policy();
+        let mut prevalidated = unmarked.clone();
+        prevalidated.validate().unwrap();
+        prevalidated.prevalidated = true;
+
+        assert_eq!(
+            unmarked.strategy(&state, &game, None).unwrap(),
+            prevalidated.strategy(&state, &game, None).unwrap()
+        );
+    }
+
+    #[test]
     fn zero_residual_range_policy_preserves_the_pinned_source_policy() {
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 20.0;
@@ -10167,6 +10516,29 @@ mod tests {
         fs::write(&path, &bytes).unwrap();
         let loaded = PublicValueNetwork::read(&path).unwrap();
         fs::remove_file(path).unwrap();
+        assert_eq!(
+            loaded.artifact_sha256,
+            Some(format!("{:x}", Sha256::digest(&bytes)))
+        );
+    }
+
+    #[test]
+    fn range_policy_read_records_validation_and_the_exact_artifact_hash() {
+        let network = check_preferring_range_policy();
+        let bytes = serde_json::to_vec(&network).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "range-policy-validation-{}-{}.json",
+            std::process::id(),
+            Sha256::digest(&bytes)
+                .iter()
+                .take(4)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
+        fs::write(&path, &bytes).unwrap();
+        let loaded = RangeConditionedPolicyNetwork::read(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        assert!(loaded.prevalidated);
         assert_eq!(
             loaded.artifact_sha256,
             Some(format!("{:x}", Sha256::digest(&bytes)))
