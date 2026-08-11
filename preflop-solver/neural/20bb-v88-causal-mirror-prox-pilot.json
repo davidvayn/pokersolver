@@ -1,0 +1,113 @@
+{
+  "schema": "hu-20bb-causal-mirror-prox-pilot-v1",
+  "depth_bb": 20.0,
+  "baseline": "v82 residual range policies over the retained v57 direct networks",
+  "purpose": "test a frozen-parent Mirror-Prox-style correction using full-game information-set-consistent causal best-response values generated at independent v86 look-ahead profiles",
+  "causal_attribution_corpora": [
+    {
+      "name": "A",
+      "seed": 19511,
+      "deals": 8,
+      "threads": 4,
+      "records": 676,
+      "records_by_street": [154, 232, 290],
+      "response_tree_nodes": 140320,
+      "attribution_tree_nodes": 3175,
+      "sample_mean_exploitability_bb": 7.891566969523481,
+      "maximum_root_value_reconstruction_error_bb": 3.552713678800501e-15,
+      "maximum_target_probability_sum_error": 4.440892098500626e-16,
+      "truncated": false,
+      "lookahead_range_policy_sha256": "800ce29503c5b1a8b0be0e7c0639c1210467e20fdc5ba94963d001e6d597c673",
+      "dataset_sha256": "4b0637fafc897fb8db0fbbe88a2e5b6d2ff91c62b60e8fe4ee92db48272817db",
+      "report_sha256": "9139fbc3d972c201526886a2a72bc9f6d3841e45b4e19c8c97dc5452bcd7a074",
+      "validation_status": "accepted_for_trust_region_training"
+    },
+    {
+      "name": "B",
+      "seed": 19512,
+      "deals": 8,
+      "threads": 4,
+      "records": 763,
+      "records_by_street": [116, 278, 369],
+      "response_tree_nodes": 140320,
+      "attribution_tree_nodes": 3585,
+      "sample_mean_exploitability_bb": 4.204447435265304,
+      "maximum_root_value_reconstruction_error_bb": 1.7763568394002505e-15,
+      "maximum_target_probability_sum_error": 4.440892098500626e-16,
+      "truncated": false,
+      "lookahead_range_policy_sha256": "765c6cb5baac545e09ffde9def946f8c813f3502fb3f778067a6e627c47287c6",
+      "dataset_sha256": "e7722640f5794290922428c7e33efa3d0b52201213ee8e675512f59ccd9e218f",
+      "report_sha256": "61e76a2fdabe0d4bca0b0d1d987c7dbf7f71cb116279b21f3d3641908117f311",
+      "validation_status": "accepted_for_trust_region_training"
+    }
+  ],
+  "training": {
+    "update_operator": "mirror_prox_corrector_from_frozen_parent",
+    "steps": 1,
+    "batch_size": 16,
+    "learning_rate": 0.000001,
+    "mirror_step_per_bb": 0.1,
+    "full_corpus_gradient": true,
+    "paired_corpus_gradient": true,
+    "paired_corpus_weighting": "equal_corpus_mass",
+    "maximum_realized_node_kl": 0.005,
+    "maximum_realized_weighted_kl": 0.0015,
+    "report_sha256": "9c0546dc13f0e33f6356cf403f4b11fc18df8e6b8801b81f3ed81663ba844e01",
+    "exact_dataset_parity": [
+      {
+        "records": 676,
+        "maximum_stored_source_probability_difference": 8.237692721291268e-7,
+        "maximum_probability_sum_error": 4.6988134272396564e-8
+      },
+      {
+        "records": 763,
+        "maximum_stored_source_probability_difference": 5.613012857841326e-7,
+        "maximum_probability_sum_error": 3.91155481338501e-8
+      }
+    ]
+  },
+  "paired_full_game_screen": {
+    "seeds": [19101, 19102],
+    "deals_per_seed": 2,
+    "public_branches_per_street": 1,
+    "opponent_samples_per_runout": 1,
+    "threads_per_candidate": 2,
+    "interpretation": "deterministic paired directional screen only; too small for release certification",
+    "parent_mean_exploitability_bb": [8.209943599220036, 1.1705828767642554],
+    "parent_report_sha256": [
+      "6e9b5c8cda646bb621d469e6a1276cddec3d17b204ee47667104c9536c5f2561",
+      "321e7f4e5b8ea8de3ed30354f4212e9000e5ee9e003f805b72f9df97f41e66a4"
+    ]
+  },
+  "candidates": [
+    {
+      "name": "A",
+      "seed": 19601,
+      "candidate_range_policy_sha256": "3512e9d999212818ef9774b0bef2746dd84b52742f43e7c6c8a552d68aa6e09a",
+      "exact_directional_value_gains_bb": [0.008567719914464481, 0.003766620373583813],
+      "maximum_reverse_kl_from_frozen": 0.0007559068891146967,
+      "weighted_reverse_kl_from_frozen": 0.00002054366153427139,
+      "passes_paired_directional_gate": true,
+      "candidate_mean_exploitability_bb": 8.20555291474876,
+      "candidate_delta_bb": -0.0043906844712768844,
+      "pilot_report_sha256": "5a142952f8bec09b03e730db7f3d5fe467ee7763b531904b9fa3db5a08493d6d",
+      "decision": "rejected_with_pair"
+    },
+    {
+      "name": "B",
+      "seed": 19602,
+      "candidate_range_policy_sha256": "e9ca0592bb692e21400f5048337e01557ef280fbd18bda8c059771975682675c",
+      "exact_directional_value_gains_bb": [0.00648381139549073, 0.0032833572936820246],
+      "maximum_reverse_kl_from_frozen": 0.0001303008087221204,
+      "weighted_reverse_kl_from_frozen": 0.00001328272451981961,
+      "passes_paired_directional_gate": true,
+      "candidate_mean_exploitability_bb": 1.171204880328065,
+      "candidate_delta_bb": 0.0006220035638095922,
+      "pilot_report_sha256": "f190b43cee5620cffe3de8f91e181fd2f4276c055f332e71004031bd17883966",
+      "decision": "rejected"
+    }
+  ],
+  "conclusion": "Both candidates passed exact response-aware causal corpus gates, but candidate B worsened its matched full-game screen by 0.000622004 bb/hand, so the pair is rejected. Candidate A improved while the earlier v87 self-play correction improved only candidate B. This complementary sign pattern justifies one identical equal-weight causal plus self-play hybrid update for both seeds, followed by fresh confirmation if and only if both matched screens improve.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}
