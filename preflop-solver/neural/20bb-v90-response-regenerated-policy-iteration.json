@@ -500,6 +500,71 @@
     "bothMatchedResponsesImproved": true,
     "interpretation": "slightly enlarging both seed-specific steps within the unchanged exact trust bounds produced a seventh consecutive two-seed improvement and the largest paired matched-response reduction so far"
   },
+  "round8DirectionalPair": {
+    "rejectedPilot": {
+      "learningRates": [0.0000016, 0.0000045],
+      "report": "neural/runs/20bb-v90-causal-policy-iteration/round8/s1-full-paired-b16-lr1p6e6-4p5e6/report.json",
+      "reason": "seed A exceeded the unchanged cross-seed maximum node reverse-KL gate: 0.0054507833215662466 > 0.005"
+    },
+    "settings": {
+      "steps": 1,
+      "batchSize": 16,
+      "learningRates": [0.00000145, 0.0000045],
+      "fullCorpusGradient": true,
+      "pairedCorpusGradient": true,
+      "maximumRealizedNodeKl": 0.005,
+      "maximumRealizedWeightedKl": 0.0015
+    },
+    "report": "neural/runs/20bb-v90-causal-policy-iteration/round8/s1-full-paired-b16-lr1p45e6-4p5e6/report.json",
+    "reportSha256": "d469d3931a09e78b4824e4d67a2517b446e275e2c2f67782ee12c74af8d0de85",
+    "candidates": [
+      {
+        "seed": 20721,
+        "sha256": "a5dc8cd4855211571151a666c59bd78fa5b97a3f6e0f715fbed97873185c89a1",
+        "exactResponseCorpusGainsBb": [0.025390360764275817, 0.014634955977647057],
+        "maximumExactNodeReverseKl": 0.004469012737325151
+      },
+      {
+        "seed": 20722,
+        "sha256": "78c5e2864fa50a8c02bf9a405aee642c3d82fbcb5f78ff88c07688d250ba4d02",
+        "exactResponseCorpusGainsBb": [0.029352261045856334, 0.03149735118852713],
+        "maximumExactNodeReverseKl": 0.004581299861593009
+      }
+    ],
+    "allEightDirectionalChecksPassed": true
+  },
+  "round8RegeneratedResponse": {
+    "reports": [
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round8/matched-response-refresh/attribution-seed-19801-report.json",
+        "sha256": "674cace11bbc832e06edefb0b2df50df30f066427ca5bfaa59975dab23602f7e",
+        "datasetSha256": "cbb020d3371412f9d6802b71569defb083e47aeaf4a8dbdb9917b2e3f5beb5bd"
+      },
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round8/matched-response-refresh/attribution-seed-19802-report.json",
+        "sha256": "a2d8a22c2fd89ebf5210f59848d6c9077b30f2be189b95c8acb6c5fc3199c982",
+        "datasetSha256": "24bb313971a8bd49d143663e0e78a28d90f0f322ffb86630a7aeead652fd8c1e"
+      }
+    ],
+    "matchedValuesBbPerHand": [
+      {
+        "parent": 4.4864914164088345,
+        "candidate": 4.460091711745603,
+        "delta": -0.026399704663231383
+      },
+      {
+        "parent": 3.7978944549362232,
+        "candidate": 3.753102629757042,
+        "delta": -0.044791825179181455
+      }
+    ],
+    "parentPairedMeanBbPerHand": 4.142192935672529,
+    "candidatePairedMeanBbPerHand": 4.106597170751322,
+    "pairedMeanDeltaBbPerHand": -0.035595764921207085,
+    "cumulativePairedMeanDeltaFromFrozenV89BbPerHand": -0.2481139434063122,
+    "bothMatchedResponsesImproved": true,
+    "interpretation": "the reduced seed-A retry restored exact trust-bound compliance and produced an eighth consecutive two-seed matched-response reduction"
+  },
   "releaseContext": {
     "lastComparableFrozenFullGameSampleMeanExploitabilityBbPerHand": 2.832711355599124,
     "lastComparableFrozenOneSided99PercentUpperBoundBbPerHand": 20.0,
@@ -507,6 +572,6 @@
     "currentMaximumOneSided99PercentUpperBoundBbPerHand": 0.5,
     "activationEligible": false,
     "activeModelChanged": false,
-    "reason": "round seven has qualifying matched directional evidence but its 4.142192935672529bb one-branch paired objective remains far above the 0.5bb release target; no current candidate has a qualifying fresh full-game certificate or complete normal release-gate result"
+    "reason": "round eight has qualifying matched directional evidence but its 4.106597170751322bb one-branch paired objective remains far above the 0.5bb release target; no current candidate has a qualifying fresh full-game certificate or complete normal release-gate result"
   }
 }
