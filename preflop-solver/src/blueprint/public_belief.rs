@@ -609,6 +609,8 @@ pub struct PublicValueNetwork {
     query_tower: Vec<ValueNetworkLayer>,
     #[serde(default)]
     head: Vec<ValueNetworkLayer>,
+    #[serde(default)]
+    pot_expert_heads: Vec<Vec<ValueNetworkLayer>>,
 }
 
 impl PublicValueNetwork {
@@ -632,7 +634,7 @@ impl PublicValueNetwork {
             || self.target_scale_bb <= 0.0
             || !self.range_scale.is_finite()
             || self.range_scale <= 0.0
-            || self.head.is_empty()
+            || (self.head.is_empty() && self.pot_expert_heads.is_empty())
         {
             return Err("public value network header is incompatible".to_owned());
         }
@@ -662,7 +664,8 @@ impl PublicValueNetwork {
             }
             "hu-public-belief-combo-value-network-v3"
             | "hu-public-belief-combo-value-network-v4"
-            | "hu-public-belief-combo-value-network-v5" => {
+            | "hu-public-belief-combo-value-network-v5"
+            | "hu-public-belief-combo-value-network-v6" => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -698,6 +701,7 @@ impl PublicValueNetwork {
                     self.schema.as_str(),
                     "hu-public-belief-combo-value-network-v4"
                         | "hu-public-belief-combo-value-network-v5"
+                        | "hu-public-belief-combo-value-network-v6"
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -712,17 +716,40 @@ impl PublicValueNetwork {
                 for layer in &self.query_tower {
                     query_size = layer.validate(query_size)?;
                 }
-                let mut head_size = context_size
-                    + if self.schema == "hu-public-belief-combo-value-network-v5" {
+                let head_size = context_size
+                    + if matches!(
+                        self.schema.as_str(),
+                        "hu-public-belief-combo-value-network-v5"
+                            | "hu-public-belief-combo-value-network-v6"
+                    ) {
                         query_size * 3
                     } else {
                         query_size
                     };
-                for layer in &self.head {
-                    head_size = layer.validate(head_size)?;
-                }
-                if head_size != 1 {
-                    return Err("shared-combo public value network must output one CFV".to_owned());
+                let heads = if self.schema == "hu-public-belief-combo-value-network-v6" {
+                    if !self.head.is_empty() || self.pot_expert_heads.len() != 3 {
+                        return Err(
+                            "pot-expert value network must contain exactly three expert heads"
+                                .to_owned(),
+                        );
+                    }
+                    self.pot_expert_heads.as_slice()
+                } else {
+                    if self.head.is_empty() || !self.pot_expert_heads.is_empty() {
+                        return Err("shared-combo value network head is incompatible".to_owned());
+                    }
+                    std::slice::from_ref(&self.head)
+                };
+                for head in heads {
+                    let mut output_size = head_size;
+                    for layer in head {
+                        output_size = layer.validate(output_size)?;
+                    }
+                    if output_size != 1 {
+                        return Err(
+                            "shared-combo public value network must output one CFV".to_owned()
+                        );
+                    }
                 }
             }
             _ => return Err("public value network schema is incompatible".to_owned()),
@@ -863,28 +890,32 @@ impl PublicValueNetwork {
             .last()
             .expect("validated shared query tower")
             .output_size;
-        let pooled_queries: Option<[Vec<f32>; 2]> =
-            (self.schema == "hu-public-belief-combo-value-network-v5").then(|| {
-                std::array::from_fn(|player| {
-                    let denominator = legal_combos[player]
-                        .iter()
-                        .map(|combo| ranges[player][*combo] * masses[player][*combo])
-                        .sum::<f64>()
-                        .max(EPSILON);
-                    let mut pooled = vec![0.0f32; query_embedding_size];
-                    for (row, combo) in legal_combos[player].iter().enumerate() {
-                        let weight =
-                            (ranges[player][*combo] * masses[player][*combo] / denominator) as f32;
-                        for (value, embedding) in pooled.iter_mut().zip(
-                            &query_embeddings[player]
-                                [row * query_embedding_size..(row + 1) * query_embedding_size],
-                        ) {
-                            *value += weight * embedding;
-                        }
+        let pooled_queries: Option<[Vec<f32>; 2]> = matches!(
+            self.schema.as_str(),
+            "hu-public-belief-combo-value-network-v5" | "hu-public-belief-combo-value-network-v6"
+        )
+        .then(|| {
+            std::array::from_fn(|player| {
+                let denominator = legal_combos[player]
+                    .iter()
+                    .map(|combo| ranges[player][*combo] * masses[player][*combo])
+                    .sum::<f64>()
+                    .max(EPSILON);
+                let mut pooled = vec![0.0f32; query_embedding_size];
+                for (row, combo) in legal_combos[player].iter().enumerate() {
+                    let weight =
+                        (ranges[player][*combo] * masses[player][*combo] / denominator) as f32;
+                    for (value, embedding) in pooled.iter_mut().zip(
+                        &query_embeddings[player]
+                            [row * query_embedding_size..(row + 1) * query_embedding_size],
+                    ) {
+                        *value += weight * embedding;
                     }
-                    pooled
-                })
-            });
+                }
+                pooled
+            })
+        });
+        let selected_head = self.selected_value_head(invested);
         let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
             let mut head_context = context_embeddings[player].clone();
             if let Some(pooled) = &pooled_queries {
@@ -892,12 +923,15 @@ impl PublicValueNetwork {
                 head_context.extend_from_slice(&pooled[1 - player]);
             }
             let output = forward_batch_head(
-                &self.head,
+                selected_head,
                 &head_context,
                 &query_embeddings[player],
                 legal_combos[player].len(),
             );
-            let output_size = self.head.last().expect("validated shared head").output_size;
+            let output_size = selected_head
+                .last()
+                .expect("validated shared head")
+                .output_size;
             let mut values = vec![0.0; COMBO_COUNT];
             for (row, combo) in legal_combos[player].iter().copied().enumerate() {
                 let query = &queries[player][combo];
@@ -913,6 +947,7 @@ impl PublicValueNetwork {
                     self.schema.as_str(),
                     "hu-public-belief-combo-value-network-v4"
                         | "hu-public-belief-combo-value-network-v5"
+                        | "hu-public-belief-combo-value-network-v6"
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -943,6 +978,21 @@ impl PublicValueNetwork {
             }
         }
         result
+    }
+
+    fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {
+        if self.schema != "hu-public-belief-combo-value-network-v6" {
+            return &self.head;
+        }
+        let maximum_invested = invested[0].max(invested[1]);
+        let expert = if maximum_invested <= 3.5 {
+            0
+        } else if maximum_invested <= 7.5 {
+            1
+        } else {
+            2
+        };
+        &self.pot_expert_heads[expert]
     }
 
     fn state_value_scale_bb(&self, invested: [f64; 2]) -> f64 {
@@ -10342,6 +10392,7 @@ mod tests {
             context_tower: Vec::new(),
             query_tower: Vec::new(),
             head: vec![layer(2, COMBO_COUNT * 2, "tanh")],
+            pot_expert_heads: Vec::new(),
         }
     }
 
@@ -10380,7 +10431,37 @@ mod tests {
             context_tower: vec![layer(SHARED_CONTEXT_COUNT, 1, "linear")],
             query_tower: vec![layer(SHARED_QUERY_COUNT, 1, "linear")],
             head: vec![layer(2, 1, "tanh")],
+            pot_expert_heads: Vec::new(),
         }
+    }
+
+    #[test]
+    fn pot_expert_value_network_routes_by_maximum_investment() {
+        let mut network = zero_shared_value_network();
+        network.schema = "hu-public-belief-combo-value-network-v6".to_owned();
+        network.value_normalization = Some("pot".to_owned());
+        network.head.clear();
+        network.pot_expert_heads = (0..3)
+            .map(|expert| {
+                vec![ValueNetworkLayer {
+                    input_size: 4,
+                    output_size: 1,
+                    activation: "linear".to_owned(),
+                    weights: vec![0.0; 4],
+                    biases: vec![expert as f32],
+                    normalization: None,
+                    normalization_weights: Vec::new(),
+                    normalization_biases: Vec::new(),
+                    normalization_epsilon: 0.0,
+                    residual: false,
+                }]
+            })
+            .collect();
+        network.validate().expect("valid pot-expert network");
+        assert_eq!(network.selected_value_head([2.0, 3.5])[0].biases, [0.0]);
+        assert_eq!(network.selected_value_head([3.6, 3.0])[0].biases, [1.0]);
+        assert_eq!(network.selected_value_head([7.5, 7.5])[0].biases, [1.0]);
+        assert_eq!(network.selected_value_head([7.6, 7.5])[0].biases, [2.0]);
     }
 
     fn check_preferring_range_policy() -> RangeConditionedPolicyNetwork {

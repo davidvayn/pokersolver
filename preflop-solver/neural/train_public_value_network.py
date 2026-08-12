@@ -22,6 +22,7 @@ import numpy as np
 SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
 POOLED_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v5"
+POT_EXPERT_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v6"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
 FEATURE_SCHEMA_BOARD_RELATIVE = "rank-suit-invariant-combo-query-v2"
 FEATURE_SCHEMA_EXACT_RUNOUT = "rank-suit-invariant-combo-query-v3"
@@ -60,11 +61,11 @@ def feature_sizes(feature_schema: str) -> tuple[int, int]:
 
 
 def network_schema_for_architecture(architecture: str) -> str:
-    return (
-        POOLED_NETWORK_SCHEMA
-        if architecture == "xwide-gelu-pooled"
-        else NETWORK_SCHEMA
-    )
+    if architecture == "xwide-gelu-pooled-pot-experts":
+        return POT_EXPERT_NETWORK_SCHEMA
+    if architecture == "xwide-gelu-pooled":
+        return POOLED_NETWORK_SCHEMA
+    return NETWORK_SCHEMA
 
 
 def combo_cards(key: int) -> tuple[int, int]:
@@ -343,7 +344,11 @@ class SharedComboValueNetwork(nn.Module):
         super().__init__()
         self.use_ranges = use_ranges
         self.architecture = architecture
-        self.pools_exact_ranges = architecture == "xwide-gelu-pooled"
+        self.pools_exact_ranges = architecture in (
+            "xwide-gelu-pooled",
+            "xwide-gelu-pooled-pot-experts",
+        )
+        self.uses_pot_experts = architecture == "xwide-gelu-pooled-pot-experts"
         self.value_normalization = value_normalization
         self.feature_schema = feature_schema
         context_count, query_count = feature_sizes(feature_schema)
@@ -410,7 +415,11 @@ class SharedComboValueNetwork(nn.Module):
                 nn.GELU(approx="fast"),
                 nn.Linear(64, 1),
             )
-        elif architecture in ("xwide-gelu", "xwide-gelu-pooled"):
+        elif architecture in (
+            "xwide-gelu",
+            "xwide-gelu-pooled",
+            "xwide-gelu-pooled-pot-experts",
+        ):
             embedding = 128
             self.context_tower = nn.Sequential(
                 nn.Linear(context_count, 256),
@@ -429,15 +438,23 @@ class SharedComboValueNetwork(nn.Module):
                 nn.GELU(approx="fast"),
             )
             head_inputs = embedding * (4 if self.pools_exact_ranges else 2)
-            self.head = nn.Sequential(
-                nn.Linear(head_inputs, 256),
-                nn.GELU(approx="fast"),
-                nn.Linear(256, 128),
-                nn.GELU(approx="fast"),
-                nn.Linear(128, 64),
-                nn.GELU(approx="fast"),
-                nn.Linear(64, 1),
-            )
+            def make_head() -> nn.Sequential:
+                return nn.Sequential(
+                    nn.Linear(head_inputs, 256),
+                    nn.GELU(approx="fast"),
+                    nn.Linear(256, 128),
+                    nn.GELU(approx="fast"),
+                    nn.Linear(128, 64),
+                    nn.GELU(approx="fast"),
+                    nn.Linear(64, 1),
+                )
+
+            if self.uses_pot_experts:
+                self.head = None
+                self.pot_expert_heads = [make_head() for _ in POT_BAND_NAMES]
+            else:
+                self.head = make_head()
+                self.pot_expert_heads = []
         else:
             raise ValueError(f"unknown shared-combo architecture {architecture}")
 
@@ -490,7 +507,33 @@ class SharedComboValueNetwork(nn.Module):
             )
         else:
             combined = mx.concatenate((expanded_context, query_embedding), axis=-1)
-        residual = self.head(combined).reshape((combined.shape[0], 2, COMBO_COUNT))
+        if self.uses_pot_experts:
+            expert_outputs = mx.stack(
+                [
+                    head(combined).reshape((combined.shape[0], 2, COMBO_COUNT))
+                    for head in self.pot_expert_heads
+                ],
+                axis=-1,
+            )
+            maximum_invested_bb = (
+                mx.maximum(context[:, 0, 19], context[:, 0, 20]) * DEPTH_BB
+            )
+            expert_index = mx.where(
+                maximum_invested_bb <= 3.5,
+                0,
+                mx.where(maximum_invested_bb <= 7.5, 1, 2),
+            )
+            expert_weights = mx.stack(
+                [expert_index == index for index in range(len(POT_BAND_NAMES))],
+                axis=-1,
+            )
+            residual = mx.sum(
+                expert_outputs * expert_weights[:, None, None, :], axis=-1
+            )
+        else:
+            residual = self.head(combined).reshape(
+                (combined.shape[0], 2, COMBO_COUNT)
+            )
         raw = baseline + residual
         joint_mass = mx.maximum(mx.sum(projection_weights[:, 0, :], axis=1), 1e-8)
         aggregate = mx.sum(raw * projection_weights, axis=2) / joint_mass[:, None]
@@ -576,6 +619,7 @@ def parse_args() -> argparse.Namespace:
             "deep-gelu",
             "xwide-gelu",
             "xwide-gelu-pooled",
+            "xwide-gelu-pooled-pot-experts",
         ),
         default="compact",
     )
@@ -1924,6 +1968,7 @@ def export_model(
             "deep-gelu",
             "xwide-gelu",
             "xwide-gelu-pooled",
+            "xwide-gelu-pooled-pot-experts",
         )
         else "relu"
     )
@@ -1968,7 +2013,19 @@ def export_model(
                 "queryTower": tower_payload(
                     model.query_tower, hidden_activation, hidden_activation
                 ),
-                "head": tower_payload(model.head, hidden_activation, "linear"),
+                "head": (
+                    []
+                    if model.uses_pot_experts
+                    else tower_payload(model.head, hidden_activation, "linear")
+                ),
+                "potExpertHeads": (
+                    [
+                        tower_payload(head, hidden_activation, "linear")
+                        for head in model.pot_expert_heads
+                    ]
+                    if model.uses_pot_experts
+                    else []
+                ),
             },
             separators=(",", ":"),
         )

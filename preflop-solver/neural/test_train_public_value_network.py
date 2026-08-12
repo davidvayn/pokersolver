@@ -450,6 +450,65 @@ class PublicValueNetworkTests(unittest.TestCase):
             "joint-reach-weighted-own-and-opponent-query-pooling",
         )
 
+    def test_pot_expert_export_has_three_runtime_routed_heads(self) -> None:
+        model = module.SharedComboValueNetwork(
+            True,
+            "xwide-gelu-pooled-pot-experts",
+            "pot",
+            module.FEATURE_SCHEMA_EXACT_RUNOUT,
+        )
+        self.assertTrue(model.pools_exact_ranges)
+        self.assertTrue(model.uses_pot_experts)
+        self.assertEqual(len(model.pot_expert_heads), 3)
+        self.assertTrue(
+            all(
+                [
+                    layer["outputSize"]
+                    for layer in module.tower_payload(head, "gelu-fast", "linear")
+                ]
+                == [256, 128, 64, 1]
+                for head in model.pot_expert_heads
+            )
+        )
+        contexts = np.zeros(
+            (3, 2, module.feature_sizes(module.FEATURE_SCHEMA_EXACT_RUNOUT)[0]),
+            dtype=np.float32,
+        )
+        contexts[0, :, 19:21] = [2.0 / module.DEPTH_BB, 3.5 / module.DEPTH_BB]
+        contexts[1, :, 19:21] = [3.6 / module.DEPTH_BB, 3.0 / module.DEPTH_BB]
+        contexts[2, :, 19:21] = [8.0 / module.DEPTH_BB, 7.5 / module.DEPTH_BB]
+        prediction = model(
+            module.mx.array(contexts),
+            module.mx.zeros(
+                (
+                    3,
+                    2,
+                    module.COMBO_COUNT,
+                    module.feature_sizes(module.FEATURE_SCHEMA_EXACT_RUNOUT)[1],
+                )
+            ),
+            module.mx.ones((3, 2, module.COMBO_COUNT)),
+            module.mx.array([5.5, 6.6, 15.5]),
+        )
+        module.mx.eval(prediction)
+        self.assertEqual(prediction.shape, (3, module.COMBO_COUNT * 2))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pot-experts.json"
+            module.export_model(
+                model,
+                path,
+                7,
+                "a" * 64,
+                module.COMPLETE_TURN_TARGET_SCHEMA,
+                "accepted",
+                "b" * 64,
+                "pot",
+            )
+            payload = json.loads(path.read_text())
+        self.assertEqual(payload["schema"], module.POT_EXPERT_NETWORK_SCHEMA)
+        self.assertEqual(payload["head"], [])
+        self.assertEqual(len(payload["potExpertHeads"]), 3)
+
     def test_supplemental_dataset_offsets_groups_and_preserves_component_hashes(
         self,
     ) -> None:
