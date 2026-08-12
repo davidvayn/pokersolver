@@ -8979,6 +8979,7 @@ pub struct SelfPlayTurnTargetConfig {
     pub seed: u64,
     pub threads: usize,
     pub network_path: PathBuf,
+    pub range_policy_path: Option<PathBuf>,
     pub belief_replicates: u32,
     pub exploration_probability: f64,
     pub minimum_pot_bb: f64,
@@ -9163,9 +9164,15 @@ pub fn generate_self_play_turn_targets(
     if let Some(directory) = &config.checkpoint_dir {
         fs::create_dir_all(directory)?;
     }
-    let policy_bytes = fs::read(&config.network_path)?;
+    let policy_bytes = fs::read(
+        config
+            .range_policy_path
+            .as_ref()
+            .unwrap_or(&config.network_path),
+    )?;
     let source_policy_sha256 = format!("{:x}", Sha256::digest(&policy_bytes));
-    let policy = FrozenPolicy::load(&config.network_path)?;
+    let policy =
+        FrozenPolicy::load_with_range(&config.network_path, config.range_policy_path.as_deref())?;
     let mut chance = SplitMix64::new(config.seed);
     let mut prepared = Vec::with_capacity(config.states);
     let mut attempts = 0usize;
@@ -9327,10 +9334,16 @@ pub fn generate_self_play_turn_targets(
         river_iterations: config.river_iterations,
         turn_river_iterations: Some(config.river_iterations),
         turn_river_averaging_delay: Some(config.river_averaging_delay),
-        state_distribution: if config.exploration_probability > 0.0 {
-            "frozen_v26_one_player_epsilon_exploration_exact_reach_factor_public_beliefs"
+        state_distribution: if config.range_policy_path.is_some()
+            && config.exploration_probability > 0.0
+        {
+            "frozen_range_conditioned_policy_one_player_epsilon_exploration_exact_reach_factor_public_beliefs"
+        } else if config.range_policy_path.is_some() {
+            "frozen_range_conditioned_policy_self_play_exact_reach_factor_public_beliefs"
+        } else if config.exploration_probability > 0.0 {
+            "frozen_routed_policy_one_player_epsilon_exploration_exact_reach_factor_public_beliefs"
         } else {
-            "frozen_v26_self_play_exact_reach_factor_public_beliefs"
+            "frozen_routed_policy_self_play_exact_reach_factor_public_beliefs"
         }
         .to_owned(),
         source_policy_sha256: Some(source_policy_sha256),
@@ -12136,6 +12149,7 @@ mod tests {
             seed: 91,
             threads,
             network_path: PathBuf::new(),
+            range_policy_path: None,
             belief_replicates: 2,
             exploration_probability: 0.0,
             minimum_pot_bb: 0.0,

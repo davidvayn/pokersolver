@@ -56,6 +56,50 @@ pub struct ExploitabilityCertificateConfig {
     pub threads: usize,
     pub network_path: PathBuf,
     pub range_policy_path: Option<PathBuf>,
+    /// Optional research policy refinement. At every reached river decision,
+    /// replace the static network row with an exact-range public-belief CFR
+    /// solve rooted at that decision. This changes policy actions, not the
+    /// response or confidence-bound evaluator, and remains fail-closed until
+    /// an independently measured certificate passes every release gate.
+    pub river_resolver: Option<RiverResolverConfig>,
+    /// Optional joint turn/river public-belief search. Turn decisions use the
+    /// complete exact-river-card subgame; reached river decisions may then use
+    /// `river_resolver` as a nested terminal-street solve.
+    pub turn_resolver: Option<TurnResolverConfig>,
+    /// Optional depth-limited flop public-belief search using a frozen turn
+    /// counterfactual-value network at the cutoff.
+    pub flop_resolver: Option<FlopResolverConfig>,
+}
+
+impl ExploitabilityCertificateConfig {
+    fn continual_resolving_enabled(&self) -> bool {
+        self.flop_resolver.is_some()
+            || self.turn_resolver.is_some()
+            || self.river_resolver.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RiverResolverConfig {
+    pub iterations: u64,
+    pub averaging_delay: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TurnResolverConfig {
+    pub iterations: u64,
+    pub averaging_delay: u64,
+    pub river_refinement_iterations: u64,
+    pub regret_matching_plus: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlopResolverConfig {
+    pub iterations: u64,
+    pub averaging_delay: u64,
+    pub regret_matching_plus: bool,
+    pub threads: usize,
+    pub value_network_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -202,6 +246,26 @@ pub struct ExploitabilityCertificate {
     pub public_branches_per_street: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scenarios_per_deal: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_averaging_delay: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_averaging_delay: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_river_refinement_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_regret_matching_plus: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_averaging_delay: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_regret_matching_plus: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_value_network_sha256: Option<String>,
     pub exact_betting_tree_nodes: u64,
     pub sample_mean_exploitability_bb: f64,
     pub sample_standard_error_bb: f64,
@@ -240,12 +304,28 @@ pub(super) struct FrozenPolicy {
     range_policy: Option<RangeConditionedPolicyNetwork>,
     range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
     preflop_range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
+    flop_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
+    turn_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
+    river_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
+    river_resolver: Option<RiverResolverConfig>,
+    turn_resolver: Option<TurnResolverConfig>,
+    flop_resolver: Option<FlopResolverRuntime>,
+}
+
+struct FlopResolverRuntime {
+    config: FlopResolverConfig,
+    value_network: super::public_belief::PublicValueNetwork,
 }
 
 struct RangePolicyCachedNode {
     action_labels: Vec<String>,
     probabilities: Vec<f64>,
     ranges: [Vec<f64>; 2],
+}
+
+struct ResolvedPolicyCachedRow {
+    action_labels: Vec<String>,
+    probabilities: Vec<f64>,
 }
 
 impl FrozenPolicy {
@@ -260,10 +340,16 @@ impl FrozenPolicy {
             range_policy: None,
             range_cache: Mutex::new(BTreeMap::new()),
             preflop_range_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(BTreeMap::new()),
+            turn_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_resolver: None,
+            turn_resolver: None,
+            flop_resolver: None,
         })
     }
 
-    fn load_with_range(
+    pub(super) fn load_with_range(
         path: &std::path::Path,
         range_policy_path: Option<&std::path::Path>,
     ) -> Result<Self, Box<dyn Error>> {
@@ -329,11 +415,232 @@ impl FrozenPolicy {
             state,
             ranges,
         );
-        let source = range_policy
-            .requires_source_policy()
-            .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
-            .transpose()?;
-        let probabilities = range_policy.strategy(&public, config, source.as_deref())?;
+        let probabilities = if let Some(resolver) = self
+            .flop_resolver
+            .as_ref()
+            .filter(|_| state.street == Street::Flop)
+        {
+            let resolved = self
+                .flop_strategy_cache
+                .lock()
+                .expect("flop strategy cache")
+                .get(&key)
+                .cloned();
+            let resolved = if let Some(resolved) = resolved {
+                resolved
+            } else {
+                let solution =
+                    super::public_belief::solve_flop(super::public_belief::FlopResolveConfig {
+                        game: config.clone(),
+                        state: public.clone(),
+                        iterations: resolver.config.iterations,
+                        averaging_delay: resolver.config.averaging_delay,
+                        regret_matching_plus: resolver.config.regret_matching_plus,
+                        value_network: resolver.value_network.clone(),
+                        auxiliary_value_networks: Vec::new(),
+                        threads: resolver.config.threads,
+                    })?;
+                let mut cache = self
+                    .flop_strategy_cache
+                    .lock()
+                    .expect("flop strategy cache");
+                for strategy in solution.strategies {
+                    let strategy_key = range_policy_public_cache_key(
+                        Street::Flop,
+                        strategy.actor,
+                        &public.board,
+                        &strategy.public_history,
+                    );
+                    if cache.len() >= 4_096 && !cache.contains_key(&strategy_key) {
+                        if let Some(oldest) = cache.keys().next().copied() {
+                            cache.remove(&oldest);
+                        }
+                    }
+                    let action_labels = strategy.action_labels;
+                    let probabilities = stabilize_resolved_policy(
+                        strategy.probabilities.into_iter().map(f64::from).collect(),
+                        action_labels.len(),
+                    )?;
+                    cache.insert(
+                        strategy_key,
+                        Arc::new(ResolvedPolicyCachedRow {
+                            action_labels,
+                            probabilities,
+                        }),
+                    );
+                }
+                cache
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| "flop resolver omitted its root strategy".to_owned())?
+            };
+            let labels = actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>();
+            if resolved
+                .action_labels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != labels
+                || resolved.probabilities.len() != COMBO_COUNT * actions.len()
+            {
+                return Err("flop resolver root strategy is incompatible".to_owned());
+            }
+            resolved.probabilities.clone()
+        } else if let Some(resolver) = self.turn_resolver.filter(|_| state.street == Street::Turn) {
+            let resolved = self
+                .turn_strategy_cache
+                .lock()
+                .expect("turn strategy cache")
+                .get(&key)
+                .cloned();
+            let resolved = if let Some(resolved) = resolved {
+                resolved
+            } else {
+                let solution = super::public_belief::solve_turn_river(
+                    super::public_belief::TurnRiverSolveConfig {
+                        game: config.clone(),
+                        state: public.clone(),
+                        iterations: resolver.iterations,
+                        averaging_delay: resolver.averaging_delay,
+                        river_refinement_iterations: resolver.river_refinement_iterations,
+                        regret_matching_plus: resolver.regret_matching_plus,
+                    },
+                )?;
+                let mut cache = self
+                    .turn_strategy_cache
+                    .lock()
+                    .expect("turn strategy cache");
+                for strategy in solution.strategies {
+                    if strategy
+                        .public_history
+                        .last()
+                        .is_some_and(|part| part.starts_with("chance:river:"))
+                    {
+                        continue;
+                    }
+                    let strategy_key = range_policy_public_cache_key(
+                        Street::Turn,
+                        strategy.actor,
+                        &public.board,
+                        &strategy.public_history,
+                    );
+                    if cache.len() >= 4_096 && !cache.contains_key(&strategy_key) {
+                        if let Some(oldest) = cache.keys().next().copied() {
+                            cache.remove(&oldest);
+                        }
+                    }
+                    let action_labels = strategy.action_labels;
+                    let probabilities = stabilize_resolved_policy(
+                        strategy.probabilities.into_iter().map(f64::from).collect(),
+                        action_labels.len(),
+                    )?;
+                    cache.insert(
+                        strategy_key,
+                        Arc::new(ResolvedPolicyCachedRow {
+                            action_labels,
+                            probabilities,
+                        }),
+                    );
+                }
+                cache
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| "turn resolver omitted its root strategy".to_owned())?
+            };
+            let labels = actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>();
+            if resolved
+                .action_labels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != labels
+                || resolved.probabilities.len() != COMBO_COUNT * actions.len()
+            {
+                return Err("turn resolver root strategy is incompatible".to_owned());
+            }
+            resolved.probabilities.clone()
+        } else if let Some(resolver) = self
+            .river_resolver
+            .filter(|_| state.street == Street::River)
+        {
+            let resolved = self
+                .river_strategy_cache
+                .lock()
+                .expect("river strategy cache")
+                .get(&key)
+                .cloned();
+            let resolved = if let Some(resolved) = resolved {
+                resolved
+            } else {
+                let solution =
+                    super::public_belief::solve_river(super::public_belief::RiverSolveConfig {
+                        game: config.clone(),
+                        state: public.clone(),
+                        iterations: resolver.iterations,
+                        averaging_delay: resolver.averaging_delay,
+                    })?;
+                let mut cache = self
+                    .river_strategy_cache
+                    .lock()
+                    .expect("river strategy cache");
+                for strategy in solution.strategies {
+                    let strategy_key = range_policy_public_cache_key(
+                        Street::River,
+                        strategy.actor,
+                        &public.board,
+                        &strategy.public_history,
+                    );
+                    if cache.len() >= 16_384 && !cache.contains_key(&strategy_key) {
+                        if let Some(oldest) = cache.keys().next().copied() {
+                            cache.remove(&oldest);
+                        }
+                    }
+                    let action_labels = strategy.action_labels;
+                    let probabilities = stabilize_resolved_policy(
+                        strategy.probabilities.into_iter().map(f64::from).collect(),
+                        action_labels.len(),
+                    )?;
+                    cache.insert(
+                        strategy_key,
+                        Arc::new(ResolvedPolicyCachedRow {
+                            action_labels,
+                            probabilities,
+                        }),
+                    );
+                }
+                cache
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| "river resolver omitted its root strategy".to_owned())?
+            };
+            let labels = actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>();
+            if resolved
+                .action_labels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != labels
+                || resolved.probabilities.len() != COMBO_COUNT * actions.len()
+            {
+                return Err("river resolver root strategy is incompatible".to_owned());
+            }
+            resolved.probabilities.clone()
+        } else {
+            let source = range_policy
+                .requires_source_policy()
+                .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
+                .transpose()?;
+            range_policy.strategy(&public, config, source.as_deref())?
+        };
         let cached = Arc::new(RangePolicyCachedNode {
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             probabilities,
@@ -541,6 +848,62 @@ impl FrozenPolicy {
         &self.bundle_sha256
     }
 
+    fn enable_flop_resolver(&mut self, resolver: FlopResolverConfig) -> Result<(), Box<dyn Error>> {
+        if self.range_policy.is_none() {
+            return Err("flop resolving requires a range-conditioned policy".into());
+        }
+        if resolver.iterations < 2
+            || resolver.averaging_delay >= resolver.iterations
+            || resolver.threads == 0
+        {
+            return Err("flop resolver configuration is invalid".into());
+        }
+        let value_network =
+            super::public_belief::PublicValueNetwork::read(&resolver.value_network_path)?;
+        self.flop_resolver = Some(FlopResolverRuntime {
+            config: resolver,
+            value_network,
+        });
+        self.range_cache.lock().expect("range policy cache").clear();
+        self.flop_strategy_cache
+            .lock()
+            .expect("flop strategy cache")
+            .clear();
+        Ok(())
+    }
+
+    fn enable_turn_resolver(&mut self, resolver: TurnResolverConfig) -> Result<(), String> {
+        if self.range_policy.is_none() {
+            return Err("turn resolving requires a range-conditioned policy".to_owned());
+        }
+        if resolver.iterations < 2 || resolver.averaging_delay >= resolver.iterations {
+            return Err("turn resolver configuration is invalid".to_owned());
+        }
+        self.turn_resolver = Some(resolver);
+        self.range_cache.lock().expect("range policy cache").clear();
+        self.turn_strategy_cache
+            .lock()
+            .expect("turn strategy cache")
+            .clear();
+        Ok(())
+    }
+
+    fn enable_river_resolver(&mut self, resolver: RiverResolverConfig) -> Result<(), String> {
+        if self.range_policy.is_none() {
+            return Err("river resolving requires a range-conditioned policy".to_owned());
+        }
+        if resolver.iterations < 2 || resolver.averaging_delay >= resolver.iterations {
+            return Err("river resolver configuration is invalid".to_owned());
+        }
+        self.river_resolver = Some(resolver);
+        self.range_cache.lock().expect("range policy cache").clear();
+        self.river_strategy_cache
+            .lock()
+            .expect("river strategy cache")
+            .clear();
+        Ok(())
+    }
+
     pub(super) fn bundle_strategy_matrix(
         &self,
         state: &GameState,
@@ -589,17 +952,62 @@ impl RangePolicyCachedNode {
 }
 
 fn range_policy_cache_key(state: &GameState, deal: &Deal) -> [u8; 32] {
+    range_policy_public_cache_key(
+        state.street,
+        state.actor,
+        &deal.board[..state.street.board_len()],
+        &state.public_history,
+    )
+}
+
+fn range_policy_public_cache_key(
+    street: Street,
+    actor: usize,
+    board: &[u8],
+    public_history: &[String],
+) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"hu-range-policy-public-state-v1");
-    digest.update([state.street as u8, state.actor as u8]);
-    for card in &deal.board[..state.street.board_len()] {
+    digest.update([street as u8, actor as u8]);
+    for card in board {
         digest.update([*card]);
     }
-    for history in &state.public_history {
+    for history in public_history {
         digest.update((history.len() as u64).to_le_bytes());
         digest.update(history.as_bytes());
     }
     digest.finalize().into()
+}
+
+/// Exact CFR averages can assign a legal action zero probability after a
+/// short research solve. The response evaluator deliberately explores forced
+/// deviations, so retain negligible full support without materially changing
+/// the solved mix. Rows for card-blocked combos remain all-zero.
+fn stabilize_resolved_policy(
+    mut probabilities: Vec<f64>,
+    action_count: usize,
+) -> Result<Vec<f64>, String> {
+    const MINIMUM_ACTION_PROBABILITY: f64 = 1e-9;
+    if action_count == 0 || probabilities.len() != COMBO_COUNT * action_count {
+        return Err("resolved policy dimensions are incompatible".to_owned());
+    }
+    for row in probabilities.chunks_exact_mut(action_count) {
+        let sum = row.iter().sum::<f64>();
+        if sum <= 0.0 {
+            continue;
+        }
+        if !sum.is_finite() || row.iter().any(|probability| !probability.is_finite()) {
+            return Err("resolved policy contains non-finite probabilities".to_owned());
+        }
+        for probability in row.iter_mut() {
+            *probability = probability.max(MINIMUM_ACTION_PROBABILITY);
+        }
+        let stabilized_sum = row.iter().sum::<f64>();
+        for probability in row {
+            *probability /= stabilized_sum;
+        }
+    }
+    Ok(probabilities)
 }
 
 fn trajectory_action_matches(
@@ -990,6 +1398,45 @@ impl SampleGenerator {
             config,
             networks,
         })
+    }
+
+    fn enable_river_resolver(
+        &mut self,
+        resolver: Option<RiverResolverConfig>,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(resolver) = resolver {
+            self.networks
+                .as_mut()
+                .ok_or("river resolving requires a frozen policy")?
+                .enable_river_resolver(resolver)?;
+        }
+        Ok(())
+    }
+
+    fn enable_turn_resolver(
+        &mut self,
+        resolver: Option<TurnResolverConfig>,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(resolver) = resolver {
+            self.networks
+                .as_mut()
+                .ok_or("turn resolving requires a frozen policy")?
+                .enable_turn_resolver(resolver)?;
+        }
+        Ok(())
+    }
+
+    fn enable_flop_resolver(
+        &mut self,
+        resolver: Option<FlopResolverConfig>,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(resolver) = resolver {
+            self.networks
+                .as_mut()
+                .ok_or("flop resolving requires a frozen policy")?
+                .enable_flop_resolver(resolver)?;
+        }
+        Ok(())
     }
 
     fn run(
@@ -3851,6 +4298,20 @@ fn one_sided_empirical_bernstein_margin(
 /// frozen policy. This responder contains every legal imperfect-information
 /// response, so its expected value upper-bounds true exploitability. Hoeffding's
 /// inequality bounds the remaining i.i.d. chance-sampling error.
+fn flop_resolver_value_network_sha256(
+    config: &ExploitabilityCertificateConfig,
+) -> Result<Option<String>, Box<dyn Error>> {
+    config
+        .flop_resolver
+        .as_ref()
+        .map(|resolver| {
+            fs::read(&resolver.value_network_path)
+                .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        })
+        .transpose()
+        .map_err(Into::into)
+}
+
 pub fn certify_exploitability_upper_bound(
     config: ExploitabilityCertificateConfig,
 ) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
@@ -3869,7 +4330,8 @@ pub fn certify_exploitability_upper_bound(
         .as_ref()
         .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
         .transpose()?;
-    let generator = SampleGenerator::new_with_range(
+    let flop_resolver_value_network_sha256 = flop_resolver_value_network_sha256(&config)?;
+    let mut generator = SampleGenerator::new_with_range(
         SampleGenerationConfig {
             game: config.game.clone(),
             traversals: 1,
@@ -3885,6 +4347,11 @@ pub fn certify_exploitability_upper_bound(
         },
         config.range_policy_path.as_deref(),
     )?;
+    generator.enable_flop_resolver(config.flop_resolver.clone())?;
+    generator.enable_flop_resolver(config.flop_resolver.clone())?;
+    generator.enable_flop_resolver(config.flop_resolver.clone())?;
+    generator.enable_turn_resolver(config.turn_resolver)?;
+    generator.enable_river_resolver(config.river_resolver)?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -3952,9 +4419,37 @@ pub fn certify_exploitability_upper_bound(
     let sample_standard_error = (sample_variance.max(0.0) / config.deals as f64).sqrt();
     let alpha = 1.0 - config.confidence;
     let margin = depth * ((1.0 / alpha).ln() / (2.0 * config.deals as f64)).sqrt();
+    let mut assumptions = vec![
+        "complete deals are independent uniform samples from the exact card-removal distribution",
+        "the frozen opponent network is evaluated exactly on every reached betting action",
+        "utilities are zero-sum and bounded to the effective stack in absolute value",
+    ];
+    if config.river_resolver.is_some() {
+        assumptions.push(
+            "every reached river action is replaced by deterministic exact-range public-belief CFR",
+        );
+    }
+    if config.turn_resolver.is_some() {
+        assumptions.push(
+            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
+        );
+    }
+    if config.flop_resolver.is_some() {
+        assumptions.push(
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
+        );
+    }
     Ok(ExploitabilityCertificate {
-        schema: "hu-neural-clairvoyant-upper-bound-v1",
-        method: "complete_deal_clairvoyant_best_response_with_hoeffding_ucb",
+        schema: if config.continual_resolving_enabled() {
+            "hu-neural-continual-resolved-clairvoyant-upper-bound-v1"
+        } else {
+            "hu-neural-clairvoyant-upper-bound-v1"
+        },
+        method: if config.continual_resolving_enabled() {
+            "complete_deal_clairvoyant_best_response_against_exact_range_continual_resolved_policy_with_hoeffding_ucb"
+        } else {
+            "complete_deal_clairvoyant_best_response_with_hoeffding_ucb"
+        },
         depth_bb: depth,
         deals: config.deals,
         seed: config.seed,
@@ -3966,6 +4461,33 @@ pub fn certify_exploitability_upper_bound(
         opponent_samples_per_runout: None,
         public_branches_per_street: None,
         scenarios_per_deal: None,
+        river_resolver_iterations: config.river_resolver.map(|resolver| resolver.iterations),
+        river_resolver_averaging_delay: config
+            .river_resolver
+            .map(|resolver| resolver.averaging_delay),
+        turn_resolver_iterations: config.turn_resolver.map(|resolver| resolver.iterations),
+        turn_resolver_averaging_delay: config
+            .turn_resolver
+            .map(|resolver| resolver.averaging_delay),
+        turn_resolver_river_refinement_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.river_refinement_iterations),
+        turn_resolver_regret_matching_plus: config
+            .turn_resolver
+            .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.iterations),
+        flop_resolver_averaging_delay: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.averaging_delay),
+        flop_resolver_regret_matching_plus: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
@@ -3976,11 +4498,7 @@ pub fn certify_exploitability_upper_bound(
         exploitability_upper_bound_bb: (mean + margin).min(depth),
         relaxation: "each responder observes both private hands and the complete board runout",
         guarantee: "the relaxed responder contains all legal imperfect-information responses, so its i.i.d. chance expectation upper-bounds true exploitability",
-        assumptions: vec![
-            "complete deals are independent uniform samples from the exact card-removal distribution",
-            "the frozen opponent network is evaluated exactly on every reached betting action",
-            "utilities are zero-sum and bounded to the effective stack in absolute value",
-        ],
+        assumptions,
     })
 }
 
@@ -4017,7 +4535,8 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         .as_ref()
         .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
         .transpose()?;
-    let generator = SampleGenerator::new_with_range(
+    let flop_resolver_value_network_sha256 = flop_resolver_value_network_sha256(&config)?;
+    let mut generator = SampleGenerator::new_with_range(
         SampleGenerationConfig {
             game: config.game.clone(),
             traversals: 1,
@@ -4033,6 +4552,8 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         },
         config.range_policy_path.as_deref(),
     )?;
+    generator.enable_turn_resolver(config.turn_resolver)?;
+    generator.enable_river_resolver(config.river_resolver)?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -4115,9 +4636,39 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         config.deals,
         config.confidence,
     );
+    let mut assumptions = vec![
+        "outer responder-card and board samples are independent and exact under card removal",
+        "conditional opponent particles are independent uniform samples with replacement and shared across every candidate response in an outer game",
+        "the frozen opponent network is evaluated exactly on every reached betting action",
+        "complete sampled runouts settle every showdown exactly",
+        "utilities are zero-sum and bounded to the effective stack in absolute value",
+    ];
+    if config.river_resolver.is_some() {
+        assumptions.push(
+            "every reached river action is replaced by deterministic exact-range public-belief CFR",
+        );
+    }
+    if config.turn_resolver.is_some() {
+        assumptions.push(
+            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
+        );
+    }
+    if config.flop_resolver.is_some() {
+        assumptions.push(
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
+        );
+    }
     Ok(ExploitabilityCertificate {
-        schema: "hu-neural-opponent-hidden-upper-bound-v1",
-        method: "future_public_runout_relaxation_with_hidden_opponent_sample_average_best_response_and_empirical_bernstein_ucb",
+        schema: if config.continual_resolving_enabled() {
+            "hu-neural-continual-resolved-opponent-hidden-upper-bound-v1"
+        } else {
+            "hu-neural-opponent-hidden-upper-bound-v1"
+        },
+        method: if config.continual_resolving_enabled() {
+            "future_public_runout_relaxation_with_hidden_opponent_sample_average_best_response_against_exact_range_continual_resolved_policy_and_empirical_bernstein_ucb"
+        } else {
+            "future_public_runout_relaxation_with_hidden_opponent_sample_average_best_response_and_empirical_bernstein_ucb"
+        },
         depth_bb: depth,
         deals: config.deals,
         seed: config.seed,
@@ -4129,6 +4680,33 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         opponent_samples_per_runout: None,
         public_branches_per_street: None,
         scenarios_per_deal: Some(opponent_samples_per_deal as u64),
+        river_resolver_iterations: config.river_resolver.map(|resolver| resolver.iterations),
+        river_resolver_averaging_delay: config
+            .river_resolver
+            .map(|resolver| resolver.averaging_delay),
+        turn_resolver_iterations: config.turn_resolver.map(|resolver| resolver.iterations),
+        turn_resolver_averaging_delay: config
+            .turn_resolver
+            .map(|resolver| resolver.averaging_delay),
+        turn_resolver_river_refinement_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.river_refinement_iterations),
+        turn_resolver_regret_matching_plus: config
+            .turn_resolver
+            .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.iterations),
+        flop_resolver_averaging_delay: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.averaging_delay),
+        flop_resolver_regret_matching_plus: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
@@ -4139,13 +4717,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         exploitability_upper_bound_bb: (mean + empirical_bernstein_margin).min(depth),
         relaxation: "each responder observes its own private cards and the complete public runout, while opponent private cards remain hidden behind a common sample-average belief",
         guarantee: "future-board revelation contains every legal response; the expected sample-average optimum upper-bounds the relaxed best response by convexity, and the one-sided empirical Bernstein bound covers its outer i.i.d. expectation",
-        assumptions: vec![
-            "outer responder-card and board samples are independent and exact under card removal",
-            "conditional opponent particles are independent uniform samples with replacement and shared across every candidate response in an outer game",
-            "the frozen opponent network is evaluated exactly on every reached betting action",
-            "complete sampled runouts settle every showdown exactly",
-            "utilities are zero-sum and bounded to the effective stack in absolute value",
-        ],
+        assumptions,
     })
 }
 
@@ -4191,7 +4763,8 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         .as_ref()
         .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
         .transpose()?;
-    let generator = SampleGenerator::new_with_range(
+    let flop_resolver_value_network_sha256 = flop_resolver_value_network_sha256(&config)?;
+    let mut generator = SampleGenerator::new_with_range(
         SampleGenerationConfig {
             game: config.game.clone(),
             traversals: 1,
@@ -4207,6 +4780,8 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         },
         config.range_policy_path.as_deref(),
     )?;
+    generator.enable_turn_resolver(config.turn_resolver)?;
+    generator.enable_river_resolver(config.river_resolver)?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -4287,9 +4862,40 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         config.deals,
         config.confidence,
     );
+    let mut assumptions = vec![
+        "outer responder-card samples are independent and exact under card removal",
+        "nested flop, turn, river, and hidden-hand branches have the exact conditional card distribution",
+        "identical observed public boards share one responder action within each sampled betting history",
+        "the frozen opponent network is evaluated exactly on every reached betting action",
+        "complete sampled runouts settle every showdown exactly",
+        "utilities are zero-sum and bounded to the effective stack in absolute value",
+    ];
+    if config.river_resolver.is_some() {
+        assumptions.push(
+            "every reached river action is replaced by deterministic exact-range public-belief CFR",
+        );
+    }
+    if config.turn_resolver.is_some() {
+        assumptions.push(
+            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
+        );
+    }
+    if config.flop_resolver.is_some() {
+        assumptions.push(
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
+        );
+    }
     Ok(ExploitabilityCertificate {
-        schema: "hu-neural-causal-sample-game-upper-bound-v1",
-        method: "nested_public_chance_and_hidden_hand_sample_game_best_response_with_empirical_bernstein_ucb",
+        schema: if config.continual_resolving_enabled() {
+            "hu-neural-continual-resolved-causal-sample-game-upper-bound-v1"
+        } else {
+            "hu-neural-causal-sample-game-upper-bound-v1"
+        },
+        method: if config.continual_resolving_enabled() {
+            "nested_public_chance_and_hidden_hand_sample_game_best_response_against_exact_range_continual_resolved_policy_with_empirical_bernstein_ucb"
+        } else {
+            "nested_public_chance_and_hidden_hand_sample_game_best_response_with_empirical_bernstein_ucb"
+        },
         depth_bb: depth,
         deals: config.deals,
         seed: config.seed,
@@ -4301,6 +4907,33 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         opponent_samples_per_runout: Some(opponent_samples_per_runout),
         public_branches_per_street: Some(public_branches_per_street),
         scenarios_per_deal: Some(scenarios_per_deal),
+        river_resolver_iterations: config.river_resolver.map(|resolver| resolver.iterations),
+        river_resolver_averaging_delay: config
+            .river_resolver
+            .map(|resolver| resolver.averaging_delay),
+        turn_resolver_iterations: config.turn_resolver.map(|resolver| resolver.iterations),
+        turn_resolver_averaging_delay: config
+            .turn_resolver
+            .map(|resolver| resolver.averaging_delay),
+        turn_resolver_river_refinement_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.river_refinement_iterations),
+        turn_resolver_regret_matching_plus: config
+            .turn_resolver
+            .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.iterations),
+        flop_resolver_averaging_delay: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.averaging_delay),
+        flop_resolver_regret_matching_plus: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
@@ -4311,20 +4944,25 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         exploitability_upper_bound_bb: (mean + empirical_bernstein_margin).min(depth),
         relaxation: "each responder observes its own cards, betting history, and only the currently revealed public board in a nested public-chance and hidden-hand sample game",
         guarantee: "every fixed legal response has an unbiased nested sample-game value; the expected empirical optimum upper-bounds the legal best response by convexity, and the one-sided empirical Bernstein bound covers the independent outer games",
-        assumptions: vec![
-            "outer responder-card samples are independent and exact under card removal",
-            "nested flop, turn, river, and hidden-hand branches have the exact conditional card distribution",
-            "identical observed public boards share one responder action within each sampled betting history",
-            "the frozen opponent network is evaluated exactly on every reached betting action",
-            "complete sampled runouts settle every showdown exactly",
-            "utilities are zero-sum and bounded to the effective stack in absolute value",
-        ],
+        assumptions,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolved_policy_stabilization_preserves_blocked_rows_and_full_support() {
+        let mut probabilities = vec![0.0; COMBO_COUNT * 3];
+        probabilities[3..6].copy_from_slice(&[0.0, 0.25, 0.75]);
+        let stabilized = stabilize_resolved_policy(probabilities, 3).unwrap();
+        assert_eq!(&stabilized[..3], &[0.0, 0.0, 0.0]);
+        assert!(stabilized[3..6]
+            .iter()
+            .all(|probability| *probability > 0.0));
+        assert!((stabilized[3..6].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
 
     #[test]
     fn public_range_normalization_is_scale_invariant_for_rare_lines() {
@@ -4784,6 +5422,9 @@ mod tests {
             threads: 2,
             network_path: path.clone(),
             range_policy_path: None,
+            river_resolver: None,
+            turn_resolver: None,
+            flop_resolver: None,
         };
         let first = certify_exploitability_upper_bound(make()).unwrap();
         let second = certify_exploitability_upper_bound(make()).unwrap();
@@ -4925,6 +5566,9 @@ mod tests {
                 threads: 2,
                 network_path: network_path.clone(),
                 range_policy_path: None,
+                river_resolver: None,
+                turn_resolver: None,
+                flop_resolver: None,
             },
             1,
             1,
@@ -5086,6 +5730,34 @@ mod tests {
                 threads: 2,
                 network_path: network_path.clone(),
                 range_policy_path: Some(range_path.clone()),
+                river_resolver: None,
+                turn_resolver: None,
+                flop_resolver: None,
+            },
+            1,
+            1,
+        )
+        .unwrap();
+        let resolved_certificate = certify_causal_sample_game_exploitability_upper_bound(
+            ExploitabilityCertificateConfig {
+                game: game.clone(),
+                deals: 2,
+                seed: 83,
+                confidence: 0.99,
+                threads: 2,
+                network_path: network_path.clone(),
+                range_policy_path: Some(range_path.clone()),
+                river_resolver: Some(RiverResolverConfig {
+                    iterations: 2,
+                    averaging_delay: 0,
+                }),
+                turn_resolver: Some(TurnResolverConfig {
+                    iterations: 2,
+                    averaging_delay: 0,
+                    river_refinement_iterations: 0,
+                    regret_matching_plus: false,
+                }),
+                flop_resolver: None,
             },
             1,
             1,
@@ -5101,6 +5773,17 @@ mod tests {
                 < 1e-12
         );
         assert!(attribution.maximum_root_value_reconstruction_error_bb < 1e-12);
+        assert_eq!(
+            resolved_certificate.schema,
+            "hu-neural-continual-resolved-causal-sample-game-upper-bound-v1"
+        );
+        assert_eq!(resolved_certificate.river_resolver_iterations, Some(2));
+        assert_eq!(resolved_certificate.river_resolver_averaging_delay, Some(0));
+        assert_eq!(resolved_certificate.turn_resolver_iterations, Some(2));
+        assert_eq!(resolved_certificate.turn_resolver_averaging_delay, Some(0));
+        assert!(resolved_certificate
+            .sample_mean_exploitability_bb
+            .is_finite());
 
         let reader = BufReader::new(GzDecoder::new(fs::File::open(&output_path).unwrap()));
         let mut lines = reader.lines();

@@ -140,6 +140,7 @@ fn run_turn_pbs_self_play_targets(args: &[String]) -> Result<(), Box<dyn Error>>
                     .unwrap_or(1),
             )?,
             network_path,
+            range_policy_path: value(args, "--range-policy").map(PathBuf::from),
             belief_replicates: parse_or(args, "--belief-replicates", 2u32)?,
             exploration_probability: parse_or(args, "--exploration", 0.0f64)?,
             minimum_pot_bb: parse_or(args, "--minimum-pot-bb", 0.0f64)?,
@@ -1769,6 +1770,92 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
         .ok_or("--networks is required for neural certification")?;
+    let river_resolver_iterations = value(args, "--river-resolver-iterations")
+        .map(|iterations| iterations.parse::<u64>())
+        .transpose()?;
+    let river_resolver = river_resolver_iterations
+        .map(|iterations| -> Result<_, Box<dyn Error>> {
+            Ok(blueprint::neural::RiverResolverConfig {
+                iterations,
+                averaging_delay: parse_or(
+                    args,
+                    "--river-resolver-averaging-delay",
+                    iterations / 10,
+                )?,
+            })
+        })
+        .transpose()?;
+    if river_resolver.is_none() && value(args, "--river-resolver-averaging-delay").is_some() {
+        return Err("--river-resolver-averaging-delay requires --river-resolver-iterations".into());
+    }
+    let turn_resolver_iterations = value(args, "--turn-resolver-iterations")
+        .map(|iterations| iterations.parse::<u64>())
+        .transpose()?;
+    let turn_resolver = turn_resolver_iterations
+        .map(|iterations| -> Result<_, Box<dyn Error>> {
+            Ok(blueprint::neural::TurnResolverConfig {
+                iterations,
+                averaging_delay: parse_or(
+                    args,
+                    "--turn-resolver-averaging-delay",
+                    iterations / 10,
+                )?,
+                river_refinement_iterations: parse_or(
+                    args,
+                    "--turn-resolver-river-refinement-iterations",
+                    0u64,
+                )?,
+                regret_matching_plus: args
+                    .iter()
+                    .any(|argument| argument == "--turn-resolver-regret-matching-plus"),
+            })
+        })
+        .transpose()?;
+    if turn_resolver.is_none()
+        && [
+            "--turn-resolver-averaging-delay",
+            "--turn-resolver-river-refinement-iterations",
+            "--turn-resolver-regret-matching-plus",
+        ]
+        .iter()
+        .any(|name| args.iter().any(|argument| argument == name))
+    {
+        return Err("turn resolver options require --turn-resolver-iterations".into());
+    }
+    let flop_resolver_iterations = value(args, "--flop-resolver-iterations")
+        .map(|iterations| iterations.parse::<u64>())
+        .transpose()?;
+    let flop_resolver = flop_resolver_iterations
+        .map(|iterations| -> Result<_, Box<dyn Error>> {
+            Ok(blueprint::neural::FlopResolverConfig {
+                iterations,
+                averaging_delay: parse_or(
+                    args,
+                    "--flop-resolver-averaging-delay",
+                    iterations / 10,
+                )?,
+                regret_matching_plus: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-regret-matching-plus"),
+                threads: parse_or(args, "--flop-resolver-threads", 1usize)?,
+                value_network_path: value(args, "--flop-resolver-value-network")
+                    .map(PathBuf::from)
+                    .ok_or("--flop-resolver-value-network is required with flop resolving")?,
+            })
+        })
+        .transpose()?;
+    if flop_resolver.is_none()
+        && [
+            "--flop-resolver-averaging-delay",
+            "--flop-resolver-regret-matching-plus",
+            "--flop-resolver-threads",
+            "--flop-resolver-value-network",
+        ]
+        .iter()
+        .any(|name| args.iter().any(|argument| argument == name))
+    {
+        return Err("flop resolver options require --flop-resolver-iterations".into());
+    }
     let config = blueprint::neural::ExploitabilityCertificateConfig {
         game,
         deals: parse_or(args, "--deals", 10_000u64)?,
@@ -1783,6 +1870,9 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
         )?,
         network_path,
         range_policy_path: value(args, "--range-policy").map(PathBuf::from),
+        river_resolver,
+        turn_resolver,
+        flop_resolver,
     };
     let opponent_samples = value(args, "--opponent-samples-per-deal")
         .map(|samples| samples.parse())
@@ -2383,6 +2473,28 @@ Neural certificate options:
   --seed <integer>                Default: deterministic evaluation seed
   --confidence <number>           Default: 0.99 one-sided bound
   --threads <integer>             Default: available logical CPUs
+  --range-policy <path>           Optional frozen exact-range policy JSON
+  --river-resolver-iterations <N> Replace every reached river action with
+                                  an exact-range public-belief CFR solve
+  --river-resolver-averaging-delay <N>
+                                  Default: resolver iterations / 10
+  --turn-resolver-iterations <N>  Replace every reached turn action with a
+                                  joint exact-range turn/river CFR solve
+  --turn-resolver-averaging-delay <N>
+                                  Default: resolver iterations / 10
+  --turn-resolver-river-refinement-iterations <N>
+                                  Default: 0 frozen-turn refinement updates
+  --turn-resolver-regret-matching-plus
+                                  Use regret-matching+ in joint turn search
+  --flop-resolver-iterations <N>  Replace every reached flop action with a
+                                  depth-limited exact-range CFR solve
+  --flop-resolver-value-network <path>
+                                  Required frozen turn CFV network
+  --flop-resolver-averaging-delay <N>
+                                  Default: resolver iterations / 10
+  --flop-resolver-regret-matching-plus
+                                  Use regret-matching+ in flop search
+  --flop-resolver-threads <N>     Leaf-evaluation threads; default: 1
   --compact-serving-grid          Match an opt-in reduced-open model
   --output <path>                 Optional JSON certificate file
 
@@ -2430,6 +2542,9 @@ Neural exploitability-certificate options:
                                   when their street is reached
 
 Complete turn/river label options:
+  turn-pbs-self-play-targets --networks <source-policy.json>
+    [--range-policy <range-policy.json>] [--states 4] [--range-particles 512]
+    [--river-iterations 200] [--river-averaging-delay 20]
   postflop-action-targets --networks <source-policy.json>
     --value-network <turn-value.json> --range-output <targets.jsonl.gz>
     [--root-offset 0] [--roots 1]
