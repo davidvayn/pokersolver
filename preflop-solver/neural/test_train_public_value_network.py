@@ -460,6 +460,22 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertEqual(
             combined.source["component_dataset_sha256"], ["a" * 64, "b" * 64]
         )
+        self.assertEqual(
+            combined.source["component_source_policy_sha256"], ["f" * 64, "f" * 64]
+        )
+        self.assertEqual(combined.source["validation"]["status"], "accepted")
+
+    def test_supplemental_dataset_preserves_distinct_policy_provenance(self) -> None:
+        primary = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        supplement = self.synthetic_dataset([1, 6, 11, 16], "b" * 64)
+        primary.source["source_policy_sha256"] = "1" * 64
+        supplement.source["source_policy_sha256"] = "2" * 64
+        combined = module.combine_training_datasets(primary, [supplement])
+        self.assertEqual(combined.source["source_policy_sha256"], "1" * 64)
+        self.assertEqual(
+            combined.source["component_source_policy_sha256"],
+            ["1" * 64, "2" * 64],
+        )
         self.assertEqual(combined.source["validation"]["status"], "accepted")
 
     def test_legacy_target_schema_is_readable_but_release_rejected(self) -> None:
