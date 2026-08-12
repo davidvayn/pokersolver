@@ -1419,6 +1419,27 @@ pub struct CausalRangePolicyEvaluationConfig {
     pub maximum_weighted_kl: f64,
 }
 
+// Attribution rows store f32 probabilities emitted by the Rust generator,
+// while the serving evaluator recomputes the same MLX-exported policy through
+// its f64 inference path.  Keep this tolerance aligned with
+// fine_tune_range_policy_causal.py: it only admits bounded serialization/
+// inference drift and is independent of every policy-value and trust-region
+// gate below.
+const MAXIMUM_STORED_SOURCE_PROBABILITY_DIFFERENCE: f64 = 2e-6;
+const MAXIMUM_CAUSAL_PROBABILITY_SUM_ERROR: f64 = 1e-6;
+
+fn causal_probability_parity_accepted(
+    maximum_source_difference: f64,
+    maximum_sum_error: f64,
+) -> bool {
+    maximum_source_difference.is_finite()
+        && maximum_source_difference >= 0.0
+        && maximum_source_difference <= MAXIMUM_STORED_SOURCE_PROBABILITY_DIFFERENCE
+        && maximum_sum_error.is_finite()
+        && maximum_sum_error >= 0.0
+        && maximum_sum_error <= MAXIMUM_CAUSAL_PROBABILITY_SUM_ERROR
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct CausalRangePolicyAttributionRecord {
     record_type: String,
@@ -1710,8 +1731,7 @@ pub fn evaluate_causal_range_policy(
     let passed = weighted_gain >= config.minimum_policy_value_gain_bb
         && weighted_kl <= config.maximum_weighted_kl
         && maximum_reverse_kl <= config.maximum_node_kl
-        && maximum_sum_error <= 1e-6
-        && maximum_source_difference <= 1e-6;
+        && causal_probability_parity_accepted(maximum_source_difference, maximum_sum_error);
     Ok(CausalRangePolicyEvaluationReport {
         schema: "hu-range-conditioned-causal-policy-rust-evaluation-v1",
         network_sha256,
@@ -10235,6 +10255,23 @@ fn joint_compatibility_mass(ranges: &[Vec<f64>; 2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn causal_probability_parity_limits_are_closed_and_finite() {
+        assert!(causal_probability_parity_accepted(
+            MAXIMUM_STORED_SOURCE_PROBABILITY_DIFFERENCE,
+            MAXIMUM_CAUSAL_PROBABILITY_SUM_ERROR,
+        ));
+        assert!(!causal_probability_parity_accepted(
+            f64::from_bits(MAXIMUM_STORED_SOURCE_PROBABILITY_DIFFERENCE.to_bits() + 1),
+            0.0,
+        ));
+        assert!(!causal_probability_parity_accepted(
+            0.0,
+            f64::from_bits(MAXIMUM_CAUSAL_PROBABILITY_SUM_ERROR.to_bits() + 1),
+        ));
+        assert!(!causal_probability_parity_accepted(f64::NAN, 0.0));
+    }
 
     #[test]
     fn range_policy_ev_sensitivity_bins_cover_gate_boundaries() {

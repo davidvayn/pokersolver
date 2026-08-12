@@ -42,6 +42,26 @@ class CausalRangePolicyTests(unittest.TestCase):
                 ),
                 [exact],
             )
+            exact["maximumStoredSourceProbabilityDifference"] = (
+                module.MAXIMUM_EXACT_RUST_STORED_SOURCE_PROBABILITY_DIFFERENCE
+            )
+            report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
+            self.assertEqual(
+                module.reuse_exact_dataset_parity(
+                    report, [dataset], [source], [attribution]
+                ),
+                [exact],
+            )
+            exact["maximumStoredSourceProbabilityDifference"] = np.nextafter(
+                module.MAXIMUM_EXACT_RUST_STORED_SOURCE_PROBABILITY_DIFFERENCE,
+                np.inf,
+            )
+            report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
+            with self.assertRaisesRegex(ValueError, "not pinned"):
+                module.reuse_exact_dataset_parity(
+                    report, [dataset], [source], [attribution]
+                )
+            exact["maximumStoredSourceProbabilityDifference"] = 1e-7
             exact["datasetSha256"] = "0" * 64
             report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
             with self.assertRaisesRegex(ValueError, "not pinned"):

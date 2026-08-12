@@ -69,6 +69,17 @@
       "reason": "the other corpus's stored probabilities belong to the other policy and are not the candidate source's frozen baseline",
       "regressionTest": "a deliberately nonuniform other-policy current profile must not enter candidate trust-region accounting"
     },
+    "exactStoredProbabilityParity": {
+      "maximumStoredSourceProbabilityDifference": 0.000002,
+      "maximumProbabilitySumError": 0.000001,
+      "observedMaximumStoredSourceProbabilityDifference": 0.000001268438561408125,
+      "reason": "attribution rows store f32 probabilities while both the MLX training path and exact Rust serving evaluator recompute the pinned policy; the bounded ceiling covers serialization and inference-order drift only",
+      "policyValueOrTrustRegionGateChanged": false,
+      "implementationsAligned": [
+        "neural/fine_tune_range_policy_causal.py",
+        "src/blueprint/public_belief.rs"
+      ]
+    },
     "reproducibleUpdateRebase": {
       "tool": "neural/blend_range_policy_updates.py",
       "operator": "target_source_plus_weighted_donor_delta",
@@ -163,8 +174,90 @@
       }
     ],
     "allEightDirectionalChecksPassed": true,
-    "regeneratedResponseStatus": "pending",
-    "interpretation": "A is already close to the unchanged 0.005 node-KL ceiling, so do not enlarge this step again; regenerate the response before selecting either candidate"
+    "regeneratedResponseStatus": "accepted_both_matched_responses_improved",
+    "regeneratedResponse": {
+      "reports": [
+        {
+          "path": "neural/runs/20bb-v90-causal-policy-iteration/round2/matched-response-refresh/attribution-seed-19801-report.json",
+          "sha256": "65ee43602d0ae0ebfadc95b81c3dee4a702fc7e0f88f243e3365f973c27ddd0f"
+        },
+        {
+          "path": "neural/runs/20bb-v90-causal-policy-iteration/round2/matched-response-refresh/attribution-seed-19802-report.json",
+          "sha256": "0f10f0c071d6cdaef4bb4ef5b444848df9a459465ed7e90db5fd4e520384b91d"
+        }
+      ],
+      "matchedValuesBbPerHand": [4.644789058758727, 3.974244298737305],
+      "parentPairedMeanBbPerHand": 4.33975455879868,
+      "candidatePairedMeanBbPerHand": 4.309516678748016,
+      "pairedMeanDeltaBbPerHand": -0.030237880050663968,
+      "bothMatchedResponsesImproved": true
+    },
+    "interpretation": "the enlarged second step remained inside every exact trust bound and lowered both newly optimized matched responses"
+  },
+  "round3DirectionalPair": {
+    "rejectedPilot": {
+      "learningRate": 0.000002,
+      "report": "neural/runs/20bb-v90-causal-policy-iteration/round3/s1-full-paired-b16-lr2e6/report.json",
+      "reason": "seed A exceeded the unchanged cross-seed maximum node reverse-KL gate: 0.005420957320348248 > 0.005"
+    },
+    "settings": {
+      "steps": 1,
+      "batchSize": 16,
+      "learningRate": 0.00000175,
+      "fullCorpusGradient": true,
+      "pairedCorpusGradient": true,
+      "maximumRealizedNodeKl": 0.005,
+      "maximumRealizedWeightedKl": 0.0015
+    },
+    "report": "neural/runs/20bb-v90-causal-policy-iteration/round3/s1-full-paired-b16-lr1p75e6/report.json",
+    "reportSha256": "b6ccca2d60a0014baf4a4a55a232efbf8367ff8e23ba240ad8628de1e082905b",
+    "candidates": [
+      {
+        "seed": 20221,
+        "sha256": "6e24b2ca87e082e581eb3443d3590738d289c2a0817ed25898a5c7a26f66f354",
+        "exactResponseCorpusGainsBb": [0.0305614947690975, 0.016724616451509713],
+        "maximumExactNodeReverseKl": 0.004101054170553399
+      },
+      {
+        "seed": 20222,
+        "sha256": "187936e09cd7ca8a5f7af2e99859a60df1c906c6ea25342bb98c6383448a85a6",
+        "exactResponseCorpusGainsBb": [0.009872723059202268, 0.012132048836098624],
+        "maximumExactNodeReverseKl": 0.0009418033877354334
+      }
+    ],
+    "allEightDirectionalChecksPassed": true
+  },
+  "round3RegeneratedResponse": {
+    "reports": [
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round3/matched-response-refresh/attribution-seed-19801-report.json",
+        "sha256": "47a82ddc744bc8077235de94d0dd8f5044287a5cff634dadad25685254eb49c3",
+        "datasetSha256": "5cebcae1cfab3322e8a0e65eeac7c679047838f2003d06a7001561cf76782eae"
+      },
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round3/matched-response-refresh/attribution-seed-19802-report.json",
+        "sha256": "ced52e3633dcace0a85e4eb6508fa0120a47b2256ef56e1f0064dad51d32ed1c",
+        "datasetSha256": "57b33e91e3bdf5aeb7ad7ac6958d80d742a69ca9362f9a6c4a0715d16d66ff56"
+      }
+    ],
+    "matchedValuesBbPerHand": [
+      {
+        "parent": 4.644789058758727,
+        "candidate": 4.611923331017611,
+        "delta": -0.03286572774111618
+      },
+      {
+        "parent": 3.974244298737305,
+        "candidate": 3.9555260589331014,
+        "delta": -0.01871823980420362
+      }
+    ],
+    "parentPairedMeanBbPerHand": 4.309516678748016,
+    "candidatePairedMeanBbPerHand": 4.283724694975356,
+    "pairedMeanDeltaBbPerHand": -0.025791983772660343,
+    "cumulativePairedMeanDeltaFromFrozenV89BbPerHand": -0.07098641918227888,
+    "bothMatchedResponsesImproved": true,
+    "interpretation": "three consecutive bounded current-profile corrections reduced both re-optimized matched response values, but this relaxed one-branch objective is still not a release certificate"
   },
   "releaseContext": {
     "lastComparableFrozenFullGameSampleMeanExploitabilityBbPerHand": 2.832711355599124,
@@ -173,6 +266,6 @@
     "currentMaximumOneSided99PercentUpperBoundBbPerHand": 0.5,
     "activationEligible": false,
     "activeModelChanged": false,
-    "reason": "round-two has only fixed-response directional evidence; no current candidate has a qualifying regenerated response, fresh full-game certificate, or complete normal release-gate result"
+    "reason": "round three has qualifying matched directional evidence but its 4.283724694975356bb one-branch paired objective remains far above the 0.5bb release target; no current candidate has a qualifying fresh full-game certificate or complete normal release-gate result"
   }
 }

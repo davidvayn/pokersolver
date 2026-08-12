@@ -50,6 +50,8 @@ MAXIMUM_SOURCE_PARITY_WEIGHTED_KL = 1e-6
 # exact candidate acceptance is still decided by the Rust evaluator below.
 MAXIMUM_SOURCE_PARITY_NODE_KL = 5e-5
 MINIMUM_SOURCE_PARITY_PRIMARY_AGREEMENT = 0.999
+MAXIMUM_EXACT_RUST_STORED_SOURCE_PROBABILITY_DIFFERENCE = 2e-6
+MAXIMUM_EXACT_RUST_PROBABILITY_SUM_ERROR = 1e-6
 REALIZED_TRUST_REGION_SELECTION_FRACTION = 0.95
 ONE_SIDED_99_PERCENT_Z = 2.3263478740408408
 
@@ -458,6 +460,21 @@ def rust_evaluate(
     return report
 
 
+def exact_dataset_parity_accepted(report: dict[str, Any]) -> bool:
+    stored_difference = report.get("maximumStoredSourceProbabilityDifference")
+    sum_error = report.get("maximumProbabilitySumError")
+    return all(
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and np.isfinite(value)
+        and value >= 0.0
+        for value in (stored_difference, sum_error)
+    ) and bool(
+        stored_difference <= MAXIMUM_EXACT_RUST_STORED_SOURCE_PROBABILITY_DIFFERENCE
+        and sum_error <= MAXIMUM_EXACT_RUST_PROBABILITY_SUM_ERROR
+    )
+
+
 def reuse_exact_dataset_parity(
     report_path: Path,
     datasets: list[CausalRangeDataset],
@@ -479,9 +496,7 @@ def reuse_exact_dataset_parity(
             or report.get("attributionNetworkSha256") != sha256(attribution)
             or report.get("datasetSha256") != dataset.sha256
             or report.get("records") != len(dataset.records)
-            or report.get("maximumStoredSourceProbabilityDifference", float("inf"))
-            > 1e-6
-            or report.get("maximumProbabilitySumError", float("inf")) > 1e-6
+            or not exact_dataset_parity_accepted(report)
         ):
             raise ValueError("cached exact Rust dataset parity is not pinned")
     return reports
@@ -893,10 +908,7 @@ def main() -> None:
                 args.maximum_realized_node_kl,
                 args.maximum_realized_weighted_kl,
             )
-            if (
-                report["maximumStoredSourceProbabilityDifference"] > 1e-6
-                or report["maximumProbabilitySumError"] > 1e-6
-            ):
+            if not exact_dataset_parity_accepted(report):
                 raise RuntimeError("exact Rust directional-dataset parity failed")
             return report
 
@@ -1053,6 +1065,10 @@ def main() -> None:
         ),
         "exactRustDatasetParity": exact_dataset_parity_reports,
         "exactRustDatasetParitySource": exact_dataset_parity_source,
+        "exactRustDatasetParityLimits": {
+            "maximumStoredSourceProbabilityDifference": MAXIMUM_EXACT_RUST_STORED_SOURCE_PROBABILITY_DIFFERENCE,
+            "maximumProbabilitySumError": MAXIMUM_EXACT_RUST_PROBABILITY_SUM_ERROR,
+        },
         "updateOperator": (
             "mirror_prox_corrector_from_frozen_parent"
             if any(
