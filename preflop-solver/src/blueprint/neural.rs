@@ -4312,6 +4312,16 @@ fn flop_resolver_value_network_sha256(
         .map_err(Into::into)
 }
 
+fn enable_certificate_resolvers(
+    generator: &mut SampleGenerator,
+    config: &ExploitabilityCertificateConfig,
+) -> Result<(), Box<dyn Error>> {
+    generator.enable_flop_resolver(config.flop_resolver.clone())?;
+    generator.enable_turn_resolver(config.turn_resolver)?;
+    generator.enable_river_resolver(config.river_resolver)?;
+    Ok(())
+}
+
 pub fn certify_exploitability_upper_bound(
     config: ExploitabilityCertificateConfig,
 ) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
@@ -4347,11 +4357,7 @@ pub fn certify_exploitability_upper_bound(
         },
         config.range_policy_path.as_deref(),
     )?;
-    generator.enable_flop_resolver(config.flop_resolver.clone())?;
-    generator.enable_flop_resolver(config.flop_resolver.clone())?;
-    generator.enable_flop_resolver(config.flop_resolver.clone())?;
-    generator.enable_turn_resolver(config.turn_resolver)?;
-    generator.enable_river_resolver(config.river_resolver)?;
+    enable_certificate_resolvers(&mut generator, &config)?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -4552,8 +4558,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         },
         config.range_policy_path.as_deref(),
     )?;
-    generator.enable_turn_resolver(config.turn_resolver)?;
-    generator.enable_river_resolver(config.river_resolver)?;
+    enable_certificate_resolvers(&mut generator, &config)?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -4780,8 +4785,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         },
         config.range_policy_path.as_deref(),
     )?;
-    generator.enable_turn_resolver(config.turn_resolver)?;
-    generator.enable_river_resolver(config.river_resolver)?;
+    enable_certificate_resolvers(&mut generator, &config)?;
     if generator.networks.is_none() {
         return Err("exploitability certification requires a frozen policy".into());
     }
@@ -5691,6 +5695,25 @@ mod tests {
             "sourceValidationStatus": "accepted_for_training",
             "policyComposition": "replace"
         });
+        let value_network = serde_json::json!({
+            "schema": "hu-public-belief-combo-value-network-v3",
+            "seed": 83,
+            "usesExactRanges": true,
+            "targetScaleBb": 20.0,
+            "rangeScale": COMBO_COUNT,
+            "residualScaleBb": 5.0,
+            "sourceDatasetSha256": "b".repeat(64),
+            "sourcePolicySha256": "c".repeat(64),
+            "sourceValidationStatus": "accepted",
+            "featureSchema": "rank-suit-invariant-combo-query-v1",
+            "contextPublicCount": 21,
+            "contextSize": 359,
+            "queryStructuralCount": 76,
+            "querySize": 95,
+            "contextTower": [layer(359)],
+            "queryTower": [layer(95)],
+            "head": [layer(2)]
+        });
         let prefix = format!(
             "pokersolver-range-causal-attribution-{}",
             std::process::id()
@@ -5698,6 +5721,7 @@ mod tests {
         let directory = std::env::temp_dir();
         let network_path = directory.join(format!("{prefix}-network.json"));
         let range_path = directory.join(format!("{prefix}-range.json"));
+        let value_path = directory.join(format!("{prefix}-value.json"));
         let output_path = directory.join(format!("{prefix}.jsonl.gz"));
         let self_play_first_path = directory.join(format!("{prefix}-self-play-first.jsonl.gz"));
         let self_play_second_path = directory.join(format!("{prefix}-self-play-second.jsonl.gz"));
@@ -5706,8 +5730,49 @@ mod tests {
         fs::write(&network_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let range_bytes = serde_json::to_vec(&range_policy).unwrap();
         fs::write(&range_path, &range_bytes).unwrap();
+        fs::write(&value_path, serde_json::to_vec(&value_network).unwrap()).unwrap();
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 2.0;
+        let resolver_config = ExploitabilityCertificateConfig {
+            game: game.clone(),
+            deals: 2,
+            seed: 83,
+            confidence: 0.99,
+            threads: 2,
+            network_path: network_path.clone(),
+            range_policy_path: Some(range_path.clone()),
+            river_resolver: None,
+            turn_resolver: None,
+            flop_resolver: Some(FlopResolverConfig {
+                iterations: 2,
+                averaging_delay: 0,
+                regret_matching_plus: false,
+                threads: 1,
+                value_network_path: value_path.clone(),
+            }),
+        };
+        let mut resolver_generator = SampleGenerator::new_with_range(
+            SampleGenerationConfig {
+                game: game.clone(),
+                traversals: 1,
+                start_iteration: 0,
+                seed: 83,
+                max_records: 1,
+                output: directory.join(format!("{prefix}-unused.jsonl.gz")),
+                network_path: Some(network_path.clone()),
+                trajectory_sampling: false,
+                evaluate_trajectory_values: false,
+                value_rollouts_per_action: 1,
+                enumerate_turn_river_chance: false,
+            },
+            Some(&range_path),
+        )
+        .unwrap();
+        enable_certificate_resolvers(&mut resolver_generator, &resolver_config).unwrap();
+        assert!(resolver_generator
+            .networks
+            .as_ref()
+            .is_some_and(|policy| policy.flop_resolver.is_some()));
         let attribution = generate_causal_policy_attribution(CausalPolicyAttributionConfig {
             game: game.clone(),
             deals: 2,
@@ -5962,6 +6027,7 @@ mod tests {
             first_self_play.retained_records
         );
         fs::remove_file(network_path).unwrap();
+        fs::remove_file(value_path).unwrap();
         fs::remove_file(range_path).unwrap();
         fs::remove_file(output_path).unwrap();
         fs::remove_file(self_play_first_path).unwrap();
