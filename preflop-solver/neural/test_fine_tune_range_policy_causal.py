@@ -16,6 +16,19 @@ import train_public_value_network as value_features
 
 
 class CausalRangePolicyTests(unittest.TestCase):
+    def test_per_seed_learning_rates_override_the_shared_default(self):
+        self.assertEqual(
+            module.resolve_learning_rates(1e-6, None, None),
+            [1e-6, 1e-6],
+        )
+        self.assertEqual(
+            module.resolve_learning_rates(1e-6, 1.5e-6, 3e-6),
+            [1.5e-6, 3e-6],
+        )
+        for invalid in (0.0, -1e-6, float("nan"), float("inf")):
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                module.resolve_learning_rates(1e-6, None, invalid)
+
     def test_cached_exact_dataset_parity_must_pin_every_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

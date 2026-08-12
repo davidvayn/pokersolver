@@ -475,6 +475,20 @@ def exact_dataset_parity_accepted(report: dict[str, Any]) -> bool:
     )
 
 
+def resolve_learning_rates(
+    learning_rate: float,
+    learning_rate_a: float | None,
+    learning_rate_b: float | None,
+) -> list[float]:
+    rates = [
+        learning_rate if learning_rate_a is None else learning_rate_a,
+        learning_rate if learning_rate_b is None else learning_rate_b,
+    ]
+    if any(not np.isfinite(rate) or rate <= 0.0 for rate in rates):
+        raise ValueError("causal range-policy learning rates must be positive")
+    return rates
+
+
 def reuse_exact_dataset_parity(
     report_path: Path,
     datasets: list[CausalRangeDataset],
@@ -812,6 +826,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--learning-rate-a", type=float)
+    parser.add_argument("--learning-rate-b", type=float)
     parser.add_argument("--mirror-step-per-bb", type=float, default=0.1)
     parser.add_argument("--maximum-target-node-kl", type=float, default=0.002)
     parser.add_argument("--maximum-realized-node-kl", type=float, default=0.005)
@@ -864,6 +880,11 @@ def main() -> None:
             raise ValueError("causal range-policy bounds must be positive")
     if args.paired_corpus_gradient and not args.full_corpus_gradient:
         raise ValueError("paired-corpus gradient requires --full-corpus-gradient")
+    learning_rates = resolve_learning_rates(
+        args.learning_rate,
+        args.learning_rate_a,
+        args.learning_rate_b,
+    )
 
     datasets = [
         load_dataset(
@@ -936,7 +957,7 @@ def main() -> None:
             seed,
             args.steps,
             args.batch_size,
-            args.learning_rate,
+            learning_rates[index],
             args.mirror_step_per_bb,
             args.maximum_target_node_kl,
             args.maximum_realized_node_kl,
@@ -981,6 +1002,7 @@ def main() -> None:
                 "attributionSha256": sha256(attributions[index]),
                 "network": str(output),
                 "networkSha256": sha256(output),
+                "learningRate": learning_rates[index],
                 "diagnostics": diagnostics,
                 "pythonPairedDirectionalTrustGate": python_accepted,
             }
@@ -1051,6 +1073,7 @@ def main() -> None:
         "steps": args.steps,
         "batchSize": args.batch_size,
         "learningRate": args.learning_rate,
+        "learningRates": learning_rates,
         "mirrorStepPerBb": args.mirror_step_per_bb,
         "maximumTargetNodeKl": args.maximum_target_node_kl,
         "maximumRealizedNodeKl": args.maximum_realized_node_kl,

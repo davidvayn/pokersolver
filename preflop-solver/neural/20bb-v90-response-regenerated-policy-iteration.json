@@ -259,6 +259,66 @@
     "bothMatchedResponsesImproved": true,
     "interpretation": "three consecutive bounded current-profile corrections reduced both re-optimized matched response values, but this relaxed one-branch objective is still not a release certificate"
   },
+  "round4DirectionalPair": {
+    "settings": {
+      "steps": 1,
+      "batchSize": 16,
+      "learningRate": 0.00000175,
+      "fullCorpusGradient": true,
+      "pairedCorpusGradient": true,
+      "maximumRealizedNodeKl": 0.005,
+      "maximumRealizedWeightedKl": 0.0015
+    },
+    "report": "neural/runs/20bb-v90-causal-policy-iteration/round4/s1-full-paired-b16-lr1p75e6/report.json",
+    "reportSha256": "1ddd4fa95b58ab1e23034fca0d8478fb0841f013fa51c0e501bc6b951099429a",
+    "candidates": [
+      {
+        "seed": 20321,
+        "sha256": "a4fe1a4f45ba0b5297611fa6a2d406b260a4b6a1842bb4de9b127261fbe36564",
+        "exactResponseCorpusGainsBb": [0.030646758064328757, 0.012756685422305392],
+        "maximumExactNodeReverseKl": 0.004103912839702654
+      },
+      {
+        "seed": 20322,
+        "sha256": "d50f5415eae7e1aca2d1128b70183053e1dfe20191e41498d67eb119070729b9",
+        "exactResponseCorpusGainsBb": [0.01069100104492734, 0.011048546453247154],
+        "maximumExactNodeReverseKl": 0.0008741823663833918
+      }
+    ],
+    "allEightDirectionalChecksPassed": true
+  },
+  "round4RegeneratedResponse": {
+    "reports": [
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round4/matched-response-refresh/attribution-seed-19801-report.json",
+        "sha256": "8e1cf7a65ae2848f1fe02465410f8084d12c2b5036627a18dff75fa088c540d2",
+        "datasetSha256": "1da1a4dd8fb6f4d0d3ee9aa771dd35adf6f13a872d35a9ed9217ada62b3d5271"
+      },
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round4/matched-response-refresh/attribution-seed-19802-report.json",
+        "sha256": "06adf772add3a0bc156dc3e79762f8bb7a733d0411c2428d500fb497901ab9d7",
+        "datasetSha256": "51eead24ba67940c506fab887b04faa70ea9582b07ca0e3ea909317fcde8c5e3"
+      }
+    ],
+    "matchedValuesBbPerHand": [
+      {
+        "parent": 4.611923331017611,
+        "candidate": 4.57864001329544,
+        "delta": -0.0332833177221703
+      },
+      {
+        "parent": 3.9555260589331014,
+        "candidate": 3.9366266257504217,
+        "delta": -0.018899433182679726
+      }
+    ],
+    "parentPairedMeanBbPerHand": 4.283724694975356,
+    "candidatePairedMeanBbPerHand": 4.257633319522931,
+    "pairedMeanDeltaBbPerHand": -0.026091375452424792,
+    "cumulativePairedMeanDeltaFromFrozenV89BbPerHand": -0.09707779463470345,
+    "bothMatchedResponsesImproved": true,
+    "nextOptimization": "use independent learning rates under unchanged trust gates because seed A's maximum exact node KL is 0.004103912839702654 while seed B's is 0.0008741823663833918"
+  },
   "releaseContext": {
     "lastComparableFrozenFullGameSampleMeanExploitabilityBbPerHand": 2.832711355599124,
     "lastComparableFrozenOneSided99PercentUpperBoundBbPerHand": 20.0,
@@ -266,6 +326,6 @@
     "currentMaximumOneSided99PercentUpperBoundBbPerHand": 0.5,
     "activationEligible": false,
     "activeModelChanged": false,
-    "reason": "round three has qualifying matched directional evidence but its 4.283724694975356bb one-branch paired objective remains far above the 0.5bb release target; no current candidate has a qualifying fresh full-game certificate or complete normal release-gate result"
+    "reason": "round four has qualifying matched directional evidence but its 4.257633319522931bb one-branch paired objective remains far above the 0.5bb release target; no current candidate has a qualifying fresh full-game certificate or complete normal release-gate result"
   }
 }
