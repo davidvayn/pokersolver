@@ -1,0 +1,142 @@
+{
+  "schema": "hu-20bb-hybrid-policy-correction-pilot-v1",
+  "depth_bb": 20.0,
+  "baseline": "v82 residual range policies over the retained v57 direct networks",
+  "purpose": "test whether one identical equal-weight blend of the complementary v87 self-play and v88 causal Mirror-Prox corrections improves both frozen policy seeds",
+  "implementation": {
+    "method": "source_plus_weighted_component_deltas",
+    "weights": [0.5, 0.5],
+    "requires_identical_frozen_parent": true,
+    "validates_architecture_and_tensor_shapes": true,
+    "rejects_non_finite_parameters": true,
+    "atomic_output": true,
+    "unit_tests": 5
+  },
+  "candidates": [
+    {
+      "name": "A",
+      "seed": 19701,
+      "source_range_policy_sha256": "6b511a44610882a45b1506dbe2ca3e0fe8a950e06f72192d81d944f007d26746",
+      "self_play_component_sha256": "681afa8fcadfcad3b4789568ec827dc5de190b9fd064d4fd278b2a9ddc995269",
+      "causal_component_sha256": "3512e9d999212818ef9774b0bef2746dd84b52742f43e7c6c8a552d68aa6e09a",
+      "candidate_range_policy_sha256": "c822bc81f057937a0cc623ba6445141180ef2dcae9c80aa1a659dc9875f5af44",
+      "exact_directional_evaluations": [
+        {
+          "corpus": "causal_a",
+          "weighted_policy_value_gain_bb": 0.003939922931697746,
+          "maximum_reverse_kl_from_frozen": 0.0002627149587025381,
+          "weighted_reverse_kl_from_frozen": 0.000006380264294034114,
+          "weighted_primary_action_agreement": 1.0,
+          "report_sha256": "a8e305e44c308426c319944bd4732c96db309a4773d52c71cda77100ad13394a"
+        },
+        {
+          "corpus": "causal_b",
+          "weighted_policy_value_gain_bb": 0.001428854331935437,
+          "maximum_reverse_kl_from_frozen": 0.0000739839170371967,
+          "weighted_reverse_kl_from_frozen": 0.0000037460136108060262,
+          "weighted_primary_action_agreement": 1.0,
+          "report_sha256": "0c39eb1c05ac492b70b6fb127489a2e4557f1c86983d3824dce87374d792f7df"
+        },
+        {
+          "corpus": "self_play_a",
+          "weighted_policy_value_gain_bb": 0.0013035424226294052,
+          "maximum_reverse_kl_from_frozen": 0.00005148358000145025,
+          "weighted_reverse_kl_from_frozen": 0.000001972144216371477,
+          "weighted_primary_action_agreement": 1.0,
+          "report_sha256": "d9aaa54fbdc3259806b65937844cffee3cfa1705964a48b15d2eeffec182a0d6"
+        },
+        {
+          "corpus": "self_play_b",
+          "weighted_policy_value_gain_bb": 0.0015891171551807683,
+          "maximum_reverse_kl_from_frozen": 0.00018469650499248848,
+          "weighted_reverse_kl_from_frozen": 0.000003093688170738841,
+          "weighted_primary_action_agreement": 1.0,
+          "report_sha256": "0ffad6e6e499064d7c7b21843d7530322c9f14ed3e14726f30990a17d68e81a7"
+        }
+      ],
+      "matched_screen": {
+        "seed": 19101,
+        "deals": 2,
+        "parent_mean_exploitability_bb": 8.209943599220036,
+        "candidate_mean_exploitability_bb": 8.207849491206574,
+        "candidate_delta_bb": -0.002094108013462659,
+        "candidate_report_sha256": "0b9d7333c95434f18838e192229a95f49a16069221b5767094f09ebb2ea461d9"
+      }
+    },
+    {
+      "name": "B",
+      "seed": 19702,
+      "source_range_policy_sha256": "111454bc7d05ad72a536acdad8bcdf945a6ecd20850cb1da7a34150b015ab006",
+      "self_play_component_sha256": "ae01b5b2183217f5ef35b05c059a49b52b0441f99f9572db906cea9ef31b9681",
+      "causal_component_sha256": "e9ca0592bb692e21400f5048337e01557ef280fbd18bda8c059771975682675c",
+      "candidate_range_policy_sha256": "d83d43ee3c609ccb1f5882a45cc2b3870e67058b7fc429b380d71de3efe51e39",
+      "exact_directional_evaluations": [
+        {
+          "corpus": "causal_a",
+          "weighted_policy_value_gain_bb": 0.002278710761518482,
+          "maximum_reverse_kl_from_frozen": 0.00004174206843854088,
+          "weighted_reverse_kl_from_frozen": 0.0000031474097680949744,
+          "weighted_primary_action_agreement": 0.999999524663332,
+          "report_sha256": "45bde239c495f9e69f547f5ea46c03d1521096376be905c891aef6f12c3f027a"
+        },
+        {
+          "corpus": "causal_b",
+          "weighted_policy_value_gain_bb": 0.0010349441696025144,
+          "maximum_reverse_kl_from_frozen": 0.000040867508930554655,
+          "weighted_reverse_kl_from_frozen": 0.0000019602884524363784,
+          "weighted_primary_action_agreement": 1.0,
+          "report_sha256": "ac08a46a1dcf95728a83ab6b7cd8ac6b216eefe3e22248c44870738e5aa78b29"
+        },
+        {
+          "corpus": "self_play_a",
+          "weighted_policy_value_gain_bb": 0.001153336811172163,
+          "maximum_reverse_kl_from_frozen": 0.000029483593281901555,
+          "weighted_reverse_kl_from_frozen": 0.0000013960463068597013,
+          "weighted_primary_action_agreement": 1.0,
+          "report_sha256": "5f2a546bf0aec9bc7626aae53b88855947f390b30e854ba0f896c07ea79d4be9"
+        },
+        {
+          "corpus": "self_play_b",
+          "weighted_policy_value_gain_bb": 0.0016407694032045316,
+          "maximum_reverse_kl_from_frozen": 0.0000955419323953188,
+          "weighted_reverse_kl_from_frozen": 0.000002129099845025372,
+          "weighted_primary_action_agreement": 0.9959016393442623,
+          "report_sha256": "f5bd6c2cd6984a18e3e5a7e910e99f9b7c8ed0ba69d84773ddfe1f2d840625a5"
+        }
+      ],
+      "matched_screen": {
+        "seed": 19102,
+        "deals": 2,
+        "parent_mean_exploitability_bb": 1.1705828767642554,
+        "candidate_mean_exploitability_bb": 1.1697901435455798,
+        "candidate_delta_bb": -0.0007927332186756786,
+        "candidate_report_sha256": "42f53a02aac9e13dd49bca17f55bc72c5db1a0ed6a31ed5ccafcbb7b0da82c9e"
+      }
+    }
+  ],
+  "directional_gates": {
+    "minimum_weighted_policy_value_gain_bb": 0.000001,
+    "maximum_node_reverse_kl": 0.005,
+    "maximum_weighted_reverse_kl": 0.0015,
+    "all_eight_exact_evaluations_pass": true,
+    "both_matched_full_game_deltas_are_negative": true
+  },
+  "fresh_confirmation": {
+    "seeds": [19711, 19712],
+    "deals_per_seed": 2,
+    "public_branches_per_street": 1,
+    "opponent_samples_per_runout": 1,
+    "result": "terminated_without_completed_outer_game",
+    "reason": "the A parent and candidate each exceeded 28.6 process CPU-hours and nearly eight elapsed hours without emitting one result; the B pair was paused after about 3.1 process CPU-hours each to avoid oversubscription",
+    "interpretation": "operationally inconclusive; absence of a result is not a policy failure or success, and the two-deal comparison would remain directional rather than release evidence"
+  },
+  "release_context": {
+    "frozen_v82_sample_mean_exploitability_bb": 2.832711355599124,
+    "maximum_release_mean_exploitability_bb": 0.05,
+    "frozen_v82_one_sided_99_percent_upper_bound_bb": 20.0,
+    "maximum_release_one_sided_99_percent_upper_bound_bb": 0.1
+  },
+  "conclusion": "The equal-weight hybrid resolves the complementary matched-seed sign failure of v87 and v88 and is locally safe on all four independent causal/self-play corpora per candidate. Its matched full-game improvements are only 0.002094108 and 0.000792733 bb/hand, the fresh confirmation was operationally inconclusive, and the frozen release gap remains orders of magnitude larger. Retain V89 as directional research evidence only; do not select, enlarge, certify, serve, or activate it.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}
