@@ -262,6 +262,20 @@ class CausalRangePolicyTests(unittest.TestCase):
             self.assertFalse(
                 module.source_parity_metrics(primary_drift, dataset)["accepted"]
             )
+            rare_primary_drift = dataset.current.copy()
+            rare_primary_drift[0] = [0.4995, 0.5005]
+            rare_primary_dataset = replace(
+                dataset,
+                weights=np.asarray([1e-6, 1, 1, 1, 1, 1], dtype=np.float64),
+            )
+            rare_primary_metrics = module.source_parity_metrics(
+                rare_primary_drift, rare_primary_dataset
+            )
+            self.assertGreaterEqual(
+                rare_primary_metrics["primaryActionAgreement"],
+                module.MINIMUM_SOURCE_PARITY_PRIMARY_AGREEMENT,
+            )
+            self.assertTrue(rare_primary_metrics["accepted"])
             skewed_current = dataset.current.copy()
             skewed_current[0] = [0.001, 0.999]
             skewed_measured = skewed_current.copy()
@@ -337,7 +351,45 @@ class CausalRangePolicyTests(unittest.TestCase):
                 self.assertEqual(
                     diagnostics["pairedCorpusGradient"], paired_corpus_gradient
                 )
+                self.assertEqual(
+                    diagnostics["targetAnchorProbabilities"],
+                    "exact_stored_rust_training_and_mlx_cross_seed_probabilities",
+                )
                 del trained
+
+            # A cross-seed corpus stores the other policy's Rust probabilities.
+            # Those probabilities are evidence about its attribution policy, not
+            # the candidate source's frozen baseline on the same public states.
+            # Keep this deliberately far from the uniform source so a regression
+            # to anchoring validation metrics at ``validation.current`` fails.
+            cross_seed_current = np.tile([0.9, 0.1], (6, 1)).astype(np.float32)
+            cross_seed_dataset = replace(dataset, current=cross_seed_current)
+            trained, _, diagnostics = module.train_candidate(
+                source_path,
+                dataset,
+                cross_seed_dataset,
+                108,
+                1,
+                2,
+                1e-5,
+                0.1,
+                0.002,
+                0.005,
+                0.0015,
+                0.25,
+                1.0,
+                1,
+                True,
+                None,
+                True,
+            )
+            validation = diagnostics["selectedCheckpoint"]["validation"]
+            self.assertLess(validation["maximumReverseKlFromFrozen"], 0.005)
+            self.assertGreater(validation["weightedPolicyValueGainBb"], 0.0)
+            self.assertTrue(
+                diagnostics["selectedCheckpoint"]["insideRealizedTrustRegion"]
+            )
+            del trained
 
             attribution_path = Path(temporary) / "attribution.json"
             attribution_payload = json.loads(source_path.read_text())
@@ -374,6 +426,10 @@ class CausalRangePolicyTests(unittest.TestCase):
             self.assertEqual(
                 diagnostics["targetAnchorRangePolicySha256"],
                 module.sha256(source_path),
+            )
+            self.assertEqual(
+                diagnostics["targetAnchorProbabilities"],
+                "mlx_frozen_parent_probabilities",
             )
             del trained
 

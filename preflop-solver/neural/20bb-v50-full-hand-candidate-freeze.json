@@ -77,8 +77,10 @@
     "candidateCount": 2
   },
   "releaseGates": {
-    "maximumEstimatedExploitabilityBbPerHand": 0.05,
-    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": 0.1,
+    "revision": "2026-08-12-user-approved-total-exploitability-0.50bb",
+    "scope": "full-game total exploitability only; every other release gate remains unchanged",
+    "maximumEstimatedExploitabilityBbPerHand": 0.5,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": 0.5,
     "maximumReachWeightedCrossSeedActionFrequencyMae": 0.05,
     "minimumPrimaryActionAgreement": 0.85,
     "maximumAggregateActionDelta": 0.03,

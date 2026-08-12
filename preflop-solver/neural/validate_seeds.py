@@ -33,6 +33,27 @@ from train import (
 )
 
 
+MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND = 0.50
+MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND = 0.50
+
+
+def select_exploitability_certificate(
+    certificates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Select one candidate by its declared release statistic.
+
+    The sample mean and confidence bound must come from the same candidate;
+    independently minimizing those two fields would create an invalid hybrid
+    certificate after looking at both seeds.
+    """
+    if not certificates:
+        return None
+    return min(
+        certificates,
+        key=lambda certificate: float(certificate["exploitability_upper_bound_bb"]),
+    )
+
+
 def load_artifact_model(source_path: Path) -> ActionScorer:
     source = json.loads(source_path.read_text(encoding="utf-8"))
     descriptors = source["metadata"]["networks"]["baselinePolicy"]["layers"]
@@ -120,14 +141,18 @@ def latest_artifact(
             if int(artifact["round"]) == round_number
         ]
         if len(matches) != 1:
-            raise RuntimeError(f"run has no unique round-{round_number} browser artifact")
+            raise RuntimeError(
+                f"run has no unique round-{round_number} browser artifact"
+            )
         return matches[0]
     return max(state["artifacts"], key=lambda artifact: int(artifact["round"]))
 
 
 def verify_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     binary = Path(artifact["binary"])
-    descriptor = json.loads((binary.parent / "descriptor.json").read_text(encoding="utf-8"))
+    descriptor = json.loads(
+        (binary.parent / "descriptor.json").read_text(encoding="utf-8")
+    )
     payload = binary.read_bytes()
     sha256 = hashlib.sha256(payload).hexdigest()
     return {
@@ -214,7 +239,9 @@ def evaluation_records(
             command.append("--compact-serving-grid")
         if action_value_rollouts_per_action > 0:
             if action_value_rollouts_per_action < 2:
-                raise ValueError("action-EV evaluation requires at least two rollouts per action")
+                raise ValueError(
+                    "action-EV evaluation requires at least two rollouts per action"
+                )
             command.extend(
                 (
                     "--evaluate-action-values",
@@ -247,7 +274,9 @@ def evaluation_records(
     if metadata["truncated"]:
         raise RuntimeError("independent evaluation trajectory set was truncated")
     if metadata["sampling_mode"] != "trajectory":
-        raise RuntimeError("independent evaluation did not use pure trajectory sampling")
+        raise RuntimeError(
+            "independent evaluation did not use pure trajectory sampling"
+        )
     if action_value_rollouts_per_action > 0 and not metadata.get(
         "evaluates_trajectory_action_values"
     ):
@@ -354,8 +383,7 @@ def exploitability_certificate(
     if opponent_samples_per_deal > 0:
         margin = certificate.get("empirical_bernstein_margin_bb")
         if (
-            certificate.get("opponent_samples_per_deal")
-            != opponent_samples_per_deal
+            certificate.get("opponent_samples_per_deal") != opponent_samples_per_deal
             or certificate.get("confidence_bound_method")
             != "maurer_pontil_2009_theorem_4_one_sided_empirical_bernstein"
             or not isinstance(margin, (int, float))
@@ -363,9 +391,7 @@ def exploitability_certificate(
         ):
             raise RuntimeError("opponent-hidden exploitability certificate is invalid")
     if public_branches_per_street > 0:
-        expected_scenarios = (
-            public_branches_per_street**3 * opponent_samples_per_runout
-        )
+        expected_scenarios = public_branches_per_street**3 * opponent_samples_per_runout
         if (
             certificate.get("opponent_samples_per_runout")
             != opponent_samples_per_runout
@@ -392,14 +418,17 @@ def action_ev_standard_error_summary(
             if errors is None:
                 continue
             if len(errors) != len(record["actions"]) or not np.all(np.isfinite(errors)):
-                raise RuntimeError("action-EV evaluation returned invalid standard errors")
+                raise RuntimeError(
+                    "action-EV evaluation returned invalid standard errors"
+                )
             decisions += 1
             actions += len(errors)
             precise = [float(error) <= threshold_bb for error in errors]
             precise_actions += sum(precise)
             precise_decisions += int(all(precise))
             maximum_standard_error = max(
-                maximum_standard_error, max((float(error) for error in errors), default=0.0)
+                maximum_standard_error,
+                max((float(error) for error in errors), default=0.0),
             )
     return {
         "available": decisions > 0,
@@ -416,7 +445,10 @@ def action_ev_standard_error_summary(
 def policy(model: Any, features: np.ndarray) -> np.ndarray:
     logits = np.asarray(model(mx.array(features))).reshape(-1)
     probabilities = softmax(logits.astype(np.float64))
-    if not np.all(np.isfinite(probabilities)) or abs(float(probabilities.sum()) - 1.0) > 1e-6:
+    if (
+        not np.all(np.isfinite(probabilities))
+        or abs(float(probabilities.sum()) - 1.0) > 1e-6
+    ):
         raise RuntimeError("neural average policy produced invalid probabilities")
     return probabilities
 
@@ -454,7 +486,10 @@ def compare(
         decision_weight = raw_weight / total_weight
         squared_weight += decision_weight * decision_weight
         features = np.stack(
-            [expand_state_action(record["state"], action, depth_bb) for action in record["actions"]]
+            [
+                expand_state_action(record["state"], action, depth_bb)
+                for action in record["actions"]
+            ]
         )
         first = policy(first_model, features)
         second = policy(second_model, features)
@@ -462,13 +497,21 @@ def compare(
         first_primary = int(np.argmax(first))
         second_primary = int(np.argmax(second))
         primary_agreements += decision_weight * int(first_primary == second_primary)
-        first_near_best = set(np.flatnonzero(first >= float(np.max(first)) - 0.01).tolist())
-        second_near_best = set(np.flatnonzero(second >= float(np.max(second)) - 0.01).tolist())
-        tie_aware_agreements += decision_weight * int(bool(first_near_best & second_near_best))
+        first_near_best = set(
+            np.flatnonzero(first >= float(np.max(first)) - 0.01).tolist()
+        )
+        second_near_best = set(
+            np.flatnonzero(second >= float(np.max(second)) - 0.01).tolist()
+        )
+        tie_aware_agreements += decision_weight * int(
+            bool(first_near_best & second_near_best)
+        )
         first_top_probability += decision_weight * float(np.max(first))
         second_top_probability += decision_weight * float(np.max(second))
         first_entropy += decision_weight * float(-np.sum(first * np.log(first + 1e-12)))
-        second_entropy += decision_weight * float(-np.sum(second * np.log(second + 1e-12)))
+        second_entropy += decision_weight * float(
+            -np.sum(second * np.log(second + 1e-12))
+        )
         street = str(record["state"]["street"])
         street_metric = street_metrics.setdefault(
             street,
@@ -476,10 +519,14 @@ def compare(
         )
         street_metric["weight"] += decision_weight
         street_metric["mae"] += decision_weight * float(np.mean(np.abs(first - second)))
-        street_metric["agreement"] += decision_weight * int(first_primary == second_primary)
+        street_metric["agreement"] += decision_weight * int(
+            first_primary == second_primary
+        )
         street_metric["decisions"] += 1
         probability_count += len(first)
-        for action, first_probability, second_probability in zip(record["actions"], first, second):
+        for action, first_probability, second_probability in zip(
+            record["actions"], first, second
+        ):
             kind_index = ACTIONS.index(action["kind"])
             first_kind_mass[kind_index] += decision_weight * first_probability
             second_kind_mass[kind_index] += decision_weight * second_probability
@@ -536,7 +583,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--postflop-weights-b", type=Path)
     parser.add_argument("--action-value-rollouts-per-action", type=int, default=0)
     parser.add_argument("--exploitability-certificate-deals", type=int, default=0)
-    parser.add_argument("--exploitability-certificate-seed", type=int, default=0xA11CE5EED)
+    parser.add_argument(
+        "--exploitability-certificate-seed", type=int, default=0xA11CE5EED
+    )
     parser.add_argument("--exploitability-certificate-threads", type=int, default=8)
     parser.add_argument(
         "--exploitability-certificate-opponent-samples-per-deal",
@@ -566,7 +615,9 @@ def main() -> None:
     if args.postflop_round is not None and args.postflop_round <= 0:
         raise ValueError("postflop artifact round must be positive")
     if (args.postflop_run_a is None) != (args.postflop_run_b is None):
-        raise ValueError("both postflop run directories are required for street routing")
+        raise ValueError(
+            "both postflop run directories are required for street routing"
+        )
     if (args.weights_a is None) != (args.weights_b is None):
         raise ValueError("both preflop frozen weight overrides are required")
     if (args.postflop_weights_a is None) != (args.postflop_weights_b is None):
@@ -579,9 +630,15 @@ def main() -> None:
         raise ValueError("latest postflop selection requires postflop run directories")
     if args.postflop_latest and args.postflop_round is not None:
         raise ValueError("postflop round and latest selection are mutually exclusive")
-    if args.action_value_rollouts_per_action == 1 or args.action_value_rollouts_per_action < 0:
+    if (
+        args.action_value_rollouts_per_action == 1
+        or args.action_value_rollouts_per_action < 0
+    ):
         raise ValueError("action-EV rollouts must be zero (disabled) or at least two")
-    if args.exploitability_certificate_deals == 1 or args.exploitability_certificate_deals < 0:
+    if (
+        args.exploitability_certificate_deals == 1
+        or args.exploitability_certificate_deals < 0
+    ):
         raise ValueError("certificate deals must be zero (disabled) or at least two")
     if args.exploitability_certificate_threads <= 0:
         raise ValueError("certificate threads must be positive")
@@ -610,7 +667,9 @@ def main() -> None:
     first_state, first_model = load_run(args.run_a.resolve(), args.round_number)
     second_state, second_model = load_run(args.run_b.resolve(), args.round_number)
     if immutable_game_config(first_state) != immutable_game_config(second_state):
-        raise RuntimeError("cross-seed runs do not share an identical training configuration")
+        raise RuntimeError(
+            "cross-seed runs do not share an identical training configuration"
+        )
     config = first_state["config"]
     if first_state["config"]["seed"] == second_state["config"]["seed"]:
         raise RuntimeError("cross-seed validation requires independent training seeds")
@@ -637,16 +696,22 @@ def main() -> None:
         if immutable_game_config(first_postflop_state) != immutable_game_config(
             second_postflop_state
         ):
-            raise RuntimeError("postflop runs do not share an identical training configuration")
+            raise RuntimeError(
+                "postflop runs do not share an identical training configuration"
+            )
         if routing_compatible_config(first_state) != routing_compatible_config(
             first_postflop_state
         ):
-            raise RuntimeError("preflop and postflop runs use incompatible game abstractions")
+            raise RuntimeError(
+                "preflop and postflop runs use incompatible game abstractions"
+            )
         if [first_state["config"]["seed"], second_state["config"]["seed"]] != [
             first_postflop_state["config"]["seed"],
             second_postflop_state["config"]["seed"],
         ]:
-            raise RuntimeError("street-routed components must align their independent seeds")
+            raise RuntimeError(
+                "street-routed components must align their independent seeds"
+            )
         postflop_states = [first_postflop_state, second_postflop_state]
         postflop_models = [first_postflop_model, second_postflop_model]
         postflop_weight_overrides = apply_weight_overrides(
@@ -705,9 +770,9 @@ def main() -> None:
     # budget across the two candidates so the selected minimum remains a
     # family-wise one-sided 99% upper bound.
     selected_certificate_confidence = 0.99
-    per_seed_certificate_confidence = 1.0 - (
-        1.0 - selected_certificate_confidence
-    ) / 2.0
+    per_seed_certificate_confidence = (
+        1.0 - (1.0 - selected_certificate_confidence) / 2.0
+    )
     exploitability_certificates = (
         [
             exploitability_certificate(
@@ -731,24 +796,39 @@ def main() -> None:
         if args.exploitability_certificate_deals > 0
         else []
     )
-    selected_exploitability_upper = min(
-        (
-            float(certificate["exploitability_upper_bound_bb"])
-            for certificate in exploitability_certificates
-        ),
-        default=None,
+    selected_exploitability_certificate = select_exploitability_certificate(
+        exploitability_certificates
+    )
+    selected_exploitability_upper = (
+        None
+        if selected_exploitability_certificate is None
+        else float(selected_exploitability_certificate["exploitability_upper_bound_bb"])
+    )
+    selected_exploitability_mean = (
+        None
+        if selected_exploitability_certificate is None
+        else float(selected_exploitability_certificate["sample_mean_exploitability_bb"])
     )
     gates = {
         "action_frequency_mae_at_most_0_05": cross_seed["action_frequency_mae"] <= 0.05,
-        "primary_action_agreement_at_least_0_85": cross_seed["primary_action_agreement"] >= 0.85,
-        "aggregate_action_delta_at_most_0_03": cross_seed["maximum_aggregate_action_delta"] <= 0.03,
+        "primary_action_agreement_at_least_0_85": cross_seed["primary_action_agreement"]
+        >= 0.85,
+        "aggregate_action_delta_at_most_0_03": cross_seed[
+            "maximum_aggregate_action_delta"
+        ]
+        <= 0.03,
         "probabilities_valid": cross_seed["probability_sums_valid"],
         "reach_weighting_valid": cross_seed["reach_weighted"],
         "coverage_at_least_0_9999": cross_seed["lookup_coverage"] >= 0.9999,
         "independent_seed_count_at_least_2": True,
-        "exploitability_upper_99_at_most_0_10": selected_exploitability_upper
+        "estimated_exploitability_at_most_0_50": selected_exploitability_mean
         is not None
-        and selected_exploitability_upper <= 0.10,
+        and selected_exploitability_mean
+        <= MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND,
+        "exploitability_upper_99_at_most_0_50": selected_exploitability_upper
+        is not None
+        and selected_exploitability_upper
+        <= MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
         "action_ev_standard_error_coverage_at_least_0_95": action_ev_uncertainty[
             "available"
         ]
@@ -756,13 +836,17 @@ def main() -> None:
     }
     research_pilot_gates = {
         "action_frequency_mae_at_most_0_06": cross_seed["action_frequency_mae"] <= 0.06,
-        "primary_action_agreement_at_least_0_80": cross_seed["primary_action_agreement"] >= 0.80,
-        "aggregate_action_delta_at_most_0_04": cross_seed["maximum_aggregate_action_delta"] <= 0.04,
+        "primary_action_agreement_at_least_0_80": cross_seed["primary_action_agreement"]
+        >= 0.80,
+        "aggregate_action_delta_at_most_0_04": cross_seed[
+            "maximum_aggregate_action_delta"
+        ]
+        <= 0.04,
         "coverage_at_least_0_9999": cross_seed["lookup_coverage"] >= 0.9999,
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v10",
+        "schema": "hu-neural-cross-seed-validation-v11",
         "depth_bb": config["depth_bb"],
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
@@ -777,6 +861,7 @@ def main() -> None:
         "forced_deviation": forced_deviation,
         "action_ev_uncertainty": action_ev_uncertainty,
         "exploitability_certificates": exploitability_certificates,
+        "selected_sample_mean_exploitability_bb": selected_exploitability_mean,
         "selected_exploitability_upper_bound_bb": selected_exploitability_upper,
         "selected_exploitability_confidence": selected_certificate_confidence
         if exploitability_certificates
@@ -784,6 +869,10 @@ def main() -> None:
         "exploitability_selection_method": "minimum_of_two_seed_bounds_with_bonferroni_family_error_control"
         if exploitability_certificates
         else None,
+        "full_game_exploitability_release_gates": {
+            "maximum_estimated_bb_per_hand": MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND,
+            "maximum_one_sided_99_upper_bound_bb_per_hand": MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
+        },
         "artifacts": [
             verify_artifact(latest_artifact(first_state, args.round_number)),
             verify_artifact(latest_artifact(second_state, args.round_number)),
@@ -803,8 +892,11 @@ def main() -> None:
         "status": "rejected_not_activated",
         "reasons": [
             "Cross-seed stability is a reproducibility check, not equilibrium proof.",
-            "The conservative 99% full-game exploitability upper bound has not reached 0.10bb."
-            if not gates["exploitability_upper_99_at_most_0_10"]
+            "The selected full-game exploitability mean has not reached 0.50bb/hand."
+            if not gates["estimated_exploitability_at_most_0_50"]
+            else "The selected full-game exploitability mean passed.",
+            "The conservative 99% full-game exploitability upper bound has not reached 0.50bb/hand."
+            if not gates["exploitability_upper_99_at_most_0_50"]
             else "The conservative 99% full-game exploitability upper bound passed.",
             "Independent action-EV standard-error coverage has not reached the release gate."
             if not gates["action_ev_standard_error_coverage_at_least_0_95"]
@@ -834,7 +926,8 @@ def main() -> None:
             for state in postflop_states
         )
     report["integrity_valid"] = all(
-        artifact["descriptor_matches"] and artifact["magic_valid"] for artifact in report["artifacts"]
+        artifact["descriptor_matches"] and artifact["magic_valid"]
+        for artifact in report["artifacts"]
     )
     output = json.dumps(report, indent=2, sort_keys=True)
     if args.output:

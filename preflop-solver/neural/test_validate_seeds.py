@@ -6,10 +6,13 @@ import numpy as np
 
 from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT
 from validate_seeds import (
+    MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND,
+    MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
     StreetRoutedModel,
     action_ev_standard_error_summary,
     apply_weight_overrides,
     compare,
+    select_exploitability_certificate,
 )
 
 
@@ -59,6 +62,28 @@ class RankMarkerModel:
 
 
 class ReachAwareValidationTests(unittest.TestCase):
+    def test_total_exploitability_gate_is_half_a_blind_with_consistent_selection(self):
+        self.assertEqual(MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND, 0.50)
+        self.assertEqual(
+            MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
+            0.50,
+        )
+        certificates = [
+            {
+                "sample_mean_exploitability_bb": 0.10,
+                "exploitability_upper_bound_bb": 0.49,
+                "network_sha256": "a" * 64,
+            },
+            {
+                "sample_mean_exploitability_bb": 0.01,
+                "exploitability_upper_bound_bb": 0.50,
+                "network_sha256": "b" * 64,
+            },
+        ]
+        selected = select_exploitability_certificate(certificates)
+        self.assertIs(selected, certificates[0])
+        self.assertEqual(selected["sample_mean_exploitability_bb"], 0.10)
+
     def test_weight_overrides_must_remain_a_paired_seed_comparison(self):
         with self.assertRaisesRegex(ValueError, "paired frozen weight"):
             apply_weight_overrides([], (Path("seed-a.safetensors"), None))
@@ -91,7 +116,9 @@ class ReachAwareValidationTests(unittest.TestCase):
                 return mx.full((values.shape[0], 1), self.value)
 
         result = np.asarray(
-            StreetRoutedModel(ConstantModel(3.0), ConstantModel(7.0))(mx.array(features))
+            StreetRoutedModel(ConstantModel(3.0), ConstantModel(7.0))(
+                mx.array(features)
+            )
         ).reshape(-1)
         np.testing.assert_array_equal(result, np.asarray([3.0, 7.0]))
 

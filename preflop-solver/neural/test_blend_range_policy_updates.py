@@ -136,6 +136,41 @@ class BlendRangePolicyUpdateTests(unittest.TestCase):
                 17,
             )
 
+    def test_rebases_a_donor_delta_onto_an_independent_parent(self):
+        target_hash = "a" * 64
+        donor_hash = "b" * 64
+        candidate_hash = "c" * 64
+        rebased = module.rebase_policy_update(
+            policy(2.0),
+            policy(4.0),
+            policy(7.0, donor_hash),
+            target_hash,
+            donor_hash,
+            candidate_hash,
+            0.5,
+            19,
+        )
+        for tower in module.TOWER_KEYS:
+            self.assertEqual(rebased[tower][0]["weights"], [3.5])
+            self.assertEqual(rebased[tower][0]["biases"], [4.5])
+        self.assertEqual(rebased["parentRangePolicySha256"], target_hash)
+        self.assertEqual(rebased["rebasedUpdateDonorSourceSha256"], donor_hash)
+        self.assertEqual(rebased["rebasedUpdateDonorCandidateSha256"], candidate_hash)
+        self.assertEqual(rebased["rebasedUpdateWeight"], 0.5)
+
+    def test_rebase_rejects_an_unpinned_donor_candidate(self):
+        with self.assertRaisesRegex(ValueError, "does not pin"):
+            module.rebase_policy_update(
+                policy(2.0),
+                policy(4.0),
+                policy(7.0, "d" * 64),
+                "a" * 64,
+                "b" * 64,
+                "c" * 64,
+                1.0,
+                19,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

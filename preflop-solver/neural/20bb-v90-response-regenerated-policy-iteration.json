@@ -1,0 +1,178 @@
+{
+  "schema": "hu-20bb-response-regenerated-policy-iteration-v1",
+  "modelVersion": "hu-20bb-v90-response-regenerated-policy-iteration",
+  "purpose": "replace stale fixed-response policy sweeps with bounded policy iteration that regenerates an information-set-consistent causal response against the current paired policy before the next correction",
+  "releaseGateRevision": {
+    "authorizedOn": "2026-08-12",
+    "scope": "full-game total exploitability only",
+    "maximumEstimatedExploitabilityBbPerHand": 0.5,
+    "maximumOneSided99PercentExploitabilityUpperBoundBbPerHand": 0.5,
+    "otherReleaseGatesChanged": false,
+    "interpretation": "changing the release threshold does not improve any policy measurement; every candidate remains fail-closed until a qualifying full-game certificate and all unchanged normal gates pass"
+  },
+  "frozenV89Parents": [
+    {
+      "seed": 19701,
+      "path": "neural/runs/20bb-v89-hybrid-correction/equal-half/range-policy-seed-19701.json",
+      "sha256": "c822bc81f057937a0cc623ba6445141180ef2dcae9c80aa1a659dc9875f5af44"
+    },
+    {
+      "seed": 19702,
+      "path": "neural/runs/20bb-v89-hybrid-correction/equal-half/range-policy-seed-19702.json",
+      "sha256": "d83d43ee3c609ccb1f5882a45cc2b3870e67058b7fc429b380d71de3efe51e39"
+    }
+  ],
+  "round1ResponseGeneration": {
+    "method": "fixed_information_set_causal_best_response_policy_action_subgradient",
+    "controls": {
+      "dealsPerSeed": 8,
+      "publicBranchesPerStreet": 1,
+      "opponentSamplesPerRunout": 1,
+      "threadsPerSeed": 4,
+      "maximumRecords": 2000
+    },
+    "responses": [
+      {
+        "seed": 19801,
+        "dataset": "neural/runs/20bb-v90-causal-policy-iteration/round1/attribution-seed-19801.jsonl.gz",
+        "datasetSha256": "0399deba5b6d12d1333ba780f29eb538230bee14de972ea92bbed497af559d27",
+        "sampleMeanExploitabilityBbPerHand": 4.701541484929058,
+        "retainedRecords": 951,
+        "responseTreeNodes": 140320,
+        "maximumRootValueReconstructionErrorBb": 3.552713678800501e-15
+      },
+      {
+        "seed": 19802,
+        "dataset": "neural/runs/20bb-v90-causal-policy-iteration/round1/attribution-seed-19802.jsonl.gz",
+        "datasetSha256": "fa5e8e2955146695f67ba5d144682ab35ad82d2ed6838557cc31e9599f64b5e6",
+        "sampleMeanExploitabilityBbPerHand": 4.00788074338621,
+        "retainedRecords": 689,
+        "responseTreeNodes": 140320,
+        "maximumRootValueReconstructionErrorBb": 3.552713678800501e-15
+      }
+    ],
+    "interpretation": "these relaxed one-branch sample-game values are matched policy-iteration objectives, not the release certificate and not directly comparable to a different inner-sampling configuration"
+  },
+  "implementationCorrections": {
+    "sourceParity": {
+      "reason": "the blended V89 policies have bounded Rust scalar versus MLX matrix inference drift",
+      "maximumAbsoluteProbabilityError": 0.005,
+      "maximumNodeReverseKl": 0.00005,
+      "maximumReachWeightedReverseKl": 0.000001,
+      "minimumReachWeightedPrimaryActionAgreement": 0.999,
+      "maximumProbabilitySumError": 0.000001,
+      "interpretation": "all five limits must pass; aggregate agreement cannot hide an excessive node KL"
+    },
+    "crossSeedAnchor": {
+      "trainingCorpus": "exact stored Rust probabilities when the source policy generated its own current-profile corpus",
+      "validationCorpus": "candidate source policy recomputed by MLX on the other seed's rows",
+      "reason": "the other corpus's stored probabilities belong to the other policy and are not the candidate source's frozen baseline",
+      "regressionTest": "a deliberately nonuniform other-policy current profile must not enter candidate trust-region accounting"
+    },
+    "reproducibleUpdateRebase": {
+      "tool": "neural/blend_range_policy_updates.py",
+      "operator": "target_source_plus_weighted_donor_delta",
+      "result": "rejected_as_a_policy_correction",
+      "exactGainsBb": [-0.00011864872658470029, -0.00015587971913205327],
+      "interpretation": "same-architecture independently trained networks do not have aligned parameter coordinates; transferring A's delta onto B regressed both response corpora"
+    }
+  },
+  "round1CorrectedPair": {
+    "settings": {
+      "steps": 1,
+      "batchSize": 16,
+      "learningRate": 0.000001,
+      "fullCorpusGradient": true,
+      "pairedCorpusGradient": true,
+      "maximumRealizedNodeKl": 0.005,
+      "maximumRealizedWeightedKl": 0.0015
+    },
+    "report": "neural/runs/20bb-v90-causal-policy-iteration/round1/s1-full-paired-corrected-b16-lr1e6/report.json",
+    "reportSha256": "c59741026d3abf70204019168b551f4bd69f6d1e5c8632870de4a8b94c0db517",
+    "candidates": [
+      {
+        "seed": 19921,
+        "sha256": "e8a4018180e2072a876b02e0101e2b52f659df139e71339a0c48efae32f46717",
+        "exactResponseCorpusGainsBb": [0.017149905567589583, 0.00896165357269949],
+        "maximumExactNodeReverseKl": 0.0009435512793884834
+      },
+      {
+        "seed": 19922,
+        "sha256": "a7fd964dd658f5df984bc741125cfa686a6a00f97cb73adc1fa57bdbc35be4a2",
+        "exactResponseCorpusGainsBb": [0.0057520279810506355, 0.0067143350873485295],
+        "maximumExactNodeReverseKl": 0.0003323340083631487
+      }
+    ],
+    "allEightDirectionalChecksPassed": true
+  },
+  "round1RegeneratedResponse": {
+    "reports": [
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round1/matched-response-refresh/attribution-seed-19801-report.json",
+        "sha256": "ba0fe6be5b101ab10947339e178e5dd0b845fa31a11c0c4270c949327b04de39"
+      },
+      {
+        "path": "neural/runs/20bb-v90-causal-policy-iteration/round1/matched-response-refresh/attribution-seed-19802-report.json",
+        "sha256": "f83f267def12cf1f03719f6fce171f4b7395736d02fd9544c836ac4e21a82447"
+      }
+    ],
+    "matchedValuesBbPerHand": [
+      {
+        "parent": 4.701541484929058,
+        "candidate": 4.682664786569948,
+        "delta": -0.018876698359110655,
+        "relativeReduction": 0.004015001977462182
+      },
+      {
+        "parent": 4.00788074338621,
+        "candidate": 3.996844331027413,
+        "delta": -0.01103641235879671,
+        "relativeReduction": 0.002753677832607409
+      }
+    ],
+    "parentPairedMeanBbPerHand": 4.3547111141576345,
+    "candidatePairedMeanBbPerHand": 4.33975455879868,
+    "pairedMeanDeltaBbPerHand": -0.014956555358954127,
+    "bothMatchedResponsesImproved": true,
+    "interpretation": "the first corrected step lowers a newly optimized response on both matched seeds, validating the policy-iteration direction, but its approximately 0.3-0.4 percent reduction is too small to repeat unchanged"
+  },
+  "round2DirectionalPair": {
+    "settings": {
+      "steps": 1,
+      "batchSize": 16,
+      "learningRate": 0.000002,
+      "fullCorpusGradient": true,
+      "pairedCorpusGradient": true,
+      "maximumRealizedNodeKl": 0.005,
+      "maximumRealizedWeightedKl": 0.0015
+    },
+    "report": "neural/runs/20bb-v90-causal-policy-iteration/round2/s1-full-paired-b16-lr2e6/report.json",
+    "reportSha256": "fabf6e63ef8a60a609319d5023ad05f825a583d692ab5e090d12e2ac51e2e662",
+    "candidates": [
+      {
+        "seed": 20021,
+        "sha256": "84fc564e36421b5818d928839700199a64d2902e499be9fe5a7f6ea97fe5b747",
+        "exactResponseCorpusGainsBb": [0.03440495358221198, 0.018447304328469118],
+        "maximumExactNodeReverseKl": 0.004427865465597512
+      },
+      {
+        "seed": 20022,
+        "sha256": "10d58d11f0b4e5242a01441ea55c324d72fa845eef1fdeaf5bbdc5b32870e058",
+        "exactResponseCorpusGainsBb": [0.011465681429583036, 0.01361109666139497],
+        "maximumExactNodeReverseKl": 0.0012755761028037187
+      }
+    ],
+    "allEightDirectionalChecksPassed": true,
+    "regeneratedResponseStatus": "pending",
+    "interpretation": "A is already close to the unchanged 0.005 node-KL ceiling, so do not enlarge this step again; regenerate the response before selecting either candidate"
+  },
+  "releaseContext": {
+    "lastComparableFrozenFullGameSampleMeanExploitabilityBbPerHand": 2.832711355599124,
+    "lastComparableFrozenOneSided99PercentUpperBoundBbPerHand": 20.0,
+    "currentMaximumEstimatedExploitabilityBbPerHand": 0.5,
+    "currentMaximumOneSided99PercentUpperBoundBbPerHand": 0.5,
+    "activationEligible": false,
+    "activeModelChanged": false,
+    "reason": "round-two has only fixed-response directional evidence; no current candidate has a qualifying regenerated response, fresh full-game certificate, or complete normal release-gate result"
+  }
+}
