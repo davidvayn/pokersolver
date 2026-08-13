@@ -323,6 +323,14 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
             .iter()
             .map(|path| blueprint::public_belief::PublicValueNetwork::read(Path::new(path)))
             .collect::<Result<Vec<_>, _>>()?,
+        continuation_selection: if args
+            .iter()
+            .any(|argument| argument == "--opponent-public-choice")
+        {
+            blueprint::public_belief::FlopContinuationSelection::OpponentPublicChoice
+        } else {
+            blueprint::public_belief::FlopContinuationSelection::Mean
+        },
         threads: parse_or(
             args,
             "--threads",
@@ -401,6 +409,14 @@ fn run_flop_pbs_convergence(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .iter()
                 .map(|path| blueprint::public_belief::PublicValueNetwork::read(Path::new(path)))
                 .collect::<Result<Vec<_>, _>>()?,
+            continuation_selection: if args
+                .iter()
+                .any(|argument| argument == "--opponent-public-choice")
+            {
+                blueprint::public_belief::FlopContinuationSelection::OpponentPublicChoice
+            } else {
+                blueprint::public_belief::FlopContinuationSelection::Mean
+            },
             threads: parse_or(
                 args,
                 "--threads",
@@ -1841,6 +1857,21 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                 value_network_path: value(args, "--flop-resolver-value-network")
                     .map(PathBuf::from)
                     .ok_or("--flop-resolver-value-network is required with flop resolving")?,
+                auxiliary_value_network_paths: values(
+                    args,
+                    "--flop-resolver-auxiliary-value-network",
+                )
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+                continuation_selection: if args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-opponent-public-choice")
+                {
+                    blueprint::public_belief::FlopContinuationSelection::OpponentPublicChoice
+                } else {
+                    blueprint::public_belief::FlopContinuationSelection::Mean
+                },
                 resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
             })
         })
@@ -1851,6 +1882,8 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--flop-resolver-regret-matching-plus",
             "--flop-resolver-threads",
             "--flop-resolver-value-network",
+            "--flop-resolver-auxiliary-value-network",
+            "--flop-resolver-opponent-public-choice",
             "--flop-resolver-policy-weight",
         ]
         .iter()
@@ -2492,6 +2525,12 @@ Neural certificate options:
                                   depth-limited exact-range CFR solve
   --flop-resolver-value-network <path>
                                   Required frozen turn CFV network
+  --flop-resolver-auxiliary-value-network <path>
+                                  Repeat for distinct continuation-policy CFV
+                                  hypotheses used by robust public choice
+  --flop-resolver-opponent-public-choice
+                                  Keep continuation hypotheses distinct and
+                                  select the traverser's worst public choice
   --flop-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
   --flop-resolver-regret-matching-plus

@@ -100,6 +100,8 @@ pub struct FlopResolverConfig {
     pub regret_matching_plus: bool,
     pub threads: usize,
     pub value_network_path: PathBuf,
+    pub auxiliary_value_network_paths: Vec<PathBuf>,
+    pub continuation_selection: super::public_belief::FlopContinuationSelection,
     /// Fraction of the served action probability contributed by the resolved
     /// strategy. The remainder stays anchored to the frozen blueprint at the
     /// same exact public belief, preventing unconstrained strategy grafting.
@@ -272,6 +274,11 @@ pub struct ExploitabilityCertificate {
     pub flop_resolver_resolved_policy_weight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_value_network_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flop_resolver_auxiliary_value_network_sha256s: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_continuation_selection:
+        Option<super::public_belief::FlopContinuationSelection>,
     pub exact_betting_tree_nodes: u64,
     /// Retained outer-game observations permit paired candidate comparisons,
     /// deterministic replay, and honest inspection of chance-sampling noise.
@@ -327,6 +334,7 @@ pub(super) struct FrozenPolicy {
 struct FlopResolverRuntime {
     config: FlopResolverConfig,
     value_network: super::public_belief::PublicValueNetwork,
+    auxiliary_value_networks: Vec<super::public_belief::PublicValueNetwork>,
 }
 
 struct RangePolicyCachedNode {
@@ -449,7 +457,8 @@ impl FrozenPolicy {
                         averaging_delay: resolver.config.averaging_delay,
                         regret_matching_plus: resolver.config.regret_matching_plus,
                         value_network: resolver.value_network.clone(),
-                        auxiliary_value_networks: Vec::new(),
+                        auxiliary_value_networks: resolver.auxiliary_value_networks.clone(),
+                        continuation_selection: resolver.config.continuation_selection,
                         threads: resolver.config.threads,
                     })?;
                 let mut cache = self
@@ -823,9 +832,15 @@ impl FrozenPolicy {
         }
         let value_network =
             super::public_belief::PublicValueNetwork::read(&resolver.value_network_path)?;
+        let auxiliary_value_networks = resolver
+            .auxiliary_value_network_paths
+            .iter()
+            .map(|path| super::public_belief::PublicValueNetwork::read(path))
+            .collect::<Result<Vec<_>, _>>()?;
         self.flop_resolver = Some(FlopResolverRuntime {
             config: resolver,
             value_network,
+            auxiliary_value_networks,
         });
         self.range_cache.lock().expect("range policy cache").clear();
         self.flop_strategy_cache
@@ -4367,6 +4382,24 @@ fn flop_resolver_value_network_sha256(
         .map_err(Into::into)
 }
 
+fn flop_resolver_auxiliary_value_network_sha256s(
+    config: &ExploitabilityCertificateConfig,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    config
+        .flop_resolver
+        .as_ref()
+        .map(|resolver| {
+            resolver
+                .auxiliary_value_network_paths
+                .iter()
+                .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+        .map_err(Into::into)
+}
+
 fn enable_certificate_resolvers(
     generator: &mut SampleGenerator,
     config: &ExploitabilityCertificateConfig,
@@ -4396,6 +4429,8 @@ pub fn certify_exploitability_upper_bound(
         .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
         .transpose()?;
     let flop_resolver_value_network_sha256 = flop_resolver_value_network_sha256(&config)?;
+    let flop_resolver_auxiliary_value_network_sha256s =
+        flop_resolver_auxiliary_value_network_sha256s(&config)?;
     let mut generator = SampleGenerator::new_with_range(
         SampleGenerationConfig {
             game: config.game.clone(),
@@ -4504,6 +4539,14 @@ pub fn certify_exploitability_upper_bound(
         assumptions.push(
             "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
         );
+        if config.flop_resolver.as_ref().is_some_and(|resolver| {
+            resolver.continuation_selection
+                == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
+        }) {
+            assumptions.push(
+                "each flop regret update retains distinct accepted turn-value hypotheses from different frozen continuation policies and permits the opposing continuation to select the traverser's worst hypothesis at each public turn leaf",
+            );
+        }
     }
     Ok(ExploitabilityCertificate {
         schema: if config.continual_resolving_enabled() {
@@ -4558,6 +4601,11 @@ pub fn certify_exploitability_upper_bound(
             .as_ref()
             .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
+        flop_resolver_auxiliary_value_network_sha256s,
+        flop_resolver_continuation_selection: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.continuation_selection),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -4608,6 +4656,8 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
         .transpose()?;
     let flop_resolver_value_network_sha256 = flop_resolver_value_network_sha256(&config)?;
+    let flop_resolver_auxiliary_value_network_sha256s =
+        flop_resolver_auxiliary_value_network_sha256s(&config)?;
     let mut generator = SampleGenerator::new_with_range(
         SampleGenerationConfig {
             game: config.game.clone(),
@@ -4733,6 +4783,14 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         assumptions.push(
             "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
         );
+        if config.flop_resolver.as_ref().is_some_and(|resolver| {
+            resolver.continuation_selection
+                == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
+        }) {
+            assumptions.push(
+                "each flop regret update retains distinct accepted turn-value hypotheses from different frozen continuation policies and permits the opposing continuation to select the traverser's worst hypothesis at each public turn leaf",
+            );
+        }
     }
     Ok(ExploitabilityCertificate {
         schema: if config.continual_resolving_enabled() {
@@ -4787,6 +4845,11 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .as_ref()
             .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
+        flop_resolver_auxiliary_value_network_sha256s,
+        flop_resolver_continuation_selection: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.continuation_selection),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -4846,6 +4909,8 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         .map(|path| fs::read(path).map(|bytes| format!("{:x}", Sha256::digest(bytes))))
         .transpose()?;
     let flop_resolver_value_network_sha256 = flop_resolver_value_network_sha256(&config)?;
+    let flop_resolver_auxiliary_value_network_sha256s =
+        flop_resolver_auxiliary_value_network_sha256s(&config)?;
     let mut generator = SampleGenerator::new_with_range(
         SampleGenerationConfig {
             game: config.game.clone(),
@@ -4970,6 +5035,14 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         assumptions.push(
             "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
         );
+        if config.flop_resolver.as_ref().is_some_and(|resolver| {
+            resolver.continuation_selection
+                == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
+        }) {
+            assumptions.push(
+                "each flop regret update retains distinct accepted turn-value hypotheses from different frozen continuation policies and permits the opposing continuation to select the traverser's worst hypothesis at each public turn leaf",
+            );
+        }
     }
     Ok(ExploitabilityCertificate {
         schema: if config.continual_resolving_enabled() {
@@ -5024,6 +5097,11 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .as_ref()
             .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
+        flop_resolver_auxiliary_value_network_sha256s,
+        flop_resolver_continuation_selection: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.continuation_selection),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -5903,6 +5981,8 @@ mod tests {
                 regret_matching_plus: false,
                 threads: 1,
                 value_network_path: value_path.clone(),
+                auxiliary_value_network_paths: Vec::new(),
+                continuation_selection: super::public_belief::FlopContinuationSelection::Mean,
                 resolved_policy_weight: 0.5,
             }),
         };

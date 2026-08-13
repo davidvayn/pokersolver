@@ -1259,6 +1259,8 @@ pub fn build_resolver_continuation_cache(
                             regret_matching_plus: config.resolver_regret_matching_plus,
                             value_network: network.clone(),
                             auxiliary_value_networks: Vec::new(),
+                            continuation_selection:
+                                super::public_belief::FlopContinuationSelection::Mean,
                             threads: resolver_threads,
                         };
                         let counterfactual_values_bb = if let Some(evaluation) = &evaluation_network

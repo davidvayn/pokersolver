@@ -3271,11 +3271,23 @@ pub struct FlopResolveConfig {
     pub regret_matching_plus: bool,
     pub value_network: PublicValueNetwork,
     /// Additional independently trained turn value estimates used only while
-    /// optimizing the frozen flop strategy. Their counterfactual values are
-    /// averaged before the single zero-sum projection, so the resolver no
-    /// longer overfits one continuation model's errors.
+    /// optimizing the frozen flop strategy. `continuation_selection` controls
+    /// whether they are averaged or retained as distinct strategic hypotheses.
     pub auxiliary_value_networks: Vec<PublicValueNetwork>,
+    /// How multiple continuation hypotheses enter regret updates. Averaging
+    /// collapses them into one brittle scalar game. Public-state robust choice
+    /// instead lets the opposing continuation select the hypothesis that is
+    /// worst for the current traverser at each public turn leaf.
+    pub continuation_selection: FlopContinuationSelection,
     pub threads: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlopContinuationSelection {
+    #[default]
+    Mean,
+    OpponentPublicChoice,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3312,6 +3324,8 @@ pub struct FlopSolution {
     pub auxiliary_value_network_seeds: Vec<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auxiliary_value_network_sha256s: Vec<String>,
+    #[serde(default)]
+    pub continuation_selection: FlopContinuationSelection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_seed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3561,6 +3575,30 @@ impl FlopSolver {
                 return Err("auxiliary turn value networks must be pairwise distinct".to_owned());
             }
         }
+        if config.continuation_selection == FlopContinuationSelection::OpponentPublicChoice {
+            let source_policies = std::iter::once(&config.value_network)
+                .chain(&config.auxiliary_value_networks)
+                .map(|network| network.source_policy_sha256.as_deref())
+                .collect::<BTreeSet<_>>();
+            if config.auxiliary_value_networks.is_empty()
+                || source_policies.contains(&None)
+                || source_policies.len() < 2
+            {
+                return Err(
+                    "opponent public continuation choice requires at least two accepted value networks trained from distinct frozen continuation policies"
+                        .to_owned(),
+                );
+            }
+            if std::iter::once(&config.value_network)
+                .chain(&config.auxiliary_value_networks)
+                .any(|network| network.source_validation_status.as_deref() != Some("accepted"))
+            {
+                return Err(
+                    "opponent public continuation choice requires accepted value-network sources"
+                        .to_owned(),
+                );
+            }
+        }
         if config.iterations < 2
             || config.averaging_delay >= config.iterations
             || config.threads == 0
@@ -3684,7 +3722,7 @@ impl FlopSolver {
         accumulate_average: bool,
     ) -> [Vec<f64>; 2] {
         if state.street == Street::Turn && state.terminal.is_none() {
-            return self.turn_leaf_values(&state, &reaches);
+            return self.turn_leaf_values(&state, &reaches, Some(traverser));
         }
         if state.terminal.is_some() {
             return self.terminal_values(&state, &reaches);
@@ -3777,7 +3815,7 @@ impl FlopSolver {
         regret_matching_plus: bool,
     ) -> [Vec<f64>; 2] {
         if state.street == Street::Turn && state.terminal.is_none() {
-            return self.turn_leaf_values(&state, &reaches);
+            return self.turn_leaf_values(&state, &reaches, Some(responder));
         }
         if state.terminal.is_some() {
             return self.terminal_values(&state, &reaches);
@@ -3870,7 +3908,7 @@ impl FlopSolver {
         action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
     ) -> [Vec<f64>; 2] {
         if state.street == Street::Turn && state.terminal.is_none() {
-            return self.turn_leaf_values(&state, &reaches);
+            return self.turn_leaf_values(&state, &reaches, None);
         }
         if state.terminal.is_some() {
             return self.terminal_values(&state, &reaches);
@@ -4216,7 +4254,12 @@ impl FlopSolver {
         values
     }
 
-    fn turn_leaf_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
+    fn turn_leaf_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        traverser: Option<usize>,
+    ) -> [Vec<f64>; 2] {
         self.turn_leaf_evaluations
             .set(self.turn_leaf_evaluations.get() + 1);
         let mut result = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
@@ -4224,6 +4267,7 @@ impl FlopSolver {
             .filter(|turn| !self.config.state.board.contains(turn))
             .collect::<Vec<_>>();
         let worker_count = self.config.threads.min(turns.len()).max(1);
+        let continuation_selection = self.config.continuation_selection;
         let solved = std::thread::scope(|scope| {
             let mut workers = Vec::with_capacity(worker_count);
             for worker in 0..worker_count {
@@ -4250,6 +4294,8 @@ impl FlopSolver {
                                 state.invested,
                                 reaches,
                                 turn,
+                                continuation_selection,
+                                traverser,
                             )
                         })
                         .collect::<Vec<_>>()
@@ -4358,7 +4404,7 @@ impl FlopSolver {
         unresolved_uniform: bool,
     ) -> [Vec<f64>; 2] {
         if state.street == Street::Turn && state.terminal.is_none() {
-            return self.turn_leaf_values(&state, &reaches);
+            return self.turn_leaf_values(&state, &reaches, best_responder);
         }
         if state.terminal.is_some() {
             return self.terminal_values(&state, &reaches);
@@ -4619,7 +4665,14 @@ impl FlopSolver {
             method.push_str("_regret_matching_plus");
         }
         if !self.config.auxiliary_value_networks.is_empty() {
-            method.push_str("_mean_independent_turn_cfv_ensemble");
+            match self.config.continuation_selection {
+                FlopContinuationSelection::Mean => {
+                    method.push_str("_mean_independent_turn_cfv_ensemble");
+                }
+                FlopContinuationSelection::OpponentPublicChoice => {
+                    method.push_str("_opponent_public_choice_multi_value_turn_cfv");
+                }
+            }
         }
         let auxiliary_value_network_seeds = self
             .config
@@ -4645,6 +4698,7 @@ impl FlopSolver {
             value_network_source_policy_sha256: self.config.value_network.source_policy_sha256,
             auxiliary_value_network_seeds,
             auxiliary_value_network_sha256s,
+            continuation_selection: self.config.continuation_selection,
             evaluation_value_network_seed: None,
             evaluation_value_network_sha256: None,
             evaluation_value_network_source_dataset_sha256: None,
@@ -4819,48 +4873,82 @@ fn turn_leaf_card_values(
     invested: [f64; 2],
     reaches: &[Vec<f64>; 2],
     turn: u8,
+    continuation_selection: FlopContinuationSelection,
+    traverser: Option<usize>,
 ) -> Option<([Vec<f64>; 2], f64)> {
     let (masked, totals, _) = normalized_turn_ranges(reaches, turn)?;
     let mut board = flop_board.to_vec();
     board.push(turn);
-    let mut predicted = network.predict(&board, actor, invested, &masked);
-    for auxiliary in auxiliary_networks {
-        let auxiliary_prediction = auxiliary.predict(&board, actor, invested, &masked);
-        for player in 0..2 {
-            for combo in 0..COMBO_COUNT {
-                predicted[player][combo] += auxiliary_prediction[player][combo];
-            }
-        }
-    }
-    let inverse_network_count = 1.0 / (auxiliary_networks.len() + 1) as f64;
-    if !auxiliary_networks.is_empty() {
-        for player in &mut predicted {
-            for value in player {
-                *value *= inverse_network_count;
-            }
-        }
-    }
     let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
         (0..COMBO_COUNT)
             .map(|combo| compatible_mass_from_conflicts(&masked[1 - player], conflicts, combo))
             .collect()
     });
     let joint = joint_compatibility_mass(&masked);
-    let aggregate = |player: usize| {
-        masked[player]
-            .iter()
-            .zip(&predicted[player])
-            .zip(&masses[player])
-            .map(|((reach, value), mass)| reach * value * mass)
-            .sum::<f64>()
-            / joint.max(EPSILON)
-    };
-    let residual = aggregate(0) + aggregate(1);
-    for values in &mut predicted {
-        for value in values {
-            *value -= residual / 2.0;
+    let project = |mut predicted: [Vec<f64>; 2]| {
+        let aggregate = |player: usize, values: &[f64]| {
+            masked[player]
+                .iter()
+                .zip(values)
+                .zip(&masses[player])
+                .map(|((reach, value), mass)| reach * value * mass)
+                .sum::<f64>()
+                / joint.max(EPSILON)
+        };
+        let residual = aggregate(0, &predicted[0]) + aggregate(1, &predicted[1]);
+        for values in &mut predicted {
+            for value in values {
+                *value -= residual / 2.0;
+            }
         }
-    }
+        let projected_aggregates = [aggregate(0, &predicted[0]), aggregate(1, &predicted[1])];
+        (predicted, residual.abs(), projected_aggregates)
+    };
+
+    let networks = std::iter::once(network)
+        .chain(auxiliary_networks)
+        .collect::<Vec<_>>();
+    let (predicted, residual) = if continuation_selection
+        == FlopContinuationSelection::OpponentPublicChoice
+        && traverser.is_some()
+    {
+        let traverser = traverser.expect("checked robust traverser");
+        let mut candidates = networks
+            .into_iter()
+            .map(|candidate| project(candidate.predict(&board, actor, invested, &masked)))
+            .collect::<Vec<_>>();
+        let maximum_residual = candidates
+            .iter()
+            .map(|(_, residual, _)| *residual)
+            .fold(0.0f64, f64::max);
+        let selected = candidates
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| left.2[traverser].total_cmp(&right.2[traverser]))
+            .map(|(index, _)| index)
+            .expect("primary continuation hypothesis exists");
+        (candidates.swap_remove(selected).0, maximum_residual)
+    } else {
+        let mut mean = network.predict(&board, actor, invested, &masked);
+        for auxiliary in auxiliary_networks {
+            let prediction = auxiliary.predict(&board, actor, invested, &masked);
+            for player in 0..2 {
+                for combo in 0..COMBO_COUNT {
+                    mean[player][combo] += prediction[player][combo];
+                }
+            }
+        }
+        if !auxiliary_networks.is_empty() {
+            let inverse_network_count = 1.0 / networks.len() as f64;
+            for player in &mut mean {
+                for value in player {
+                    *value *= inverse_network_count;
+                }
+            }
+        }
+        let (mean, residual, _) = project(mean);
+        (mean, residual)
+    };
     let contribution = std::array::from_fn(|player| {
         (0..COMBO_COUNT)
             .map(|combo| {
@@ -4868,7 +4956,7 @@ fn turn_leaf_card_values(
             })
             .collect()
     });
-    Some((contribution, residual.abs()))
+    Some((contribution, residual))
 }
 
 fn normalized_turn_ranges(
@@ -5215,6 +5303,7 @@ pub fn evaluate_frozen_flop_range_response_convergence(
         regret_matching_plus: false,
         value_network: evaluation_value_network.clone(),
         auxiliary_value_networks: Vec::new(),
+        continuation_selection: FlopContinuationSelection::Mean,
         threads,
     })?;
     base.load_frozen_average_strategies(&frozen.strategies)?;
@@ -5351,6 +5440,7 @@ pub fn evaluate_frozen_flop_solution(
         regret_matching_plus: false,
         value_network: evaluation_value_network.clone(),
         auxiliary_value_networks: Vec::new(),
+        continuation_selection: FlopContinuationSelection::Mean,
         threads,
     })?;
     solver.load_frozen_average_strategies(&frozen.strategies)?;
@@ -5369,6 +5459,7 @@ pub fn evaluate_frozen_flop_solution(
     solution.value_network_source_policy_sha256 = frozen.value_network_source_policy_sha256.clone();
     solution.auxiliary_value_network_seeds = frozen.auxiliary_value_network_seeds.clone();
     solution.auxiliary_value_network_sha256s = frozen.auxiliary_value_network_sha256s.clone();
+    solution.continuation_selection = frozen.continuation_selection;
     solution.evaluation_value_network_seed = Some(evaluation_value_network.seed);
     solution.evaluation_value_network_sha256 = evaluation_value_network.artifact_sha256.clone();
     solution.evaluation_value_network_source_dataset_sha256 =
@@ -7983,6 +8074,7 @@ pub fn generate_postflop_action_targets(
             regret_matching_plus: config.flop_regret_matching_plus,
             value_network: value_network.clone(),
             auxiliary_value_networks: auxiliary_value_networks.clone(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads: config.threads,
         })?;
         let solver_root = flop_solver.config.state.game_state();
@@ -9797,6 +9889,7 @@ fn solve_resolver_root_leaf_checkpoint(
         regret_matching_plus: false,
         value_network: network.clone(),
         auxiliary_value_networks: Vec::new(),
+        continuation_selection: FlopContinuationSelection::Mean,
         threads: config.threads,
     })?;
     solver.train();
@@ -10814,6 +10907,8 @@ mod tests {
             [1.0, 1.0],
             &ranges,
             turn,
+            FlopContinuationSelection::Mean,
+            None,
         )
         .expect("turn is reachable");
 
@@ -10857,6 +10952,8 @@ mod tests {
                 [1.0, 1.0],
                 &ranges,
                 turn,
+                FlopContinuationSelection::Mean,
+                None,
             )
             .unwrap()
             .0
@@ -10870,6 +10967,87 @@ mod tests {
                 assert!((ensemble_values[player][combo] - expected).abs() < 1e-10);
             }
         }
+    }
+
+    #[test]
+    fn opponent_public_choice_keeps_continuation_hypotheses_distinct() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut first = zero_value_network();
+        first.seed = 51;
+        first.artifact_sha256 = Some("c".repeat(64));
+        first.source_policy_sha256 = Some("1".repeat(64));
+        first.source_validation_status = Some("accepted".to_owned());
+        first.head[0].biases[..COMBO_COUNT].fill(0.1);
+        first.head[0].biases[COMBO_COUNT..].fill(-0.1);
+        let mut second = zero_value_network();
+        second.seed = 52;
+        second.artifact_sha256 = Some("d".repeat(64));
+        second.source_policy_sha256 = Some("2".repeat(64));
+        second.source_validation_status = Some("accepted".to_owned());
+        second.head[0].biases[..COMBO_COUNT].fill(-0.1);
+        second.head[0].biases[COMBO_COUNT..].fill(0.1);
+        let conflicts = combo_conflicts();
+        let evaluate = |traverser| {
+            turn_leaf_card_values(
+                &first,
+                std::slice::from_ref(&second),
+                &conflicts,
+                &board,
+                0,
+                [1.0, 1.0],
+                &ranges,
+                15,
+                FlopContinuationSelection::OpponentPublicChoice,
+                Some(traverser),
+            )
+            .unwrap()
+            .0
+        };
+        let for_zero = evaluate(0);
+        let for_one = evaluate(1);
+        let aggregate = |values: &[f64], player: usize| {
+            ranges[player]
+                .iter()
+                .zip(values)
+                .map(|(reach, value)| reach * value)
+                .sum::<f64>()
+        };
+        assert!(aggregate(&for_zero[0], 0) < 0.0);
+        assert!(aggregate(&for_one[1], 1) < 0.0);
+        assert!(aggregate(&for_zero[1], 1) > 0.0);
+        assert!(aggregate(&for_one[0], 0) > 0.0);
+    }
+
+    #[test]
+    fn opponent_public_choice_requires_distinct_accepted_policy_sources() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut first = zero_value_network();
+        first.seed = 61;
+        first.artifact_sha256 = Some("e".repeat(64));
+        first.source_policy_sha256 = Some("1".repeat(64));
+        first.source_validation_status = Some("accepted".to_owned());
+        let mut second = first.clone();
+        second.seed = 62;
+        second.artifact_sha256 = Some("f".repeat(64));
+        let config = |auxiliary| FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges.clone()),
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+            value_network: first.clone(),
+            auxiliary_value_networks: vec![auxiliary],
+            continuation_selection: FlopContinuationSelection::OpponentPublicChoice,
+            threads: 1,
+        };
+        assert!(FlopSolver::new(config(second.clone()))
+            .err()
+            .expect("same-policy hypotheses must be rejected")
+            .contains("distinct frozen continuation policies"));
+        second.source_policy_sha256 = Some("2".repeat(64));
+        FlopSolver::new(config(second)).expect("distinct accepted continuation policies");
     }
 
     #[test]
@@ -11625,6 +11803,7 @@ mod tests {
             regret_matching_plus: false,
             value_network: zero_value_network(),
             auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads: 1,
         };
         let continuation = solve_flop_continuation_values(config.clone()).unwrap();
@@ -11671,6 +11850,7 @@ mod tests {
             regret_matching_plus: false,
             value_network: resolver_network.clone(),
             auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads: 1,
         };
         let ordinary = solve_flop(config.clone()).unwrap();
@@ -11740,6 +11920,7 @@ mod tests {
             regret_matching_plus: false,
             value_network: resolver_network,
             auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads: 1,
         };
         let mut evaluation_network = zero_value_network();
@@ -11840,6 +12021,7 @@ mod tests {
             regret_matching_plus: false,
             value_network: resolver_network,
             auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads: 1,
         };
         let frozen = solve_flop(config.clone()).unwrap();
@@ -12074,6 +12256,7 @@ mod tests {
             regret_matching_plus: false,
             value_network: zero_shared_value_network(),
             auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads: 1,
         })
         .unwrap();
@@ -12234,13 +12417,14 @@ mod tests {
             regret_matching_plus: false,
             value_network: zero_shared_value_network(),
             auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
             threads,
         };
         let single_solver = FlopSolver::new(config(1)).unwrap();
         let parallel_solver = FlopSolver::new(config(4)).unwrap();
         let state = single_solver.config.state.game_state();
-        let single = single_solver.turn_leaf_values(&state, &ranges);
-        let parallel = parallel_solver.turn_leaf_values(&state, &ranges);
+        let single = single_solver.turn_leaf_values(&state, &ranges, None);
+        let parallel = parallel_solver.turn_leaf_values(&state, &ranges, None);
         for player in 0..2 {
             for (left, right) in single[player].iter().zip(&parallel[player]) {
                 assert!((left - right).abs() < 1e-5);
