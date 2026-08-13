@@ -102,6 +102,9 @@ pub struct FlopResolverConfig {
     pub value_network_path: PathBuf,
     pub auxiliary_value_network_paths: Vec<PathBuf>,
     pub continuation_selection: super::public_belief::FlopContinuationSelection,
+    /// Use the opponent-CFV opt-out gadget and deploy only the resolving
+    /// player's subgame strategy. This prevents unconstrained strategy grafting.
+    pub safe_resolving: bool,
     /// Fraction of the served action probability contributed by the resolved
     /// strategy. The remainder stays anchored to the frozen blueprint at the
     /// same exact public belief, preventing unconstrained strategy grafting.
@@ -279,6 +282,8 @@ pub struct ExploitabilityCertificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_continuation_selection:
         Option<super::public_belief::FlopContinuationSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_safe_resolving: Option<bool>,
     pub exact_betting_tree_nodes: u64,
     /// Retained outer-game observations permit paired candidate comparisons,
     /// deterministic replay, and honest inspection of chance-sampling noise.
@@ -344,6 +349,7 @@ struct RangePolicyCachedNode {
 }
 
 struct ResolvedPolicyCachedRow {
+    actor: usize,
     action_labels: Vec<String>,
     probabilities: Vec<f64>,
 }
@@ -449,28 +455,54 @@ impl FrozenPolicy {
             let resolved = if let Some(resolved) = resolved {
                 resolved
             } else {
-                let solution =
-                    super::public_belief::solve_flop(super::public_belief::FlopResolveConfig {
-                        game: config.clone(),
-                        state: public.clone(),
-                        iterations: resolver.config.iterations,
-                        averaging_delay: resolver.config.averaging_delay,
-                        regret_matching_plus: resolver.config.regret_matching_plus,
-                        value_network: resolver.value_network.clone(),
-                        auxiliary_value_networks: resolver.auxiliary_value_networks.clone(),
-                        continuation_selection: resolver.config.continuation_selection,
-                        threads: resolver.config.threads,
-                    })?;
+                let solve_config = super::public_belief::FlopResolveConfig {
+                    game: config.clone(),
+                    state: public.clone(),
+                    iterations: resolver.config.iterations,
+                    averaging_delay: resolver.config.averaging_delay,
+                    regret_matching_plus: resolver.config.regret_matching_plus,
+                    value_network: resolver.value_network.clone(),
+                    auxiliary_value_networks: resolver.auxiliary_value_networks.clone(),
+                    continuation_selection: resolver.config.continuation_selection,
+                    threads: resolver.config.threads,
+                };
+                let solution = if resolver.config.safe_resolving {
+                    let blueprint = self.flop_blueprint_strategies(
+                        state.clone(),
+                        &public.board,
+                        public.ranges.clone(),
+                        config,
+                    )?;
+                    super::public_belief::solve_flop_safe(solve_config, &blueprint, public.actor)?
+                } else {
+                    super::public_belief::solve_flop(solve_config)?
+                };
+                if resolver.config.safe_resolving
+                    && solution
+                        .metrics
+                        .safe_opponent_maximum_cfv_excess_bb
+                        .is_none_or(|excess| excess > 0.05)
+                {
+                    return Err(format!(
+                        "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound (observed {:?})",
+                        solution.metrics.safe_opponent_maximum_cfv_excess_bb
+                    ));
+                }
                 let mut cache = self
                     .flop_strategy_cache
                     .lock()
                     .expect("flop strategy cache");
+                let safe_resolving = resolver.config.safe_resolving;
+                let requested_actor = public.actor;
                 cache_resolved_policy_rows(
                     &mut cache,
                     key,
                     Street::Flop,
                     &public.board,
-                    solution.strategies,
+                    solution
+                        .strategies
+                        .into_iter()
+                        .filter(|strategy| !safe_resolving || strategy.actor == requested_actor),
                     4_096,
                 )?
             };
@@ -478,12 +510,13 @@ impl FrozenPolicy {
                 .iter()
                 .map(|action| action.label.as_str())
                 .collect::<Vec<_>>();
-            if resolved
-                .action_labels
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                != labels
+            if resolved.actor != state.actor
+                || resolved
+                    .action_labels
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    != labels
                 || resolved.probabilities.len() != COMBO_COUNT * actions.len()
             {
                 return Err("flop resolver root strategy is incompatible".to_owned());
@@ -545,12 +578,13 @@ impl FrozenPolicy {
                 .iter()
                 .map(|action| action.label.as_str())
                 .collect::<Vec<_>>();
-            if resolved
-                .action_labels
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                != labels
+            if resolved.actor != state.actor
+                || resolved
+                    .action_labels
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    != labels
                 || resolved.probabilities.len() != COMBO_COUNT * actions.len()
             {
                 return Err("turn resolver root strategy is incompatible".to_owned());
@@ -593,12 +627,13 @@ impl FrozenPolicy {
                 .iter()
                 .map(|action| action.label.as_str())
                 .collect::<Vec<_>>();
-            if resolved
-                .action_labels
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                != labels
+            if resolved.actor != state.actor
+                || resolved
+                    .action_labels
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    != labels
                 || resolved.probabilities.len() != COMBO_COUNT * actions.len()
             {
                 return Err("river resolver root strategy is incompatible".to_owned());
@@ -626,6 +661,68 @@ impl FrozenPolicy {
             cache.insert(key, cached.clone());
         }
         Ok(cached)
+    }
+
+    fn flop_blueprint_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+    ) -> Result<Vec<super::public_belief::PublicBeliefStrategy>, String> {
+        let mut output = Vec::new();
+        self.collect_flop_blueprint_strategies(state, board, ranges, config, &mut output)?;
+        if output.is_empty() {
+            return Err("safe flop resolving produced an empty blueprint subtree".to_owned());
+        }
+        Ok(output)
+    }
+
+    fn collect_flop_blueprint_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        mut ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+        output: &mut Vec<super::public_belief::PublicBeliefStrategy>,
+    ) -> Result<(), String> {
+        if state.terminal.is_some() || state.street != Street::Flop {
+            return Ok(());
+        }
+        normalize_ranges_for_board(&mut ranges, board)?;
+        let range_policy = self
+            .range_policy
+            .as_ref()
+            .ok_or_else(|| "safe flop resolving requires a range policy".to_owned())?;
+        let actions = state.legal_actions(config);
+        let public = PublicBeliefState::from_game_state(board.to_vec(), &state, ranges.clone());
+        let source = range_policy
+            .requires_source_policy()
+            .then(|| self.bundle_strategy_matrix(&state, board, &actions, config))
+            .transpose()?;
+        let probabilities = range_policy.strategy(&public, config, source.as_deref())?;
+        output.push(super::public_belief::PublicBeliefStrategy {
+            public_history: state.public_history.clone(),
+            actor: state.actor,
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities: probabilities.iter().map(|value| *value as f32).collect(),
+            action_values_bb: None,
+        });
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_ranges = ranges.clone();
+            for combo in 0..COMBO_COUNT {
+                child_ranges[state.actor][combo] *=
+                    probabilities[combo * actions.len() + action_index];
+            }
+            self.collect_flop_blueprint_strategies(
+                state.apply(action, config),
+                board,
+                child_ranges,
+                config,
+                output,
+            )?;
+        }
+        Ok(())
     }
 
     fn policy_node(
@@ -980,6 +1077,7 @@ fn cache_resolved_policy_rows(
             action_labels.len(),
         )?;
         let row = Arc::new(ResolvedPolicyCachedRow {
+            actor: strategy.actor,
             action_labels,
             probabilities,
         });
@@ -4547,6 +4645,15 @@ pub fn certify_exploitability_upper_bound(
                 "each flop regret update retains distinct accepted turn-value hypotheses from different frozen continuation policies and permits the opposing continuation to select the traverser's worst hypothesis at each public turn leaf",
             );
         }
+        if config
+            .flop_resolver
+            .as_ref()
+            .is_some_and(|resolver| resolver.safe_resolving)
+        {
+            assumptions.push(
+                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed",
+            );
+        }
     }
     Ok(ExploitabilityCertificate {
         schema: if config.continual_resolving_enabled() {
@@ -4606,6 +4713,10 @@ pub fn certify_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.continuation_selection),
+        flop_resolver_safe_resolving: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_resolving),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -4791,6 +4902,15 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
                 "each flop regret update retains distinct accepted turn-value hypotheses from different frozen continuation policies and permits the opposing continuation to select the traverser's worst hypothesis at each public turn leaf",
             );
         }
+        if config
+            .flop_resolver
+            .as_ref()
+            .is_some_and(|resolver| resolver.safe_resolving)
+        {
+            assumptions.push(
+                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed",
+            );
+        }
     }
     Ok(ExploitabilityCertificate {
         schema: if config.continual_resolving_enabled() {
@@ -4850,6 +4970,10 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.continuation_selection),
+        flop_resolver_safe_resolving: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_resolving),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -5043,6 +5167,15 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
                 "each flop regret update retains distinct accepted turn-value hypotheses from different frozen continuation policies and permits the opposing continuation to select the traverser's worst hypothesis at each public turn leaf",
             );
         }
+        if config
+            .flop_resolver
+            .as_ref()
+            .is_some_and(|resolver| resolver.safe_resolving)
+        {
+            assumptions.push(
+                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed",
+            );
+        }
     }
     Ok(ExploitabilityCertificate {
         schema: if config.continual_resolving_enabled() {
@@ -5102,6 +5235,10 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.continuation_selection),
+        flop_resolver_safe_resolving: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_resolving),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -5983,6 +6120,7 @@ mod tests {
                 value_network_path: value_path.clone(),
                 auxiliary_value_network_paths: Vec::new(),
                 continuation_selection: super::public_belief::FlopContinuationSelection::Mean,
+                safe_resolving: false,
                 resolved_policy_weight: 0.5,
             }),
         };
@@ -6016,6 +6154,42 @@ mod tests {
                 .map(|resolver| resolver.config.resolved_policy_weight),
             Some(0.5)
         );
+        let mut safe_resolver_config = resolver_config.clone();
+        safe_resolver_config
+            .flop_resolver
+            .as_mut()
+            .expect("flop resolver configured")
+            .safe_resolving = true;
+        enable_certificate_resolvers(&mut resolver_generator, &safe_resolver_config).unwrap();
+        let mut flop_state = GameState::initial(&game);
+        let limp = flop_state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "limp")
+            .expect("limp available");
+        flop_state = flop_state.apply(&limp, &game);
+        let check = flop_state
+            .legal_actions(&game)
+            .into_iter()
+            .find(|action| action.label == "check")
+            .expect("check available");
+        flop_state = flop_state.apply(&check, &game);
+        assert_eq!(flop_state.street, Street::Flop);
+        let deal = Deal::from_sampled_cards([[48, 49], [44, 45]], [0, 5, 10, 15, 20]);
+        let flop_actions = flop_state.legal_actions(&game);
+        let safe_strategy = resolver_generator.current_strategy(&flop_state, &deal, &flop_actions);
+        assert!((safe_strategy.iter().sum::<f64>() - 1.0).abs() < 1e-8);
+        let policy = resolver_generator
+            .networks
+            .as_ref()
+            .expect("frozen policy loaded");
+        assert!(policy
+            .flop_resolver
+            .as_ref()
+            .is_some_and(|resolver| resolver.config.safe_resolving));
+        let safe_cache = policy.flop_strategy_cache.lock().expect("flop cache");
+        assert!(!safe_cache.is_empty());
+        assert!(safe_cache.values().all(|row| row.actor == flop_state.actor));
         let attribution = generate_causal_policy_attribution(CausalPolicyAttributionConfig {
             game: game.clone(),
             deals: 2,

@@ -1872,6 +1872,9 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                 } else {
                     blueprint::public_belief::FlopContinuationSelection::Mean
                 },
+                safe_resolving: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-safe"),
                 resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
             })
         })
@@ -1884,6 +1887,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--flop-resolver-value-network",
             "--flop-resolver-auxiliary-value-network",
             "--flop-resolver-opponent-public-choice",
+            "--flop-resolver-safe",
             "--flop-resolver-policy-weight",
         ]
         .iter()
@@ -2531,6 +2535,8 @@ Neural certificate options:
   --flop-resolver-opponent-public-choice
                                   Keep continuation hypotheses distinct and
                                   select the traverser's worst public choice
+  --flop-resolver-safe            Use the opponent-CFV opt-out gadget and
+                                  deploy only the resolving player's strategy
   --flop-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
   --flop-resolver-regret-matching-plus

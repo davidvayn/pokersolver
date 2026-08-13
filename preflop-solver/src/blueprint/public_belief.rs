@@ -3304,6 +3304,12 @@ pub struct FlopResolveMetrics {
     pub resolver_relative_exploitability_improvement: f64,
     pub maximum_leaf_zero_sum_residual_before_projection_bb: f64,
     pub zero_sum_residual_after_projection_bb: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_resolving_player: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_opponent_maximum_cfv_excess_bb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_opponent_reach_weighted_cfv_excess_bb: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3527,6 +3533,14 @@ struct FlopSolver {
     exact_all_in_terminal_evaluations: Cell<u64>,
     all_in_equities: OnceLock<Arc<Vec<f32>>>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
+    safe_root: Option<SafeResolveRoot>,
+}
+
+#[derive(Clone)]
+struct SafeResolveRoot {
+    resolving_player: usize,
+    opponent_alternative_values_bb: Vec<f64>,
+    node: RangeNode,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3626,7 +3640,120 @@ impl FlopSolver {
             exact_all_in_terminal_evaluations: Cell::new(0),
             all_in_equities: OnceLock::new(),
             maximum_leaf_zero_sum_residual: Cell::new(0.0),
+            safe_root: None,
         })
+    }
+
+    fn install_safe_root(
+        &mut self,
+        resolving_player: usize,
+        opponent_alternative_values_bb: Vec<f64>,
+    ) -> Result<(), String> {
+        if resolving_player > 1
+            || opponent_alternative_values_bb.len() != COMBO_COUNT
+            || opponent_alternative_values_bb.iter().any(|value| {
+                !value.is_finite() || value.abs() > self.config.game.effective_stack_bb + 1e-8
+            })
+        {
+            return Err("safe flop resolving has invalid opponent alternative values".to_owned());
+        }
+        let opponent = 1 - resolving_player;
+        self.safe_root = Some(SafeResolveRoot {
+            resolving_player,
+            opponent_alternative_values_bb,
+            node: RangeNode {
+                actor: opponent,
+                action_labels: vec!["enter".to_owned(), "terminate".to_owned()],
+                regrets: vec![0.0; COMBO_COUNT * 2],
+                strategy_sum: vec![0.0; COMBO_COUNT * 2],
+                last_regret_discount_round: 0,
+                last_strategy_discount_round: 0,
+            },
+        });
+        Ok(())
+    }
+
+    fn exact_best_response_conditional_values(&self, responder: usize) -> Vec<f64> {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let values = self.profile_walk(root, reaches.clone(), Some(responder), false);
+        (0..COMBO_COUNT)
+            .map(|combo| {
+                let mass =
+                    compatible_mass_from_conflicts(&reaches[1 - responder], &self.conflicts, combo);
+                if mass > 0.0 {
+                    values[responder][combo] / mass
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    fn safe_walk(
+        &mut self,
+        traverser: usize,
+        round: u64,
+        accumulate_average: bool,
+    ) -> [Vec<f64>; 2] {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let (resolving_player, opponent, gadget_strategy, alternatives) = {
+            let safe = self.safe_root.as_mut().expect("safe flop root installed");
+            let opponent = 1 - safe.resolving_player;
+            if traverser == opponent {
+                safe.node.discount_regrets(round, &self.config.game.dcfr);
+            }
+            if accumulate_average {
+                safe.node
+                    .discount_strategy_sum(round, &self.config.game.dcfr);
+            }
+            (
+                safe.resolving_player,
+                opponent,
+                safe.node.strategy(&self.legal[opponent]),
+                safe.opponent_alternative_values_bb.clone(),
+            )
+        };
+
+        if traverser == resolving_player {
+            let mut enter_reaches = reaches;
+            for combo in 0..COMBO_COUNT {
+                enter_reaches[opponent][combo] *= gadget_strategy[combo * 2];
+            }
+            return self.walk(root, enter_reaches, traverser, round, accumulate_average);
+        }
+
+        let follow = self.walk(root, reaches.clone(), traverser, round, accumulate_average);
+        let safe = self.safe_root.as_mut().expect("safe flop root installed");
+        for combo in 0..COMBO_COUNT {
+            if !self.legal[opponent][combo] {
+                continue;
+            }
+            let offset = combo * 2;
+            let compatible_resolver_mass =
+                compatible_mass_from_conflicts(&reaches[resolving_player], &self.conflicts, combo);
+            let action_values = [
+                follow[opponent][combo],
+                alternatives[combo] * compatible_resolver_mass,
+            ];
+            let expected = gadget_strategy[offset] * action_values[0]
+                + gadget_strategy[offset + 1] * action_values[1];
+            for action in 0..2 {
+                safe.node.regrets[offset + action] += action_values[action] - expected;
+                if self.config.regret_matching_plus {
+                    safe.node.regrets[offset + action] =
+                        safe.node.regrets[offset + action].max(0.0);
+                }
+            }
+            if accumulate_average && round > self.config.averaging_delay {
+                for action in 0..2 {
+                    safe.node.strategy_sum[offset + action] +=
+                        reaches[opponent][combo] * gadget_strategy[offset + action];
+                }
+            }
+        }
+        follow
     }
 
     fn train(&mut self) {
@@ -3634,8 +3761,13 @@ impl FlopSolver {
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
             let round = offset + 1;
-            self.walk(root.clone(), reaches.clone(), 0, round, false);
-            self.walk(root.clone(), reaches.clone(), 1, round, true);
+            if self.safe_root.is_some() {
+                self.safe_walk(0, round, false);
+                self.safe_walk(1, round, true);
+            } else {
+                self.walk(root.clone(), reaches.clone(), 0, round, false);
+                self.walk(root.clone(), reaches.clone(), 1, round, true);
+            }
         }
     }
 
@@ -4612,6 +4744,38 @@ impl FlopSolver {
                 })
                 .collect()
         });
+        let (safe_resolving_player, safe_maximum_excess, safe_weighted_excess) = self
+            .safe_root
+            .as_ref()
+            .map(|safe| {
+                let opponent = 1 - safe.resolving_player;
+                let response = if opponent == 0 { &br0[0] } else { &br1[1] };
+                let mut maximum_excess: f64 = 0.0;
+                let mut weighted_excess = 0.0;
+                for combo in 0..COMBO_COUNT {
+                    let compatible_resolver_mass = compatible_mass_from_conflicts(
+                        &reaches[safe.resolving_player],
+                        &self.conflicts,
+                        combo,
+                    );
+                    if compatible_resolver_mass <= 0.0 {
+                        continue;
+                    }
+                    let conditional_response = response[combo] / compatible_resolver_mass;
+                    let excess = (conditional_response
+                        - safe.opponent_alternative_values_bb[combo])
+                        .max(0.0);
+                    maximum_excess = maximum_excess.max(excess);
+                    weighted_excess +=
+                        reaches[opponent][combo] * compatible_resolver_mass / joint * excess;
+                }
+                (
+                    Some(safe.resolving_player),
+                    Some(maximum_excess),
+                    Some(weighted_excess),
+                )
+            })
+            .unwrap_or((None, None, None));
         let metrics = FlopResolveMetrics {
             information_sets: strategies.len(),
             turn_leaf_evaluations: self.turn_leaf_evaluations.get(),
@@ -4629,6 +4793,9 @@ impl FlopSolver {
                 .maximum_leaf_zero_sum_residual
                 .get(),
             zero_sum_residual_after_projection_bb: (profile_p0 + profile_p1).abs(),
+            safe_resolving_player,
+            safe_opponent_maximum_cfv_excess_bb: safe_maximum_excess,
+            safe_opponent_reach_weighted_cfv_excess_bb: safe_weighted_excess,
         };
         let mut reasons = Vec::new();
         if std::iter::once(&self.config.value_network)
@@ -4660,6 +4827,17 @@ impl FlopSolver {
                 metrics.zero_sum_residual_after_projection_bb
             ));
         }
+        if metrics
+            .safe_opponent_maximum_cfv_excess_bb
+            .is_some_and(|excess| excess > 0.05)
+        {
+            reasons.push(format!(
+                "safe-resolving opponent CFV excess {:.6}bb exceeds 0.05bb",
+                metrics
+                    .safe_opponent_maximum_cfv_excess_bb
+                    .expect("checked safe-resolving metric")
+            ));
+        }
         let mut method = "exact_turn_chance_enumeration_with_exact_flop_all_in_runouts_full_vector_turn_cfv_network_and_paired_alternating_dcfr".to_owned();
         if self.config.regret_matching_plus {
             method.push_str("_regret_matching_plus");
@@ -4673,6 +4851,9 @@ impl FlopSolver {
                     method.push_str("_opponent_public_choice_multi_value_turn_cfv");
                 }
             }
+        }
+        if self.safe_root.is_some() {
+            method.push_str("_opponent_cfv_opt_out_safe_resolving");
         }
         let auxiliary_value_network_seeds = self
             .config
@@ -4993,6 +5174,52 @@ fn normalized_turn_ranges(
 
 pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
     let mut solver = FlopSolver::new(config)?;
+    solver.train();
+    Ok(solver.finish())
+}
+
+/// Re-solve one player's flop decision with the opponent-CFV opt-out gadget
+/// from Resolve subgame solving. `blueprint_strategies` must describe the
+/// frozen depth-limited policy being replaced. Its exact information-set best
+/// response supplies one alternative payoff per opponent private hand; only
+/// the resolving player's strategy is safe to deploy from the result.
+pub fn solve_flop_safe(
+    mut config: FlopResolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<FlopSolution, String> {
+    if resolving_player > 1 || resolving_player != config.state.actor {
+        return Err("safe flop resolving must target the acting player".to_owned());
+    }
+    let opponent = 1 - resolving_player;
+    // The Resolve gadget's initial chance distribution is proportional to the
+    // resolving player's counterfactual reach. The opponent's own prior reach
+    // must therefore not remove or reweight private hands: an earlier
+    // deviation can arrive with any board-compatible opponent hand.
+    let compatible = all_combos()
+        .into_iter()
+        .filter(|combo| {
+            !combo
+                .cards()
+                .iter()
+                .any(|card| config.state.board.contains(card))
+        })
+        .map(|combo| combo.key())
+        .collect::<Vec<_>>();
+    if compatible.is_empty() {
+        return Err("safe flop resolving has no board-compatible opponent hands".to_owned());
+    }
+    config.state.ranges[opponent].fill(0.0);
+    let uniform = 1.0 / compatible.len() as f64;
+    for combo in compatible {
+        config.state.ranges[opponent][combo] = uniform;
+    }
+    let mut blueprint = FlopSolver::new(config.clone())?;
+    blueprint.load_frozen_average_strategies(blueprint_strategies)?;
+    let opponent_alternative_values_bb = blueprint.exact_best_response_conditional_values(opponent);
+
+    let mut solver = FlopSolver::new(config)?;
+    solver.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
     solver.train();
     Ok(solver.finish())
 }
@@ -11832,6 +12059,40 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("all-in")));
+    }
+
+    #[test]
+    fn safe_flop_resolver_uses_opponent_cfv_opt_out() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let mut config = FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+            value_network: zero_value_network(),
+            auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
+            threads: 1,
+        };
+        let blueprint = solve_flop(config.clone()).unwrap();
+        config.iterations = 64;
+        let resolving_player = config.state.actor;
+        let safe =
+            solve_flop_safe(config.clone(), &blueprint.strategies, resolving_player).unwrap();
+
+        assert_eq!(safe.metrics.safe_resolving_player, Some(resolving_player));
+        assert!(safe.method.contains("opponent_cfv_opt_out_safe_resolving"));
+        assert!(safe
+            .metrics
+            .safe_opponent_maximum_cfv_excess_bb
+            .is_some_and(|excess| excess <= 0.05));
+        assert!(safe
+            .metrics
+            .safe_opponent_reach_weighted_cfv_excess_bb
+            .is_some_and(|excess| excess <= 0.05));
+        assert!(solve_flop_safe(config, &blueprint.strategies, 1 - resolving_player).is_err());
     }
 
     #[test]
