@@ -484,8 +484,16 @@ impl FrozenPolicy {
                         .is_none_or(|excess| excess > 0.05)
                 {
                     return Err(format!(
-                        "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound (observed {:?})",
-                        solution.metrics.safe_opponent_maximum_cfv_excess_bb
+                        "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound \
+                         (maximum {:?}, reach-weighted {:?}, iterations {}, actor {}, board {:?}, \
+                         invested {:?}, history {:?})",
+                        solution.metrics.safe_opponent_maximum_cfv_excess_bb,
+                        solution.metrics.safe_opponent_reach_weighted_cfv_excess_bb,
+                        resolver.config.iterations,
+                        public.actor,
+                        public.board,
+                        public.invested_bb,
+                        public.public_history,
                     ));
                 }
                 let mut cache = self

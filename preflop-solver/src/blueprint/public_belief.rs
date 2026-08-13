@@ -48,6 +48,8 @@ const ACTION_FEATURE_COUNT: usize = 9;
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const RESOLVER_ROOT_CHECKPOINT_SCHEMA: &str = "hu-resolver-root-leaf-checkpoint-v1";
+const SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 0.05;
+const SAFE_RESOLVE_PROJECTION_BISECTIONS: usize = 8;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
 const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
 const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARDS * 49;
@@ -3310,6 +3312,14 @@ pub struct FlopResolveMetrics {
     pub safe_opponent_maximum_cfv_excess_bb: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub safe_opponent_reach_weighted_cfv_excess_bb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_unprojected_opponent_maximum_cfv_excess_bb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_unprojected_opponent_reach_weighted_cfv_excess_bb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_deployed_resolved_policy_weight: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_projection_best_response_evaluations: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3541,6 +3551,10 @@ struct SafeResolveRoot {
     resolving_player: usize,
     opponent_alternative_values_bb: Vec<f64>,
     node: RangeNode,
+    unprojected_maximum_cfv_excess_bb: Option<f64>,
+    unprojected_reach_weighted_cfv_excess_bb: Option<f64>,
+    deployed_resolved_policy_weight: f64,
+    projection_best_response_evaluations: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3669,7 +3683,182 @@ impl FlopSolver {
                 last_regret_discount_round: 0,
                 last_strategy_discount_round: 0,
             },
+            unprojected_maximum_cfv_excess_bb: None,
+            unprojected_reach_weighted_cfv_excess_bb: None,
+            deployed_resolved_policy_weight: 1.0,
+            projection_best_response_evaluations: 0,
         });
+        Ok(())
+    }
+
+    fn safe_opponent_cfv_excess(&self) -> Option<(f64, f64)> {
+        let safe = self.safe_root.as_ref()?;
+        let opponent = 1 - safe.resolving_player;
+        let reaches = self.config.state.ranges.clone();
+        let joint = joint_compatibility_mass(&reaches);
+        let response = self.profile_walk(
+            self.config.state.game_state(),
+            reaches.clone(),
+            Some(opponent),
+            false,
+        );
+        let mut maximum_excess: f64 = 0.0;
+        let mut weighted_excess = 0.0;
+        for combo in 0..COMBO_COUNT {
+            let compatible_resolver_mass = compatible_mass_from_conflicts(
+                &reaches[safe.resolving_player],
+                &self.conflicts,
+                combo,
+            );
+            if compatible_resolver_mass <= 0.0 {
+                continue;
+            }
+            let conditional_response = response[opponent][combo] / compatible_resolver_mass;
+            let excess =
+                (conditional_response - safe.opponent_alternative_values_bb[combo]).max(0.0);
+            maximum_excess = maximum_excess.max(excess);
+            weighted_excess += reaches[opponent][combo] * compatible_resolver_mass / joint * excess;
+        }
+        Some((maximum_excess, weighted_excess))
+    }
+
+    fn apply_resolving_player_strategy_blend(
+        &mut self,
+        blueprint: &BTreeMap<Vec<String>, &PublicBeliefStrategy>,
+        resolved: &BTreeMap<Vec<String>, PublicBeliefStrategy>,
+        resolving_player: usize,
+        resolved_weight: f64,
+    ) -> Result<(), String> {
+        if !resolved_weight.is_finite() || !(0.0..=1.0).contains(&resolved_weight) {
+            return Err("safe resolver projection has an invalid policy weight".to_owned());
+        }
+        for (history, node) in &mut self.nodes {
+            if node.actor != resolving_player {
+                continue;
+            }
+            let blueprint = blueprint.get(history).ok_or_else(|| {
+                "safe resolver blueprint is missing a resolving-player node".to_owned()
+            })?;
+            let resolved = resolved.get(history).ok_or_else(|| {
+                "safe resolver snapshot is missing a resolving-player node".to_owned()
+            })?;
+            if blueprint.actor != resolving_player
+                || resolved.actor != resolving_player
+                || blueprint.action_labels != node.action_labels
+                || resolved.action_labels != node.action_labels
+                || blueprint.probabilities.len() != node.strategy_sum.len()
+                || resolved.probabilities.len() != node.strategy_sum.len()
+            {
+                return Err("safe resolver projection found an incompatible policy node".to_owned());
+            }
+            for index in 0..node.strategy_sum.len() {
+                node.strategy_sum[index] = (1.0 - resolved_weight)
+                    * f64::from(blueprint.probabilities[index])
+                    + resolved_weight * f64::from(resolved.probabilities[index]);
+            }
+        }
+        Ok(())
+    }
+
+    /// Finite CFR averages need not satisfy Resolve's per-opponent-hand CFV
+    /// constraint yet. Project the trained resolving-player policy toward the
+    /// exact frozen blueprint and certify each candidate with a fresh exact
+    /// depth-limited best response. The deployed candidate therefore passes
+    /// the hard bound by measurement; no monotonicity assumption is used as
+    /// evidence for the final selected policy.
+    fn project_safe_strategy_to_blueprint(
+        &mut self,
+        blueprint_strategies: &[PublicBeliefStrategy],
+    ) -> Result<(), String> {
+        let resolving_player = self
+            .safe_root
+            .as_ref()
+            .ok_or_else(|| "safe resolver projection requires the opt-out gadget".to_owned())?
+            .resolving_player;
+        let blueprint = blueprint_strategies
+            .iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let resolved = self
+            .average_strategies(Some(resolving_player))
+            .into_iter()
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let unprojected = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe resolver projection has no CFV diagnostic".to_owned())?;
+        {
+            let safe = self.safe_root.as_mut().expect("safe root checked");
+            safe.unprojected_maximum_cfv_excess_bb = Some(unprojected.0);
+            safe.unprojected_reach_weighted_cfv_excess_bb = Some(unprojected.1);
+            safe.projection_best_response_evaluations = 1;
+        }
+        if unprojected.0 <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            return Ok(());
+        }
+
+        self.apply_resolving_player_strategy_blend(&blueprint, &resolved, resolving_player, 0.0)?;
+        let blueprint_excess = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe resolver blueprint has no CFV diagnostic".to_owned())?;
+        self.safe_root
+            .as_mut()
+            .expect("safe root checked")
+            .projection_best_response_evaluations += 1;
+        if blueprint_excess.0 > 1e-7 {
+            return Err(format!(
+                "safe resolver frozen blueprint does not reproduce its opponent CFV bound ({:.6}bb)",
+                blueprint_excess.0
+            ));
+        }
+
+        let mut passing_weight = 0.0;
+        let mut failing_weight = 1.0;
+        for _ in 0..SAFE_RESOLVE_PROJECTION_BISECTIONS {
+            let candidate = (passing_weight + failing_weight) / 2.0;
+            self.apply_resolving_player_strategy_blend(
+                &blueprint,
+                &resolved,
+                resolving_player,
+                candidate,
+            )?;
+            let excess = self
+                .safe_opponent_cfv_excess()
+                .ok_or_else(|| "safe resolver projected policy has no CFV diagnostic".to_owned())?;
+            self.safe_root
+                .as_mut()
+                .expect("safe root checked")
+                .projection_best_response_evaluations += 1;
+            if excess.0 <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+                passing_weight = candidate;
+            } else {
+                failing_weight = candidate;
+            }
+        }
+        self.apply_resolving_player_strategy_blend(
+            &blueprint,
+            &resolved,
+            resolving_player,
+            passing_weight,
+        )?;
+        self.safe_root
+            .as_mut()
+            .expect("safe root checked")
+            .deployed_resolved_policy_weight = passing_weight;
+        let final_excess = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe resolver final policy has no CFV diagnostic".to_owned())?;
+        self.safe_root
+            .as_mut()
+            .expect("safe root checked")
+            .projection_best_response_evaluations += 1;
+        if final_excess.0 > SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            return Err(format!(
+                "safe resolver projection failed its exact CFV check ({:.6}bb)",
+                final_excess.0
+            ));
+        }
         Ok(())
     }
 
@@ -4744,7 +4933,15 @@ impl FlopSolver {
                 })
                 .collect()
         });
-        let (safe_resolving_player, safe_maximum_excess, safe_weighted_excess) = self
+        let (
+            safe_resolving_player,
+            safe_maximum_excess,
+            safe_weighted_excess,
+            safe_unprojected_maximum_excess,
+            safe_unprojected_weighted_excess,
+            safe_deployed_resolved_policy_weight,
+            safe_projection_best_response_evaluations,
+        ) = self
             .safe_root
             .as_ref()
             .map(|safe| {
@@ -4773,9 +4970,13 @@ impl FlopSolver {
                     Some(safe.resolving_player),
                     Some(maximum_excess),
                     Some(weighted_excess),
+                    safe.unprojected_maximum_cfv_excess_bb,
+                    safe.unprojected_reach_weighted_cfv_excess_bb,
+                    Some(safe.deployed_resolved_policy_weight),
+                    Some(safe.projection_best_response_evaluations),
                 )
             })
-            .unwrap_or((None, None, None));
+            .unwrap_or((None, None, None, None, None, None, None));
         let metrics = FlopResolveMetrics {
             information_sets: strategies.len(),
             turn_leaf_evaluations: self.turn_leaf_evaluations.get(),
@@ -4796,6 +4997,11 @@ impl FlopSolver {
             safe_resolving_player,
             safe_opponent_maximum_cfv_excess_bb: safe_maximum_excess,
             safe_opponent_reach_weighted_cfv_excess_bb: safe_weighted_excess,
+            safe_unprojected_opponent_maximum_cfv_excess_bb: safe_unprojected_maximum_excess,
+            safe_unprojected_opponent_reach_weighted_cfv_excess_bb:
+                safe_unprojected_weighted_excess,
+            safe_deployed_resolved_policy_weight,
+            safe_projection_best_response_evaluations,
         };
         let mut reasons = Vec::new();
         if std::iter::once(&self.config.value_network)
@@ -4854,6 +5060,13 @@ impl FlopSolver {
         }
         if self.safe_root.is_some() {
             method.push_str("_opponent_cfv_opt_out_safe_resolving");
+            if self
+                .safe_root
+                .as_ref()
+                .is_some_and(|safe| safe.deployed_resolved_policy_weight < 1.0)
+            {
+                method.push_str("_exact_cfv_blueprint_projection");
+            }
         }
         let auxiliary_value_network_seeds = self
             .config
@@ -5221,6 +5434,7 @@ pub fn solve_flop_safe(
     let mut solver = FlopSolver::new(config)?;
     solver.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
     solver.train();
+    solver.project_safe_strategy_to_blueprint(blueprint_strategies)?;
     Ok(solver.finish())
 }
 
@@ -12077,7 +12291,7 @@ mod tests {
             threads: 1,
         };
         let blueprint = solve_flop(config.clone()).unwrap();
-        config.iterations = 64;
+        config.iterations = 2;
         let resolving_player = config.state.actor;
         let safe =
             solve_flop_safe(config.clone(), &blueprint.strategies, resolving_player).unwrap();
@@ -12092,6 +12306,28 @@ mod tests {
             .metrics
             .safe_opponent_reach_weighted_cfv_excess_bb
             .is_some_and(|excess| excess <= 0.05));
+        let unprojected = safe
+            .metrics
+            .safe_unprojected_opponent_maximum_cfv_excess_bb
+            .expect("unprojected safe diagnostic");
+        let final_excess = safe
+            .metrics
+            .safe_opponent_maximum_cfv_excess_bb
+            .expect("final safe diagnostic");
+        let deployed_weight = safe
+            .metrics
+            .safe_deployed_resolved_policy_weight
+            .expect("safe policy weight");
+        assert!(unprojected + 1e-8 >= final_excess);
+        assert!((0.0..=1.0).contains(&deployed_weight));
+        assert!(safe
+            .metrics
+            .safe_projection_best_response_evaluations
+            .is_some_and(|evaluations| evaluations >= 1));
+        if unprojected > SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            assert!(deployed_weight < 1.0);
+            assert!(safe.method.contains("exact_cfv_blueprint_projection"));
+        }
         assert!(solve_flop_safe(config, &blueprint.strategies, 1 - resolving_player).is_err());
     }
 
