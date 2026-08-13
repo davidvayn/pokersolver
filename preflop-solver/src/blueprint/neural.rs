@@ -93,13 +93,17 @@ pub struct TurnResolverConfig {
     pub regret_matching_plus: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FlopResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
     pub regret_matching_plus: bool,
     pub threads: usize,
     pub value_network_path: PathBuf,
+    /// Fraction of the served action probability contributed by the resolved
+    /// strategy. The remainder stays anchored to the frozen blueprint at the
+    /// same exact public belief, preventing unconstrained strategy grafting.
+    pub resolved_policy_weight: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -264,6 +268,8 @@ pub struct ExploitabilityCertificate {
     pub flop_resolver_averaging_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_regret_matching_plus: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_resolved_policy_weight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_value_network_sha256: Option<String>,
     pub exact_betting_tree_nodes: u64,
@@ -488,7 +494,21 @@ impl FrozenPolicy {
             {
                 return Err("flop resolver root strategy is incompatible".to_owned());
             }
-            resolved.probabilities.clone()
+            if resolver.config.resolved_policy_weight < 1.0 {
+                let source = range_policy
+                    .requires_source_policy()
+                    .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
+                    .transpose()?;
+                let anchor = range_policy.strategy(&public, config, source.as_deref())?;
+                blend_resolved_with_anchor(
+                    &resolved.probabilities,
+                    &anchor,
+                    actions.len(),
+                    resolver.config.resolved_policy_weight,
+                )?
+            } else {
+                resolved.probabilities.clone()
+            }
         } else if let Some(resolver) = self.turn_resolver.filter(|_| state.street == Street::Turn) {
             let resolved = self
                 .turn_strategy_cache
@@ -855,6 +875,8 @@ impl FrozenPolicy {
         if resolver.iterations < 2
             || resolver.averaging_delay >= resolver.iterations
             || resolver.threads == 0
+            || !resolver.resolved_policy_weight.is_finite()
+            || !(0.0..=1.0).contains(&resolver.resolved_policy_weight)
         {
             return Err("flop resolver configuration is invalid".into());
         }
@@ -1008,6 +1030,61 @@ fn stabilize_resolved_policy(
         }
     }
     Ok(probabilities)
+}
+
+fn blend_resolved_with_anchor(
+    resolved: &[f64],
+    anchor: &[f64],
+    action_count: usize,
+    resolved_weight: f64,
+) -> Result<Vec<f64>, String> {
+    if action_count == 0
+        || resolved.len() != COMBO_COUNT * action_count
+        || anchor.len() != resolved.len()
+        || !resolved_weight.is_finite()
+        || !(0.0..=1.0).contains(&resolved_weight)
+    {
+        return Err("anchored resolved policy dimensions are incompatible".to_owned());
+    }
+    let anchor_weight = 1.0 - resolved_weight;
+    let mut blended = Vec::with_capacity(resolved.len());
+    for (resolved_row, anchor_row) in resolved
+        .chunks_exact(action_count)
+        .zip(anchor.chunks_exact(action_count))
+    {
+        let resolved_sum = resolved_row.iter().sum::<f64>();
+        let anchor_sum = anchor_row.iter().sum::<f64>();
+        if resolved_sum <= 0.0 && anchor_sum <= 0.0 {
+            blended.extend(std::iter::repeat_n(0.0, action_count));
+            continue;
+        }
+        if !resolved_sum.is_finite()
+            || !anchor_sum.is_finite()
+            || resolved_row
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            || anchor_row
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err("anchored resolved policy contains invalid probabilities".to_owned());
+        }
+        for action in 0..action_count {
+            let resolved_probability = if resolved_sum > 0.0 {
+                resolved_row[action] / resolved_sum
+            } else {
+                anchor_row[action] / anchor_sum
+            };
+            let anchor_probability = if anchor_sum > 0.0 {
+                anchor_row[action] / anchor_sum
+            } else {
+                resolved_row[action] / resolved_sum
+            };
+            blended
+                .push(resolved_weight * resolved_probability + anchor_weight * anchor_probability);
+        }
+    }
+    stabilize_resolved_policy(blended, action_count)
 }
 
 fn trajectory_action_matches(
@@ -4493,6 +4570,10 @@ pub fn certify_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_resolved_policy_weight: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
@@ -4711,6 +4792,10 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_resolved_policy_weight: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
@@ -4937,6 +5022,10 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_resolved_policy_weight: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
         sample_mean_exploitability_bb: mean,
@@ -4966,6 +5055,22 @@ mod tests {
             .iter()
             .all(|probability| *probability > 0.0));
         assert!((stabilized[3..6].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn anchored_resolver_blend_preserves_rows_and_endpoints() {
+        let mut resolved = vec![0.0; COMBO_COUNT * 2];
+        let mut anchor = vec![0.0; COMBO_COUNT * 2];
+        resolved[2..4].copy_from_slice(&[1.0, 0.0]);
+        anchor[2..4].copy_from_slice(&[0.0, 1.0]);
+        let midpoint = blend_resolved_with_anchor(&resolved, &anchor, 2, 0.5).unwrap();
+        assert_eq!(&midpoint[..2], &[0.0, 0.0]);
+        assert!((midpoint[2] - 0.5).abs() < 1e-8);
+        assert!((midpoint[3] - 0.5).abs() < 1e-8);
+        let anchored = blend_resolved_with_anchor(&resolved, &anchor, 2, 0.0).unwrap();
+        let solved = blend_resolved_with_anchor(&resolved, &anchor, 2, 1.0).unwrap();
+        assert!(anchored[3] > 1.0 - 1e-8);
+        assert!(solved[2] > 1.0 - 1e-8);
     }
 
     #[test]
@@ -5749,6 +5854,7 @@ mod tests {
                 regret_matching_plus: false,
                 threads: 1,
                 value_network_path: value_path.clone(),
+                resolved_policy_weight: 0.5,
             }),
         };
         let mut resolver_generator = SampleGenerator::new_with_range(
@@ -5773,6 +5879,14 @@ mod tests {
             .networks
             .as_ref()
             .is_some_and(|policy| policy.flop_resolver.is_some()));
+        assert_eq!(
+            resolver_generator
+                .networks
+                .as_ref()
+                .and_then(|policy| policy.flop_resolver.as_ref())
+                .map(|resolver| resolver.config.resolved_policy_weight),
+            Some(0.5)
+        );
         let attribution = generate_causal_policy_attribution(CausalPolicyAttributionConfig {
             game: game.clone(),
             deals: 2,

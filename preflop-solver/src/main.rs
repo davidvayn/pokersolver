@@ -1841,6 +1841,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                 value_network_path: value(args, "--flop-resolver-value-network")
                     .map(PathBuf::from)
                     .ok_or("--flop-resolver-value-network is required with flop resolving")?,
+                resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
             })
         })
         .transpose()?;
@@ -1850,6 +1851,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--flop-resolver-regret-matching-plus",
             "--flop-resolver-threads",
             "--flop-resolver-value-network",
+            "--flop-resolver-policy-weight",
         ]
         .iter()
         .any(|name| args.iter().any(|argument| argument == name))
@@ -2495,6 +2497,9 @@ Neural certificate options:
   --flop-resolver-regret-matching-plus
                                   Use regret-matching+ in flop search
   --flop-resolver-threads <N>     Leaf-evaluation threads; default: 1
+  --flop-resolver-policy-weight <0..1>
+                                  Blend resolved actions with the frozen
+                                  blueprint; default: 1 (pure resolve)
   --compact-serving-grid          Match an opt-in reduced-open model
   --output <path>                 Optional JSON certificate file
 
