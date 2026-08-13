@@ -769,6 +769,7 @@ impl PublicValueNetwork {
             "hu-public-belief-combo-value-network-v3"
                 | "hu-public-belief-combo-value-network-v4"
                 | "hu-public-belief-combo-value-network-v5"
+                | "hu-public-belief-combo-value-network-v6"
         ) {
             return self.predict_shared_combo(board, actor, invested, ranges);
         }
@@ -10462,6 +10463,53 @@ mod tests {
         assert_eq!(network.selected_value_head([3.6, 3.0])[0].biases, [1.0]);
         assert_eq!(network.selected_value_head([7.5, 7.5])[0].biases, [1.0]);
         assert_eq!(network.selected_value_head([7.6, 7.5])[0].biases, [2.0]);
+    }
+
+    #[test]
+    fn pot_expert_value_network_uses_shared_combo_inference() {
+        let mut network = zero_shared_value_network();
+        network.schema = "hu-public-belief-combo-value-network-v6".to_owned();
+        network.value_normalization = Some("pot".to_owned());
+        network.head.clear();
+        network.pot_expert_heads = (0..3)
+            .map(|expert| {
+                vec![ValueNetworkLayer {
+                    input_size: 4,
+                    output_size: 1,
+                    activation: "linear".to_owned(),
+                    weights: vec![0.0, 0.0, 0.0, 1.0],
+                    biases: vec![expert as f32 * 0.1],
+                    normalization: None,
+                    normalization_weights: Vec::new(),
+                    normalization_biases: Vec::new(),
+                    normalization_epsilon: 0.0,
+                    residual: false,
+                }]
+            })
+            .collect();
+        network.validate().expect("valid pot-expert network");
+
+        let board = [0, 21, 34, 47];
+        let ranges: [Vec<f64>; 2] = std::array::from_fn(|_| {
+            let mut range = all_combos()
+                .iter()
+                .map(|combo| {
+                    if combo.cards().iter().any(|card| board.contains(card)) {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                })
+                .collect::<Vec<_>>();
+            let total = range.iter().sum::<f64>();
+            for weight in &mut range {
+                *weight /= total;
+            }
+            range
+        });
+        let routed = network.predict(&board, 0, [4.0, 4.0], &ranges);
+        let expected = network.predict_shared_combo(&board, 0, [4.0, 4.0], &ranges);
+        assert_eq!(routed, expected);
     }
 
     fn check_preferring_range_policy() -> RangeConditionedPolicyNetwork {

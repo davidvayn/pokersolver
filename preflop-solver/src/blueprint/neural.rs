@@ -273,6 +273,12 @@ pub struct ExploitabilityCertificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_value_network_sha256: Option<String>,
     pub exact_betting_tree_nodes: u64,
+    /// Retained outer-game observations permit paired candidate comparisons,
+    /// deterministic replay, and honest inspection of chance-sampling noise.
+    pub sample_exploitabilities_bb: Vec<f64>,
+    /// Per observation, responder-zero and responder-one values before their
+    /// average is clamped into the reported exploitability sample.
+    pub sample_response_values_bb: Vec<[f64; 2]>,
     pub sample_mean_exploitability_bb: f64,
     pub sample_standard_error_bb: f64,
     pub hoeffding_margin_bb: f64,
@@ -450,35 +456,14 @@ impl FrozenPolicy {
                     .flop_strategy_cache
                     .lock()
                     .expect("flop strategy cache");
-                for strategy in solution.strategies {
-                    let strategy_key = range_policy_public_cache_key(
-                        Street::Flop,
-                        strategy.actor,
-                        &public.board,
-                        &strategy.public_history,
-                    );
-                    if cache.len() >= 4_096 && !cache.contains_key(&strategy_key) {
-                        if let Some(oldest) = cache.keys().next().copied() {
-                            cache.remove(&oldest);
-                        }
-                    }
-                    let action_labels = strategy.action_labels;
-                    let probabilities = stabilize_resolved_policy(
-                        strategy.probabilities.into_iter().map(f64::from).collect(),
-                        action_labels.len(),
-                    )?;
-                    cache.insert(
-                        strategy_key,
-                        Arc::new(ResolvedPolicyCachedRow {
-                            action_labels,
-                            probabilities,
-                        }),
-                    );
-                }
-                cache
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| "flop resolver omitted its root strategy".to_owned())?
+                cache_resolved_policy_rows(
+                    &mut cache,
+                    key,
+                    Street::Flop,
+                    &public.board,
+                    solution.strategies,
+                    4_096,
+                )?
             };
             let labels = actions
                 .iter()
@@ -533,42 +518,19 @@ impl FrozenPolicy {
                     .turn_strategy_cache
                     .lock()
                     .expect("turn strategy cache");
-                for strategy in solution.strategies {
-                    if strategy
-                        .public_history
-                        .last()
-                        .is_some_and(|part| part.starts_with("chance:river:"))
-                    {
-                        continue;
-                    }
-                    let strategy_key = range_policy_public_cache_key(
-                        Street::Turn,
-                        strategy.actor,
-                        &public.board,
-                        &strategy.public_history,
-                    );
-                    if cache.len() >= 4_096 && !cache.contains_key(&strategy_key) {
-                        if let Some(oldest) = cache.keys().next().copied() {
-                            cache.remove(&oldest);
-                        }
-                    }
-                    let action_labels = strategy.action_labels;
-                    let probabilities = stabilize_resolved_policy(
-                        strategy.probabilities.into_iter().map(f64::from).collect(),
-                        action_labels.len(),
-                    )?;
-                    cache.insert(
-                        strategy_key,
-                        Arc::new(ResolvedPolicyCachedRow {
-                            action_labels,
-                            probabilities,
-                        }),
-                    );
-                }
-                cache
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| "turn resolver omitted its root strategy".to_owned())?
+                cache_resolved_policy_rows(
+                    &mut cache,
+                    key,
+                    Street::Turn,
+                    &public.board,
+                    solution.strategies.into_iter().filter(|strategy| {
+                        !strategy
+                            .public_history
+                            .last()
+                            .is_some_and(|part| part.starts_with("chance:river:"))
+                    }),
+                    4_096,
+                )?
             };
             let labels = actions
                 .iter()
@@ -609,35 +571,14 @@ impl FrozenPolicy {
                     .river_strategy_cache
                     .lock()
                     .expect("river strategy cache");
-                for strategy in solution.strategies {
-                    let strategy_key = range_policy_public_cache_key(
-                        Street::River,
-                        strategy.actor,
-                        &public.board,
-                        &strategy.public_history,
-                    );
-                    if cache.len() >= 16_384 && !cache.contains_key(&strategy_key) {
-                        if let Some(oldest) = cache.keys().next().copied() {
-                            cache.remove(&oldest);
-                        }
-                    }
-                    let action_labels = strategy.action_labels;
-                    let probabilities = stabilize_resolved_policy(
-                        strategy.probabilities.into_iter().map(f64::from).collect(),
-                        action_labels.len(),
-                    )?;
-                    cache.insert(
-                        strategy_key,
-                        Arc::new(ResolvedPolicyCachedRow {
-                            action_labels,
-                            probabilities,
-                        }),
-                    );
-                }
-                cache
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| "river resolver omitted its root strategy".to_owned())?
+                cache_resolved_policy_rows(
+                    &mut cache,
+                    key,
+                    Street::River,
+                    &public.board,
+                    solution.strategies,
+                    16_384,
+                )?
             };
             let labels = actions
                 .iter()
@@ -999,6 +940,43 @@ fn range_policy_public_cache_key(
         digest.update(history.as_bytes());
     }
     digest.finalize().into()
+}
+
+fn cache_resolved_policy_rows(
+    cache: &mut BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>,
+    requested_key: [u8; 32],
+    street: Street,
+    board: &[u8],
+    strategies: impl IntoIterator<Item = super::public_belief::PublicBeliefStrategy>,
+    capacity: usize,
+) -> Result<Arc<ResolvedPolicyCachedRow>, String> {
+    let mut requested = None;
+    for strategy in strategies {
+        let strategy_key =
+            range_policy_public_cache_key(street, strategy.actor, board, &strategy.public_history);
+        if cache.len() >= capacity && !cache.contains_key(&strategy_key) {
+            if let Some(evicted) = cache.keys().next().copied() {
+                cache.remove(&evicted);
+            }
+        }
+        let action_labels = strategy.action_labels;
+        let probabilities = stabilize_resolved_policy(
+            strategy.probabilities.into_iter().map(f64::from).collect(),
+            action_labels.len(),
+        )?;
+        let row = Arc::new(ResolvedPolicyCachedRow {
+            action_labels,
+            probabilities,
+        });
+        if strategy_key == requested_key {
+            // Retain the requested row locally. A later insertion in this same
+            // solution may evict it from the bounded shared cache, and another
+            // worker can concurrently fill/evict unrelated entries.
+            requested = Some(row.clone());
+        }
+        cache.insert(strategy_key, row);
+    }
+    requested.ok_or_else(|| "resolver solution omitted its requested root strategy".to_owned())
 }
 
 /// Exact CFR averages can assign a legal action zero probability after a
@@ -4476,6 +4454,7 @@ pub fn certify_exploitability_upper_bound(
                         );
                         (
                             ((response_p0 + response_p1) / 2.0).clamp(0.0, game.effective_stack_bb),
+                            [response_p0, response_p1],
                             visited_nodes,
                         )
                     })
@@ -4490,9 +4469,13 @@ pub fn certify_exploitability_upper_bound(
     let mut visited_nodes = 0u64;
     let mut mean = 0.0;
     let mut squared_deviation_sum = 0.0;
+    let mut sample_exploitabilities = Vec::with_capacity(config.deals as usize);
+    let mut sample_responses = Vec::with_capacity(config.deals as usize);
     let depth = config.game.effective_stack_bb;
-    for (index, (exploitability, nodes)) in evaluated.into_iter().enumerate() {
+    for (index, (exploitability, responses, nodes)) in evaluated.into_iter().enumerate() {
         visited_nodes += nodes;
+        sample_exploitabilities.push(exploitability);
+        sample_responses.push(responses);
         let sample_index = index + 1;
         let delta = exploitability - mean;
         mean += delta / sample_index as f64;
@@ -4576,6 +4559,8 @@ pub fn certify_exploitability_upper_bound(
             .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
+        sample_exploitabilities_bb: sample_exploitabilities,
+        sample_response_values_bb: sample_responses,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: margin,
@@ -4690,6 +4675,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
                         (
                             ((responses[0] + responses[1]) / 2.0)
                                 .clamp(0.0, game.effective_stack_bb),
+                            responses,
                             visited_nodes,
                         )
                     })
@@ -4704,9 +4690,13 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
     let mut visited_nodes = 0u64;
     let mut mean = 0.0;
     let mut squared_deviation_sum = 0.0;
+    let mut sample_exploitabilities = Vec::with_capacity(config.deals as usize);
+    let mut sample_responses = Vec::with_capacity(config.deals as usize);
     let depth = config.game.effective_stack_bb;
-    for (index, (exploitability, nodes)) in evaluated.into_iter().enumerate() {
+    for (index, (exploitability, responses, nodes)) in evaluated.into_iter().enumerate() {
         visited_nodes += nodes;
+        sample_exploitabilities.push(exploitability);
+        sample_responses.push(responses);
         let sample_index = index + 1;
         let delta = exploitability - mean;
         mean += delta / sample_index as f64;
@@ -4798,6 +4788,8 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
+        sample_exploitabilities_bb: sample_exploitabilities,
+        sample_response_values_bb: sample_responses,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: hoeffding_margin,
@@ -4919,6 +4911,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
                         (
                             ((responses[0] + responses[1]) / 2.0)
                                 .clamp(0.0, game.effective_stack_bb),
+                            responses,
                             visited_nodes,
                         )
                     })
@@ -4933,9 +4926,13 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
     let mut visited_nodes = 0u64;
     let mut mean = 0.0;
     let mut squared_deviation_sum = 0.0;
+    let mut sample_exploitabilities = Vec::with_capacity(config.deals as usize);
+    let mut sample_responses = Vec::with_capacity(config.deals as usize);
     let depth = config.game.effective_stack_bb;
-    for (index, (exploitability, nodes)) in evaluated.into_iter().enumerate() {
+    for (index, (exploitability, responses, nodes)) in evaluated.into_iter().enumerate() {
         visited_nodes += nodes;
+        sample_exploitabilities.push(exploitability);
+        sample_responses.push(responses);
         let sample_index = index + 1;
         let delta = exploitability - mean;
         mean += delta / sample_index as f64;
@@ -5028,6 +5025,8 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .map(|resolver| resolver.resolved_policy_weight),
         flop_resolver_value_network_sha256,
         exact_betting_tree_nodes: visited_nodes,
+        sample_exploitabilities_bb: sample_exploitabilities,
+        sample_response_values_bb: sample_responses,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: hoeffding_margin,
@@ -5055,6 +5054,38 @@ mod tests {
             .iter()
             .all(|probability| *probability > 0.0));
         assert!((stabilized[3..6].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bounded_resolver_cache_returns_requested_root_after_self_eviction() {
+        let board = [0, 5, 10, 15, 20];
+        let root_history = vec!["root".to_owned()];
+        let root_key = range_policy_public_cache_key(Street::River, 0, &board, &root_history);
+        let strategies = (0..32)
+            .map(|index| {
+                let history = if index == 0 {
+                    root_history.clone()
+                } else {
+                    vec![format!("child:{index}")]
+                };
+                let mut probabilities = vec![0.0f32; COMBO_COUNT * 2];
+                probabilities[2..4].copy_from_slice(&[0.25, 0.75]);
+                super::public_belief::PublicBeliefStrategy {
+                    public_history: history,
+                    actor: 0,
+                    action_labels: vec!["check".to_owned(), "bet".to_owned()],
+                    probabilities,
+                    action_values_bb: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut cache = BTreeMap::new();
+        let root =
+            cache_resolved_policy_rows(&mut cache, root_key, Street::River, &board, strategies, 1)
+                .unwrap();
+        assert_eq!(root.action_labels, ["check", "bet"]);
+        assert_eq!(root.probabilities.len(), COMBO_COUNT * 2);
+        assert!(!cache.contains_key(&root_key));
     }
 
     #[test]
@@ -5551,6 +5582,24 @@ mod tests {
         assert!(first.exact_betting_tree_nodes > 0);
         assert_eq!(first.network_sha256, expected_network_sha256);
         assert!(first.sample_mean_exploitability_bb >= 0.0);
+        for certificate in [&first, &hidden_first, &causal_first] {
+            assert_eq!(certificate.sample_exploitabilities_bb.len(), 8);
+            assert_eq!(certificate.sample_response_values_bb.len(), 8);
+            let reconstructed_mean =
+                certificate.sample_exploitabilities_bb.iter().sum::<f64>() / 8.0;
+            assert!((reconstructed_mean - certificate.sample_mean_exploitability_bb).abs() < 1e-12);
+            for (sample, responses) in certificate
+                .sample_exploitabilities_bb
+                .iter()
+                .zip(&certificate.sample_response_values_bb)
+            {
+                assert!(responses.iter().all(|value| value.is_finite()));
+                assert_eq!(
+                    *sample,
+                    ((responses[0] + responses[1]) / 2.0).clamp(0.0, 2.0)
+                );
+            }
+        }
         assert!(first.exploitability_upper_bound_bb >= first.sample_mean_exploitability_bb);
         assert!(first.exploitability_upper_bound_bb <= 2.0);
         assert_eq!(
