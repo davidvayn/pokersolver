@@ -1091,10 +1091,13 @@ def train(
     maximum_teacher_ev_loss_bb: float,
     balanced_teacher_batches: bool,
     maximum_gradient_norm: float,
+    initial_network_path: Path | None = None,
 ) -> tuple[RangeConditionedPolicy, list[float], dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
     model = RangeConditionedPolicy(architecture, composition)
+    if initial_network_path is not None:
+        load_exported_model(model, initial_network_path)
     mx.eval(model.parameters())
     schedule = (
         learning_rate
@@ -1523,6 +1526,7 @@ def export_model_from_source(
         "causalAttributionSha256s",
         "selfPlayRegretDatasetSha256s",
         "directionalDatasetSha256s",
+        "consensusDatasetSha256s",
     }:
         raise ValueError("range-policy provenance key is invalid")
     payload = dict(source_payload)
@@ -1530,6 +1534,7 @@ def export_model_from_source(
         "causalAttributionSha256s",
         "selfPlayRegretDatasetSha256s",
         "directionalDatasetSha256s",
+        "consensusDatasetSha256s",
     ):
         payload.pop(key, None)
     payload.update(

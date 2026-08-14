@@ -2179,24 +2179,41 @@ pub fn attribute_policy_action_values(
                 (variance / cycles as f64).sqrt()
             })
             .collect();
-        let row_maximum = entry
-            .action_value_standard_errors_bb
-            .iter()
-            .copied()
-            .fold(0.0f64, f64::max);
-        maximum_standard_error = maximum_standard_error.max(row_maximum);
-        total_weight += entry.reach_probability;
-        if row_maximum <= 0.02 {
-            covered_weight += entry.reach_probability;
-        }
+        let (entry_covered, entry_total, entry_maximum) = action_ev_precision_weights(
+            entry.reach_probability,
+            &entry.policy_probabilities,
+            &entry.action_value_standard_errors_bb,
+        );
+        covered_weight += entry_covered;
+        total_weight += entry_total;
+        maximum_standard_error = maximum_standard_error.max(entry_maximum);
     }
     if !samples.is_empty() || total_weight <= 0.0 {
         return Err("preflop action-value cycles and full evaluation differ".into());
     }
     attribution.action_ev_standard_error_coverage = Some(covered_weight / total_weight);
     attribution.maximum_action_ev_standard_error_bb = Some(maximum_standard_error);
-    attribution.interpretation = "policy-reach-weighted one-step deviation action values with every later decision fixed to the evaluated policy; standard errors are measured across independent balanced exact-combo cycles and approximation error in the frozen postflop continuation cache is not sampling error".to_owned();
+    attribution.interpretation = "policy-reach-and-action-frequency-weighted one-step deviation action values with every later decision fixed to the evaluated policy; standard errors are measured across independent balanced exact-combo cycles and approximation error in the frozen postflop continuation cache is not sampling error".to_owned();
     Ok(attribution)
+}
+
+fn action_ev_precision_weights(
+    reach_probability: f64,
+    policy_probabilities: &[f64],
+    standard_errors_bb: &[f64],
+) -> (f64, f64, f64) {
+    debug_assert_eq!(policy_probabilities.len(), standard_errors_bb.len());
+    policy_probabilities.iter().zip(standard_errors_bb).fold(
+        (0.0f64, 0.0f64, 0.0f64),
+        |(covered, total, maximum), (probability, standard_error)| {
+            let weight = reach_probability * probability;
+            (
+                covered + if *standard_error <= 0.02 { weight } else { 0.0 },
+                total + weight,
+                maximum.max(*standard_error),
+            )
+        },
+    )
 }
 
 pub fn evaluate_neural_policy(
@@ -3158,6 +3175,16 @@ mod tests {
                     && entry.action_labels.len() == entry.policy_probabilities.len()
             }));
         }
+    }
+
+    #[test]
+    fn action_ev_precision_uses_served_action_frequency() {
+        let (covered, total, maximum) =
+            action_ev_precision_weights(0.25, &[0.75, 0.25], &[0.01, 0.03]);
+        assert!((covered - 0.1875).abs() < 1e-12);
+        assert!((total - 0.25).abs() < 1e-12);
+        assert!((covered / total - 0.75).abs() < 1e-12);
+        assert!((maximum - 0.03).abs() < 1e-12);
     }
 
     #[test]

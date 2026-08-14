@@ -332,6 +332,22 @@ class RangePolicyDistillationTests(unittest.TestCase):
                 self_play["selfPlayRegretDatasetSha256s"],
                 ["e" * 64, "f" * 64],
             )
+            consensus_path = Path(temporary) / "consensus-updated.json"
+            module.export_model_from_source(
+                restored,
+                self_play,
+                consensus_path,
+                48,
+                module.sha256(path),
+                ["1" * 64, "2" * 64],
+                "consensusDatasetSha256s",
+            )
+            consensus = json.loads(consensus_path.read_text())
+            self.assertNotIn("selfPlayRegretDatasetSha256s", consensus)
+            self.assertEqual(
+                consensus["consensusDatasetSha256s"],
+                ["1" * 64, "2" * 64],
+            )
             second = module.RangeConditionedPolicy("compact", "replace")
             module.load_exported_model(second, updated_path)
             second_values = second(*arguments)

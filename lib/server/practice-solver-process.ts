@@ -5,15 +5,15 @@ import { cpus } from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
-const MODEL_VERSION = 'hu-20bb-v92-continual-resolver-experimental';
+const MODEL_VERSION = 'hu-20bb-v102-consensus-continual-resolver-experimental';
 const NETWORK_SHA256 =
   '310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3';
 const RANGE_POLICY_SHA256 =
-  'a5dc8cd4855211571151a666c59bd78fa5b97a3f6e0f715fbed97873185c89a1';
+  '7296e5a54cd0c310f5fd7dc126937b41131c54d00b0bc2c6807d7791c14772f0';
 const VALUE_NETWORK_SHA256 =
   '2764959d5ddf004dc7ad9146a831250bbf2db2b3fcf86a3f3daf2cc51e458202';
 const PREFLOP_ACTION_VALUES_SHA256 =
-  'f945babfc6e094af60295e2c4094339369ffe13f64f9deeea634ad8776724979';
+  '8369f6dde1f6de8380e0bc32cf54003524791478939741c9fc427b47d3efa70a';
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_STDERR_BYTES = 16_384;
 
@@ -60,9 +60,9 @@ function command(): { executable: string; args: string[] } {
       '--networks',
       path.join(modelRoot, 'v57-seed7601-networks.json.gz'),
       '--range-policy',
-      path.join(modelRoot, 'v90-round8-seed20721-range-policy.json.gz'),
+      path.join(modelRoot, 'v102-seed20931-range-policy.json.gz'),
       '--preflop-action-values',
-      path.join(modelRoot, 'v27-seed7601-preflop-action-values.json.gz'),
+      path.join(modelRoot, 'v101-seed7601-preflop-action-values.json.gz'),
       '--flop-resolver-iterations',
       '2',
       '--flop-resolver-averaging-delay',

@@ -2319,10 +2319,32 @@ pub struct RangePolicyCrossSeedReport {
     pub primary_action_agreement: f64,
     pub maximum_aggregate_action_delta: f64,
     pub aggregate_action_deltas: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub street_diagnostics: BTreeMap<String, RangePolicyCrossSeedStreetDiagnostic>,
     pub maximum_probability_sum_error: f64,
     pub lookup_coverage: f64,
     pub gates: BTreeMap<String, bool>,
     pub validation: BlueprintValidation,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangePolicyCrossSeedStreetDiagnostic {
+    pub records: usize,
+    pub action_probabilities: usize,
+    pub evaluation_weight: f64,
+    pub conditional_action_frequency_mae: f64,
+    pub contribution_to_action_frequency_mae: f64,
+    pub conditional_primary_action_agreement: f64,
+}
+
+#[derive(Default)]
+struct RangePolicyPairSliceSums {
+    records: usize,
+    action_probabilities: usize,
+    weight: f64,
+    absolute_probability_error: f64,
+    primary_agreement: f64,
 }
 
 #[derive(Default)]
@@ -2334,6 +2356,7 @@ struct RangePolicyPairSums {
     primary_agreement: f64,
     action_kind_mass: [[f64; 6]; 2],
     maximum_probability_sum_error: f64,
+    street_sums: BTreeMap<String, RangePolicyPairSliceSums>,
 }
 
 fn range_policy_action_kind(label: &str) -> Result<usize, Box<dyn Error>> {
@@ -2461,6 +2484,17 @@ fn compare_range_policy_dataset(
         {
             return Err("range policy comparison legal actions do not match".into());
         }
+        let street_key = match normalized.street {
+            Street::Preflop => "preflop",
+            Street::Flop => "flop",
+            Street::Turn => "turn",
+            Street::River => "river",
+        }
+        .to_owned();
+        sums.street_sums
+            .entry(street_key.clone())
+            .or_default()
+            .records += 1;
         let source_probabilities = [
             sources[0]
                 .map(|source| {
@@ -2514,13 +2548,14 @@ fn compare_range_policy_dataset(
                     return Err("range policy comparison produced invalid probabilities".into());
                 }
             }
-            sums.absolute_probability_error += weight
+            let absolute_probability_error = weight
                 * probabilities[0]
                     .iter()
                     .zip(probabilities[1])
                     .map(|(first, second)| (first - second).abs())
                     .sum::<f64>()
                 / action_count as f64;
+            sums.absolute_probability_error += absolute_probability_error;
             let primaries = probabilities.map(|policy| {
                 policy
                     .iter()
@@ -2529,12 +2564,13 @@ fn compare_range_policy_dataset(
                     .expect("range policy has a legal action")
                     .0
             });
-            sums.primary_agreement += weight
+            let primary_agreement = weight
                 * if primaries[0] == primaries[1] {
                     1.0
                 } else {
                     0.0
                 };
+            sums.primary_agreement += primary_agreement;
             for (action_index, label) in record.action_labels.iter().enumerate() {
                 let kind = range_policy_action_kind(label)?;
                 for policy in 0..2 {
@@ -2544,6 +2580,14 @@ fn compare_range_policy_dataset(
             }
             sums.weight += weight;
             sums.action_probabilities += action_count;
+            let street = sums
+                .street_sums
+                .get_mut(&street_key)
+                .expect("street diagnostic was initialized");
+            street.weight += weight;
+            street.absolute_probability_error += absolute_probability_error;
+            street.primary_agreement += primary_agreement;
+            street.action_probabilities += action_count;
         }
         sums.records += 1;
     }
@@ -2582,13 +2626,32 @@ pub fn compare_range_conditioned_policies(
     let mut action_frequency_mae = 0.0;
     let mut primary_action_agreement = 0.0;
     let mut aggregate_action_mass = [[0.0f64; 6]; 2];
+    let mut street_accumulators = BTreeMap::<String, RangePolicyPairSliceSums>::new();
     let mut maximum_probability_sum_error = 0.0f64;
-    for dataset in dataset_paths {
-        let (sums, dataset_sha256, parent_sha256) = compare_range_policy_dataset(
-            [&networks[0], &networks[1]],
-            [sources[0].as_ref(), sources[1].as_ref()],
-            dataset,
-        )?;
+    let comparisons = std::thread::scope(|scope| {
+        let workers = dataset_paths
+            .iter()
+            .map(|dataset| {
+                scope.spawn(|| {
+                    compare_range_policy_dataset(
+                        [&networks[0], &networks[1]],
+                        [sources[0].as_ref(), sources[1].as_ref()],
+                        dataset,
+                    )
+                    .map_err(|error| error.to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "range policy comparison worker panicked".to_owned())?
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
+    for (sums, dataset_sha256, parent_sha256) in comparisons {
         dataset_sha256s.push(dataset_sha256);
         dataset_parent_sha256s.push(parent_sha256);
         records += sums.records;
@@ -2600,6 +2663,15 @@ pub fn compare_range_conditioned_policies(
                 aggregate_action_mass[policy][kind] +=
                     0.5 * sums.action_kind_mass[policy][kind] / sums.weight;
             }
+        }
+        for (street, slice) in &sums.street_sums {
+            let accumulator = street_accumulators.entry(street.clone()).or_default();
+            accumulator.records += slice.records;
+            accumulator.action_probabilities += slice.action_probabilities;
+            accumulator.weight += 0.5 * slice.weight / sums.weight;
+            accumulator.absolute_probability_error +=
+                0.5 * slice.absolute_probability_error / sums.weight;
+            accumulator.primary_agreement += 0.5 * slice.primary_agreement / sums.weight;
         }
         maximum_probability_sum_error =
             maximum_probability_sum_error.max(sums.maximum_probability_sum_error);
@@ -2622,6 +2694,45 @@ pub fn compare_range_conditioned_policies(
         .values()
         .copied()
         .fold(0.0f64, f64::max);
+    let street_diagnostics = street_accumulators
+        .into_iter()
+        .map(|(street, sums)| {
+            let evaluation_weight = sums.weight;
+            (
+                street,
+                RangePolicyCrossSeedStreetDiagnostic {
+                    records: sums.records,
+                    action_probabilities: sums.action_probabilities,
+                    evaluation_weight,
+                    conditional_action_frequency_mae: sums.absolute_probability_error
+                        / evaluation_weight,
+                    contribution_to_action_frequency_mae: sums.absolute_probability_error,
+                    conditional_primary_action_agreement: sums.primary_agreement
+                        / evaluation_weight,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let diagnostic_weight = street_diagnostics
+        .values()
+        .map(|diagnostic| diagnostic.evaluation_weight)
+        .sum::<f64>();
+    let diagnostic_mae = street_diagnostics
+        .values()
+        .map(|diagnostic| diagnostic.contribution_to_action_frequency_mae)
+        .sum::<f64>();
+    if street_diagnostics.is_empty()
+        || (diagnostic_weight - 1.0).abs() > 1e-9
+        || (diagnostic_mae - action_frequency_mae).abs() > 1e-9
+        || street_diagnostics.values().any(|diagnostic| {
+            !diagnostic.evaluation_weight.is_finite()
+                || diagnostic.evaluation_weight <= 0.0
+                || !diagnostic.conditional_action_frequency_mae.is_finite()
+                || !diagnostic.conditional_primary_action_agreement.is_finite()
+        })
+    {
+        return Err("range policy street diagnostics do not reconcile".into());
+    }
     let lookup_coverage = 1.0;
     let gates = BTreeMap::from([
         (
@@ -2666,6 +2777,7 @@ pub fn compare_range_conditioned_policies(
         primary_action_agreement,
         maximum_aggregate_action_delta,
         aggregate_action_deltas,
+        street_diagnostics,
         maximum_probability_sum_error,
         lookup_coverage,
         gates,
