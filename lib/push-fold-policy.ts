@@ -16,21 +16,57 @@ import type {
   Seat,
 } from '@/lib/practice-types';
 
+interface HandClassPolicy {
+  shove: number;
+  call: number;
+  smallBlindFoldEvBb: number;
+  smallBlindShoveEvBb: number;
+  bigBlindFoldEvBb: number;
+  bigBlindCallEvBb: number;
+}
+
 interface ScenarioIndex {
   scenario: CompactPushFoldScenario;
-  hands: Map<string, { shove: number; call: number }>;
+  hands: Map<string, HandClassPolicy>;
 }
 
 const indexes = new Map<number, ScenarioIndex>(
-  (solvedScenarios as CompactPushFoldScenario[]).map((scenario) => [
-    scenario.effective_stack_bb,
-    {
-      scenario,
-      hands: new Map(
-        scenario.hands.map(([label, shove, call]) => [label, { shove, call }])
-      ),
-    },
-  ])
+  (solvedScenarios as CompactPushFoldScenario[]).map((scenario) => {
+    const values = new Map(
+      scenario.action_values.map(
+        ([
+          label,
+          smallBlindFoldEvBb,
+          smallBlindShoveEvBb,
+          bigBlindFoldEvBb,
+          bigBlindCallEvBb,
+        ]) => [
+          label,
+          {
+            smallBlindFoldEvBb,
+            smallBlindShoveEvBb,
+            bigBlindFoldEvBb,
+            bigBlindCallEvBb,
+          },
+        ]
+      )
+    );
+    return [
+      scenario.effective_stack_bb,
+      {
+        scenario,
+        hands: new Map(
+          scenario.hands.map(([label, shove, call]) => {
+            const actionValues = values.get(label);
+            if (!actionValues) {
+              throw new Error(`Push/fold model has no action values for ${label}`);
+            }
+            return [label, { shove, call, ...actionValues }];
+          })
+        ),
+      },
+    ];
+  })
 );
 
 export interface PushFoldSpot {
@@ -54,23 +90,25 @@ function frequenciesFor(
   index: ScenarioIndex,
   state: HandState,
   seat: Seat
-): { shove: number; call: number } {
+): HandClassPolicy {
   const label = handBucket(state.holeCards[seat]);
   const frequency = index.hands.get(label);
   if (!frequency) throw new Error(`Policy has no hand class ${label}`);
   return frequency;
 }
 
-function unavailableValue(
+function estimatedValue(
   action: LegalAction,
-  probability: number
+  probability: number,
+  evBb: number,
+  standardErrorBb: number
 ): PolicyAction {
   return {
     ...action,
     probability,
-    evBb: null,
-    standardErrorBb: null,
-    confidence: 'unavailable',
+    evBb,
+    standardErrorBb,
+    confidence: 'low',
   };
 }
 
@@ -80,29 +118,58 @@ async function nodeFor(
   hero: Seat
 ): Promise<PolicyNode> {
   const frequencies = frequenciesFor(index, state, hero);
+  const sampledValueError = index.scenario.action_value_standard_error_upper_bound_bb;
   const actions: PolicyAction[] =
     hero === 'button-small-blind'
       ? [
-          unavailableValue({ id: 'fold', kind: 'fold', label: 'Fold' }, 1 - frequencies.shove),
-          unavailableValue(
+          estimatedValue(
+            { id: 'fold', kind: 'fold', label: 'Fold' },
+            1 - frequencies.shove,
+            frequencies.smallBlindFoldEvBb,
+            0
+          ),
+          estimatedValue(
             {
               id: 'all-in',
               kind: 'all-in',
               label: `All-in ${state.depthBb}bb`,
               amountToBb: state.depthBb,
             },
-            frequencies.shove
+            frequencies.shove,
+            frequencies.smallBlindShoveEvBb,
+            sampledValueError
           ),
         ]
       : [
-          unavailableValue({ id: 'fold', kind: 'fold', label: 'Fold' }, 1 - frequencies.call),
-          unavailableValue({ id: 'call', kind: 'call', label: `Call ${Math.min(state.stacksBb[hero], state.depthBb - 1).toFixed(1)}bb` }, frequencies.call),
+          estimatedValue(
+            { id: 'fold', kind: 'fold', label: 'Fold' },
+            1 - frequencies.call,
+            frequencies.bigBlindFoldEvBb,
+            0
+          ),
+          estimatedValue(
+            {
+              id: 'call',
+              kind: 'call',
+              label: `Call ${Math.min(state.stacksBb[hero], state.depthBb - 1).toFixed(1)}bb`,
+            },
+            frequencies.call,
+            frequencies.bigBlindCallEvBb,
+            sampledValueError
+          ),
         ];
+  const best = actions.reduce(
+    (current, action) =>
+      current === null || (action.evBb ?? -Infinity) > (current.evBb ?? -Infinity)
+        ? action
+        : current,
+    null as PolicyAction | null
+  );
   return {
     stateHash: await canonicalPolicyHash(state, hero),
     actions,
-    bestActionId: null,
-    bestActionEvBb: null,
+    bestActionId: best?.id ?? null,
+    bestActionEvBb: best?.evBb ?? null,
   };
 }
 

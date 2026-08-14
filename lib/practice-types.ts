@@ -85,6 +85,7 @@ export interface HandState {
 
 export interface PolicyValidationSummary {
   status: 'accepted' | 'rejected' | 'training';
+  exploitabilityGateDeferred?: boolean;
   exploitabilityEstimateBb?: number;
   exploitabilityUpper99Bb?: number;
   crossSeedFrequencyMae?: number;
@@ -151,6 +152,25 @@ export interface ShardedPolicyRuntime {
   kind: 'binary-policy-shards-v1';
 }
 
+export interface ContinualResolverRuntime {
+  kind: 'rust-continual-resolver-v1';
+  endpoint: '/api/practice/resolve';
+  networkSha256: string;
+  rangePolicySha256: string;
+  valueNetworkSha256: string;
+  preflopActionValuesSha256: string;
+  stateFeatureSchema: 'hu-cash-trajectory-poker-aware-v4';
+  rangeFeatureSchema: 'rank-suit-invariant-combo-policy-query-v2';
+  actionFeatureSchema: 'hu-cash-legal-action-v1';
+  actionAbstraction: ActionAbstraction;
+  resolver: {
+    flopIterations: number;
+    turnIterations: number;
+    riverIterations: number;
+    deterministic: true;
+  };
+}
+
 export interface PolicyManifest {
   schemaVersion: number;
   version: string;
@@ -162,7 +182,10 @@ export interface PolicyManifest {
   generatedAt: string;
   stateSchema: string;
   shardSchema: string;
-  runtime?: ShardedPolicyRuntime | NeuralPolicyRuntime;
+  runtime?:
+    | ShardedPolicyRuntime
+    | NeuralPolicyRuntime
+    | ContinualResolverRuntime;
   abstraction: {
     blindsBb: [number, number];
     anteBb: number;

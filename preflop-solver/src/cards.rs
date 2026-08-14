@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const RANKS: &[u8; 13] = b"23456789TJQKA";
 pub const SUITS: &[u8; 4] = b"cdhs";
@@ -61,7 +61,7 @@ impl Combo {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ComboIdentity {
     pub combo_key: usize,
     pub cards: [u8; 2],

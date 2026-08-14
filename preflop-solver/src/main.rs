@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -13,9 +14,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     match command {
         "kuhn" => run_kuhn(&args[1..]),
         "solve" => run_push_fold(&args[1..]),
+        "push-fold-action-values" => run_push_fold_action_values(&args[1..]),
         "blueprint" => run_blueprint(&args[1..]),
         "neural-samples" => run_neural_samples(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
+        "practice-policy-server" => run_practice_policy_server(&args[1..]),
         "neural-causal-attribution" => run_neural_causal_attribution(&args[1..]),
         "neural-causal-attribution-evaluate" => run_neural_causal_attribution_evaluate(&args[1..]),
         "range-policy-self-play-samples" => run_range_policy_self_play_samples(&args[1..]),
@@ -28,6 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-dcfr" => run_preflop_dcfr(&args[1..]),
         "preflop-evaluate" => run_preflop_evaluate(&args[1..]),
         "preflop-attribution" => run_preflop_attribution(&args[1..]),
+        "preflop-action-values" => run_preflop_action_values(&args[1..]),
         "preflop-compact" => run_preflop_compact(&args[1..]),
         "preflop-distill-samples" => run_preflop_distill_samples(&args[1..]),
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
@@ -56,6 +60,160 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         unknown => Err(format!("unknown command: {unknown}").into()),
     }
+}
+
+fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args
+        .iter()
+        .any(|argument| argument == "--compact-serving-grid")
+    {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for practice serving")?;
+    let range_policy_path = value(args, "--range-policy")
+        .map(PathBuf::from)
+        .ok_or("--range-policy is required for practice serving")?;
+    let preflop_action_values_path = value(args, "--preflop-action-values").map(PathBuf::from);
+    let model_version = value(args, "--model-version")
+        .ok_or("--model-version is required for practice serving")?
+        .to_owned();
+    let river_resolver = value(args, "--river-resolver-iterations")
+        .map(|iterations| -> Result<_, Box<dyn Error>> {
+            let iterations = iterations.parse::<u64>()?;
+            Ok(blueprint::neural::RiverResolverConfig {
+                iterations,
+                averaging_delay: parse_or(
+                    args,
+                    "--river-resolver-averaging-delay",
+                    iterations / 10,
+                )?,
+            })
+        })
+        .transpose()?;
+    let turn_resolver = value(args, "--turn-resolver-iterations")
+        .map(|iterations| -> Result<_, Box<dyn Error>> {
+            let iterations = iterations.parse::<u64>()?;
+            Ok(blueprint::neural::TurnResolverConfig {
+                iterations,
+                averaging_delay: parse_or(
+                    args,
+                    "--turn-resolver-averaging-delay",
+                    iterations / 10,
+                )?,
+                river_refinement_iterations: parse_or(
+                    args,
+                    "--turn-resolver-river-refinement-iterations",
+                    0u64,
+                )?,
+                regret_matching_plus: args
+                    .iter()
+                    .any(|argument| argument == "--turn-resolver-regret-matching-plus"),
+                threads: parse_or(args, "--turn-resolver-threads", 1usize)?,
+                safe_resolving: args
+                    .iter()
+                    .any(|argument| argument == "--turn-resolver-safe"),
+                safe_anchor_iterations: parse_or(
+                    args,
+                    "--turn-resolver-safe-anchor-iterations",
+                    0u64,
+                )?,
+                resolved_policy_weight: parse_or(args, "--turn-resolver-policy-weight", 1.0f64)?,
+            })
+        })
+        .transpose()?;
+    let flop_resolver = value(args, "--flop-resolver-iterations")
+        .map(|iterations| -> Result<_, Box<dyn Error>> {
+            let iterations = iterations.parse::<u64>()?;
+            Ok(blueprint::neural::FlopResolverConfig {
+                iterations,
+                averaging_delay: parse_or(
+                    args,
+                    "--flop-resolver-averaging-delay",
+                    iterations / 10,
+                )?,
+                regret_matching_plus: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-regret-matching-plus"),
+                threads: parse_or(args, "--flop-resolver-threads", 1usize)?,
+                value_network_path: value(args, "--flop-resolver-value-network")
+                    .map(PathBuf::from)
+                    .ok_or("--flop-resolver-value-network is required with flop resolving")?,
+                auxiliary_value_network_paths: values(
+                    args,
+                    "--flop-resolver-auxiliary-value-network",
+                )
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+                continuation_selection: if args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-opponent-public-choice")
+                {
+                    blueprint::public_belief::FlopContinuationSelection::OpponentPublicChoice
+                } else {
+                    blueprint::public_belief::FlopContinuationSelection::Mean
+                },
+                safe_resolving: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-safe"),
+                safe_anchor_iterations: parse_or(
+                    args,
+                    "--flop-resolver-safe-anchor-iterations",
+                    0u64,
+                )?,
+                safe_bilateral: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-safe-bilateral"),
+                resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
+            })
+        })
+        .transpose()?;
+    let engine = blueprint::neural::PracticePolicyEngine::load(
+        blueprint::neural::PracticePolicyEngineConfig {
+            game,
+            model_version,
+            network_path,
+            range_policy_path,
+            preflop_action_values_path,
+            river_resolver,
+            turn_resolver,
+            flop_resolver,
+        },
+    )?;
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<blueprint::neural::PracticePolicyQuery>(&line) {
+            Ok(query) => {
+                let request_id = query.request_id.clone();
+                match engine.query(query) {
+                    Ok(result) => serde_json::to_value(result)?,
+                    Err(error) => serde_json::json!({
+                        "schema": "hu-practice-continual-resolver-error-v1",
+                        "requestId": request_id,
+                        "error": error,
+                    }),
+                }
+            }
+            Err(error) => serde_json::json!({
+                "schema": "hu-practice-continual-resolver-error-v1",
+                "requestId": null,
+                "error": format!("invalid practice query: {error}"),
+            }),
+        };
+        serde_json::to_writer(&mut stdout, &response)?;
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
+    Ok(())
 }
 
 fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -1761,6 +1919,41 @@ fn run_preflop_attribution(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_preflop_action_values(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for preflop action values")?;
+    let policy_path = value(args, "--policy")
+        .map(PathBuf::from)
+        .ok_or("--policy is required for preflop action values")?;
+    let output_path = value(args, "--output")
+        .map(PathBuf::from)
+        .ok_or("--output is required for preflop action values")?;
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
+    let attribution = blueprint::preflop::attribute_policy_action_values(&cache, &policy)?;
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(
+        &output_path,
+        format!("{}\n", serde_json::to_string_pretty(&attribution)?),
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "output": output_path,
+            "informationSets": attribution.evaluated_information_sets,
+            "policyLookupCoverage": attribution.policy_lookup_coverage,
+            "actionEvStandardErrorCoverage": attribution.action_ev_standard_error_coverage,
+            "maximumActionEvStandardErrorBb": attribution.maximum_action_ev_standard_error_bb,
+        }))?
+    );
+    Ok(())
+}
+
 fn run_preflop_compact(args: &[String]) -> Result<(), Box<dyn Error>> {
     let policy_path = value(args, "--policy")
         .map(PathBuf::from)
@@ -1889,6 +2082,14 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                 safe_resolving: args
                     .iter()
                     .any(|argument| argument == "--flop-resolver-safe"),
+                safe_anchor_iterations: parse_or(
+                    args,
+                    "--flop-resolver-safe-anchor-iterations",
+                    0u64,
+                )?,
+                safe_bilateral: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-safe-bilateral"),
                 resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
             })
         })
@@ -1902,6 +2103,8 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--flop-resolver-auxiliary-value-network",
             "--flop-resolver-opponent-public-choice",
             "--flop-resolver-safe",
+            "--flop-resolver-safe-anchor-iterations",
+            "--flop-resolver-safe-bilateral",
             "--flop-resolver-policy-weight",
         ]
         .iter()
@@ -2373,6 +2576,33 @@ fn run_push_fold(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_push_fold_action_values(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let artifact_path = value(args, "--artifact")
+        .map(PathBuf::from)
+        .ok_or("--artifact is required")?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .ok_or("--output is required")?;
+    let source = fs::read(&artifact_path)?;
+    let source_sha256 = format!("{:x}", Sha256::digest(&source));
+    let artifact = serde_json::from_slice::<push_fold::PushFoldArtifact>(&source)?;
+    let values = push_fold::estimate_action_values(&artifact, source_sha256)
+        .map_err(|error| format!("could not evaluate push/fold actions: {error}"))?;
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&output, serde_json::to_string_pretty(&values)?)?;
+    eprintln!(
+        "wrote {} ({} hand classes, conservative called-action SE <= {:.3}bb)",
+        output.display(),
+        values.hand_classes.len(),
+        values.called_payoff_standard_error_upper_bound_bb
+    );
+    Ok(())
+}
+
 fn parse_or<T>(args: &[String], name: &str, default: T) -> Result<T, Box<dyn Error>>
 where
     T: std::str::FromStr,
@@ -2405,6 +2635,7 @@ fn print_help() {
 Usage:
   preflop-solver kuhn [--iterations 20000]
   preflop-solver solve [options]
+  preflop-solver push-fold-action-values --artifact <json> --output <json>
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
   preflop-solver neural-certificate [options]
@@ -2561,6 +2792,10 @@ Neural certificate options:
                                   select the traverser's worst public choice
   --flop-resolver-safe            Use the opponent-CFV opt-out gadget and
                                   deploy only the resolving player's strategy
+  --flop-resolver-safe-anchor-iterations <N>
+                                  Protect an N-iteration flop resolver policy
+  --flop-resolver-safe-bilateral  Sequentially protect and update both players,
+                                  then deploy one atomic complete flop policy
   --flop-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
   --flop-resolver-regret-matching-plus
@@ -2589,6 +2824,7 @@ Preflop continuation/solve options:
     [--dcfr-gamma 2] [--exploration 0.05]
   preflop-evaluate --cache <json.gz> --policy <json> [--output <json>]
   preflop-attribution --cache <json.gz> --policy <json> [--top 50] [--output <json>]
+  preflop-action-values --cache <json.gz> --policy <json> --output <json>
   preflop-compact --policy <json> [--output <bin>]
   preflop-distill-samples --cache <json.gz> --policy <json> --output <jsonl.gz>
   preflop-evaluate-neural --cache <json.gz> --networks <json> [--output <json>]

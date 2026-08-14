@@ -617,7 +617,7 @@ pub struct PublicValueNetwork {
 
 impl PublicValueNetwork {
     pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = super::read_json_artifact(path)?;
         let mut network: Self = serde_json::from_slice(&bytes)?;
         network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
         network.validate()?;
@@ -1126,7 +1126,7 @@ fn range_policy_state_features(
 
 impl RangeConditionedPolicyNetwork {
     pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = super::read_json_artifact(path)?;
         let mut network: Self = serde_json::from_slice(&bytes)?;
         network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
         network.validate()?;
@@ -4221,6 +4221,35 @@ impl FlopSolver {
             .collect()
     }
 
+    fn policy_strategies_with_action_values(&self) -> Vec<PublicBeliefStrategy> {
+        let mut reaches = BTreeMap::new();
+        let mut action_values = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            &mut reaches,
+            &mut action_values,
+        );
+        let mut strategies = self.average_strategies(None);
+        for strategy in &mut strategies {
+            strategy.action_values_bb = Some(
+                normalized_action_values_bb(
+                    strategy.actor,
+                    strategy.action_labels.len(),
+                    reaches
+                        .get(&strategy.public_history)
+                        .expect("flop action-value pass contains every strategy node"),
+                    action_values
+                        .get(&strategy.public_history)
+                        .expect("flop action-value pass contains every strategy action"),
+                    &self.conflicts,
+                )
+                .expect("trained flop action values are finite and compatible"),
+            );
+        }
+        strategies
+    }
+
     fn collect_average_profile_diagnostics(
         &self,
         state: GameState,
@@ -5394,29 +5423,34 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
 /// Train the identical frozen average flop policy without running the
 /// post-solve exploitability, unresolved-control, and action-EV passes. Online
 /// continual resolving only consumes action probabilities. Standalone
-/// resolver validation still uses `solve_flop`, safe resolving still uses
-/// `solve_flop_safe`, and the full-game certificate independently evaluates
+/// resolver validation still uses `solve_flop`, while the full-game
+/// certificate independently evaluates
 /// the resulting policy against its response tree.
 pub(super) fn solve_flop_policy(
     config: FlopResolveConfig,
 ) -> Result<Vec<PublicBeliefStrategy>, String> {
     let mut solver = FlopSolver::new(config)?;
     solver.train();
-    Ok(solver.average_strategies(None))
+    Ok(solver.policy_strategies_with_action_values())
 }
 
-/// Re-solve one player's flop decision with the opponent-CFV opt-out gadget
-/// from Resolve subgame solving. `blueprint_strategies` must describe the
-/// frozen depth-limited policy being replaced. Its exact information-set best
-/// response supplies one alternative payoff per opponent private hand; only
-/// the resolving player's strategy is safe to deploy from the result.
-pub fn solve_flop_safe(
+#[derive(Clone, Debug)]
+pub(super) struct SafeFlopPolicy {
+    pub strategies: Vec<PublicBeliefStrategy>,
+    pub opponent_maximum_cfv_excess_bb: f64,
+    pub opponent_reach_weighted_cfv_excess_bb: f64,
+    pub unprojected_opponent_maximum_cfv_excess_bb: f64,
+    pub deployed_resolved_policy_weight: f64,
+    pub projection_best_response_evaluations: usize,
+}
+
+fn train_safe_flop_solver(
     mut config: FlopResolveConfig,
     blueprint_strategies: &[PublicBeliefStrategy],
     resolving_player: usize,
-) -> Result<FlopSolution, String> {
-    if resolving_player > 1 || resolving_player != config.state.actor {
-        return Err("safe flop resolving must target the acting player".to_owned());
+) -> Result<FlopSolver, String> {
+    if resolving_player > 1 {
+        return Err("safe flop resolving has an invalid target player".to_owned());
     }
     let opponent = 1 - resolving_player;
     // The Resolve gadget's initial chance distribution is proportional to the
@@ -5449,7 +5483,42 @@ pub fn solve_flop_safe(
     solver.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
     solver.train();
     solver.project_safe_strategy_to_blueprint(blueprint_strategies)?;
-    Ok(solver.finish())
+    Ok(solver)
+}
+
+/// Re-solve one player's flop decision with the opponent-CFV opt-out gadget
+/// from Resolve subgame solving. `blueprint_strategies` must describe the
+/// frozen depth-limited policy being replaced. Its exact information-set best
+/// response supplies one alternative payoff per opponent private hand; only
+/// the resolving player's strategy is safe to deploy from the result.
+pub fn solve_flop_safe(
+    config: FlopResolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<FlopSolution, String> {
+    Ok(train_safe_flop_solver(config, blueprint_strategies, resolving_player)?.finish())
+}
+
+pub(super) fn solve_flop_safe_policy(
+    config: FlopResolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<SafeFlopPolicy, String> {
+    let solver = train_safe_flop_solver(config, blueprint_strategies, resolving_player)?;
+    let final_excess = solver
+        .safe_opponent_cfv_excess()
+        .ok_or_else(|| "safe flop resolver has no final CFV diagnostic".to_owned())?;
+    let safe = solver.safe_root.as_ref().expect("safe flop root installed");
+    Ok(SafeFlopPolicy {
+        strategies: solver.average_strategies(Some(resolving_player)),
+        opponent_maximum_cfv_excess_bb: final_excess.0,
+        opponent_reach_weighted_cfv_excess_bb: final_excess.1,
+        unprojected_opponent_maximum_cfv_excess_bb: safe
+            .unprojected_maximum_cfv_excess_bb
+            .expect("safe flop projection records the unprojected excess"),
+        deployed_resolved_policy_weight: safe.deployed_resolved_policy_weight,
+        projection_best_response_evaluations: safe.projection_best_response_evaluations,
+    })
 }
 
 fn evaluation_is_distinct_from_optimization_networks(
@@ -6471,19 +6540,88 @@ impl RiverSolver {
         values
     }
 
-    fn policy_strategies(&self) -> Vec<PublicBeliefStrategy> {
+    fn collect_average_profile_diagnostics(
+        &self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        reach_output: &mut BTreeMap<Vec<String>, [Vec<f64>; 2]>,
+        action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
+    ) -> [Vec<f64>; 2] {
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches);
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let history = state.public_history.clone();
+        let actor = state.actor;
+        let node = self.nodes.get(&history).expect("trained river node");
+        let strategy = node.average_strategy(&self.legal[actor]);
+        reach_output.insert(history.clone(), reaches.clone());
+        let mut children = Vec::with_capacity(actions.len());
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * actions.len() + action_index];
+            }
+            children.push(self.collect_average_profile_diagnostics(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                reach_output,
+                action_value_output,
+            ));
+        }
+        action_value_output.insert(
+            history,
+            children.iter().map(|child| child[actor].clone()).collect(),
+        );
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            for action in 0..actions.len() {
+                values[actor][combo] +=
+                    strategy[combo * actions.len() + action] * children[action][actor][combo];
+                values[opponent][combo] += children[action][opponent][combo];
+            }
+        }
+        values
+    }
+
+    fn policy_strategies_with_action_values(&self) -> Vec<PublicBeliefStrategy> {
+        let mut reaches = BTreeMap::new();
+        let mut action_values = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            &mut reaches,
+            &mut action_values,
+        );
         self.nodes
             .iter()
-            .map(|(history, node)| PublicBeliefStrategy {
-                public_history: history.clone(),
-                actor: node.actor,
-                action_labels: node.action_labels.clone(),
-                probabilities: node
-                    .average_strategy(&self.legal[node.actor])
-                    .into_iter()
-                    .map(|value| value as f32)
-                    .collect(),
-                action_values_bb: None,
+            .map(|(history, node)| {
+                let action_count = node.action_labels.len();
+                PublicBeliefStrategy {
+                    public_history: history.clone(),
+                    actor: node.actor,
+                    action_labels: node.action_labels.clone(),
+                    probabilities: node
+                        .average_strategy(&self.legal[node.actor])
+                        .into_iter()
+                        .map(|value| value as f32)
+                        .collect(),
+                    action_values_bb: Some(
+                        normalized_action_values_bb(
+                            node.actor,
+                            action_count,
+                            reaches
+                                .get(history)
+                                .expect("river action-value pass contains every strategy node"),
+                            action_values
+                                .get(history)
+                                .expect("river action-value pass contains every strategy action"),
+                            &combo_conflicts(),
+                        )
+                        .expect("trained river action values are finite and compatible"),
+                    ),
+                }
             })
             .collect()
     }
@@ -6627,7 +6765,7 @@ pub(super) fn solve_river_policy(
 ) -> Result<Vec<PublicBeliefStrategy>, String> {
     let mut solver = RiverSolver::new(config)?;
     solver.train();
-    Ok(solver.policy_strategies())
+    Ok(solver.policy_strategies_with_action_values())
 }
 
 #[derive(Clone, Debug)]
@@ -7700,6 +7838,50 @@ impl TurnRiverSolver {
             .collect()
     }
 
+    fn policy_strategies_with_action_values(&self) -> Vec<PublicBeliefStrategy> {
+        let mut reaches = BTreeMap::new();
+        let mut action_values = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            None,
+            &mut reaches,
+            &mut action_values,
+        );
+        let conflicts = combo_conflicts();
+        self.nodes
+            .iter()
+            .map(|(history, node)| {
+                let river = Self::river_from_key(history);
+                let action_count = node.action_labels.len();
+                PublicBeliefStrategy {
+                    public_history: history.clone(),
+                    actor: node.actor,
+                    action_labels: node.action_labels.clone(),
+                    probabilities: node
+                        .average_strategy(self.legal_for(river, node.actor))
+                        .into_iter()
+                        .map(|value| value as f32)
+                        .collect(),
+                    action_values_bb: Some(
+                        normalized_action_values_bb(
+                            node.actor,
+                            action_count,
+                            reaches
+                                .get(history)
+                                .expect("turn-river action-value pass contains every node"),
+                            action_values
+                                .get(history)
+                                .expect("turn-river action-value pass contains every action"),
+                            &conflicts,
+                        )
+                        .expect("trained turn-river action values are finite and compatible"),
+                    ),
+                }
+            })
+            .collect()
+    }
+
     fn finish_continuation_values(self) -> TurnRiverContinuationValues {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
@@ -8085,7 +8267,7 @@ pub(super) fn solve_turn_river_policy(
 ) -> Result<Vec<PublicBeliefStrategy>, String> {
     let mut solver = TurnRiverSolver::new(config)?;
     solver.train();
-    Ok(solver.policy_strategies())
+    Ok(solver.policy_strategies_with_action_values())
 }
 
 /// Resolve the complete turn/river subgame for the acting player while
@@ -12288,7 +12470,7 @@ mod tests {
         assert_same_policy(&policy, &full.strategies);
         assert!(policy
             .iter()
-            .all(|strategy| strategy.action_values_bb.is_none()));
+            .all(|strategy| strategy.action_values_bb.is_some()));
     }
 
     #[test]
@@ -12311,7 +12493,7 @@ mod tests {
         assert_same_policy(&policy, &solution.strategies);
         assert!(policy
             .iter()
-            .all(|strategy| strategy.action_values_bb.is_none()));
+            .all(|strategy| strategy.action_values_bb.is_some()));
         assert!(!safe.strategies.is_empty());
         assert!(safe
             .strategies
@@ -12823,7 +13005,7 @@ mod tests {
         assert_same_policy(&policy, &solution.strategies);
         assert!(policy
             .iter()
-            .all(|strategy| strategy.action_values_bb.is_none()));
+            .all(|strategy| strategy.action_values_bb.is_some()));
         assert_eq!(
             continuation.counterfactual_values_bb,
             solution.counterfactual_values_bb
@@ -12870,6 +13052,22 @@ mod tests {
         let resolving_player = config.state.actor;
         let safe =
             solve_flop_safe(config.clone(), &blueprint.strategies, resolving_player).unwrap();
+        let safe_policy =
+            solve_flop_safe_policy(config.clone(), &blueprint.strategies, resolving_player)
+                .unwrap();
+        let expected_policy = safe
+            .strategies
+            .iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_same_policy(&safe_policy.strategies, &expected_policy);
+        assert_eq!(
+            safe_policy.opponent_maximum_cfv_excess_bb,
+            safe.metrics
+                .safe_opponent_maximum_cfv_excess_bb
+                .expect("safe maximum excess")
+        );
 
         assert_eq!(safe.metrics.safe_resolving_player, Some(resolving_player));
         assert!(safe.method.contains("opponent_cfv_opt_out_safe_resolving"));
@@ -12903,7 +13101,16 @@ mod tests {
             assert!(deployed_weight < 1.0);
             assert!(safe.method.contains("exact_cfv_blueprint_projection"));
         }
-        assert!(solve_flop_safe(config, &blueprint.strategies, 1 - resolving_player).is_err());
+        let nonacting =
+            solve_flop_safe(config, &blueprint.strategies, 1 - resolving_player).unwrap();
+        assert_eq!(
+            nonacting.metrics.safe_resolving_player,
+            Some(1 - resolving_player)
+        );
+        assert!(nonacting
+            .metrics
+            .safe_opponent_maximum_cfv_excess_bb
+            .is_some_and(|excess| excess <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB));
     }
 
     #[test]

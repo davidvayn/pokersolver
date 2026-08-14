@@ -307,9 +307,6 @@ export function PracticeTable({
                 className={`practice-action-button practice-action-${action.kind} ${selectedActionId === action.id ? 'ring-2 ring-accent ring-offset-2 ring-offset-bg' : ''}`}
               >
                 <span>{action.label}</span>
-                <span className="font-mono text-xs opacity-75">
-                  {(action.probability * 100).toFixed(action.probability > 0.995 ? 1 : 0)}%
-                </span>
               </button>
             ))}
           </div>

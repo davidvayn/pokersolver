@@ -337,6 +337,7 @@ export function compactPushFoldToScenario(
   }
   const summary = value as Partial<CompactPushFoldScenario>;
   const hands = summary.hands;
+  const actionValues = summary.action_values;
   const identityValid =
     typeof summary.artifact_id === 'string' &&
     summary.artifact_id.length > 0 &&
@@ -345,7 +346,9 @@ export function compactPushFoldToScenario(
     typeof summary.solver_version === 'string' &&
     summary.solver_version.length > 0 &&
     typeof summary.source_sha256 === 'string' &&
-    /^[a-f0-9]{64}$/.test(summary.source_sha256);
+    /^[a-f0-9]{64}$/.test(summary.source_sha256) &&
+    typeof summary.action_values_source_sha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(summary.action_values_source_sha256);
   if (
     !identityValid ||
     summary.model !== 'heads-up-push-fold-monte-carlo-v1' ||
@@ -363,6 +366,8 @@ export function compactPushFoldToScenario(
     !isFiniteNumber(summary.exploitability_bb) ||
     summary.exploitability_bb < 0 ||
     summary.exploitability_bb > 0.01 ||
+    !isFiniteNumber(summary.action_value_standard_error_upper_bound_bb) ||
+    summary.action_value_standard_error_upper_bound_bb < 0 ||
     !Array.isArray(hands) ||
     hands.length !== 169 ||
     new Set(hands.map((hand) => (Array.isArray(hand) ? hand[0] : null)))
@@ -374,6 +379,21 @@ export function compactPushFoldToScenario(
         !EXPECTED_HAND_CLASSES.has(hand[0]) ||
         !isFrequency(hand[1]) ||
         !isFrequency(hand[2])
+    ) ||
+    !Array.isArray(actionValues) ||
+    actionValues.length !== 169 ||
+    new Set(
+      actionValues.map((hand) => (Array.isArray(hand) ? hand[0] : null))
+    ).size !== 169 ||
+    actionValues.some(
+      (hand) =>
+        !Array.isArray(hand) ||
+        hand.length !== 5 ||
+        !EXPECTED_HAND_CLASSES.has(hand[0]) ||
+        hand.slice(1).some((value) => !isFiniteNumber(value))
+    ) ||
+    actionValues.some(
+      ([label]) => !hands.some(([policyLabel]) => policyLabel === label)
     )
   ) {
     throw new Error(

@@ -118,8 +118,8 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
           <p>
             {feedback.confidence === 'unavailable'
-              ? 'This legacy push/fold corpus contains frequencies but no per-action EV estimates. The choice is saved as ungraded.'
-              : 'This is a low-reach node with a noisier action-value estimate. Treat the grade as approximate.'}
+              ? 'This model version does not contain per-action EV estimates. The choice is saved as ungraded.'
+              : 'This action value has a wider sampling or low-reach uncertainty bound. Treat the EV-loss grade as approximate.'}
           </p>
         </div>
       )}
@@ -472,6 +472,16 @@ export function AnalystRail({
             {manifest.runtime?.kind === 'neural-deep-cfr-v1' && (
               <p>
                 Frozen Deep CFR baseline plus a confidence-capped exploit response. Weights are immutable static artifacts; opponent evidence stays in local IndexedDB.
+              </p>
+            )}
+            {manifest.runtime?.kind === 'rust-continual-resolver-v1' && (
+              <p>
+                The server replays this hand through the pinned Rust policy and resolves each postflop decision from exact public ranges. Missing weights or a failed resolve pause the table; no fallback strategy is scored.
+              </p>
+            )}
+            {manifest.validation.exploitabilityGateDeferred && (
+              <p className="font-semibold text-amber-700 dark:text-amber-300">
+                Experimental: the exploitability release gate is deferred. This model is not labeled Approximate GTO.
               </p>
             )}
             <p>

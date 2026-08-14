@@ -11,6 +11,16 @@ const nextConfig = {
     maxInactiveAge: 24 * 60 * 60 * 1000,
     pagesBufferLength: 16,
   },
+  // The continual-resolver API launches the pinned Rust binary and reads its
+  // immutable model bundle at runtime. Include both in standalone/server
+  // traces instead of relying on Next's static import analysis to discover
+  // child-process arguments.
+  outputFileTracingIncludes: {
+    '/api/practice/resolve': [
+      './preflop-solver/target/release/preflop-solver',
+      './preflop-solver/models/practice/*.json.gz',
+    ],
+  },
   // Cross-origin isolation is required for SharedArrayBuffer, which the
   // multithreaded WASM postflop solver relies on. These headers make it
   // available both on localhost and on Vercel.

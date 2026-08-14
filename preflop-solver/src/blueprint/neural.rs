@@ -121,10 +121,183 @@ pub struct FlopResolverConfig {
     /// Use the opponent-CFV opt-out gadget and deploy only the resolving
     /// player's subgame strategy. This prevents unconstrained strategy grafting.
     pub safe_resolving: bool,
+    /// When non-zero, protect a deterministic short flop-resolver policy
+    /// instead of traversing the frozen neural blueprint.
+    pub safe_anchor_iterations: u64,
+    /// Sequentially safe-resolve both players against one complete anchor and
+    /// deploy the resulting complete flop policy atomically.
+    pub safe_bilateral: bool,
     /// Fraction of the served action probability contributed by the resolved
     /// strategy. The remainder stays anchored to the frozen blueprint at the
     /// same exact public belief, preventing unconstrained strategy grafting.
     pub resolved_policy_weight: f64,
+}
+
+/// Immutable runtime configuration for website policy queries. The same
+/// `FrozenPolicy` implementation is used by certification, offline sampling,
+/// and this serving boundary, so the website cannot silently drift to a
+/// different feature encoder or resolver policy.
+#[derive(Clone, Debug)]
+pub struct PracticePolicyEngineConfig {
+    pub game: BlueprintConfig,
+    pub model_version: String,
+    pub network_path: PathBuf,
+    pub range_policy_path: PathBuf,
+    pub preflop_action_values_path: Option<PathBuf>,
+    pub river_resolver: Option<RiverResolverConfig>,
+    pub turn_resolver: Option<TurnResolverConfig>,
+    pub flop_resolver: Option<FlopResolverConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PracticePolicyActionKind {
+    Fold,
+    Check,
+    Call,
+    Bet,
+    Raise,
+    AllIn,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeObservedAction {
+    pub actor: usize,
+    pub street: Street,
+    pub kind: PracticePolicyActionKind,
+    pub amount_to_bb: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePolicyQuery {
+    pub request_id: String,
+    pub state_hash: String,
+    pub model_version: String,
+    pub depth_bb: f64,
+    pub private_cards: [u8; 2],
+    pub board: Vec<u8>,
+    pub street: Street,
+    pub actor: usize,
+    pub total_pot_bb: f64,
+    pub stacks_bb: [f64; 2],
+    pub street_bets_bb: [f64; 2],
+    pub total_committed_bb: [f64; 2],
+    pub last_full_raise_bb: f64,
+    pub raise_reopened: bool,
+    pub actions: Vec<PracticeObservedAction>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePolicyAction {
+    pub kind: PracticePolicyActionKind,
+    pub amount_to_bb: Option<f64>,
+    pub probability: f64,
+    pub ev_bb: Option<f64>,
+    pub standard_error_bb: Option<f64>,
+    pub confidence: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePolicyQueryResult {
+    pub schema: &'static str,
+    pub request_id: String,
+    pub state_hash: String,
+    pub model_version: String,
+    pub depth_bb: f64,
+    pub network_sha256: String,
+    pub range_policy_sha256: String,
+    pub value_network_sha256: Option<String>,
+    pub preflop_action_values_sha256: Option<String>,
+    pub actions: Vec<PracticePolicyAction>,
+    pub maximum_probability_sum_error: f64,
+}
+
+/// Long-lived, inference-only policy engine used by the website process.
+pub struct PracticePolicyEngine {
+    game: BlueprintConfig,
+    model_version: String,
+    policy: FrozenPolicy,
+    range_policy_sha256: String,
+    value_network_sha256: Option<String>,
+    preflop_action_values: Option<PracticePreflopActionValues>,
+}
+
+struct PracticePreflopActionValues {
+    sha256: String,
+    entries: BTreeMap<String, (Vec<String>, Vec<f64>, Vec<f64>)>,
+}
+
+impl PracticePreflopActionValues {
+    fn read(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
+        let bytes = super::read_json_artifact(path)?;
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let artifact: super::preflop::PreflopLeakAttribution = serde_json::from_slice(&bytes)?;
+        if artifact.schema != "hu-preflop-local-leak-attribution-v1"
+            || artifact.corpus_deals == 0
+            || artifact.policy_lookup_coverage < 0.9999
+            || artifact.evaluated_information_sets.iter().sum::<usize>()
+                != artifact.players.iter().map(Vec::len).sum::<usize>()
+        {
+            return Err("practice preflop action-value artifact is incomplete".into());
+        }
+        let mut entries = BTreeMap::new();
+        for entry in artifact.players.into_iter().flatten() {
+            if entry.action_labels.is_empty()
+                || entry.action_labels.len() != entry.action_values_bb.len()
+                || (!entry.action_value_standard_errors_bb.is_empty()
+                    && entry.action_labels.len() != entry.action_value_standard_errors_bb.len())
+                || entry
+                    .action_values_bb
+                    .iter()
+                    .any(|value| !value.is_finite())
+                || entry
+                    .action_value_standard_errors_bb
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || entries
+                    .insert(
+                        entry.key,
+                        (
+                            entry.action_labels,
+                            entry.action_values_bb,
+                            entry.action_value_standard_errors_bb,
+                        ),
+                    )
+                    .is_some()
+            {
+                return Err("practice preflop action-value rows are invalid".into());
+            }
+        }
+        Ok(Self { sha256, entries })
+    }
+
+    fn values(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+    ) -> Result<(Vec<f64>, Option<Vec<f64>>), String> {
+        let key = super::preflop::neural_policy_information_key(state, deal);
+        let (labels, values, standard_errors) = self.entries.get(&key).ok_or_else(|| {
+            "preflop action-value artifact missed a served information set".to_owned()
+        })?;
+        if labels
+            != &actions
+                .iter()
+                .map(|action| action.label.clone())
+                .collect::<Vec<_>>()
+        {
+            return Err("preflop action-value legal actions changed".to_owned());
+        }
+        Ok((
+            values.clone(),
+            (!standard_errors.is_empty()).then(|| standard_errors.clone()),
+        ))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -308,6 +481,10 @@ pub struct ExploitabilityCertificate {
         Option<super::public_belief::FlopContinuationSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_safe_resolving: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_safe_anchor_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_safe_bilateral: Option<bool>,
     pub exact_betting_tree_nodes: u64,
     /// Retained outer-game observations permit paired candidate comparisons,
     /// deterministic replay, and honest inspection of chance-sampling noise.
@@ -352,7 +529,7 @@ pub(super) struct FrozenPolicy {
     range_policy: Option<RangeConditionedPolicyNetwork>,
     range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
     preflop_range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
-    flop_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
+    flop_strategy_cache: Mutex<FlopStrategyCache>,
     turn_strategy_cache: Mutex<TurnStrategyCache>,
     river_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
     river_resolver: Option<RiverResolverConfig>,
@@ -370,6 +547,7 @@ struct FlopResolverRuntime {
 struct RangePolicyCachedNode {
     action_labels: Vec<String>,
     probabilities: Vec<f64>,
+    action_values_bb: Option<Vec<f64>>,
     ranges: [Vec<f64>; 2],
 }
 
@@ -377,6 +555,44 @@ struct ResolvedPolicyCachedRow {
     actor: usize,
     action_labels: Vec<String>,
     probabilities: Vec<f64>,
+    action_values_bb: Option<Vec<f64>>,
+}
+
+#[derive(Default)]
+struct FlopStrategyCache {
+    rows: BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>,
+    safe_scope: Option<SafeFlopPolicyScope>,
+}
+
+struct SafeFlopPolicyScope {
+    board: Vec<u8>,
+    root_history: Vec<String>,
+}
+
+impl FlopStrategyCache {
+    fn safe_route(
+        &self,
+        street: Street,
+        actor: usize,
+        board: &[u8],
+        public_history: &[String],
+        key: &[u8; 32],
+    ) -> Result<Option<Arc<ResolvedPolicyCachedRow>>, String> {
+        let Some(scope) = &self.safe_scope else {
+            return Ok(None);
+        };
+        let inside_scope = street == Street::Flop
+            && board == scope.board
+            && public_history.starts_with(&scope.root_history);
+        if !inside_scope {
+            return Ok(None);
+        }
+        self.rows.get(key).cloned().map(Some).ok_or_else(|| {
+            format!(
+                "bilateral safe flop generation omitted a protected descendant (actor {actor}, board {board:?}, history {public_history:?})"
+            )
+        })
+    }
 }
 
 #[derive(Default)]
@@ -430,7 +646,7 @@ impl TurnStrategyCache {
 
 impl FrozenPolicy {
     pub(super) fn load(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = super::read_json_artifact(path)?;
         let bundle_sha256 = format!("{:x}", Sha256::digest(&bytes));
         let bundle: TrainingNetworkBundle = serde_json::from_slice(&bytes)?;
         validate_training_bundle(&bundle)?;
@@ -440,7 +656,7 @@ impl FrozenPolicy {
             range_policy: None,
             range_cache: Mutex::new(BTreeMap::new()),
             preflop_range_cache: Mutex::new(BTreeMap::new()),
-            flop_strategy_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
             river_resolver: None,
@@ -470,7 +686,7 @@ impl FrozenPolicy {
             range_policy: self.range_policy.clone(),
             range_cache: Mutex::new(BTreeMap::new()),
             preflop_range_cache: Mutex::new(BTreeMap::new()),
-            flop_strategy_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
             river_resolver: self.river_resolver,
@@ -491,6 +707,44 @@ impl FrozenPolicy {
         }
         self.range_strategy(state, deal, actions, config)
             .expect("validated range-conditioned policy state")
+    }
+
+    fn strategy_with_action_values(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        config: &BlueprintConfig,
+    ) -> Result<(Vec<f64>, Option<Vec<f64>>), String> {
+        if state.street == Street::Preflop || self.range_policy.is_none() {
+            return Ok((
+                strategy_from_bundle(&self.bundle, state, deal, actions, config),
+                None,
+            ));
+        }
+        let node = self.range_node(state, deal, actions, config)?;
+        Ok((
+            node.range_for_deal(state, deal, actions)?,
+            node.action_values_for_deal(state, deal, actions)?,
+        ))
+    }
+
+    fn safe_flop_runtime_route(
+        &self,
+        state: &GameState,
+        board: &[u8],
+        key: &[u8; 32],
+    ) -> Result<Option<Arc<ResolvedPolicyCachedRow>>, String> {
+        if !self.flop_resolver.as_ref().is_some_and(|resolver| {
+            resolver.config.safe_resolving && resolver.config.safe_bilateral
+        }) || state.street != Street::Flop
+        {
+            return Ok(None);
+        }
+        self.flop_strategy_cache
+            .lock()
+            .expect("flop strategy cache")
+            .safe_route(state.street, state.actor, board, &state.public_history, key)
     }
 
     fn safe_turn_runtime_route(
@@ -551,6 +805,7 @@ impl FrozenPolicy {
             state,
             ranges,
         );
+        let safe_flop_route = self.safe_flop_runtime_route(state, &public.board, &key)?;
         let safe_turn_route = self.safe_turn_runtime_route(state, &public.board, &key)?;
         let frozen_strategy = || {
             let source = range_policy
@@ -559,7 +814,24 @@ impl FrozenPolicy {
                 .transpose()?;
             range_policy.strategy(&public, config, source.as_deref())
         };
-        let probabilities = if let Some(route) = safe_turn_route {
+        let probabilities = if let Some(resolved) = safe_flop_route {
+            let labels = actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>();
+            if resolved.actor != state.actor
+                || resolved
+                    .action_labels
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    != labels
+                || resolved.probabilities.len() != COMBO_COUNT * actions.len()
+            {
+                return Err("bilateral safe flop continuation strategy is incompatible".to_owned());
+            }
+            resolved.probabilities.clone()
+        } else if let Some(route) = safe_turn_route {
             match route {
                 SafeTurnRuntimeRoute::Resolved(resolved)
                 | SafeTurnRuntimeRoute::FrozenOpponent(resolved) => {
@@ -590,6 +862,7 @@ impl FrozenPolicy {
                 .flop_strategy_cache
                 .lock()
                 .expect("flop strategy cache")
+                .rows
                 .get(&key)
                 .cloned();
             let resolved = if let Some(resolved) = resolved {
@@ -607,36 +880,70 @@ impl FrozenPolicy {
                     threads: resolver.config.threads,
                 };
                 let strategies = if resolver.config.safe_resolving {
-                    let blueprint = self.flop_blueprint_strategies(
-                        state.clone(),
-                        &public.board,
-                        public.ranges.clone(),
-                        config,
-                    )?;
-                    let solution = super::public_belief::solve_flop_safe(
-                        solve_config,
-                        &blueprint,
-                        public.actor,
-                    )?;
-                    if solution
-                        .metrics
-                        .safe_opponent_maximum_cfv_excess_bb
-                        .is_none_or(|excess| excess > 0.05)
-                    {
-                        return Err(format!(
-                            "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound \
-                             (maximum {:?}, reach-weighted {:?}, iterations {}, actor {}, board {:?}, \
-                             invested {:?}, history {:?})",
-                            solution.metrics.safe_opponent_maximum_cfv_excess_bb,
-                            solution.metrics.safe_opponent_reach_weighted_cfv_excess_bb,
-                            resolver.config.iterations,
-                            public.actor,
-                            public.board,
-                            public.invested_bb,
-                            public.public_history,
-                        ));
+                    let blueprint = if resolver.config.safe_anchor_iterations > 0 {
+                        let mut anchor_config = solve_config.clone();
+                        anchor_config.iterations = resolver.config.safe_anchor_iterations;
+                        anchor_config.averaging_delay = 0;
+                        super::public_belief::solve_flop_policy(anchor_config)?
+                            .into_iter()
+                            .map(stabilize_public_belief_strategy)
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        self.flop_blueprint_strategies(
+                            state.clone(),
+                            &public.board,
+                            public.ranges.clone(),
+                            config,
+                        )?
+                    };
+                    let solve_one = |anchor: &[super::public_belief::PublicBeliefStrategy],
+                                     target: usize|
+                     -> Result<
+                        Vec<super::public_belief::PublicBeliefStrategy>,
+                        String,
+                    > {
+                        let solution = super::public_belief::solve_flop_safe_policy(
+                            solve_config.clone(),
+                            anchor,
+                            target,
+                        )?;
+                        if solution.opponent_maximum_cfv_excess_bb
+                            > super::public_belief::SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
+                        {
+                            return Err(format!(
+                                "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound \
+                                 (maximum {:.6}, reach-weighted {:.6}, unprojected {:.6}, \
+                                 deployed weight {:.6}, best-response evaluations {}, iterations {}, \
+                                 target {}, board {:?}, invested {:?}, history {:?})",
+                                solution.opponent_maximum_cfv_excess_bb,
+                                solution.opponent_reach_weighted_cfv_excess_bb,
+                                solution.unprojected_opponent_maximum_cfv_excess_bb,
+                                solution.deployed_resolved_policy_weight,
+                                solution.projection_best_response_evaluations,
+                                resolver.config.iterations,
+                                target,
+                                public.board,
+                                public.invested_bb,
+                                public.public_history,
+                            ));
+                        }
+                        solution
+                            .strategies
+                            .into_iter()
+                            .filter(|strategy| strategy.actor == target)
+                            .map(stabilize_public_belief_strategy)
+                            .collect()
+                    };
+                    if resolver.config.safe_bilateral {
+                        let mut deployed = blueprint;
+                        for target in [public.actor, 1 - public.actor] {
+                            let replacement = solve_one(&deployed, target)?;
+                            replace_public_belief_actor_policy(&mut deployed, target, replacement)?;
+                        }
+                        deployed
+                    } else {
+                        solve_one(&blueprint, public.actor)?
                     }
-                    solution.strategies
                 } else {
                     super::public_belief::solve_flop_policy(solve_config)?
                 };
@@ -645,17 +952,33 @@ impl FrozenPolicy {
                     .lock()
                     .expect("flop strategy cache");
                 let safe_resolving = resolver.config.safe_resolving;
+                let safe_bilateral = resolver.config.safe_bilateral;
                 let requested_actor = public.actor;
-                cache_resolved_policy_rows(
-                    &mut cache,
-                    key,
-                    Street::Flop,
-                    &public.board,
-                    strategies
-                        .into_iter()
-                        .filter(|strategy| !safe_resolving || strategy.actor == requested_actor),
-                    4_096,
-                )?
+                if safe_resolving && safe_bilateral {
+                    let resolved = cache_safe_flop_policy_rows(
+                        &mut cache,
+                        key,
+                        &public.board,
+                        &public.public_history,
+                        strategies,
+                        32_768,
+                    )?;
+                    drop(cache);
+                    self.range_cache.lock().expect("range policy cache").clear();
+                    resolved
+                } else {
+                    cache.safe_scope = None;
+                    cache_resolved_policy_rows(
+                        &mut cache.rows,
+                        key,
+                        Street::Flop,
+                        &public.board,
+                        strategies.into_iter().filter(|strategy| {
+                            !safe_resolving || strategy.actor == requested_actor
+                        }),
+                        4_096,
+                    )?
+                }
             };
             let labels = actions
                 .iter()
@@ -875,9 +1198,44 @@ impl FrozenPolicy {
         } else {
             frozen_strategy()?
         };
+        let action_values_bb = match state.street {
+            Street::Flop
+                if self
+                    .flop_resolver
+                    .as_ref()
+                    .is_some_and(|resolver| resolver.config.resolved_policy_weight == 1.0) =>
+            {
+                self.flop_strategy_cache
+                    .lock()
+                    .expect("flop strategy cache")
+                    .rows
+                    .get(&key)
+                    .and_then(|row| row.action_values_bb.clone())
+            }
+            Street::Turn
+                if self
+                    .turn_resolver
+                    .is_some_and(|resolver| resolver.resolved_policy_weight == 1.0) =>
+            {
+                self.turn_strategy_cache
+                    .lock()
+                    .expect("turn strategy cache")
+                    .rows
+                    .get(&key)
+                    .and_then(|row| row.action_values_bb.clone())
+            }
+            Street::River if self.river_resolver.is_some() => self
+                .river_strategy_cache
+                .lock()
+                .expect("river strategy cache")
+                .get(&key)
+                .and_then(|row| row.action_values_bb.clone()),
+            _ => None,
+        };
         let cached = Arc::new(RangePolicyCachedNode {
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             probabilities,
+            action_values_bb,
             ranges: public.ranges,
         });
         {
@@ -1278,6 +1636,7 @@ impl FrozenPolicy {
         let cached = Arc::new(RangePolicyCachedNode {
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             probabilities,
+            action_values_bb: None,
             ranges,
         });
         let mut cache = self
@@ -1446,8 +1805,14 @@ impl FrozenPolicy {
             || resolver.threads == 0
             || !resolver.resolved_policy_weight.is_finite()
             || !(0.0..=1.0).contains(&resolver.resolved_policy_weight)
+            || resolver.safe_anchor_iterations == 1
+            || (!resolver.safe_resolving
+                && (resolver.safe_anchor_iterations > 0 || resolver.safe_bilateral))
         {
             return Err("flop resolver configuration is invalid".into());
+        }
+        if resolver.safe_resolving && resolver.resolved_policy_weight != 1.0 {
+            return Err("safe flop resolving does not support an external policy blend".into());
         }
         let value_network =
             super::public_belief::PublicValueNetwork::read(&resolver.value_network_path)?;
@@ -1462,10 +1827,10 @@ impl FrozenPolicy {
             auxiliary_value_networks,
         });
         self.range_cache.lock().expect("range policy cache").clear();
-        self.flop_strategy_cache
+        *self
+            .flop_strategy_cache
             .lock()
-            .expect("flop strategy cache")
-            .clear();
+            .expect("flop strategy cache") = FlopStrategyCache::default();
         Ok(())
     }
 
@@ -1537,6 +1902,275 @@ impl FrozenPolicy {
     }
 }
 
+impl PracticePolicyEngine {
+    pub fn load(config: PracticePolicyEngineConfig) -> Result<Self, Box<dyn Error>> {
+        config.game.validate()?;
+        if config.model_version.trim().is_empty() {
+            return Err("practice model version is required".into());
+        }
+        let range_bytes = super::read_json_artifact(&config.range_policy_path)?;
+        let range_policy_sha256 = format!("{:x}", Sha256::digest(&range_bytes));
+        let value_network_sha256 = config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| super::read_json_artifact(&resolver.value_network_path))
+            .transpose()?
+            .map(|bytes| format!("{:x}", Sha256::digest(&bytes)));
+        let mut policy =
+            FrozenPolicy::load_with_range(&config.network_path, Some(&config.range_policy_path))?;
+        let preflop_action_values = config
+            .preflop_action_values_path
+            .as_deref()
+            .map(PracticePreflopActionValues::read)
+            .transpose()?;
+        if let Some(resolver) = config.river_resolver {
+            policy.enable_river_resolver(resolver)?;
+        }
+        if let Some(resolver) = config.turn_resolver {
+            policy.enable_turn_resolver(resolver)?;
+        }
+        if let Some(resolver) = config.flop_resolver {
+            policy.enable_flop_resolver(resolver)?;
+        }
+        Ok(Self {
+            game: config.game,
+            model_version: config.model_version,
+            policy,
+            range_policy_sha256,
+            value_network_sha256,
+            preflop_action_values,
+        })
+    }
+
+    pub fn query(&self, query: PracticePolicyQuery) -> Result<PracticePolicyQueryResult, String> {
+        self.validate_query_header(&query)?;
+        let deal = practice_query_deal(&query)?;
+        let state = replay_practice_query(&query, &self.game)?;
+        validate_practice_state_snapshot(&query, &state, &self.game)?;
+        let legal = state.legal_actions(&self.game);
+        if legal.is_empty() {
+            return Err("practice query reached a terminal state".to_owned());
+        }
+        let (probabilities, mut action_values_bb) = self
+            .policy
+            .strategy_with_action_values(&state, &deal, &legal, &self.game)?;
+        let mut action_value_standard_errors_bb = action_values_bb
+            .as_ref()
+            .map(|values| vec![0.0; values.len()]);
+        if state.street == Street::Preflop {
+            let preflop = self
+                .preflop_action_values
+                .as_ref()
+                .map(|values| values.values(&state, &deal, &legal))
+                .transpose()?;
+            action_values_bb = preflop.as_ref().map(|(values, _)| values.clone());
+            action_value_standard_errors_bb =
+                preflop.and_then(|(_, standard_errors)| standard_errors);
+        }
+        if probabilities.len() != legal.len()
+            || probabilities
+                .iter()
+                .any(|probability| !probability.is_finite() || *probability < 0.0)
+        {
+            return Err("practice policy returned invalid action probabilities".to_owned());
+        }
+        let probability_sum = probabilities.iter().sum::<f64>();
+        let probability_error = (probability_sum - 1.0).abs();
+        if probability_error > 1e-6 {
+            return Err(format!(
+                "practice policy probabilities sum to {probability_sum:.12}"
+            ));
+        }
+        let actions = legal
+            .iter()
+            .zip(probabilities)
+            .enumerate()
+            .map(|(action_index, (action, probability))| {
+                let (kind, amount_to_bb) =
+                    practice_legal_action_identity(&state, action, &self.game);
+                let ev_bb = action_values_bb.as_ref().map(|values| values[action_index]);
+                let standard_error_bb = action_value_standard_errors_bb
+                    .as_ref()
+                    .map(|values| values[action_index]);
+                PracticePolicyAction {
+                    kind,
+                    amount_to_bb,
+                    probability,
+                    ev_bb,
+                    // These values come from a deterministic exact-card
+                    // profile traversal, so they have no Monte Carlo sampling
+                    // error. Confidence remains low because the flop cutoff
+                    // still uses a frozen learned continuation approximation.
+                    standard_error_bb,
+                    confidence: if ev_bb.is_some() {
+                        "low"
+                    } else {
+                        "unavailable"
+                    },
+                }
+            })
+            .collect();
+        Ok(PracticePolicyQueryResult {
+            schema: "hu-practice-continual-resolver-query-v1",
+            request_id: query.request_id,
+            state_hash: query.state_hash,
+            model_version: self.model_version.clone(),
+            depth_bb: self.game.effective_stack_bb,
+            network_sha256: self.policy.bundle_sha256().to_owned(),
+            range_policy_sha256: self.range_policy_sha256.clone(),
+            value_network_sha256: self.value_network_sha256.clone(),
+            preflop_action_values_sha256: self
+                .preflop_action_values
+                .as_ref()
+                .map(|values| values.sha256.clone()),
+            actions,
+            maximum_probability_sum_error: probability_error,
+        })
+    }
+
+    fn validate_query_header(&self, query: &PracticePolicyQuery) -> Result<(), String> {
+        if query.request_id.trim().is_empty()
+            || query.model_version != self.model_version
+            || (query.depth_bb - self.game.effective_stack_bb).abs() > 1e-9
+            || query.actor > 1
+            || query.state_hash.len() != 64
+            || !query
+                .state_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("practice query identity is incompatible with the pinned model".to_owned());
+        }
+        Ok(())
+    }
+}
+
+fn practice_query_deal(query: &PracticePolicyQuery) -> Result<Deal, String> {
+    let mut seen = [false; 52];
+    for card in query.private_cards.iter().chain(&query.board) {
+        if *card >= 52 || seen[*card as usize] {
+            return Err("practice query cards must be unique and in range".to_owned());
+        }
+        seen[*card as usize] = true;
+    }
+    if query.board.len() != query.street.board_len() {
+        return Err("practice query board length does not match the street".to_owned());
+    }
+    let mut holes = [[0u8; 2]; 2];
+    holes[query.actor] = query.private_cards;
+    let opponent = 1 - query.actor;
+    let mut opponent_fill = 0usize;
+    for card in 0..52u8 {
+        if !seen[card as usize] && opponent_fill < 2 {
+            holes[opponent][opponent_fill] = card;
+            seen[card as usize] = true;
+            opponent_fill += 1;
+        }
+    }
+    if opponent_fill != 2 {
+        return Err("practice query could not construct opponent card placeholders".to_owned());
+    }
+    let mut board = [0u8; 5];
+    board[..query.board.len()].copy_from_slice(&query.board);
+    let mut fill = query.board.len();
+    for card in 0..52u8 {
+        if !seen[card as usize] && fill < board.len() {
+            board[fill] = card;
+            seen[card as usize] = true;
+            fill += 1;
+        }
+    }
+    if fill != board.len() {
+        return Err("practice query could not construct a complete deal".to_owned());
+    }
+    Ok(Deal::from_sampled_cards(holes, board))
+}
+
+fn replay_practice_query(
+    query: &PracticePolicyQuery,
+    game: &BlueprintConfig,
+) -> Result<GameState, String> {
+    let mut state = GameState::initial(game);
+    for (index, observed) in query.actions.iter().enumerate() {
+        if state.terminal.is_some()
+            || observed.actor != state.actor
+            || observed.street != state.street
+        {
+            return Err(format!(
+                "practice action {index} does not match the betting state"
+            ));
+        }
+        let legal = state.legal_actions(game);
+        let matches = legal
+            .iter()
+            .filter(|action| {
+                let (kind, amount_to_bb) = practice_legal_action_identity(&state, action, game);
+                kind == observed.kind
+                    && match (amount_to_bb, observed.amount_to_bb) {
+                        (Some(first), Some(second)) => (first - second).abs() <= 0.001,
+                        (None, None) => true,
+                        _ => false,
+                    }
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(format!(
+                "practice action {index} matches {} legal actions",
+                matches.len()
+            ));
+        }
+        state = state.apply(matches[0], game);
+    }
+    Ok(state)
+}
+
+fn practice_legal_action_identity(
+    state: &GameState,
+    action: &LegalAction,
+    game: &BlueprintConfig,
+) -> (PracticePolicyActionKind, Option<f64>) {
+    match action.kind {
+        ActionKind::Fold => (PracticePolicyActionKind::Fold, None),
+        ActionKind::Check => (PracticePolicyActionKind::Check, None),
+        ActionKind::Call => (PracticePolicyActionKind::Call, None),
+        ActionKind::RaiseTo(target) => {
+            let maximum = state.street_invested[state.actor] + state.remaining(state.actor, game);
+            if (target - maximum).abs() <= EPSILON {
+                (PracticePolicyActionKind::AllIn, Some(target))
+            } else if state.street_invested[0].max(state.street_invested[1]) <= EPSILON {
+                (PracticePolicyActionKind::Bet, Some(target))
+            } else {
+                (PracticePolicyActionKind::Raise, Some(target))
+            }
+        }
+    }
+}
+
+fn validate_practice_state_snapshot(
+    query: &PracticePolicyQuery,
+    state: &GameState,
+    game: &BlueprintConfig,
+) -> Result<(), String> {
+    let close = |first: f64, second: f64| (first - second).abs() <= 0.0011;
+    if state.terminal.is_some()
+        || state.street != query.street
+        || state.actor != query.actor
+        || !close(state.pot(), query.total_pot_bb)
+        || !(0..2).all(|player| {
+            close(
+                game.effective_stack_bb - state.invested[player],
+                query.stacks_bb[player],
+            ) && close(state.street_invested[player], query.street_bets_bb[player])
+                && close(state.invested[player], query.total_committed_bb[player])
+        })
+        || !close(state.last_full_raise, query.last_full_raise_bb)
+        || state.raise_reopened != query.raise_reopened
+    {
+        return Err("practice query snapshot differs from exact Rust replay".to_owned());
+    }
+    Ok(())
+}
+
 impl RangePolicyCachedNode {
     fn range_for_deal(
         &self,
@@ -1560,6 +2194,23 @@ impl RangePolicyCachedNode {
             );
         }
         Ok(row)
+    }
+
+    fn action_values_for_deal(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+    ) -> Result<Option<Vec<f64>>, String> {
+        let Some(values) = &self.action_values_bb else {
+            return Ok(None);
+        };
+        if values.len() != COMBO_COUNT * actions.len() {
+            return Err("cached resolver action values changed shape".to_owned());
+        }
+        let combo = Combo::new(deal.holes[state.actor][0], deal.holes[state.actor][1]).key();
+        let offset = combo * actions.len();
+        Ok(Some(values[offset..offset + actions.len()].to_vec()))
     }
 }
 
@@ -1591,6 +2242,119 @@ fn range_policy_public_cache_key(
     digest.finalize().into()
 }
 
+fn replace_public_belief_actor_policy(
+    deployed: &mut [super::public_belief::PublicBeliefStrategy],
+    actor: usize,
+    replacement: Vec<super::public_belief::PublicBeliefStrategy>,
+) -> Result<(), String> {
+    if actor > 1 || replacement.is_empty() {
+        return Err("bilateral safe flop replacement is empty or has an invalid actor".to_owned());
+    }
+    let mut replacement = replacement
+        .into_iter()
+        .map(|strategy| (strategy.public_history.clone(), strategy))
+        .collect::<BTreeMap<_, _>>();
+    let expected = deployed
+        .iter()
+        .filter(|strategy| strategy.actor == actor)
+        .count();
+    if replacement.len() != expected {
+        return Err("bilateral safe flop replacement has incomplete actor coverage".to_owned());
+    }
+    for strategy in deployed
+        .iter_mut()
+        .filter(|strategy| strategy.actor == actor)
+    {
+        let next = replacement
+            .remove(&strategy.public_history)
+            .ok_or_else(|| "bilateral safe flop replacement omitted a policy node".to_owned())?;
+        if next.actor != actor
+            || next.action_labels != strategy.action_labels
+            || next.probabilities.len() != strategy.probabilities.len()
+        {
+            return Err(
+                "bilateral safe flop replacement changed the abstract game tree".to_owned(),
+            );
+        }
+        *strategy = next;
+    }
+    if !replacement.is_empty() {
+        return Err("bilateral safe flop replacement added unknown policy nodes".to_owned());
+    }
+    Ok(())
+}
+
+fn resolved_action_values(
+    values: Option<Vec<f32>>,
+    expected: usize,
+) -> Result<Option<Vec<f64>>, String> {
+    values
+        .map(|values| {
+            if values.len() != expected || values.iter().any(|value| !value.is_finite()) {
+                return Err("resolver action values are invalid".to_owned());
+            }
+            Ok(values.into_iter().map(f64::from).collect())
+        })
+        .transpose()
+}
+
+fn cache_safe_flop_policy_rows(
+    cache: &mut FlopStrategyCache,
+    requested_key: [u8; 32],
+    board: &[u8],
+    root_history: &[String],
+    strategies: impl IntoIterator<Item = super::public_belief::PublicBeliefStrategy>,
+    capacity: usize,
+) -> Result<Arc<ResolvedPolicyCachedRow>, String> {
+    if board.len() != 3 || capacity == 0 {
+        return Err("bilateral safe flop cache requires a board and positive capacity".to_owned());
+    }
+    let mut requested = None;
+    let mut generation = BTreeMap::new();
+    for strategy in strategies {
+        let strategy_key = range_policy_public_cache_key(
+            Street::Flop,
+            strategy.actor,
+            board,
+            &strategy.public_history,
+        );
+        let action_labels = strategy.action_labels;
+        let probabilities = stabilize_resolved_policy(
+            strategy.probabilities.into_iter().map(f64::from).collect(),
+            action_labels.len(),
+        )?;
+        let action_values_bb =
+            resolved_action_values(strategy.action_values_bb, probabilities.len())?;
+        let row = Arc::new(ResolvedPolicyCachedRow {
+            actor: strategy.actor,
+            action_labels,
+            probabilities,
+            action_values_bb,
+        });
+        if strategy_key == requested_key {
+            requested = Some(row.clone());
+        }
+        if generation.insert(strategy_key, row).is_some() {
+            return Err("bilateral safe flop resolver produced duplicate runtime keys".to_owned());
+        }
+        if generation.len() > capacity {
+            return Err(format!(
+                "bilateral safe flop generation exceeds its {capacity}-row cache capacity"
+            ));
+        }
+    }
+    let requested = requested
+        .ok_or_else(|| "bilateral safe flop resolver omitted its requested root".to_owned())?;
+    *cache = FlopStrategyCache {
+        rows: generation,
+        safe_scope: Some(SafeFlopPolicyScope {
+            board: board.to_vec(),
+            root_history: root_history.to_vec(),
+        }),
+    };
+    Ok(requested)
+}
+
 fn cache_resolved_policy_rows(
     cache: &mut BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>,
     requested_key: [u8; 32],
@@ -1613,10 +2377,13 @@ fn cache_resolved_policy_rows(
             strategy.probabilities.into_iter().map(f64::from).collect(),
             action_labels.len(),
         )?;
+        let action_values_bb =
+            resolved_action_values(strategy.action_values_bb, probabilities.len())?;
         let row = Arc::new(ResolvedPolicyCachedRow {
             actor: strategy.actor,
             action_labels,
             probabilities,
+            action_values_bb,
         });
         if strategy_key == requested_key {
             // Retain the requested row locally. A later insertion in this same
@@ -1669,10 +2436,13 @@ fn cache_safe_turn_river_policy_rows(
             strategy.probabilities.into_iter().map(f64::from).collect(),
             action_labels.len(),
         )?;
+        let action_values_bb =
+            resolved_action_values(strategy.action_values_bb, probabilities.len())?;
         let row = Arc::new(ResolvedPolicyCachedRow {
             actor: strategy.actor,
             action_labels,
             probabilities,
+            action_values_bb,
         });
         if strategy_key == requested_key {
             requested = Some(row.clone());
@@ -5313,9 +6083,24 @@ pub fn certify_exploitability_upper_bound(
             .as_ref()
             .is_some_and(|resolver| resolver.safe_resolving)
         {
-            assumptions.push(
-                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed",
-            );
+            assumptions.push(if config
+                .flop_resolver
+                .as_ref()
+                .is_some_and(|resolver| resolver.safe_bilateral)
+            {
+                "each reached flop subgame sequentially safe-resolves both players against one complete anchor with per-private-hand opponent CFV opt-outs, then atomically deploys the complete projected policy"
+            } else {
+                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed"
+            });
+            if config
+                .flop_resolver
+                .as_ref()
+                .is_some_and(|resolver| resolver.safe_anchor_iterations > 0)
+            {
+                assumptions.push(
+                    "the protected flop anchor is the full-support stabilized policy of the configured short depth-limited flop resolver",
+                );
+            }
         }
     }
     Ok(ExploitabilityCertificate {
@@ -5390,6 +6175,14 @@ pub fn certify_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.safe_resolving),
+        flop_resolver_safe_anchor_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_anchor_iterations),
+        flop_resolver_safe_bilateral: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_bilateral),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -5581,9 +6374,24 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .as_ref()
             .is_some_and(|resolver| resolver.safe_resolving)
         {
-            assumptions.push(
-                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed",
-            );
+            assumptions.push(if config
+                .flop_resolver
+                .as_ref()
+                .is_some_and(|resolver| resolver.safe_bilateral)
+            {
+                "each reached flop subgame sequentially safe-resolves both players against one complete anchor with per-private-hand opponent CFV opt-outs, then atomically deploys the complete projected policy"
+            } else {
+                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed"
+            });
+            if config
+                .flop_resolver
+                .as_ref()
+                .is_some_and(|resolver| resolver.safe_anchor_iterations > 0)
+            {
+                assumptions.push(
+                    "the protected flop anchor is the full-support stabilized policy of the configured short depth-limited flop resolver",
+                );
+            }
         }
     }
     Ok(ExploitabilityCertificate {
@@ -5658,6 +6466,14 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.safe_resolving),
+        flop_resolver_safe_anchor_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_anchor_iterations),
+        flop_resolver_safe_bilateral: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_bilateral),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -5857,9 +6673,24 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .as_ref()
             .is_some_and(|resolver| resolver.safe_resolving)
         {
-            assumptions.push(
-                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed",
-            );
+            assumptions.push(if config
+                .flop_resolver
+                .as_ref()
+                .is_some_and(|resolver| resolver.safe_bilateral)
+            {
+                "each reached flop subgame sequentially safe-resolves both players against one complete anchor with per-private-hand opponent CFV opt-outs, then atomically deploys the complete projected policy"
+            } else {
+                "each reached flop subgame is re-solved with a per-private-hand opponent opt-out at the frozen depth-limited blueprint counterfactual best-response value; only the resolving player's subgame strategy is deployed"
+            });
+            if config
+                .flop_resolver
+                .as_ref()
+                .is_some_and(|resolver| resolver.safe_anchor_iterations > 0)
+            {
+                assumptions.push(
+                    "the protected flop anchor is the full-support stabilized policy of the configured short depth-limited flop resolver",
+                );
+            }
         }
     }
     Ok(ExploitabilityCertificate {
@@ -5934,6 +6765,14 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.safe_resolving),
+        flop_resolver_safe_anchor_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_anchor_iterations),
+        flop_resolver_safe_bilateral: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.safe_bilateral),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -6047,6 +6886,7 @@ mod tests {
             actor: 1,
             action_labels: vec!["fold".to_owned()],
             probabilities: vec![1.0; COMBO_COUNT],
+            action_values_bb: None,
         });
         let mut cache = TurnStrategyCache {
             rows: BTreeMap::from([(stale_key, stale.clone())]),
@@ -6147,7 +6987,7 @@ mod tests {
             range_policy: None,
             range_cache: Mutex::new(BTreeMap::new()),
             preflop_range_cache: Mutex::new(BTreeMap::new()),
-            flop_strategy_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
             river_resolver: Some(RiverResolverConfig {
@@ -7076,6 +7916,8 @@ mod tests {
                 auxiliary_value_network_paths: Vec::new(),
                 continuation_selection: super::public_belief::FlopContinuationSelection::Mean,
                 safe_resolving: false,
+                safe_anchor_iterations: 0,
+                safe_bilateral: false,
                 resolved_policy_weight: 0.5,
             }),
         };
@@ -7115,6 +7957,11 @@ mod tests {
             .as_mut()
             .expect("flop resolver configured")
             .safe_resolving = true;
+        safe_resolver_config
+            .flop_resolver
+            .as_mut()
+            .expect("flop resolver configured")
+            .resolved_policy_weight = 1.0;
         enable_certificate_resolvers(&mut resolver_generator, &safe_resolver_config).unwrap();
         let mut flop_state = GameState::initial(&game);
         let limp = flop_state
@@ -7143,8 +7990,40 @@ mod tests {
             .as_ref()
             .is_some_and(|resolver| resolver.config.safe_resolving));
         let safe_cache = policy.flop_strategy_cache.lock().expect("flop cache");
-        assert!(!safe_cache.is_empty());
-        assert!(safe_cache.values().all(|row| row.actor == flop_state.actor));
+        assert!(!safe_cache.rows.is_empty());
+        assert!(safe_cache
+            .rows
+            .values()
+            .all(|row| row.actor == flop_state.actor));
+        drop(safe_cache);
+
+        let mut bilateral_config = safe_resolver_config.clone();
+        let bilateral = bilateral_config
+            .flop_resolver
+            .as_mut()
+            .expect("flop resolver configured");
+        bilateral.safe_anchor_iterations = 2;
+        bilateral.safe_bilateral = true;
+        enable_certificate_resolvers(&mut resolver_generator, &bilateral_config).unwrap();
+        let bilateral_root = resolver_generator.current_strategy(&flop_state, &deal, &flop_actions);
+        assert!((bilateral_root.iter().sum::<f64>() - 1.0).abs() < 1e-8);
+        let policy = resolver_generator
+            .networks
+            .as_ref()
+            .expect("frozen policy loaded");
+        let bilateral_cache = policy.flop_strategy_cache.lock().expect("flop cache");
+        assert!(bilateral_cache.safe_scope.is_some());
+        assert!(bilateral_cache.rows.values().any(|row| row.actor == 0));
+        assert!(bilateral_cache.rows.values().any(|row| row.actor == 1));
+        drop(bilateral_cache);
+        let check = flop_actions
+            .iter()
+            .find(|action| action.label == "check")
+            .expect("flop check available");
+        let child = flop_state.apply(check, &game);
+        let child_actions = child.legal_actions(&game);
+        let child_strategy = resolver_generator.current_strategy(&child, &deal, &child_actions);
+        assert!((child_strategy.iter().sum::<f64>() - 1.0).abs() < 1e-8);
         let attribution = generate_causal_policy_attribution(CausalPolicyAttributionConfig {
             game: game.clone(),
             deals: 2,

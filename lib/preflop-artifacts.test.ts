@@ -172,6 +172,8 @@ describe('offline preflop artifacts', () => {
       )
     );
     expect(compactPushFoldToScenario(compact[0]).effectiveStackBb).toBe(2);
+    expect(compact[0].action_values).toHaveLength(169);
+    expect(compact[0].action_values.flatMap((hand: unknown[]) => hand.slice(1)).every(Number.isFinite)).toBe(true);
 
     const malformed = structuredClone(compact[0]);
     malformed.hands[1][0] = malformed.hands[0][0];
@@ -188,6 +190,11 @@ describe('offline preflop artifacts', () => {
     const nonCanonical = structuredClone(compact[0]);
     nonCanonical.hands[0][0] = 'KAo';
     expect(() => compactPushFoldToScenario(nonCanonical)).toThrow(
+      'Rejected compact preflop scenario'
+    );
+    const missingActionValues = structuredClone(compact[0]);
+    delete missingActionValues.action_values;
+    expect(() => compactPushFoldToScenario(missingActionValues)).toThrow(
       'Rejected compact preflop scenario'
     );
   });

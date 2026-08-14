@@ -8,18 +8,32 @@
 use crate::cards::{all_combos, Combo};
 use crate::evaluator::evaluate;
 use crate::rng::SplitMix64;
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 pub mod neural;
 pub mod preflop;
 pub mod public_belief;
 pub mod response;
+
+/// Read an immutable JSON artifact, accepting either plain JSON or a gzip
+/// transport wrapper. Hashes are intentionally computed by callers over the
+/// decoded JSON bytes so compression cannot change a model's pinned identity.
+fn read_json_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+    if path.extension().and_then(|extension| extension.to_str()) != Some("gz") {
+        return Ok(bytes);
+    }
+    let mut decoded = Vec::new();
+    GzDecoder::new(bytes.as_slice()).read_to_end(&mut decoded)?;
+    Ok(decoded)
+}
 
 const EPSILON: f64 = 1e-9;
 const MODEL: &str = "hu-abstracted-external-sampling-dcfr-trajectory-v3";

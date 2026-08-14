@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isValidatedFullHandManifest } from '@/lib/practice-models';
+import {
+  ACTIVE_FULL_HAND_MANIFESTS,
+  isExperimentalFullHandManifest,
+  isValidatedFullHandManifest,
+} from '@/lib/practice-models';
 import type { PolicyManifest } from '@/lib/practice-types';
 
 function acceptedManifest(): PolicyManifest {
@@ -68,6 +72,10 @@ function acceptedManifest(): PolicyManifest {
 }
 
 describe('database-free full-hand activation registry', () => {
+  it('keeps the checked-in continual-resolver candidate hidden while normal gates fail', () => {
+    expect(ACTIVE_FULL_HAND_MANIFESTS).toEqual([]);
+  });
+
   it('accepts a neural manifest only when every promotion gate is present', () => {
     expect(isValidatedFullHandManifest(acceptedManifest())).toBe(true);
     expect(
@@ -96,6 +104,60 @@ describe('database-free full-hand activation registry', () => {
       isValidatedFullHandManifest({
         ...manifest,
         label: 'Experimental self-play',
+      })
+    ).toBe(false);
+  });
+
+  it('serves an experimental resolver only when exploitability is explicitly deferred and every normal gate passes', () => {
+    const source = acceptedManifest();
+    const experimental: PolicyManifest = {
+      ...source,
+      label: 'Experimental self-play',
+      runtime: {
+        kind: 'rust-continual-resolver-v1',
+        endpoint: '/api/practice/resolve',
+        networkSha256: 'a'.repeat(64),
+        rangePolicySha256: 'b'.repeat(64),
+        valueNetworkSha256: 'c'.repeat(64),
+        preflopActionValuesSha256: 'd'.repeat(64),
+        stateFeatureSchema: 'hu-cash-trajectory-poker-aware-v4',
+        rangeFeatureSchema: 'rank-suit-invariant-combo-policy-query-v2',
+        actionFeatureSchema: 'hu-cash-legal-action-v1',
+        actionAbstraction:
+          source.runtime?.kind === 'neural-deep-cfr-v1'
+            ? source.runtime.actionAbstraction
+            : (() => {
+                throw new Error('test source must use a neural runtime');
+              })(),
+        resolver: {
+          flopIterations: 2,
+          turnIterations: 2,
+          riverIterations: 2,
+          deterministic: true,
+        },
+      },
+      validation: {
+        ...source.validation,
+        exploitabilityGateDeferred: true,
+      },
+    };
+    expect(isExperimentalFullHandManifest(experimental)).toBe(true);
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        validation: {
+          ...experimental.validation,
+          crossSeedFrequencyMae: 0.0501,
+        },
+      })
+    ).toBe(false);
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        validation: {
+          ...experimental.validation,
+          exploitabilityGateDeferred: false,
+        },
       })
     ).toBe(false);
   });

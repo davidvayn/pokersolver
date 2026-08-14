@@ -1,7 +1,7 @@
 import solvedScenarios from '@/data/preflop/solved-scenarios.json';
 import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 import type { CompactPushFoldScenario } from '@/data/preflop/artifacts/types';
-import type { PolicyManifest } from '@/lib/practice-types';
+import type { ActionAbstraction, PolicyManifest } from '@/lib/practice-types';
 
 const scenarios = solvedScenarios as CompactPushFoldScenario[];
 const newestGeneratedAt = Math.max(
@@ -35,7 +35,8 @@ export const PUSH_FOLD_MANIFEST: PolicyManifest = {
     ),
     notes: [
       'All eight bundled depths pass the v1 finite-metric, probability-sum, sanity, and advisory exploitability checks.',
-      'Showdown equities are deterministic Monte Carlo estimates; this corpus does not contain per-action EV estimates.',
+      'Per-action EV and EV-loss feedback is evaluated against the served 169-class policy with deterministic Monte Carlo showdown equity.',
+      'Called-action uncertainty uses the conservative sampled-payoff standard-error upper bound and is labeled low confidence.',
     ],
   },
 };
@@ -59,22 +60,49 @@ export function isValidatedFullHandManifest(
   ) {
     return false;
   }
-  if (manifest.runtime?.kind === 'neural-deep-cfr-v1') {
-    const runtime = manifest.runtime;
+  if (!validFullHandRuntime(manifest.runtime)) return false;
+  return (
+    typeof validation.exploitabilityEstimateBb === 'number' &&
+    validation.exploitabilityEstimateBb <= 0.05 &&
+    typeof validation.exploitabilityUpper99Bb === 'number' &&
+    validation.exploitabilityUpper99Bb <= 0.1 &&
+    normalFullHandGatesPass(validation)
+  );
+}
+
+function validActionAbstraction(action: ActionAbstraction | undefined): boolean {
+  const grids = action
+    ? [
+        action.openSizesBb,
+        action.limpRaiseSizesBb,
+        action.threeBetSizesBb,
+        action.fourBetSizesBb,
+        action.deeperRaisePotFractions,
+        action.flopBetPotFractions,
+        action.turnRiverBetPotFractions,
+        action.postflopRaisePotFractions,
+      ]
+    : [];
+  return Boolean(
+    action &&
+      grids.length === 8 &&
+      grids.every(
+        (grid) =>
+          Array.isArray(grid) &&
+          grid.length > 0 &&
+          grid.every((number) => Number.isFinite(number) && number > 0) &&
+          grid.every((number, index) => index === 0 || grid[index - 1] < number)
+      ) &&
+      Number.isInteger(action.preflopRaiseCap) &&
+      Number.isInteger(action.postflopRaiseCap) &&
+      typeof action.includeAllIn === 'boolean'
+  );
+}
+
+function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
+  if (runtime?.kind === 'neural-deep-cfr-v1') {
     const action = runtime.actionAbstraction;
     const adaptation = runtime.adaptation;
-    const grids = action
-      ? [
-          action.openSizesBb,
-          action.limpRaiseSizesBb,
-          action.threeBetSizesBb,
-          action.fourBetSizesBb,
-          action.deeperRaisePotFractions,
-          action.flopBetPotFractions,
-          action.turnRiverBetPotFractions,
-          action.postflopRaisePotFractions,
-        ]
-      : [];
     if (
       typeof runtime.artifactUrl !== 'string' ||
       !runtime.artifactUrl.startsWith('/models/practice/') ||
@@ -90,31 +118,40 @@ export function isValidatedFullHandManifest(
       !Number.isFinite(adaptation.maximumResponseWeight) ||
       adaptation.maximumResponseWeight < 0 ||
       adaptation.maximumResponseWeight > 1 ||
-      !action ||
-      grids.length !== 8 ||
-      grids.some(
-        (grid) =>
-          !Array.isArray(grid) ||
-          grid.length === 0 ||
-          grid.some((number) => !Number.isFinite(number) || number <= 0) ||
-          grid.some(
-            (number, index) => index > 0 && grid[index - 1] >= number
-          )
-      ) ||
-      !Number.isInteger(action.preflopRaiseCap) ||
-      !Number.isInteger(action.postflopRaiseCap) ||
-      typeof action.includeAllIn !== 'boolean'
+      !validActionAbstraction(action)
     ) {
       return false;
     }
-  } else if (manifest.runtime?.kind !== 'binary-policy-shards-v1') {
-    return false;
+    return true;
   }
+  if (runtime?.kind === 'rust-continual-resolver-v1') {
+    return (
+      runtime.endpoint === '/api/practice/resolve' &&
+      /^[a-f0-9]{64}$/.test(runtime.networkSha256) &&
+      /^[a-f0-9]{64}$/.test(runtime.rangePolicySha256) &&
+      /^[a-f0-9]{64}$/.test(runtime.valueNetworkSha256) &&
+      /^[a-f0-9]{64}$/.test(runtime.preflopActionValuesSha256) &&
+      runtime.stateFeatureSchema === 'hu-cash-trajectory-poker-aware-v4' &&
+      runtime.rangeFeatureSchema ===
+        'rank-suit-invariant-combo-policy-query-v2' &&
+      runtime.actionFeatureSchema === 'hu-cash-legal-action-v1' &&
+      validActionAbstraction(runtime.actionAbstraction) &&
+      Number.isInteger(runtime.resolver.flopIterations) &&
+      runtime.resolver.flopIterations >= 2 &&
+      Number.isInteger(runtime.resolver.turnIterations) &&
+      runtime.resolver.turnIterations >= 2 &&
+      Number.isInteger(runtime.resolver.riverIterations) &&
+      runtime.resolver.riverIterations >= 2 &&
+      runtime.resolver.deterministic === true
+    );
+  }
+  return runtime?.kind === 'binary-policy-shards-v1';
+}
+
+function normalFullHandGatesPass(
+  validation: PolicyManifest['validation']
+): boolean {
   return (
-    typeof validation.exploitabilityEstimateBb === 'number' &&
-    validation.exploitabilityEstimateBb <= 0.05 &&
-    typeof validation.exploitabilityUpper99Bb === 'number' &&
-    validation.exploitabilityUpper99Bb <= 0.1 &&
     typeof validation.crossSeedFrequencyMae === 'number' &&
     validation.crossSeedFrequencyMae <= 0.05 &&
     typeof validation.primaryActionAgreement === 'number' &&
@@ -138,11 +175,41 @@ export function isValidatedFullHandManifest(
   );
 }
 
-// This checked-in registry is the database-free activation boundary. It stays
-// empty until an independently validated two-seed artifact passes every gate.
+export function isExperimentalFullHandManifest(
+  value: unknown
+): value is PolicyManifest {
+  if (!value || typeof value !== 'object') return false;
+  const manifest = value as Partial<PolicyManifest>;
+  return Boolean(
+    manifest.schemaVersion === 1 &&
+      manifest.subtype === 'full-hand' &&
+      manifest.label === 'Experimental self-play' &&
+      manifest.active === true &&
+      typeof manifest.version === 'string' &&
+      Array.isArray(manifest.depthsBb) &&
+      manifest.depthsBb.length > 0 &&
+      manifest.depthsBb.every((depth) => [20, 50, 100].includes(depth)) &&
+      manifest.validation?.status === 'accepted' &&
+      manifest.validation.exploitabilityGateDeferred === true &&
+      validFullHandRuntime(manifest.runtime) &&
+      normalFullHandGatesPass(manifest.validation)
+  );
+}
+
+export function isServableFullHandManifest(
+  value: unknown
+): value is PolicyManifest {
+  return (
+    isValidatedFullHandManifest(value) || isExperimentalFullHandManifest(value)
+  );
+}
+
+// This checked-in registry is the database-free activation boundary.
+// Approximate-GTO entries pass every gate; explicitly experimental entries
+// may defer exploitability but still have to pass every normal serving gate.
 export const ACTIVE_FULL_HAND_MANIFESTS: PolicyManifest[] = (
   fullHandManifests as unknown[]
-).filter(isValidatedFullHandManifest);
+).filter(isServableFullHandManifest);
 
 export function activePracticeManifests(): PolicyManifest[] {
   return [...ACTIVE_FULL_HAND_MANIFESTS, PUSH_FOLD_MANIFEST].filter(

@@ -314,7 +314,7 @@ describe('frozen neural policy runtime', () => {
       hero: 'button-small-blind',
       random: seededRandom(29),
     });
-    const profile = buildOpponentModel([], 'routed');
+    const profile = buildOpponentModel([], 'baseline');
     expect(
       neuralNetworksForStreet(model.metadata, 'preflop').baselinePolicy
     ).toBe(model.metadata.networks.baselinePolicy);

@@ -10,7 +10,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { awsCredentialsProvider } from '@vercel/oidc-aws-credentials-provider';
 import type { PolicyManifest } from '@/lib/practice-types';
-import { isValidatedFullHandManifest } from '@/lib/practice-models';
+import { isServableFullHandManifest } from '@/lib/practice-models';
 
 export const POLICY_REGION = 'us-west-2';
 const TABLE_NAME = process.env.PRACTICE_POLICY_TABLE;
@@ -214,13 +214,17 @@ function isAcceptedManifest(value: unknown): value is PolicyManifest {
   const baseAccepted =
     manifest.schemaVersion === 1 &&
     typeof manifest.version === 'string' &&
-    manifest.label === 'Approximate GTO' &&
     manifest.active === true &&
     Array.isArray(manifest.depthsBb) &&
     validation?.status === 'accepted';
   if (!baseAccepted) return false;
-  if (manifest.subtype !== 'full-hand') return manifest.subtype === 'push-fold';
-  return isValidatedFullHandManifest(value);
+  if (manifest.subtype !== 'full-hand') {
+    return (
+      manifest.subtype === 'push-fold' &&
+      manifest.label === 'Approximate GTO'
+    );
+  }
+  return isServableFullHandManifest(value);
 }
 
 export async function readHostedManifests(): Promise<PolicyManifest[]> {

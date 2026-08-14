@@ -487,6 +487,8 @@ pub struct PreflopLeakEntry {
     pub action_labels: Vec<String>,
     pub policy_probabilities: Vec<f64>,
     pub action_values_bb: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub action_value_standard_errors_bb: Vec<f64>,
     pub policy_value_bb: f64,
     pub best_action: String,
     pub best_action_value_bb: f64,
@@ -514,6 +516,10 @@ pub struct PreflopLeakAttribution {
     pub policy_lookup_coverage: f64,
     pub players: [Vec<PreflopLeakEntry>; 2],
     pub public_histories: [Vec<PreflopPublicHistoryLeak>; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_ev_standard_error_coverage: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_action_ev_standard_error_bb: Option<f64>,
     pub interpretation: String,
 }
 
@@ -2101,8 +2107,96 @@ pub fn attribute_policy_leaks(
         },
         players,
         public_histories,
+        action_ev_standard_error_coverage: None,
+        maximum_action_ev_standard_error_bb: None,
         interpretation: "policy-reach-weighted one-step deviation gains with all later decisions fixed to the evaluated policy; rows localize leaks but are not additive best-response contributions or a full-game exploitability estimate".to_owned(),
     })
+}
+
+pub fn attribute_policy_action_values(
+    cache: &ContinuationCache,
+    artifact: &PreflopPolicyArtifact,
+) -> Result<PreflopLeakAttribution, Box<dyn Error>> {
+    let cycles = cache.complete_exact_combo_cycles;
+    let cycle_size = 2 * all_combos().len();
+    if cycles < 2 || cache.deals.len() != cycles * cycle_size {
+        return Err(
+            "preflop action-value errors require two or more complete exact-combo cycles".into(),
+        );
+    }
+    let mut attribution = attribute_policy_leaks(cache, artifact, usize::MAX)?;
+    let policy = ArtifactPolicy::new(artifact);
+    let mut samples = BTreeMap::<String, Vec<Vec<f64>>>::new();
+    for cycle in 0..cycles {
+        let start = cycle * cycle_size;
+        let worlds = (start..start + cycle_size)
+            .map(|deal_index| WeightedWorld {
+                state: GameState::initial(&cache.game),
+                deal_index,
+                weight: 1.0 / cycle_size as f64,
+            })
+            .collect();
+        let mut counters = LookupCounters::default();
+        let mut players: [Vec<PreflopLeakEntry>; 2] = std::array::from_fn(|_| Vec::new());
+        collect_local_leak_entries(cache, &policy, worlds, &mut players, &mut counters);
+        if counters.queries == 0 || counters.misses != 0 {
+            return Err("preflop action-value cycle had incomplete policy coverage".into());
+        }
+        for entry in players.into_iter().flatten() {
+            samples
+                .entry(entry.key)
+                .or_default()
+                .push(entry.action_values_bb);
+        }
+    }
+
+    let mut covered_weight = 0.0;
+    let mut total_weight = 0.0;
+    let mut maximum_standard_error = 0.0f64;
+    for entry in attribution.players.iter_mut().flatten() {
+        let cycle_values = samples
+            .remove(&entry.key)
+            .ok_or("preflop action-value cycles missed an information set")?;
+        if cycle_values.len() != cycles
+            || cycle_values
+                .iter()
+                .any(|values| values.len() != entry.action_values_bb.len())
+        {
+            return Err("preflop action-value cycles changed the legal action set".into());
+        }
+        entry.action_value_standard_errors_bb = (0..entry.action_values_bb.len())
+            .map(|action| {
+                let mean = cycle_values
+                    .iter()
+                    .map(|values| values[action])
+                    .sum::<f64>()
+                    / cycles as f64;
+                let variance = cycle_values
+                    .iter()
+                    .map(|values| (values[action] - mean).powi(2))
+                    .sum::<f64>()
+                    / (cycles - 1) as f64;
+                (variance / cycles as f64).sqrt()
+            })
+            .collect();
+        let row_maximum = entry
+            .action_value_standard_errors_bb
+            .iter()
+            .copied()
+            .fold(0.0f64, f64::max);
+        maximum_standard_error = maximum_standard_error.max(row_maximum);
+        total_weight += entry.reach_probability;
+        if row_maximum <= 0.02 {
+            covered_weight += entry.reach_probability;
+        }
+    }
+    if !samples.is_empty() || total_weight <= 0.0 {
+        return Err("preflop action-value cycles and full evaluation differ".into());
+    }
+    attribution.action_ev_standard_error_coverage = Some(covered_weight / total_weight);
+    attribution.maximum_action_ev_standard_error_bb = Some(maximum_standard_error);
+    attribution.interpretation = "policy-reach-weighted one-step deviation action values with every later decision fixed to the evaluated policy; standard errors are measured across independent balanced exact-combo cycles and approximation error in the frozen postflop continuation cache is not sampling error".to_owned();
+    Ok(attribution)
 }
 
 pub fn evaluate_neural_policy(
@@ -2396,6 +2490,7 @@ fn collect_local_leak_entries<P: Policy>(
                 .iter()
                 .map(|value| value / reach_probability)
                 .collect(),
+            action_value_standard_errors_bb: Vec::new(),
             policy_value_bb: policy_weighted_value / reach_probability,
             best_action: actions[best_index].label.clone(),
             best_action_value_bb: best_weighted_value / reach_probability,
@@ -2626,6 +2721,10 @@ fn information_key(state: &GameState, deal: &Deal) -> String {
         hand_class(deal, state.actor),
         state.public_history.join("/")
     )
+}
+
+pub(super) fn neural_policy_information_key(state: &GameState, deal: &Deal) -> String {
+    information_key(state, deal)
 }
 
 fn hand_class(deal: &Deal, player: usize) -> String {

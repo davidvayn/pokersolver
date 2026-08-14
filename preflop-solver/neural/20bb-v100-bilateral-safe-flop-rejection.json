@@ -1,0 +1,89 @@
+{
+  "schema": "hu-20bb-bilateral-safe-flop-resolver-pilot-v1",
+  "date": "2026-08-14",
+  "status": "rejected_directional_candidate",
+  "activationAllowed": false,
+  "purpose": "Test whether sequentially safe-resolving both players at every reached flop root can improve the two-iteration continual-resolving leader while protecting each updated player against the complete two-iteration flop anchor.",
+  "leader": {
+    "artifact": "neural/runs/20bb-v92-multivalue-pilot/fullgame-single-v6-flop-i2-turn-i2-river-i2-seed19801-d2.json",
+    "flopResolverIterations": 2,
+    "turnResolverIterations": 2,
+    "riverResolverIterations": 2,
+    "sampleMeanExploitabilityBb": 1.4127416606284693,
+    "sampleExploitabilitiesBb": [
+      1.4275307174373433,
+      1.3979526038195953
+    ],
+    "sampleResponseValuesBb": [
+      [
+        -0.19980318233315938,
+        3.054864617207846
+      ],
+      [
+        1.1143477108051705,
+        1.68155749683402
+      ]
+    ]
+  },
+  "candidate": {
+    "artifact": "neural/runs/20bb-v100-bilateral-safe-flop-pilot/fullgame-bilateral-safe-flop-i4-anchor-i2-turn-i2-river-i2-seed19801-d2.json",
+    "artifactSha256": "87796cee1bab23038fbe7496445462ce2cebd26f7c8074fac41b9788acf4df5e",
+    "deals": 2,
+    "seed": 19801,
+    "flopResolverIterations": 4,
+    "flopResolverSafe": true,
+    "flopResolverSafeAnchorIterations": 2,
+    "flopResolverSafeBilateral": true,
+    "turnResolverIterations": 2,
+    "riverResolverIterations": 2,
+    "sampleMeanExploitabilityBb": 1.448304955122047,
+    "sampleExploitabilitiesBb": [
+      1.3416342535961852,
+      1.5549756566479092
+    ],
+    "sampleResponseValuesBb": [
+      [
+        -0.3715961098935952,
+        3.0548646170859657
+      ],
+      [
+        1.4283938164096142,
+        1.6815574968862044
+      ]
+    ],
+    "maximumResidentBytes": 1293565952,
+    "processSwaps": 0,
+    "wallSeconds": 16705.8
+  },
+  "comparison": {
+    "sampleMeanExploitabilityDeltaBb": 0.03556329449357776,
+    "sampleExploitabilityDeltasBb": [
+      -0.08589646384115812,
+      0.15702305282831386
+    ],
+    "sampleResponseValueDeltasBb": [
+      [
+        -0.17179292756043582,
+        -1.2188028364334969e-10
+      ],
+      [
+        0.3140461056044437,
+        5.218447896027101e-11
+      ]
+    ],
+    "interpretation": "The bilateral flop update moved responder-zero values in both directions and worsened their paired mean. Both responder-one values remained unchanged to less than 1.3e-10bb, so the dominant responder-one leak on these frozen samples is outside the causal reach of this flop policy intervention. Do not spend more compute increasing bilateral flop iterations from this branch."
+  },
+  "implementationEvidence": {
+    "atomicity": "The complete projected policy for both players is installed as one cache generation; missing protected flop descendants fail closed.",
+    "safety": "Each sequential player update is projected toward its complete anchor until the exact maximum opponent counterfactual-value excess is at most 0.05bb per compatible private hand.",
+    "routing": "Safe routing serves the projected generation for either actor throughout the protected flop subtree and isolates resolver caches between evaluator workers.",
+    "validation": "The policy-only safe solve is byte-equivalent to the full diagnostic solve for the deployed actor, and the integration regression reaches and serves both actors from one bilateral generation."
+  },
+  "releaseGate": {
+    "maximumSampleMeanExploitabilityBb": 0.5,
+    "maximumOneSided99PercentUpperBoundBb": 0.5,
+    "passed": false,
+    "reason": "The two-deal directional mean is above the release gate and worse than the validated leader. Two deals are not sufficient evidence for a release confidence bound."
+  },
+  "nextExperiment": "Trace the frozen information-set best response's selected preflop actions and reached street for the unchanged responder-one values, then change the causally responsible policy actions. Retain the 1.4127416606284693 leader and keep activation disabled."
+}

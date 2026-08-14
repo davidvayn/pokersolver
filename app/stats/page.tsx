@@ -263,14 +263,14 @@ export default function StatsPage() {
           <section className="mt-6 grid border-y border-border sm:grid-cols-2 sm:divide-x sm:divide-border xl:grid-cols-4">
             <SummaryCard icon={Gauge} label="Average EV loss" value={bb(stats.averageEvLossBb)} detail={`${stats.gradedDecisions} of ${stats.decisions} decisions graded`} />
             <SummaryCard icon={TrendingDown} label="Total EV loss" value={stats.gradedDecisions ? bb(stats.totalEvLossBb) : '—'} detail={stats.trendEvLossBb === null ? 'Need 100 decisions for trend' : `${stats.trendEvLossBb > 0 ? '+' : ''}${stats.trendEvLossBb.toFixed(3)}bb recent vs previous`} />
-            <SummaryCard icon={ShieldAlert} label="Low confidence" value={percent(stats.lowConfidencePercentage)} detail="Includes unavailable action-EV estimates" />
+            <SummaryCard icon={ShieldAlert} label="Low confidence" value={percent(stats.lowConfidencePercentage)} detail="Includes approximate or unavailable action-EV estimates" />
             <SummaryCard icon={Clock3} label="Response time" value={duration(stats.averageResponseMs)} detail={`${stats.hands} complete hands retained`} />
           </section>
 
           {stats.gradedDecisions === 0 && (
             <div className="mt-5 flex gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6">
               <AlertTriangle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
-              <p>The current push/fold v1 model records authentic frequencies but no action EVs. These decisions are retained as ungraded rather than assigned invented values.</p>
+            <p>Push/fold action EVs use deterministic sampled showdown equity and a conservative error bound. Their EV-loss grades remain explicitly low confidence.</p>
             </div>
           )}
 

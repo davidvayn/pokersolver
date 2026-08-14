@@ -693,7 +693,7 @@ export default function PracticePage() {
             Practice table
           </div>
           <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted sm:block">
-            Play exact-card heads-up spots against a pinned baseline. Accepted strategy is labeled Approximate GTO; adaptive opponent responses are reported separately and never change your grading target.
+            Play exact-card heads-up spots against a pinned baseline. The model label shows its validation level: Approximate GTO has passed every release gate, while Experimental self-play explicitly defers exploitability. Adaptive opponent responses never change your grading target.
           </p>
         </div>
         <Link

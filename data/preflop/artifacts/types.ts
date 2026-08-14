@@ -81,6 +81,33 @@ export interface RawPushFoldArtifact {
   };
 }
 
+export interface RawPushFoldActionValuesArtifact {
+  schema_version: number;
+  model: string;
+  source_artifact_id: string;
+  source_config_hash: string;
+  source_artifact_sha256: string;
+  evaluation_seed: number;
+  equity_samples: number;
+  called_payoff_standard_error_upper_bound_bb: number;
+  hand_classes: Array<{
+    label: string;
+    combo_count: number;
+    small_blind: {
+      fold_ev_bb: number;
+      shove_ev_bb: number;
+      fold_standard_error_bb: number;
+      shove_standard_error_upper_bound_bb: number;
+    };
+    big_blind_vs_shove: {
+      fold_ev_bb: number;
+      call_ev_bb: number;
+      fold_standard_error_bb: number;
+      call_standard_error_upper_bound_bb: number;
+    };
+  }>;
+}
+
 export interface CompactPushFoldScenario {
   artifact_id: string;
   config_hash: string;
@@ -94,5 +121,14 @@ export interface CompactPushFoldScenario {
   exploitability_bb: number;
   quality: string;
   source_sha256: string;
+  action_values_source_sha256: string;
+  action_value_standard_error_upper_bound_bb: number;
   hands: Array<[label: string, shove: number, call: number]>;
+  action_values: Array<[
+    label: string,
+    smallBlindFoldEvBb: number,
+    smallBlindShoveEvBb: number,
+    bigBlindFoldEvBb: number,
+    bigBlindCallEvBb: number,
+  ]>;
 }

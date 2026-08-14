@@ -1,1 +1,72 @@
-[]
+[
+  {
+    "schemaVersion": 1,
+    "version": "hu-20bb-v92-continual-resolver-experimental",
+    "model": "v27-preflop-v90-range-v91-value-continual-resolver",
+    "label": "Experimental self-play",
+    "subtype": "full-hand",
+    "active": false,
+    "depthsBb": [20],
+    "generatedAt": "2026-08-14T20:00:00.000Z",
+    "stateSchema": "hu-cash-trajectory-poker-aware-v4",
+    "shardSchema": "embedded-gzip-json-rust-resolver-v1",
+    "runtime": {
+      "kind": "rust-continual-resolver-v1",
+      "endpoint": "/api/practice/resolve",
+      "networkSha256": "310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3",
+      "rangePolicySha256": "a5dc8cd4855211571151a666c59bd78fa5b97a3f6e0f715fbed97873185c89a1",
+      "valueNetworkSha256": "2764959d5ddf004dc7ad9146a831250bbf2db2b3fcf86a3f3daf2cc51e458202",
+      "preflopActionValuesSha256": "f945babfc6e094af60295e2c4094339369ffe13f64f9deeea634ad8776724979",
+      "stateFeatureSchema": "hu-cash-trajectory-poker-aware-v4",
+      "rangeFeatureSchema": "rank-suit-invariant-combo-policy-query-v2",
+      "actionFeatureSchema": "hu-cash-legal-action-v1",
+      "actionAbstraction": {
+        "openSizesBb": [2, 2.5, 3, 4, 5],
+        "limpRaiseSizesBb": [3, 4, 5],
+        "threeBetSizesBb": [7.5, 9, 11],
+        "fourBetSizesBb": [18, 22, 26],
+        "deeperRaisePotFractions": [0.75, 1, 1.25],
+        "preflopRaiseCap": 4,
+        "flopBetPotFractions": [0.3333333333333333, 0.75, 1.25],
+        "turnRiverBetPotFractions": [0.5, 1],
+        "postflopRaisePotFractions": [1],
+        "postflopRaiseCap": 1,
+        "includeAllIn": true
+      },
+      "resolver": {
+        "flopIterations": 2,
+        "turnIterations": 2,
+        "riverIterations": 2,
+        "deterministic": true
+      }
+    },
+    "abstraction": {
+      "blindsBb": [0.5, 1],
+      "anteBb": 0,
+      "rake": "none",
+      "actionSizing": "2/2.5/3/4/5bb opens; pinned street-specific bet sizes; one postflop raise; all-in",
+      "cardAbstraction": "exact card removal with rank/suit-invariant learned range and value features",
+      "recall": "complete public action trajectory within the abstract game"
+    },
+    "validation": {
+      "status": "rejected",
+      "exploitabilityGateDeferred": true,
+      "crossSeedFrequencyMae": 0.056733284,
+      "primaryActionAgreement": 0.869094,
+      "maximumAggregateActionDelta": 0.0141068,
+      "policyCoverage": 1,
+      "actionEvStandardErrorCoverage": 0,
+      "projectedStorageBytes": 42613991,
+      "rawProbabilitySumsValid": true,
+      "quantizedProbabilitySumsValid": true,
+      "independentSeedCount": 2,
+      "trainingHoursPerSeed": [8, 8],
+      "notes": [
+        "Inactive and fail-closed: exploitability is deferred, not passed.",
+        "The static paired range policies miss the 5% cross-seed MAE gate by 0.673 percentage point; the final continual-resolved policy still needs a paired served-policy measurement.",
+        "The ten-cycle preflop action-value corpus has 0% reach-weighted coverage at 0.02bb standard error, so its feedback is low confidence and cannot activate this candidate.",
+        "The immutable losslessly compressed solver bundle is 42,613,991 bytes; no database is required for this embedded runtime."
+      ]
+    }
+  }
+]

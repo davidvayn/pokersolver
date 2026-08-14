@@ -55,6 +55,7 @@ with direct links to Practice and the preflop range library.
 | Practice persistence | `lib/practice-history.ts` |
 | Policy shard codec/client | `lib/policy-codec.ts`, `lib/practice-policy-client.ts` |
 | Neural artifact/runtime | `lib/neural-policy.ts`, `scripts/policy/export-neural-artifact.mjs` |
+| Exact continual-resolver runtime | `lib/server/practice-solver-process.ts`, `app/api/practice/resolve/route.ts` |
 | Policy runtime API | `app/api/practice/` |
 | Hosted-policy infrastructure/tools | `infra/`, `scripts/policy/` |
 | Table formats and current spot | `lib/positions.ts`, `lib/store.ts` |
@@ -69,9 +70,19 @@ full-hand outputs remain advisory and hidden from Practice until two
 independent seeds pass every validation and storage gate; Practice never
 substitutes fabricated strategy when a model or shard is unavailable.
 
+The current 20bb candidate is checked in as an inactive `Experimental
+self-play` manifest. Its immutable gzip model bundle is loaded by one
+long-lived Rust child process, and `/api/practice/resolve` verifies every
+component hash before returning a policy. `npm run dev` and `npm run build`
+compile that binary; Next's output trace includes the binary and model files.
+This exact runtime therefore requires a Node host that permits child processes
+and local read-only files. It does not require DynamoDB. DynamoDB remains an
+optional backend for previously exported static policy/sample shards.
+
 The bundled push/fold corpus remains available at 2/3/5/8/10/12/15/20bb. It
-provides validated action frequencies but not counterfactual action EVs, so
-those decisions are retained as explicitly ungraded.
+provides validated action frequencies plus deterministic, policy-consistent
+counterfactual action-EV estimates. Called-action feedback carries the
+conservative Monte Carlo error bound and is graded as low confidence.
 
 ## Rebuild WebAssembly
 

@@ -59,19 +59,19 @@ impl PushFoldConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct ActionFrequency {
     pub fold: f64,
     pub shove: f64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct ResponseFrequency {
     pub fold: f64,
     pub call: f64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ExactComboStrategy {
     #[serde(flatten)]
     pub identity: ComboIdentity,
@@ -79,7 +79,7 @@ pub struct ExactComboStrategy {
     pub big_blind_vs_shove: ResponseFrequency,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HandClassStrategy {
     pub label: String,
     pub combo_count: usize,
@@ -87,13 +87,13 @@ pub struct HandClassStrategy {
     pub big_blind_vs_shove: ResponseFrequency,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Strategies {
     pub exact_combos: Vec<ExactComboStrategy>,
     pub hand_classes: Vec<HandClassStrategy>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PushFoldMetrics {
     pub profile_small_blind_ev_bb: f64,
     pub small_blind_best_response_ev_bb: f64,
@@ -111,13 +111,13 @@ pub struct PushFoldMetrics {
     pub evaluation_seed: u64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct EstimateInterval {
     pub low: f64,
     pub high: f64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ValidationCheck {
     pub name: String,
     pub passed: bool,
@@ -126,7 +126,7 @@ pub struct ValidationCheck {
     pub comparison: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Validation {
     pub status: String,
     pub quality: String,
@@ -135,7 +135,7 @@ pub struct Validation {
     pub checks: Vec<ValidationCheck>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PushFoldArtifact {
     pub schema_version: u32,
     pub solver_version: String,
@@ -148,6 +148,43 @@ pub struct PushFoldArtifact {
     pub metrics: PushFoldMetrics,
     pub validation: Validation,
     pub strategies: Strategies,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct SmallBlindActionValues {
+    pub fold_ev_bb: f64,
+    pub shove_ev_bb: f64,
+    pub fold_standard_error_bb: f64,
+    pub shove_standard_error_upper_bound_bb: f64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct BigBlindActionValues {
+    pub fold_ev_bb: f64,
+    pub call_ev_bb: f64,
+    pub fold_standard_error_bb: f64,
+    pub call_standard_error_upper_bound_bb: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HandClassActionValues {
+    pub label: String,
+    pub combo_count: usize,
+    pub small_blind: SmallBlindActionValues,
+    pub big_blind_vs_shove: BigBlindActionValues,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PushFoldActionValuesArtifact {
+    pub schema_version: u32,
+    pub model: String,
+    pub source_artifact_id: String,
+    pub source_config_hash: String,
+    pub source_artifact_sha256: String,
+    pub evaluation_seed: u64,
+    pub equity_samples: u32,
+    pub called_payoff_standard_error_upper_bound_bb: f64,
+    pub hand_classes: Vec<HandClassActionValues>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -268,6 +305,178 @@ pub fn solve(config: PushFoldConfig) -> Result<PushFoldArtifact, String> {
         metrics,
         validation,
         strategies,
+    })
+}
+
+/// Evaluate every served push/fold action against the same 169-class policy
+/// that the browser samples. BB values are conditioned on the SB having
+/// shoved, so the opponent range is weighted by its class-level shove rate.
+pub fn estimate_action_values(
+    artifact: &PushFoldArtifact,
+    source_artifact_sha256: String,
+) -> Result<PushFoldActionValuesArtifact, String> {
+    if artifact.schema_version != SCHEMA_VERSION || artifact.model != MODEL {
+        return Err("unsupported push/fold artifact".into());
+    }
+    if artifact.validation.status != "approximate" {
+        return Err("push/fold artifact is not accepted".into());
+    }
+    if source_artifact_sha256.len() != 64
+        || !source_artifact_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("source artifact SHA-256 must contain 64 hexadecimal characters".into());
+    }
+    artifact.config.validate()?;
+    let standard_error = artifact.metrics.called_payoff_standard_error_upper_bound_bb;
+    if !standard_error.is_finite() || standard_error < 0.0 {
+        return Err("invalid called-payoff standard-error upper bound".into());
+    }
+
+    let combos = all_combos();
+    if artifact.strategies.exact_combos.len() != combos.len() {
+        return Err("push/fold artifact must contain all 1,326 exact combos".into());
+    }
+    for (expected, stored) in combos.iter().zip(&artifact.strategies.exact_combos) {
+        if stored.identity.combo_key != expected.key()
+            || stored.identity.cards != expected.cards()
+            || stored.identity.label != expected.label()
+        {
+            return Err(format!(
+                "exact-combo identity mismatch at key {}",
+                expected.key()
+            ));
+        }
+    }
+
+    if artifact.strategies.hand_classes.len() != 169 {
+        return Err("push/fold artifact must contain all 169 hand classes".into());
+    }
+    let mut class_indexes = HashMap::with_capacity(169);
+    for (index, strategy) in artifact.strategies.hand_classes.iter().enumerate() {
+        let valid_pair = |first: f64, second: f64| {
+            first.is_finite()
+                && second.is_finite()
+                && first >= 0.0
+                && second >= 0.0
+                && first <= 1.0
+                && second <= 1.0
+                && (first + second - 1.0).abs() <= 1e-6
+        };
+        if strategy.combo_count == 0
+            || !valid_pair(strategy.small_blind.fold, strategy.small_blind.shove)
+            || !valid_pair(
+                strategy.big_blind_vs_shove.fold,
+                strategy.big_blind_vs_shove.call,
+            )
+            || class_indexes
+                .insert(strategy.label.clone(), index)
+                .is_some()
+        {
+            return Err(format!("invalid hand-class policy for {}", strategy.label));
+        }
+    }
+
+    let combo_class_indexes = combos
+        .iter()
+        .map(|combo| {
+            class_indexes
+                .get(&combo.label())
+                .copied()
+                .ok_or_else(|| format!("missing hand-class policy for {}", combo.label()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let class_count = artifact.strategies.hand_classes.len();
+    let mut class_combo_counts = vec![0usize; class_count];
+    let mut sb_shove_value_sums = vec![0.0f64; class_count];
+    let mut sb_compatible_deals = vec![0u64; class_count];
+    let mut bb_call_value_sums = vec![0.0f64; class_count];
+    let mut bb_shove_reach_sums = vec![0.0f64; class_count];
+    for &class_index in &combo_class_indexes {
+        class_combo_counts[class_index] += 1;
+    }
+
+    let mut equities = EquityCache::new(
+        artifact.metrics.evaluation_seed,
+        artifact.config.equity_samples,
+    );
+    for (sb_index, &sb_combo) in combos.iter().enumerate() {
+        let sb_class_index = combo_class_indexes[sb_index];
+        let sb_strategy = artifact.strategies.hand_classes[sb_class_index].small_blind;
+        for (bb_index, &bb_combo) in combos.iter().enumerate() {
+            if sb_combo.overlaps(bb_combo) {
+                continue;
+            }
+            let bb_class_index = combo_class_indexes[bb_index];
+            let bb_strategy = artifact.strategies.hand_classes[bb_class_index].big_blind_vs_shove;
+            let equity = equities.equity(sb_combo, bb_combo);
+            let called_sb_utility = (2.0 * equity - 1.0) * artifact.config.effective_stack_bb;
+
+            sb_shove_value_sums[sb_class_index] += bb_strategy.fold * artifact.config.big_blind_bb
+                + bb_strategy.call * called_sb_utility;
+            sb_compatible_deals[sb_class_index] += 1;
+
+            bb_call_value_sums[bb_class_index] += sb_strategy.shove * -called_sb_utility;
+            bb_shove_reach_sums[bb_class_index] += sb_strategy.shove;
+        }
+    }
+
+    let hand_classes = artifact
+        .strategies
+        .hand_classes
+        .iter()
+        .enumerate()
+        .map(|(index, strategy)| {
+            if class_combo_counts[index] != strategy.combo_count {
+                return Err(format!(
+                    "hand-class combo count mismatch for {}",
+                    strategy.label
+                ));
+            }
+            if sb_compatible_deals[index] == 0 || bb_shove_reach_sums[index] <= 0.0 {
+                return Err(format!(
+                    "unreachable hand-class value for {}",
+                    strategy.label
+                ));
+            }
+            let shove_ev_bb = sb_shove_value_sums[index] / sb_compatible_deals[index] as f64;
+            let call_ev_bb = bb_call_value_sums[index] / bb_shove_reach_sums[index];
+            if !shove_ev_bb.is_finite() || !call_ev_bb.is_finite() {
+                return Err(format!(
+                    "non-finite hand-class value for {}",
+                    strategy.label
+                ));
+            }
+            Ok(HandClassActionValues {
+                label: strategy.label.clone(),
+                combo_count: strategy.combo_count,
+                small_blind: SmallBlindActionValues {
+                    fold_ev_bb: -artifact.config.small_blind_bb,
+                    shove_ev_bb,
+                    fold_standard_error_bb: 0.0,
+                    shove_standard_error_upper_bound_bb: standard_error,
+                },
+                big_blind_vs_shove: BigBlindActionValues {
+                    fold_ev_bb: -artifact.config.big_blind_bb,
+                    call_ev_bb,
+                    fold_standard_error_bb: 0.0,
+                    call_standard_error_upper_bound_bb: standard_error,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(PushFoldActionValuesArtifact {
+        schema_version: 1,
+        model: "heads-up-push-fold-action-values-v1".to_owned(),
+        source_artifact_id: artifact.artifact_id.clone(),
+        source_config_hash: artifact.config_hash.clone(),
+        source_artifact_sha256: source_artifact_sha256.to_ascii_lowercase(),
+        evaluation_seed: artifact.metrics.evaluation_seed,
+        equity_samples: artifact.config.equity_samples,
+        called_payoff_standard_error_upper_bound_bb: standard_error,
+        hand_classes,
     })
 }
 
@@ -699,7 +908,7 @@ mod tests {
 
     #[test]
     fn short_solver_exports_complete_finite_strategy() {
-        let artifact = solve(PushFoldConfig {
+        let mut artifact = solve(PushFoldConfig {
             effective_stack_bb: 5.0,
             iterations: 20_000,
             equity_samples: 32,
@@ -726,6 +935,17 @@ mod tests {
                 (strategy.big_blind_vs_shove.fold + strategy.big_blind_vs_shove.call - 1.0).abs()
                     < 1e-9
             );
+        }
+        artifact.validation.status = "approximate".to_owned();
+        let values = estimate_action_values(&artifact, "a".repeat(64))
+            .expect("valid serving-policy action values");
+        assert_eq!(values.hand_classes.len(), 169);
+        assert_eq!(values.source_artifact_sha256, "a".repeat(64));
+        for hand in values.hand_classes {
+            assert_eq!(hand.small_blind.fold_ev_bb, -0.5);
+            assert_eq!(hand.big_blind_vs_shove.fold_ev_bb, -1.0);
+            assert!(hand.small_blind.shove_ev_bb.is_finite());
+            assert!(hand.big_blind_vs_shove.call_ev_bb.is_finite());
         }
     }
 
