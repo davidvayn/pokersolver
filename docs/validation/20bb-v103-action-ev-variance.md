@@ -64,12 +64,26 @@ dominant kernel. Linear scaling projects roughly 110 hours locally for all
 range-value payload is only about 155MiB, so compute—not hosted storage—is the
 constraint.
 
-Before an exhaustive run, each canonical board must be an atomic resumable
-shard and the scheduler must benchmark fewer concurrent boards with multiple
-threads assigned to exact equity construction. The evaluator then needs to
-propagate the exact weighted leaf vectors through the preflop policy tree and
-measure the declared served-action-weighted action-EV gate. Approximation
-error from the frozen resolver/value network remains separate from sampling
-error and must continue to carry a low-confidence warning.
+Each canonical board can now be emitted as an atomic resumable shard using a
+deterministic orbit offset. The provenance-checked merge rejects overlapping
+boards and any policy, value-network, game, range, or resolver mismatch. A
+two-board benchmark with two concurrent boards and four resolver threads per
+board took 429.9 seconds, or 3.58 minutes per board. This was only about 4.5%
+faster per board than the eight-board pilot and does not materially change the
+exhaustive projection.
+
+Two exact-semantics kernel experiments were rejected rather than retained:
+bitmask/symmetric dense-equity updates took 453.1 seconds, and triangular
+zero-sum updates took 446.0 seconds on the identical two boards. Replacing the
+repeated scalar terminal matrix-range product with the existing optimized
+matrix backend also regressed to 467.9 seconds. These controls indicate that
+the dominant remaining work is repeated full postflop traversal/value
+inference for each distinct preflop leaf, not the tested equity-loop surfaces.
+
+The evaluator still needs to propagate exact weighted leaf vectors through
+the preflop policy tree and measure the declared served-action-weighted
+action-EV gate. Approximation error from the frozen resolver/value network
+remains separate from sampling error and must continue to carry a
+low-confidence warning.
 
 No activation status, gate threshold, or served fallback was changed.

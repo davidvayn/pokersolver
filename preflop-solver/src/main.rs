@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-cache" => run_preflop_cache(&args[1..]),
         "preflop-cache-resolver" => run_preflop_cache_resolver(&args[1..]),
         "preflop-range-cache" => run_preflop_range_cache(&args[1..]),
+        "preflop-range-cache-merge" => run_preflop_range_cache_merge(&args[1..]),
         "preflop-cache-compare" => run_preflop_cache_compare(&args[1..]),
         "preflop-cache-merge" => run_preflop_cache_merge(&args[1..]),
         "preflop-cache-refresh" => run_preflop_cache_refresh(&args[1..]),
@@ -287,6 +288,7 @@ fn run_preflop_range_cache(args: &[String]) -> Result<(), Box<dyn Error>> {
     let cache = blueprint::preflop::build_range_continuation_cache(
         blueprint::preflop::RangeContinuationCacheConfig {
             seed: parse_or(args, "--seed", 1u64)?,
+            orbit_offset: parse_or(args, "--orbit-offset", 0usize)?,
             maximum_flop_orbits: parse_or(args, "--maximum-flop-orbits", 8usize)?,
             maximum_leaves: parse_or(args, "--maximum-leaves", 9usize)?,
             resolver_iterations: iterations,
@@ -325,6 +327,35 @@ fn run_preflop_range_cache(args: &[String]) -> Result<(), Box<dyn Error>> {
             "coveredRawFlops": cache.covered_raw_flops,
             "selectedLeaves": cache.public_histories.len(),
             "completeCanonicalFlopEnumeration": cache.complete_canonical_flop_enumeration,
+        }))?
+    );
+    Ok(())
+}
+
+fn run_preflop_range_cache_merge(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let paths = values(args, "--cache")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if paths.len() < 2 {
+        return Err("preflop-range-cache-merge requires at least two --cache paths".into());
+    }
+    let caches = paths
+        .iter()
+        .map(|path| blueprint::preflop::RangeContinuationCache::read(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let merged = blueprint::preflop::merge_range_continuation_caches(&caches)?;
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-range-continuation-merged.json.gz"));
+    merged.write(&output)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "output": output,
+            "canonicalFlopOrbits": merged.boards.len(),
+            "coveredRawFlops": merged.covered_raw_flops,
+            "completeCanonicalFlopEnumeration": merged.complete_canonical_flop_enumeration,
         }))?
     );
     Ok(())
@@ -2754,6 +2785,7 @@ Usage:
   preflop-solver preflop-cache [options]
   preflop-solver preflop-cache-resolver [options]
   preflop-solver preflop-range-cache --range-policy <json> --value-network <json.gz> [options]
+  preflop-solver preflop-range-cache-merge --cache <json.gz> --cache <json.gz> --output <json.gz>
   preflop-solver preflop-cache-compare [options]
   preflop-solver preflop-cache-merge [options]
   preflop-solver preflop-cache-refresh [options]

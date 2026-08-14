@@ -77,6 +77,7 @@ pub struct ResolverContinuationCacheConfig {
 #[derive(Clone, Debug)]
 pub struct RangeContinuationCacheConfig {
     pub seed: u64,
+    pub orbit_offset: usize,
     pub maximum_flop_orbits: usize,
     pub maximum_leaves: usize,
     pub resolver_iterations: u64,
@@ -490,7 +491,7 @@ impl RangeContinuationCache {
             .map(|board| board.orbit_size)
             .sum::<usize>();
         if self.schema != RANGE_CONTINUATION_SCHEMA
-            || self.boards.len() < 2
+            || self.boards.is_empty()
             || self.public_histories.is_empty()
             || self.public_histories.len() != self.leaf_reach_probabilities.len()
             || self
@@ -547,6 +548,9 @@ impl RangeContinuationCache {
                 .negative_regret_exponent
                 .is_finite()
             || !self.resolver_provenance.dcfr.strategy_exponent.is_finite()
+            || self.resolver_provenance.dcfr.positive_regret_exponent < 0.0
+            || self.resolver_provenance.dcfr.negative_regret_exponent < 0.0
+            || self.resolver_provenance.dcfr.strategy_exponent < 0.0
         {
             return Err("range continuation cache is incomplete or incompatible".into());
         }
@@ -1416,6 +1420,12 @@ pub fn build_resolver_continuation_cache(
         || config.resolver_dcfr.strategy_exponent < 0.0
         || !config.value_uncertainty_bb.is_finite()
         || config.value_uncertainty_bb < 0.0
+        || !config.resolver_dcfr.positive_regret_exponent.is_finite()
+        || !config.resolver_dcfr.negative_regret_exponent.is_finite()
+        || !config.resolver_dcfr.strategy_exponent.is_finite()
+        || config.resolver_dcfr.positive_regret_exponent < 0.0
+        || config.resolver_dcfr.negative_regret_exponent < 0.0
+        || config.resolver_dcfr.strategy_exponent < 0.0
         || config.threads == 0
     {
         return Err("resolver continuation configuration is invalid".into());
@@ -1645,8 +1655,9 @@ pub fn build_resolver_continuation_cache(
 pub fn build_range_continuation_cache(
     config: RangeContinuationCacheConfig,
 ) -> Result<RangeContinuationCache, Box<dyn Error>> {
-    if config.maximum_flop_orbits < 2
-        || config.maximum_flop_orbits > 1_755
+    if config.maximum_flop_orbits == 0
+        || config.orbit_offset >= 1_755
+        || config.maximum_flop_orbits > 1_755 - config.orbit_offset
         || config.maximum_leaves == 0
         || config.resolver_iterations < 2
         || config.resolver_averaging_delay >= config.resolver_iterations
@@ -1713,7 +1724,11 @@ pub fn build_range_continuation_cache(
         digest.update(orbit.board);
         <[u8; 32]>::from(digest.finalize())
     });
-    orbits.truncate(config.maximum_flop_orbits);
+    orbits = orbits
+        .into_iter()
+        .skip(config.orbit_offset)
+        .take(config.maximum_flop_orbits)
+        .collect();
     orbits.sort_by_key(|orbit| orbit.board);
 
     let worker_count = config.threads.min(orbits.len()).max(1);
@@ -1835,6 +1850,55 @@ pub fn build_range_continuation_cache(
     };
     cache.validate()?;
     Ok(cache)
+}
+
+pub fn merge_range_continuation_caches(
+    caches: &[RangeContinuationCache],
+) -> Result<RangeContinuationCache, Box<dyn Error>> {
+    let first = caches
+        .first()
+        .ok_or("range continuation merge requires at least one cache")?;
+    first.validate()?;
+    let mut boards = Vec::new();
+    for cache in caches {
+        cache.validate()?;
+        if cache.depth_bb != first.depth_bb
+            || cache.seed != first.seed
+            || cache.game != first.game
+            || cache.policy_model_version != first.policy_model_version
+            || cache.policy_sha256 != first.policy_sha256
+            || cache.resolver_provenance != first.resolver_provenance
+            || cache.public_histories != first.public_histories
+            || cache.leaf_reach_probabilities != first.leaf_reach_probabilities
+        {
+            return Err("range continuation cache shards have incompatible provenance".into());
+        }
+        boards.extend(cache.boards.iter().cloned());
+    }
+    boards.sort_by_key(|board| board.board);
+    if boards.windows(2).any(|pair| pair[0].board == pair[1].board) {
+        return Err("range continuation cache shards overlap canonical boards".into());
+    }
+    let covered_raw_flops = boards.iter().map(|board| board.orbit_size).sum::<usize>();
+    let merged = RangeContinuationCache {
+        schema: RANGE_CONTINUATION_SCHEMA.to_owned(),
+        depth_bb: first.depth_bb,
+        seed: first.seed,
+        chance_sampling:
+            "merged_provenance_checked_suit_isomorphic_flop_orbits_with_exact_combo_ranges"
+                .to_owned(),
+        complete_canonical_flop_enumeration: boards.len() == 1_755 && covered_raw_flops == 22_100,
+        covered_raw_flops,
+        game: first.game.clone(),
+        policy_model_version: first.policy_model_version.clone(),
+        policy_sha256: first.policy_sha256.clone(),
+        resolver_provenance: first.resolver_provenance.clone(),
+        public_histories: first.public_histories.clone(),
+        leaf_reach_probabilities: first.leaf_reach_probabilities.clone(),
+        boards,
+    };
+    merged.validate()?;
+    Ok(merged)
 }
 
 type ResolverRangePolicy = BTreeMap<(usize, String, Vec<String>), (Vec<String>, Vec<f64>)>;
@@ -3930,6 +3994,17 @@ mod tests {
             boards,
         };
         cache.validate().unwrap();
+
+        let mut first = cache.clone();
+        first.boards.truncate(1);
+        first.covered_raw_flops = first.boards[0].orbit_size;
+        let mut second = cache.clone();
+        second.boards.drain(..1);
+        second.covered_raw_flops = second.boards[0].orbit_size;
+        let merged = merge_range_continuation_caches(&[first.clone(), second]).unwrap();
+        assert_eq!(merged.boards.len(), 2);
+        assert!(merge_range_continuation_caches(&[first.clone(), first]).is_err());
+
         cache.boards[0].continuations.get_mut(&history).unwrap()[1].pop();
         assert!(cache.validate().is_err());
     }
