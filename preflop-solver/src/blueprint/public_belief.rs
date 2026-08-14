@@ -5391,6 +5391,20 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
     Ok(solver.finish())
 }
 
+/// Train the identical frozen average flop policy without running the
+/// post-solve exploitability, unresolved-control, and action-EV passes. Online
+/// continual resolving only consumes action probabilities. Standalone
+/// resolver validation still uses `solve_flop`, safe resolving still uses
+/// `solve_flop_safe`, and the full-game certificate independently evaluates
+/// the resulting policy against its response tree.
+pub(super) fn solve_flop_policy(
+    config: FlopResolveConfig,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.train();
+    Ok(solver.average_strategies(None))
+}
+
 /// Re-solve one player's flop decision with the opponent-CFV opt-out gadget
 /// from Resolve subgame solving. `blueprint_strategies` must describe the
 /// frozen depth-limited policy being replaced. Its exact information-set best
@@ -6457,6 +6471,23 @@ impl RiverSolver {
         values
     }
 
+    fn policy_strategies(&self) -> Vec<PublicBeliefStrategy> {
+        self.nodes
+            .iter()
+            .map(|(history, node)| PublicBeliefStrategy {
+                public_history: history.clone(),
+                actor: node.actor,
+                action_labels: node.action_labels.clone(),
+                probabilities: node
+                    .average_strategy(&self.legal[node.actor])
+                    .into_iter()
+                    .map(|value| value as f32)
+                    .collect(),
+                action_values_bb: None,
+            })
+            .collect()
+    }
+
     fn finish(self) -> RiverSolution {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
@@ -6589,6 +6620,14 @@ pub fn solve_river(config: RiverSolveConfig) -> Result<RiverSolution, String> {
     let mut solver = RiverSolver::new(config)?;
     solver.train();
     Ok(solver.finish())
+}
+
+pub(super) fn solve_river_policy(
+    config: RiverSolveConfig,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = RiverSolver::new(config)?;
+    solver.train();
+    Ok(solver.policy_strategies())
 }
 
 #[derive(Clone, Debug)]
@@ -7233,6 +7272,26 @@ impl TurnRiverSolver {
         values
     }
 
+    fn policy_strategies(&self) -> Vec<PublicBeliefStrategy> {
+        self.nodes
+            .iter()
+            .map(|(history, node)| {
+                let river = Self::river_from_key(history);
+                PublicBeliefStrategy {
+                    public_history: history.clone(),
+                    actor: node.actor,
+                    action_labels: node.action_labels.clone(),
+                    probabilities: node
+                        .average_strategy(self.legal_for(river, node.actor))
+                        .into_iter()
+                        .map(|value| value as f32)
+                        .collect(),
+                    action_values_bb: None,
+                }
+            })
+            .collect()
+    }
+
     fn finish_continuation_values(self) -> TurnRiverContinuationValues {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
@@ -7611,6 +7670,14 @@ pub fn solve_turn_river(config: TurnRiverSolveConfig) -> Result<TurnRiverSolutio
     let mut solver = TurnRiverSolver::new(config)?;
     solver.train();
     Ok(solver.finish())
+}
+
+pub(super) fn solve_turn_river_policy(
+    config: TurnRiverSolveConfig,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.train();
+    Ok(solver.policy_strategies())
 }
 
 fn deal_with_visible_board_and_private_combo(board: &[u8], player: usize, combo: Combo) -> Deal {
@@ -10892,6 +10959,16 @@ mod tests {
         game
     }
 
+    fn assert_same_policy(measured: &[PublicBeliefStrategy], expected: &[PublicBeliefStrategy]) {
+        assert_eq!(measured.len(), expected.len());
+        for (measured, expected) in measured.iter().zip(expected) {
+            assert_eq!(measured.public_history, expected.public_history);
+            assert_eq!(measured.actor, expected.actor);
+            assert_eq!(measured.action_labels, expected.action_labels);
+            assert_eq!(measured.probabilities, expected.probabilities);
+        }
+    }
+
     fn zero_value_network() -> PublicValueNetwork {
         let layer = |input_size, output_size, activation: &str| ValueNetworkLayer {
             input_size,
@@ -11734,7 +11811,13 @@ mod tests {
             iterations: 4,
             averaging_delay: 0,
         };
-        assert_eq!(solve_river(config.clone()), solve_river(config));
+        let full = solve_river(config.clone()).unwrap();
+        assert_eq!(full, solve_river(config.clone()).unwrap());
+        let policy = solve_river_policy(config).unwrap();
+        assert_same_policy(&policy, &full.strategies);
+        assert!(policy
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
     }
 
     #[test]
@@ -11750,7 +11833,12 @@ mod tests {
             regret_matching_plus: false,
         };
         let solution = solve_turn_river(config.clone()).unwrap();
-        let values = solve_turn_river_continuation_values(config).unwrap();
+        let values = solve_turn_river_continuation_values(config.clone()).unwrap();
+        let policy = solve_turn_river_policy(config).unwrap();
+        assert_same_policy(&policy, &solution.strategies);
+        assert!(policy
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
         assert_eq!(
             values.counterfactual_values_bb,
             solution.counterfactual_values_bb
@@ -12248,7 +12336,12 @@ mod tests {
             threads: 1,
         };
         let continuation = solve_flop_continuation_values(config.clone()).unwrap();
-        let solution = solve_flop(config).unwrap();
+        let solution = solve_flop(config.clone()).unwrap();
+        let policy = solve_flop_policy(config).unwrap();
+        assert_same_policy(&policy, &solution.strategies);
+        assert!(policy
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
         assert_eq!(
             continuation.counterfactual_values_bb,
             solution.counterfactual_values_bb

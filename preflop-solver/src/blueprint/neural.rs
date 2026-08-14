@@ -466,36 +466,40 @@ impl FrozenPolicy {
                     continuation_selection: resolver.config.continuation_selection,
                     threads: resolver.config.threads,
                 };
-                let solution = if resolver.config.safe_resolving {
+                let strategies = if resolver.config.safe_resolving {
                     let blueprint = self.flop_blueprint_strategies(
                         state.clone(),
                         &public.board,
                         public.ranges.clone(),
                         config,
                     )?;
-                    super::public_belief::solve_flop_safe(solve_config, &blueprint, public.actor)?
-                } else {
-                    super::public_belief::solve_flop(solve_config)?
-                };
-                if resolver.config.safe_resolving
-                    && solution
+                    let solution = super::public_belief::solve_flop_safe(
+                        solve_config,
+                        &blueprint,
+                        public.actor,
+                    )?;
+                    if solution
                         .metrics
                         .safe_opponent_maximum_cfv_excess_bb
                         .is_none_or(|excess| excess > 0.05)
-                {
-                    return Err(format!(
-                        "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound \
-                         (maximum {:?}, reach-weighted {:?}, iterations {}, actor {}, board {:?}, \
-                         invested {:?}, history {:?})",
-                        solution.metrics.safe_opponent_maximum_cfv_excess_bb,
-                        solution.metrics.safe_opponent_reach_weighted_cfv_excess_bb,
-                        resolver.config.iterations,
-                        public.actor,
-                        public.board,
-                        public.invested_bb,
-                        public.public_history,
-                    ));
-                }
+                    {
+                        return Err(format!(
+                            "safe flop resolver did not satisfy the 0.05bb opponent-CFV bound \
+                             (maximum {:?}, reach-weighted {:?}, iterations {}, actor {}, board {:?}, \
+                             invested {:?}, history {:?})",
+                            solution.metrics.safe_opponent_maximum_cfv_excess_bb,
+                            solution.metrics.safe_opponent_reach_weighted_cfv_excess_bb,
+                            resolver.config.iterations,
+                            public.actor,
+                            public.board,
+                            public.invested_bb,
+                            public.public_history,
+                        ));
+                    }
+                    solution.strategies
+                } else {
+                    super::public_belief::solve_flop_policy(solve_config)?
+                };
                 let mut cache = self
                     .flop_strategy_cache
                     .lock()
@@ -507,8 +511,7 @@ impl FrozenPolicy {
                     key,
                     Street::Flop,
                     &public.board,
-                    solution
-                        .strategies
+                    strategies
                         .into_iter()
                         .filter(|strategy| !safe_resolving || strategy.actor == requested_actor),
                     4_096,
@@ -554,7 +557,7 @@ impl FrozenPolicy {
             let resolved = if let Some(resolved) = resolved {
                 resolved
             } else {
-                let solution = super::public_belief::solve_turn_river(
+                let strategies = super::public_belief::solve_turn_river_policy(
                     super::public_belief::TurnRiverSolveConfig {
                         game: config.clone(),
                         state: public.clone(),
@@ -573,7 +576,7 @@ impl FrozenPolicy {
                     key,
                     Street::Turn,
                     &public.board,
-                    solution.strategies.into_iter().filter(|strategy| {
+                    strategies.into_iter().filter(|strategy| {
                         !strategy
                             .public_history
                             .last()
@@ -611,13 +614,14 @@ impl FrozenPolicy {
             let resolved = if let Some(resolved) = resolved {
                 resolved
             } else {
-                let solution =
-                    super::public_belief::solve_river(super::public_belief::RiverSolveConfig {
+                let strategies = super::public_belief::solve_river_policy(
+                    super::public_belief::RiverSolveConfig {
                         game: config.clone(),
                         state: public.clone(),
                         iterations: resolver.iterations,
                         averaging_delay: resolver.averaging_delay,
-                    })?;
+                    },
+                )?;
                 let mut cache = self
                     .river_strategy_cache
                     .lock()
@@ -627,7 +631,7 @@ impl FrozenPolicy {
                     key,
                     Street::River,
                     &public.board,
-                    solution.strategies,
+                    strategies,
                     16_384,
                 )?
             };
