@@ -48,7 +48,7 @@ const ACTION_FEATURE_COUNT: usize = 9;
 const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const RESOLVER_ROOT_CHECKPOINT_SCHEMA: &str = "hu-resolver-root-leaf-checkpoint-v1";
-const SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 0.05;
+pub(super) const SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 0.05;
 const SAFE_RESOLVE_PROJECTION_BISECTIONS: usize = 8;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
 const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
@@ -6686,6 +6686,16 @@ pub struct TurnRiverContinuationValues {
     pub metrics: TurnRiverSolveMetrics,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct SafeTurnRiverPolicy {
+    pub strategies: Vec<PublicBeliefStrategy>,
+    pub opponent_maximum_cfv_excess_bb: f64,
+    pub opponent_reach_weighted_cfv_excess_bb: f64,
+    pub unprojected_opponent_maximum_cfv_excess_bb: f64,
+    pub deployed_resolved_policy_weight: f64,
+    pub projection_best_response_evaluations: usize,
+}
+
 struct RiverBoardData {
     strength_ranks: Vec<usize>,
     strength_group_count: usize,
@@ -6704,6 +6714,7 @@ struct TurnRiverSolver {
     river_blocked_combos: Vec<Vec<usize>>,
     river_data: Vec<Option<RiverBoardData>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
+    safe_root: Option<SafeResolveRoot>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6791,7 +6802,399 @@ impl TurnRiverSolver {
             river_blocked_combos,
             river_data,
             nodes: BTreeMap::new(),
+            safe_root: None,
         })
+    }
+
+    fn install_safe_root(
+        &mut self,
+        resolving_player: usize,
+        opponent_alternative_values_bb: Vec<f64>,
+    ) -> Result<(), String> {
+        if resolving_player > 1
+            || opponent_alternative_values_bb.len() != COMBO_COUNT
+            || opponent_alternative_values_bb.iter().any(|value| {
+                !value.is_finite() || value.abs() > self.config.game.effective_stack_bb + 1e-8
+            })
+        {
+            return Err("safe turn resolving has invalid opponent alternative values".to_owned());
+        }
+        let opponent = 1 - resolving_player;
+        self.safe_root = Some(SafeResolveRoot {
+            resolving_player,
+            opponent_alternative_values_bb,
+            node: RangeNode {
+                actor: opponent,
+                action_labels: vec!["enter".to_owned(), "terminate".to_owned()],
+                regrets: vec![0.0; COMBO_COUNT * 2],
+                strategy_sum: vec![0.0; COMBO_COUNT * 2],
+                last_regret_discount_round: 0,
+                last_strategy_discount_round: 0,
+            },
+            unprojected_maximum_cfv_excess_bb: None,
+            unprojected_reach_weighted_cfv_excess_bb: None,
+            deployed_resolved_policy_weight: 1.0,
+            projection_best_response_evaluations: 0,
+        });
+        Ok(())
+    }
+
+    fn load_frozen_average_strategies(
+        &mut self,
+        strategies: &[PublicBeliefStrategy],
+    ) -> Result<(), String> {
+        if strategies.is_empty() {
+            return Err("frozen turn-river solution contains no strategies".to_owned());
+        }
+        for strategy in strategies {
+            if strategy.actor > 1 || strategy.action_labels.is_empty() {
+                return Err(
+                    "frozen turn-river strategy has an invalid actor or action set".to_owned(),
+                );
+            }
+            let expected = COMBO_COUNT * strategy.action_labels.len();
+            if strategy.probabilities.len() != expected
+                || strategy
+                    .probabilities
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err("frozen turn-river strategy has invalid probabilities".to_owned());
+            }
+            let node = RangeNode {
+                actor: strategy.actor,
+                action_labels: strategy.action_labels.clone(),
+                regrets: vec![0.0; expected],
+                strategy_sum: strategy
+                    .probabilities
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect(),
+                last_regret_discount_round: 0,
+                last_strategy_discount_round: 0,
+            };
+            if self
+                .nodes
+                .insert(strategy.public_history.clone(), node)
+                .is_some()
+            {
+                return Err(
+                    "frozen turn-river solution contains duplicate public histories".to_owned(),
+                );
+            }
+        }
+        self.validate_frozen_strategy_tree(self.config.state.game_state(), None)
+    }
+
+    fn validate_frozen_strategy_tree(
+        &self,
+        state: GameState,
+        river: Option<u8>,
+    ) -> Result<(), String> {
+        if state.terminal.is_some() {
+            return Ok(());
+        }
+        if state.street == Street::River && river.is_none() {
+            for card in &self.river_cards {
+                self.validate_frozen_strategy_tree(state.clone(), Some(*card))?;
+            }
+            return Ok(());
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let key = Self::node_key(&state, river);
+        let node = self.nodes.get(&key).ok_or_else(|| {
+            "frozen turn-river solution is missing a reachable public history".to_owned()
+        })?;
+        let labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        if node.actor != state.actor || node.action_labels != labels {
+            return Err(
+                "frozen turn-river strategy does not match the configured game tree".to_owned(),
+            );
+        }
+        let action_count = actions.len();
+        let legal = self.legal_for(river, state.actor);
+        for combo in 0..COMBO_COUNT {
+            let offset = combo * action_count;
+            let sum = node.strategy_sum[offset..offset + action_count]
+                .iter()
+                .sum::<f64>();
+            if legal[combo] && (sum - 1.0).abs() > 1e-4 {
+                return Err("frozen turn-river strategy probabilities do not sum to one".to_owned());
+            }
+        }
+        for action in actions {
+            self.validate_frozen_strategy_tree(state.apply(&action, &self.config.game), river)?;
+        }
+        Ok(())
+    }
+
+    fn exact_best_response_conditional_values(&self, responder: usize) -> Vec<f64> {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let values = self.profile_walk(root, reaches.clone(), None, Some(responder), None, true);
+        let compatible =
+            compatible_masses_from_card_marginals(&self.combos, &reaches[1 - responder]);
+        (0..COMBO_COUNT)
+            .map(|combo| {
+                if compatible[combo] > 0.0 {
+                    values[responder][combo] / compatible[combo]
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    fn safe_opponent_cfv_excess(&self) -> Option<(f64, f64)> {
+        let safe = self.safe_root.as_ref()?;
+        let opponent = 1 - safe.resolving_player;
+        let reaches = self.config.state.ranges.clone();
+        let joint = joint_compatibility_mass(&reaches);
+        let response = self.profile_walk(
+            self.config.state.game_state(),
+            reaches.clone(),
+            None,
+            Some(opponent),
+            None,
+            true,
+        );
+        let compatible =
+            compatible_masses_from_card_marginals(&self.combos, &reaches[safe.resolving_player]);
+        let mut maximum_excess: f64 = 0.0;
+        let mut weighted_excess = 0.0;
+        for combo in 0..COMBO_COUNT {
+            if compatible[combo] <= 0.0 {
+                continue;
+            }
+            let conditional_response = response[opponent][combo] / compatible[combo];
+            let excess =
+                (conditional_response - safe.opponent_alternative_values_bb[combo]).max(0.0);
+            maximum_excess = maximum_excess.max(excess);
+            weighted_excess += reaches[opponent][combo] * compatible[combo] / joint * excess;
+        }
+        Some((maximum_excess, weighted_excess))
+    }
+
+    fn apply_resolving_player_strategy_blend(
+        &mut self,
+        blueprint: &BTreeMap<Vec<String>, &PublicBeliefStrategy>,
+        resolved: &BTreeMap<Vec<String>, PublicBeliefStrategy>,
+        resolving_player: usize,
+        resolved_weight: f64,
+    ) -> Result<(), String> {
+        if !resolved_weight.is_finite() || !(0.0..=1.0).contains(&resolved_weight) {
+            return Err("safe turn resolver projection has an invalid policy weight".to_owned());
+        }
+        for (history, node) in &mut self.nodes {
+            if node.actor != resolving_player {
+                continue;
+            }
+            let blueprint = blueprint.get(history).ok_or_else(|| {
+                "safe turn resolver blueprint is missing a resolving-player node".to_owned()
+            })?;
+            let resolved = resolved.get(history).ok_or_else(|| {
+                "safe turn resolver snapshot is missing a resolving-player node".to_owned()
+            })?;
+            if blueprint.actor != resolving_player
+                || resolved.actor != resolving_player
+                || blueprint.action_labels != node.action_labels
+                || resolved.action_labels != node.action_labels
+                || blueprint.probabilities.len() != node.strategy_sum.len()
+                || resolved.probabilities.len() != node.strategy_sum.len()
+            {
+                return Err(
+                    "safe turn resolver projection found an incompatible policy node".to_owned(),
+                );
+            }
+            for index in 0..node.strategy_sum.len() {
+                node.strategy_sum[index] = (1.0 - resolved_weight)
+                    * f64::from(blueprint.probabilities[index])
+                    + resolved_weight * f64::from(resolved.probabilities[index]);
+            }
+        }
+        Ok(())
+    }
+
+    fn project_safe_strategy_to_blueprint(
+        &mut self,
+        blueprint_strategies: &[PublicBeliefStrategy],
+    ) -> Result<(), String> {
+        let resolving_player = self
+            .safe_root
+            .as_ref()
+            .ok_or_else(|| "safe turn resolver projection requires the opt-out gadget".to_owned())?
+            .resolving_player;
+        let blueprint = blueprint_strategies
+            .iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let resolved = self
+            .policy_strategies()
+            .into_iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let unprojected = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe turn resolver projection has no CFV diagnostic".to_owned())?;
+        {
+            let safe = self.safe_root.as_mut().expect("safe turn root checked");
+            safe.unprojected_maximum_cfv_excess_bb = Some(unprojected.0);
+            safe.unprojected_reach_weighted_cfv_excess_bb = Some(unprojected.1);
+            safe.projection_best_response_evaluations = 1;
+        }
+        if unprojected.0 <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            return Ok(());
+        }
+
+        self.apply_resolving_player_strategy_blend(&blueprint, &resolved, resolving_player, 0.0)?;
+        let blueprint_excess = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe turn resolver blueprint has no CFV diagnostic".to_owned())?;
+        self.safe_root
+            .as_mut()
+            .expect("safe turn root checked")
+            .projection_best_response_evaluations += 1;
+        if blueprint_excess.0 > 1e-7 {
+            return Err(format!(
+                "safe turn resolver frozen blueprint does not reproduce its opponent CFV bound ({:.6}bb)",
+                blueprint_excess.0
+            ));
+        }
+
+        let mut passing_weight = 0.0;
+        let mut failing_weight = 1.0;
+        for _ in 0..SAFE_RESOLVE_PROJECTION_BISECTIONS {
+            let candidate = (passing_weight + failing_weight) / 2.0;
+            self.apply_resolving_player_strategy_blend(
+                &blueprint,
+                &resolved,
+                resolving_player,
+                candidate,
+            )?;
+            let excess = self.safe_opponent_cfv_excess().ok_or_else(|| {
+                "safe turn resolver projected policy has no CFV diagnostic".to_owned()
+            })?;
+            self.safe_root
+                .as_mut()
+                .expect("safe turn root checked")
+                .projection_best_response_evaluations += 1;
+            if excess.0 <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+                passing_weight = candidate;
+            } else {
+                failing_weight = candidate;
+            }
+        }
+        self.apply_resolving_player_strategy_blend(
+            &blueprint,
+            &resolved,
+            resolving_player,
+            passing_weight,
+        )?;
+        self.safe_root
+            .as_mut()
+            .expect("safe turn root checked")
+            .deployed_resolved_policy_weight = passing_weight;
+        let final_excess = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe turn resolver final policy has no CFV diagnostic".to_owned())?;
+        self.safe_root
+            .as_mut()
+            .expect("safe turn root checked")
+            .projection_best_response_evaluations += 1;
+        if final_excess.0 > SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            return Err(format!(
+                "safe turn resolver projection failed its exact CFV check ({:.6}bb)",
+                final_excess.0
+            ));
+        }
+        Ok(())
+    }
+
+    fn safe_walk(
+        &mut self,
+        traverser: usize,
+        round: u64,
+        accumulate_average: bool,
+    ) -> [Vec<f64>; 2] {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let (resolving_player, opponent, gadget_strategy, alternatives) = {
+            let safe = self.safe_root.as_mut().expect("safe turn root installed");
+            let opponent = 1 - safe.resolving_player;
+            if traverser == opponent {
+                safe.node.discount_regrets(round, &self.config.game.dcfr);
+            }
+            if accumulate_average {
+                safe.node
+                    .discount_strategy_sum(round, &self.config.game.dcfr);
+            }
+            (
+                safe.resolving_player,
+                opponent,
+                safe.node.strategy(&self.legal[opponent]),
+                safe.opponent_alternative_values_bb.clone(),
+            )
+        };
+
+        if traverser == resolving_player {
+            let mut enter_reaches = reaches;
+            for combo in 0..COMBO_COUNT {
+                enter_reaches[opponent][combo] *= gadget_strategy[combo * 2];
+            }
+            return self.walk(
+                root,
+                enter_reaches,
+                None,
+                traverser,
+                round,
+                accumulate_average,
+                TurnRiverTrainingMode::Joint,
+            );
+        }
+
+        let follow = self.walk(
+            root,
+            reaches.clone(),
+            None,
+            traverser,
+            round,
+            accumulate_average,
+            TurnRiverTrainingMode::Joint,
+        );
+        let compatible =
+            compatible_masses_from_card_marginals(&self.combos, &reaches[resolving_player]);
+        let safe = self.safe_root.as_mut().expect("safe turn root installed");
+        for combo in 0..COMBO_COUNT {
+            if !self.legal[opponent][combo] {
+                continue;
+            }
+            let offset = combo * 2;
+            let action_values = [
+                follow[opponent][combo],
+                alternatives[combo] * compatible[combo],
+            ];
+            let expected = gadget_strategy[offset] * action_values[0]
+                + gadget_strategy[offset + 1] * action_values[1];
+            for action in 0..2 {
+                safe.node.regrets[offset + action] += action_values[action] - expected;
+                if self.config.regret_matching_plus {
+                    safe.node.regrets[offset + action] =
+                        safe.node.regrets[offset + action].max(0.0);
+                }
+            }
+            if accumulate_average && round > self.config.averaging_delay {
+                for action in 0..2 {
+                    safe.node.strategy_sum[offset + action] +=
+                        reaches[opponent][combo] * gadget_strategy[offset + action];
+                }
+            }
+        }
+        follow
     }
 
     fn train(&mut self) {
@@ -6799,24 +7202,29 @@ impl TurnRiverSolver {
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
             let round = offset + 1;
-            self.walk(
-                root.clone(),
-                reaches.clone(),
-                None,
-                0,
-                round,
-                false,
-                TurnRiverTrainingMode::Joint,
-            );
-            self.walk(
-                root.clone(),
-                reaches.clone(),
-                None,
-                1,
-                round,
-                true,
-                TurnRiverTrainingMode::Joint,
-            );
+            if self.safe_root.is_some() {
+                self.safe_walk(0, round, false);
+                self.safe_walk(1, round, true);
+            } else {
+                self.walk(
+                    root.clone(),
+                    reaches.clone(),
+                    None,
+                    0,
+                    round,
+                    false,
+                    TurnRiverTrainingMode::Joint,
+                );
+                self.walk(
+                    root.clone(),
+                    reaches.clone(),
+                    None,
+                    1,
+                    round,
+                    true,
+                    TurnRiverTrainingMode::Joint,
+                );
+            }
         }
         for offset in 0..self.config.river_refinement_iterations {
             let round = self.config.iterations + offset + 1;
@@ -7678,6 +8086,69 @@ pub(super) fn solve_turn_river_policy(
     let mut solver = TurnRiverSolver::new(config)?;
     solver.train();
     Ok(solver.policy_strategies())
+}
+
+/// Resolve the complete turn/river subgame for the acting player while
+/// retaining one opponent opt-out value per private hand from the supplied
+/// anchor policy. Only the resolving player's strategy is returned. A final exact
+/// best response checks the hard CFV bound after finite-iteration projection.
+pub(super) fn solve_turn_river_safe_policy(
+    mut config: TurnRiverSolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<SafeTurnRiverPolicy, String> {
+    if resolving_player > 1 || resolving_player != config.state.actor {
+        return Err("safe turn resolving must target the acting player".to_owned());
+    }
+    if config.river_refinement_iterations > 0 {
+        return Err("safe turn resolving does not support detached river refinement".to_owned());
+    }
+    let opponent = 1 - resolving_player;
+    let compatible = all_combos()
+        .into_iter()
+        .filter(|combo| {
+            !combo
+                .cards()
+                .iter()
+                .any(|card| config.state.board.contains(card))
+        })
+        .map(|combo| combo.key())
+        .collect::<Vec<_>>();
+    if compatible.is_empty() {
+        return Err("safe turn resolving has no board-compatible opponent hands".to_owned());
+    }
+    config.state.ranges[opponent].fill(0.0);
+    let uniform = 1.0 / compatible.len() as f64;
+    for combo in compatible {
+        config.state.ranges[opponent][combo] = uniform;
+    }
+
+    let mut blueprint = TurnRiverSolver::new(config.clone())?;
+    blueprint.load_frozen_average_strategies(blueprint_strategies)?;
+    let opponent_alternative_values_bb = blueprint.exact_best_response_conditional_values(opponent);
+
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
+    solver.train();
+    solver.project_safe_strategy_to_blueprint(blueprint_strategies)?;
+    let final_excess = solver
+        .safe_opponent_cfv_excess()
+        .ok_or_else(|| "safe turn resolver has no final CFV diagnostic".to_owned())?;
+    let safe = solver.safe_root.as_ref().expect("safe turn root installed");
+    Ok(SafeTurnRiverPolicy {
+        strategies: solver
+            .policy_strategies()
+            .into_iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .collect(),
+        opponent_maximum_cfv_excess_bb: final_excess.0,
+        opponent_reach_weighted_cfv_excess_bb: final_excess.1,
+        unprojected_opponent_maximum_cfv_excess_bb: safe
+            .unprojected_maximum_cfv_excess_bb
+            .expect("safe turn projection records the unprojected excess"),
+        deployed_resolved_policy_weight: safe.deployed_resolved_policy_weight,
+        projection_best_response_evaluations: safe.projection_best_response_evaluations,
+    })
 }
 
 fn deal_with_visible_board_and_private_combo(board: &[u8], player: usize, combo: Combo) -> Deal {
@@ -11834,11 +12305,22 @@ mod tests {
         };
         let solution = solve_turn_river(config.clone()).unwrap();
         let values = solve_turn_river_continuation_values(config.clone()).unwrap();
-        let policy = solve_turn_river_policy(config).unwrap();
+        let policy = solve_turn_river_policy(config.clone()).unwrap();
+        let safe = solve_turn_river_safe_policy(config, &solution.strategies, solution.state.actor)
+            .unwrap();
         assert_same_policy(&policy, &solution.strategies);
         assert!(policy
             .iter()
             .all(|strategy| strategy.action_values_bb.is_none()));
+        assert!(!safe.strategies.is_empty());
+        assert!(safe
+            .strategies
+            .iter()
+            .all(|strategy| strategy.actor == solution.state.actor));
+        assert!(safe.opponent_maximum_cfv_excess_bb <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB);
+        assert!(safe.opponent_reach_weighted_cfv_excess_bb <= SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB);
+        assert!((0.0..=1.0).contains(&safe.deployed_resolved_policy_weight));
+        assert!(safe.projection_best_response_evaluations >= 1);
         assert_eq!(
             values.counterfactual_values_bb,
             solution.counterfactual_values_bb

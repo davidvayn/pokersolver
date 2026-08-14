@@ -85,12 +85,28 @@ pub struct RiverResolverConfig {
     pub averaging_delay: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TurnResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
     pub river_refinement_iterations: u64,
     pub regret_matching_plus: bool,
+    /// Maximum workers used to freeze independent river branches for safe
+    /// turn resolving. The solve itself remains deterministic and serial.
+    pub threads: usize,
+    /// Protect every board-compatible opponent hand with its selected
+    /// anchor-policy counterfactual value and deploy only the acting player's
+    /// complete turn/river strategy.
+    pub safe_resolving: bool,
+    /// When non-zero, construct the safe-resolving opt-out policy with this
+    /// many deterministic turn/river CFR iterations instead of traversing the
+    /// frozen neural blueprint. This protects an already measured resolver
+    /// policy while allowing a deeper candidate solve.
+    pub safe_anchor_iterations: u64,
+    /// Fraction of each served turn action row contributed by the resolved
+    /// average policy. The remainder stays anchored to the frozen policy at
+    /// the same exact public belief.
+    pub resolved_policy_weight: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -268,6 +284,14 @@ pub struct ExploitabilityCertificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_regret_matching_plus: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_safe_resolving: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_threads: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_policy_weight: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_safe_anchor_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_averaging_delay: Option<u64>,
@@ -329,13 +353,14 @@ pub(super) struct FrozenPolicy {
     range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
     preflop_range_cache: Mutex<BTreeMap<[u8; 32], Arc<RangePolicyCachedNode>>>,
     flop_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
-    turn_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
+    turn_strategy_cache: Mutex<TurnStrategyCache>,
     river_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
     river_resolver: Option<RiverResolverConfig>,
     turn_resolver: Option<TurnResolverConfig>,
     flop_resolver: Option<FlopResolverRuntime>,
 }
 
+#[derive(Clone)]
 struct FlopResolverRuntime {
     config: FlopResolverConfig,
     value_network: super::public_belief::PublicValueNetwork,
@@ -354,6 +379,55 @@ struct ResolvedPolicyCachedRow {
     probabilities: Vec<f64>,
 }
 
+#[derive(Default)]
+struct TurnStrategyCache {
+    rows: BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>,
+    safe_scope: Option<SafeTurnPolicyScope>,
+}
+
+struct SafeTurnPolicyScope {
+    turn_board: Vec<u8>,
+    root_history: Vec<String>,
+    resolving_player: usize,
+}
+
+enum SafeTurnRuntimeRoute {
+    Resolved(Arc<ResolvedPolicyCachedRow>),
+    FrozenOpponent(Arc<ResolvedPolicyCachedRow>),
+}
+
+impl TurnStrategyCache {
+    fn safe_route(
+        &self,
+        street: Street,
+        actor: usize,
+        board: &[u8],
+        public_history: &[String],
+        key: &[u8; 32],
+    ) -> Result<Option<SafeTurnRuntimeRoute>, String> {
+        let Some(scope) = &self.safe_scope else {
+            return Ok(None);
+        };
+        let inside_scope = matches!(street, Street::Turn | Street::River)
+            && board.len() >= 4
+            && board[..4] == scope.turn_board
+            && public_history.starts_with(&scope.root_history);
+        if !inside_scope {
+            return Ok(None);
+        }
+        let row = self.rows.get(key).cloned().ok_or_else(|| {
+            format!(
+                "safe turn policy generation omitted a protected descendant (street {street:?}, actor {actor}, board {board:?}, history {public_history:?})"
+            )
+        })?;
+        if actor == scope.resolving_player {
+            Ok(Some(SafeTurnRuntimeRoute::Resolved(row)))
+        } else {
+            Ok(Some(SafeTurnRuntimeRoute::FrozenOpponent(row)))
+        }
+    }
+}
+
 impl FrozenPolicy {
     pub(super) fn load(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
         let bytes = fs::read(path)?;
@@ -367,7 +441,7 @@ impl FrozenPolicy {
             range_cache: Mutex::new(BTreeMap::new()),
             preflop_range_cache: Mutex::new(BTreeMap::new()),
             flop_strategy_cache: Mutex::new(BTreeMap::new()),
-            turn_strategy_cache: Mutex::new(BTreeMap::new()),
+            turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
             river_resolver: None,
             turn_resolver: None,
@@ -389,6 +463,22 @@ impl FrozenPolicy {
         Ok(policy)
     }
 
+    fn fork_with_fresh_caches(&self) -> Self {
+        Self {
+            bundle: self.bundle.clone(),
+            bundle_sha256: self.bundle_sha256.clone(),
+            range_policy: self.range_policy.clone(),
+            range_cache: Mutex::new(BTreeMap::new()),
+            preflop_range_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(BTreeMap::new()),
+            turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
+            river_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_resolver: self.river_resolver,
+            turn_resolver: self.turn_resolver,
+            flop_resolver: self.flop_resolver.clone(),
+        }
+    }
+
     pub(super) fn strategy(
         &self,
         state: &GameState,
@@ -401,6 +491,26 @@ impl FrozenPolicy {
         }
         self.range_strategy(state, deal, actions, config)
             .expect("validated range-conditioned policy state")
+    }
+
+    fn safe_turn_runtime_route(
+        &self,
+        state: &GameState,
+        board: &[u8],
+        key: &[u8; 32],
+    ) -> Result<Option<SafeTurnRuntimeRoute>, String> {
+        if !self
+            .turn_resolver
+            .is_some_and(|resolver| resolver.safe_resolving)
+            || !matches!(state.street, Street::Turn | Street::River)
+        {
+            return Ok(None);
+        }
+        let cache = self
+            .turn_strategy_cache
+            .lock()
+            .expect("turn strategy cache");
+        cache.safe_route(state.street, state.actor, board, &state.public_history, key)
     }
 
     fn range_strategy(
@@ -441,7 +551,37 @@ impl FrozenPolicy {
             state,
             ranges,
         );
-        let probabilities = if let Some(resolver) = self
+        let safe_turn_route = self.safe_turn_runtime_route(state, &public.board, &key)?;
+        let frozen_strategy = || {
+            let source = range_policy
+                .requires_source_policy()
+                .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
+                .transpose()?;
+            range_policy.strategy(&public, config, source.as_deref())
+        };
+        let probabilities = if let Some(route) = safe_turn_route {
+            match route {
+                SafeTurnRuntimeRoute::Resolved(resolved)
+                | SafeTurnRuntimeRoute::FrozenOpponent(resolved) => {
+                    let labels = actions
+                        .iter()
+                        .map(|action| action.label.as_str())
+                        .collect::<Vec<_>>();
+                    if resolved.actor != state.actor
+                        || resolved
+                            .action_labels
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            != labels
+                        || resolved.probabilities.len() != COMBO_COUNT * actions.len()
+                    {
+                        return Err("safe turn continuation strategy is incompatible".to_owned());
+                    }
+                    resolved.probabilities.clone()
+                }
+            }
+        } else if let Some(resolver) = self
             .flop_resolver
             .as_ref()
             .filter(|_| state.street == Street::Flop)
@@ -552,38 +692,109 @@ impl FrozenPolicy {
                 .turn_strategy_cache
                 .lock()
                 .expect("turn strategy cache")
+                .rows
                 .get(&key)
                 .cloned();
             let resolved = if let Some(resolved) = resolved {
                 resolved
             } else {
-                let strategies = super::public_belief::solve_turn_river_policy(
-                    super::public_belief::TurnRiverSolveConfig {
-                        game: config.clone(),
-                        state: public.clone(),
-                        iterations: resolver.iterations,
-                        averaging_delay: resolver.averaging_delay,
-                        river_refinement_iterations: resolver.river_refinement_iterations,
-                        regret_matching_plus: resolver.regret_matching_plus,
-                    },
-                )?;
+                let solve_config = super::public_belief::TurnRiverSolveConfig {
+                    game: config.clone(),
+                    state: public.clone(),
+                    iterations: resolver.iterations,
+                    averaging_delay: resolver.averaging_delay,
+                    river_refinement_iterations: resolver.river_refinement_iterations,
+                    regret_matching_plus: resolver.regret_matching_plus,
+                };
+                let strategies = if resolver.safe_resolving {
+                    let blueprint = if resolver.safe_anchor_iterations > 0 {
+                        let mut anchor_config = solve_config.clone();
+                        anchor_config.iterations = resolver.safe_anchor_iterations;
+                        anchor_config.averaging_delay = 0;
+                        anchor_config.river_refinement_iterations = 0;
+                        self.turn_resolver_anchor_strategies(
+                            state.clone(),
+                            &public.board,
+                            public.ranges.clone(),
+                            config,
+                            anchor_config,
+                        )?
+                    } else {
+                        self.turn_blueprint_strategies(
+                            state.clone(),
+                            &public.board,
+                            public.ranges.clone(),
+                            config,
+                            resolver.threads,
+                        )?
+                    };
+                    let safe = super::public_belief::solve_turn_river_safe_policy(
+                        solve_config,
+                        &blueprint,
+                        public.actor,
+                    )?;
+                    if safe.opponent_maximum_cfv_excess_bb
+                        > super::public_belief::SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
+                    {
+                        return Err(format!(
+                            "safe turn resolver did not satisfy the 0.05bb opponent-CFV bound \
+                             (maximum {:.6}, reach-weighted {:.6}, unprojected {:.6}, \
+                             deployed weight {:.6}, best-response evaluations {}, actor {}, \
+                             board {:?}, invested {:?}, history {:?})",
+                            safe.opponent_maximum_cfv_excess_bb,
+                            safe.opponent_reach_weighted_cfv_excess_bb,
+                            safe.unprojected_opponent_maximum_cfv_excess_bb,
+                            safe.deployed_resolved_policy_weight,
+                            safe.projection_best_response_evaluations,
+                            public.actor,
+                            public.board,
+                            public.invested_bb,
+                            public.public_history,
+                        ));
+                    }
+                    let mut deployed = safe.strategies;
+                    deployed.extend(
+                        blueprint
+                            .into_iter()
+                            .filter(|strategy| strategy.actor != public.actor),
+                    );
+                    deployed
+                } else {
+                    super::public_belief::solve_turn_river_policy(solve_config)?
+                };
                 let mut cache = self
                     .turn_strategy_cache
                     .lock()
                     .expect("turn strategy cache");
-                cache_resolved_policy_rows(
-                    &mut cache,
-                    key,
-                    Street::Turn,
-                    &public.board,
-                    strategies.into_iter().filter(|strategy| {
-                        !strategy
-                            .public_history
-                            .last()
-                            .is_some_and(|part| part.starts_with("chance:river:"))
-                    }),
-                    4_096,
-                )?
+                if resolver.safe_resolving {
+                    let resolved = cache_safe_turn_river_policy_rows(
+                        &mut cache,
+                        key,
+                        &public.board,
+                        &public.public_history,
+                        public.actor,
+                        strategies,
+                        32_768,
+                    )?;
+                    drop(cache);
+                    self.range_cache.lock().expect("range policy cache").clear();
+                    resolved
+                } else {
+                    cache.safe_scope = None;
+                    cache_resolved_policy_rows(
+                        &mut cache.rows,
+                        key,
+                        Street::Turn,
+                        &public.board,
+                        strategies.into_iter().filter(|strategy| {
+                            !strategy
+                                .public_history
+                                .last()
+                                .is_some_and(|part| part.starts_with("chance:river:"))
+                        }),
+                        4_096,
+                    )?
+                }
             };
             let labels = actions
                 .iter()
@@ -600,7 +811,17 @@ impl FrozenPolicy {
             {
                 return Err("turn resolver root strategy is incompatible".to_owned());
             }
-            resolved.probabilities.clone()
+            if resolver.resolved_policy_weight < 1.0 {
+                let anchor = frozen_strategy()?;
+                blend_resolved_with_anchor(
+                    &resolved.probabilities,
+                    &anchor,
+                    actions.len(),
+                    resolver.resolved_policy_weight,
+                )?
+            } else {
+                resolved.probabilities.clone()
+            }
         } else if let Some(resolver) = self
             .river_resolver
             .filter(|_| state.street == Street::River)
@@ -652,11 +873,7 @@ impl FrozenPolicy {
             }
             resolved.probabilities.clone()
         } else {
-            let source = range_policy
-                .requires_source_policy()
-                .then(|| self.bundle_strategy_matrix(state, &public.board, actions, config))
-                .transpose()?;
-            range_policy.strategy(&public, config, source.as_deref())?
+            frozen_strategy()?
         };
         let cached = Arc::new(RangePolicyCachedNode {
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
@@ -731,6 +948,299 @@ impl FrozenPolicy {
                 board,
                 child_ranges,
                 config,
+                output,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn turn_blueprint_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+        threads: usize,
+    ) -> Result<Vec<super::public_belief::PublicBeliefStrategy>, String> {
+        let mut output = Vec::new();
+        self.collect_turn_blueprint_strategies(
+            state,
+            board.to_vec(),
+            ranges,
+            None,
+            config,
+            threads,
+            &mut output,
+        )?;
+        if output.is_empty() {
+            return Err("safe turn resolving produced an empty blueprint subtree".to_owned());
+        }
+        Ok(output)
+    }
+
+    /// Freeze the policy that the runtime would actually serve for a short
+    /// turn solve. The joint turn/river solver supplies the turn rows, while
+    /// each reached river uses the separately configured river resolver (or
+    /// the frozen neural policy when no river resolver is enabled). Deploying
+    /// the joint solver's internal river rows here would protect a different
+    /// policy than the measured continual-resolving candidate.
+    fn turn_resolver_anchor_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+        solve_config: super::public_belief::TurnRiverSolveConfig,
+    ) -> Result<Vec<super::public_belief::PublicBeliefStrategy>, String> {
+        if state.street != Street::Turn || board.len() != 4 {
+            return Err("turn resolver anchor requires a four-card turn root".to_owned());
+        }
+        let mut turn_rows = BTreeMap::new();
+        for strategy in super::public_belief::solve_turn_river_policy(solve_config)? {
+            if strategy
+                .public_history
+                .last()
+                .is_some_and(|part| part.starts_with("chance:river:"))
+            {
+                continue;
+            }
+            let strategy = stabilize_public_belief_strategy(strategy)?;
+            if turn_rows
+                .insert(strategy.public_history.clone(), strategy)
+                .is_some()
+            {
+                return Err("turn resolver anchor produced duplicate turn rows".to_owned());
+            }
+        }
+        if turn_rows.is_empty() {
+            return Err("turn resolver anchor produced no turn policy rows".to_owned());
+        }
+        let mut output = Vec::new();
+        self.collect_turn_resolver_anchor_strategies(
+            state,
+            board,
+            ranges,
+            config,
+            &turn_rows,
+            &mut output,
+        )?;
+        if output.is_empty() {
+            return Err("turn resolver anchor produced an empty policy subtree".to_owned());
+        }
+        Ok(output)
+    }
+
+    fn collect_turn_resolver_anchor_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        mut ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+        turn_rows: &BTreeMap<Vec<String>, super::public_belief::PublicBeliefStrategy>,
+        output: &mut Vec<super::public_belief::PublicBeliefStrategy>,
+    ) -> Result<(), String> {
+        if state.terminal.is_some() {
+            return Ok(());
+        }
+        if state.street == Street::River {
+            if board.len() != 4 {
+                return Err("turn resolver anchor reached river from an invalid board".to_owned());
+            }
+            for card in 0..52u8 {
+                if board.contains(&card) {
+                    continue;
+                }
+                let mut river_board = board.to_vec();
+                river_board.push(card);
+                let mut river_ranges = ranges.clone();
+                normalize_ranges_for_board(&mut river_ranges, &river_board)?;
+                if let Some(resolver) = self.river_resolver {
+                    let public =
+                        PublicBeliefState::from_game_state(river_board, &state, river_ranges);
+                    let mut strategies = super::public_belief::solve_river_policy(
+                        super::public_belief::RiverSolveConfig {
+                            game: config.clone(),
+                            state: public,
+                            iterations: resolver.iterations,
+                            averaging_delay: resolver.averaging_delay,
+                        },
+                    )?;
+                    for strategy in &mut strategies {
+                        *strategy = stabilize_public_belief_strategy(strategy.clone())?;
+                        strategy.public_history.push(format!("chance:river:{card}"));
+                    }
+                    output.extend(strategies);
+                } else {
+                    self.collect_turn_blueprint_strategies(
+                        state.clone(),
+                        river_board,
+                        river_ranges,
+                        Some(card),
+                        config,
+                        1,
+                        output,
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+        if state.street != Street::Turn || board.len() != 4 {
+            return Err("turn resolver anchor left the turn/river subtree".to_owned());
+        }
+
+        normalize_ranges_for_board(&mut ranges, board)?;
+        let actions = state.legal_actions(config);
+        let strategy = turn_rows
+            .get(&state.public_history)
+            .ok_or_else(|| "turn resolver anchor omitted a reachable turn policy row".to_owned())?;
+        let labels = actions
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect::<Vec<_>>();
+        if strategy.actor != state.actor
+            || strategy
+                .action_labels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != labels
+            || strategy.probabilities.len() != COMBO_COUNT * actions.len()
+        {
+            return Err("turn resolver anchor policy row is incompatible".to_owned());
+        }
+        output.push(strategy.clone());
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_ranges = ranges.clone();
+            for combo in 0..COMBO_COUNT {
+                child_ranges[state.actor][combo] *=
+                    f64::from(strategy.probabilities[combo * actions.len() + action_index]);
+            }
+            self.collect_turn_resolver_anchor_strategies(
+                state.apply(action, config),
+                board,
+                child_ranges,
+                config,
+                turn_rows,
+                output,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn collect_turn_blueprint_strategies(
+        &self,
+        state: GameState,
+        board: Vec<u8>,
+        mut ranges: [Vec<f64>; 2],
+        river: Option<u8>,
+        config: &BlueprintConfig,
+        threads: usize,
+        output: &mut Vec<super::public_belief::PublicBeliefStrategy>,
+    ) -> Result<(), String> {
+        if state.terminal.is_some() {
+            return Ok(());
+        }
+        if state.street == Street::River && river.is_none() {
+            let cards = (0..52u8)
+                .filter(|card| !board.contains(card))
+                .collect::<Vec<_>>();
+            let worker_count = threads.max(1).min(cards.len());
+            if worker_count == 1 {
+                for card in cards {
+                    let mut river_board = board.clone();
+                    river_board.push(card);
+                    self.collect_turn_blueprint_strategies(
+                        state.clone(),
+                        river_board,
+                        ranges.clone(),
+                        Some(card),
+                        config,
+                        1,
+                        output,
+                    )?;
+                }
+                return Ok(());
+            }
+
+            let chunk_size = cards.len().div_ceil(worker_count);
+            let worker_outputs = std::thread::scope(|scope| {
+                let mut workers = Vec::with_capacity(worker_count);
+                for assigned in cards.chunks(chunk_size) {
+                    let assigned = assigned.to_vec();
+                    let state = state.clone();
+                    let board = board.clone();
+                    let ranges = ranges.clone();
+                    workers.push(scope.spawn(move || {
+                        let mut worker_output = Vec::new();
+                        for card in assigned {
+                            let mut river_board = board.clone();
+                            river_board.push(card);
+                            self.collect_turn_blueprint_strategies(
+                                state.clone(),
+                                river_board,
+                                ranges.clone(),
+                                Some(card),
+                                config,
+                                1,
+                                &mut worker_output,
+                            )?;
+                        }
+                        Ok::<_, String>(worker_output)
+                    }));
+                }
+                workers
+                    .into_iter()
+                    .map(|worker| {
+                        worker
+                            .join()
+                            .map_err(|_| "safe turn blueprint worker panicked".to_owned())?
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })?;
+            for worker_output in worker_outputs {
+                output.extend(worker_output);
+            }
+            return Ok(());
+        }
+        if !matches!(state.street, Street::Turn | Street::River) {
+            return Err("safe turn blueprint left the turn/river subtree".to_owned());
+        }
+        normalize_ranges_for_board(&mut ranges, &board)?;
+        let range_policy = self
+            .range_policy
+            .as_ref()
+            .ok_or_else(|| "safe turn resolving requires a range policy".to_owned())?;
+        let actions = state.legal_actions(config);
+        let public = PublicBeliefState::from_game_state(board.clone(), &state, ranges.clone());
+        let source = range_policy
+            .requires_source_policy()
+            .then(|| self.bundle_strategy_matrix(&state, &board, &actions, config))
+            .transpose()?;
+        let probabilities = range_policy.strategy(&public, config, source.as_deref())?;
+        let mut key = state.public_history.clone();
+        if let Some(card) = river {
+            key.push(format!("chance:river:{card}"));
+        }
+        output.push(super::public_belief::PublicBeliefStrategy {
+            public_history: key,
+            actor: state.actor,
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities: probabilities.iter().map(|value| *value as f32).collect(),
+            action_values_bb: None,
+        });
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_ranges = ranges.clone();
+            for combo in 0..COMBO_COUNT {
+                child_ranges[state.actor][combo] *=
+                    probabilities[combo * actions.len() + action_index];
+            }
+            self.collect_turn_blueprint_strategies(
+                state.apply(action, config),
+                board.clone(),
+                child_ranges,
+                river,
+                config,
+                threads,
                 output,
             )?;
         }
@@ -963,15 +1473,30 @@ impl FrozenPolicy {
         if self.range_policy.is_none() {
             return Err("turn resolving requires a range-conditioned policy".to_owned());
         }
-        if resolver.iterations < 2 || resolver.averaging_delay >= resolver.iterations {
+        if resolver.iterations < 2
+            || resolver.averaging_delay >= resolver.iterations
+            || resolver.threads == 0
+            || !resolver.resolved_policy_weight.is_finite()
+            || !(0.0..=1.0).contains(&resolver.resolved_policy_weight)
+            || resolver.safe_anchor_iterations == 1
+            || (!resolver.safe_resolving && resolver.safe_anchor_iterations > 0)
+        {
             return Err("turn resolver configuration is invalid".to_owned());
+        }
+        if resolver.safe_resolving
+            && (resolver.river_refinement_iterations > 0 || resolver.resolved_policy_weight != 1.0)
+        {
+            return Err(
+                "safe turn resolving does not support detached river refinement or an external policy blend"
+                    .to_owned(),
+            );
         }
         self.turn_resolver = Some(resolver);
         self.range_cache.lock().expect("range policy cache").clear();
-        self.turn_strategy_cache
+        *self
+            .turn_strategy_cache
             .lock()
-            .expect("turn strategy cache")
-            .clear();
+            .expect("turn strategy cache") = TurnStrategyCache::default();
         Ok(())
     }
 
@@ -1104,6 +1629,82 @@ fn cache_resolved_policy_rows(
     requested.ok_or_else(|| "resolver solution omitted its requested root strategy".to_owned())
 }
 
+fn cache_safe_turn_river_policy_rows(
+    cache: &mut TurnStrategyCache,
+    requested_key: [u8; 32],
+    turn_board: &[u8],
+    root_history: &[String],
+    resolving_player: usize,
+    strategies: impl IntoIterator<Item = super::public_belief::PublicBeliefStrategy>,
+    capacity: usize,
+) -> Result<Arc<ResolvedPolicyCachedRow>, String> {
+    if turn_board.len() != 4 || resolving_player > 1 {
+        return Err("safe turn policy cache requires a four-card board".to_owned());
+    }
+    if capacity == 0 {
+        return Err("safe turn policy cache capacity must be positive".to_owned());
+    }
+    let mut requested = None;
+    let mut generation = BTreeMap::new();
+    for strategy in strategies {
+        let mut history = strategy.public_history.clone();
+        let (street, board) = if let Some(card) = history
+            .last()
+            .and_then(|part| part.strip_prefix("chance:river:"))
+            .and_then(|value| value.parse::<u8>().ok())
+        {
+            history.pop();
+            let mut board = turn_board.to_vec();
+            if board.contains(&card) {
+                return Err("safe turn policy repeats a river board card".to_owned());
+            }
+            board.push(card);
+            (Street::River, board)
+        } else {
+            (Street::Turn, turn_board.to_vec())
+        };
+        let strategy_key = range_policy_public_cache_key(street, strategy.actor, &board, &history);
+        let action_labels = strategy.action_labels;
+        let probabilities = stabilize_resolved_policy(
+            strategy.probabilities.into_iter().map(f64::from).collect(),
+            action_labels.len(),
+        )?;
+        let row = Arc::new(ResolvedPolicyCachedRow {
+            actor: strategy.actor,
+            action_labels,
+            probabilities,
+        });
+        if strategy_key == requested_key {
+            requested = Some(row.clone());
+        }
+        if generation.insert(strategy_key, row).is_some() {
+            return Err("safe turn resolver produced duplicate runtime policy keys".to_owned());
+        }
+        if generation.len() > capacity {
+            return Err(format!(
+                "safe turn policy generation exceeds its {capacity}-row cache capacity"
+            ));
+        }
+    }
+    let requested = requested
+        .ok_or_else(|| "safe turn resolver omitted its requested root strategy".to_owned())?;
+
+    // Safe resolving protects one complete acting-player strategy through the
+    // river. Mixing rows from multiple bounded generations can evict a row
+    // from the solution currently being played and silently route that later
+    // decision through another resolver. Replace the cache atomically so
+    // every descendant of the accepted turn solution remains available.
+    *cache = TurnStrategyCache {
+        rows: generation,
+        safe_scope: Some(SafeTurnPolicyScope {
+            turn_board: turn_board.to_vec(),
+            root_history: root_history.to_vec(),
+            resolving_player,
+        }),
+    };
+    Ok(requested)
+}
+
 /// Exact CFR averages can assign a legal action zero probability after a
 /// short research solve. The response evaluator deliberately explores forced
 /// deviations, so retain negligible full support without materially changing
@@ -1133,6 +1734,20 @@ fn stabilize_resolved_policy(
         }
     }
     Ok(probabilities)
+}
+
+fn stabilize_public_belief_strategy(
+    mut strategy: super::public_belief::PublicBeliefStrategy,
+) -> Result<super::public_belief::PublicBeliefStrategy, String> {
+    let action_count = strategy.action_labels.len();
+    strategy.probabilities = stabilize_resolved_policy(
+        strategy.probabilities.into_iter().map(f64::from).collect(),
+        action_count,
+    )?
+    .into_iter()
+    .map(|probability| probability as f32)
+    .collect();
+    Ok(strategy)
 }
 
 fn blend_resolved_with_anchor(
@@ -1578,6 +2193,22 @@ impl SampleGenerator {
             config,
             networks,
         })
+    }
+
+    fn fork_for_response_evaluation(&self) -> Self {
+        Self {
+            rng: SplitMix64::new(self.config.seed),
+            records: Vec::new(),
+            attempted_records: 0,
+            range_records: Vec::new(),
+            attempted_range_records: 0,
+            range_self_play_only: false,
+            config: self.config.clone(),
+            networks: self
+                .networks
+                .as_ref()
+                .map(FrozenPolicy::fork_with_fresh_caches),
+        }
     }
 
     fn enable_river_resolver(
@@ -3831,10 +4462,11 @@ pub fn generate_causal_policy_attribution(
     let worker_results = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
         for (worker, chunk) in chunks.into_iter().enumerate() {
-            let generator = &generator;
+            let worker_generator = generator.fork_for_response_evaluation();
             let game = &config.game;
             let capacities = split_attribution_capacities(total_capacities, worker, worker_count);
             handles.push(scope.spawn(move || -> Result<_, String> {
+                let generator = &worker_generator;
                 let mut collector =
                     BoundedCausalAttributionCollector::new(capacities, config.seed ^ worker as u64);
                 let mut response_nodes = 0u64;
@@ -4576,9 +5208,10 @@ pub fn certify_exploitability_upper_bound(
     let evaluated = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
         for chunk in deal_chunks {
-            let generator = &generator;
+            let worker_generator = generator.fork_for_response_evaluation();
             let game = &config.game;
             handles.push(scope.spawn(move || {
+                let generator = &worker_generator;
                 chunk
                     .into_iter()
                     .map(|deal| {
@@ -4644,6 +5277,24 @@ pub fn certify_exploitability_upper_bound(
         assumptions.push(
             "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
         );
+        if config
+            .turn_resolver
+            .is_some_and(|resolver| resolver.safe_resolving)
+        {
+            assumptions.push(
+                "each reached turn subgame protects every board-compatible opponent hand with an exact best-response CFV opt-out and deploys one complete resolving-player policy plus the frozen anchor opponent policy through the river",
+            );
+        }
+        if config
+            .turn_resolver
+            .is_some_and(|resolver| resolver.safe_resolving && resolver.safe_anchor_iterations > 0)
+        {
+            assumptions.push(if config.river_resolver.is_some() {
+                "the protected turn anchor reproduces the short exact turn resolver with full-support serving stabilization and the separately configured on-reach river resolver"
+            } else {
+                "the protected turn anchor reproduces the short exact turn resolver with full-support serving stabilization and the frozen neural river policy"
+            });
+        }
     }
     if config.flop_resolver.is_some() {
         assumptions.push(
@@ -4703,6 +5354,16 @@ pub fn certify_exploitability_upper_bound(
         turn_resolver_regret_matching_plus: config
             .turn_resolver
             .map(|resolver| resolver.regret_matching_plus),
+        turn_resolver_safe_resolving: config
+            .turn_resolver
+            .map(|resolver| resolver.safe_resolving),
+        turn_resolver_threads: config.turn_resolver.map(|resolver| resolver.threads),
+        turn_resolver_policy_weight: config
+            .turn_resolver
+            .map(|resolver| resolver.resolved_policy_weight),
+        turn_resolver_safe_anchor_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.safe_anchor_iterations),
         flop_resolver_iterations: config
             .flop_resolver
             .as_ref()
@@ -4814,9 +5475,10 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
     let evaluated = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
         for chunk in deal_chunks {
-            let generator = &generator;
+            let worker_generator = generator.fork_for_response_evaluation();
             let game = &config.game;
             handles.push(scope.spawn(move || {
+                let generator = &worker_generator;
                 chunk
                     .into_iter()
                     .map(|(index, template)| {
@@ -4960,6 +5622,16 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         turn_resolver_regret_matching_plus: config
             .turn_resolver
             .map(|resolver| resolver.regret_matching_plus),
+        turn_resolver_safe_resolving: config
+            .turn_resolver
+            .map(|resolver| resolver.safe_resolving),
+        turn_resolver_threads: config.turn_resolver.map(|resolver| resolver.threads),
+        turn_resolver_policy_weight: config
+            .turn_resolver
+            .map(|resolver| resolver.resolved_policy_weight),
+        turn_resolver_safe_anchor_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.safe_anchor_iterations),
         flop_resolver_iterations: config
             .flop_resolver
             .as_ref()
@@ -5080,9 +5752,10 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
     let evaluated = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
         for chunk in chunks {
-            let generator = &generator;
+            let worker_generator = generator.fork_for_response_evaluation();
             let game = &config.game;
             handles.push(scope.spawn(move || {
+                let generator = &worker_generator;
                 chunk
                     .into_iter()
                     .map(|(index, sampled_holes)| {
@@ -5225,6 +5898,16 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         turn_resolver_regret_matching_plus: config
             .turn_resolver
             .map(|resolver| resolver.regret_matching_plus),
+        turn_resolver_safe_resolving: config
+            .turn_resolver
+            .map(|resolver| resolver.safe_resolving),
+        turn_resolver_threads: config.turn_resolver.map(|resolver| resolver.threads),
+        turn_resolver_policy_weight: config
+            .turn_resolver
+            .map(|resolver| resolver.resolved_policy_weight),
+        turn_resolver_safe_anchor_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.safe_anchor_iterations),
         flop_resolver_iterations: config
             .flop_resolver
             .as_ref()
@@ -5313,6 +5996,266 @@ mod tests {
         assert_eq!(root.action_labels, ["check", "bet"]);
         assert_eq!(root.probabilities.len(), COMBO_COUNT * 2);
         assert!(!cache.contains_key(&root_key));
+    }
+
+    #[test]
+    fn safe_turn_cache_routes_turn_and_river_rows_to_runtime_keys() {
+        let turn_board = [0, 5, 10, 15];
+        let turn_history = vec!["turn-root".to_owned()];
+        let river_history = vec!["turn-root".to_owned(), "Turn:p0:check".to_owned()];
+        let turn_key = range_policy_public_cache_key(Street::Turn, 0, &turn_board, &turn_history);
+        let mut river_board = turn_board.to_vec();
+        river_board.push(20);
+        let river_key =
+            range_policy_public_cache_key(Street::River, 0, &river_board, &river_history);
+        let opponent_turn_key =
+            range_policy_public_cache_key(Street::Turn, 1, &turn_board, &river_history);
+        let probabilities = || {
+            let mut values = vec![0.0f32; COMBO_COUNT * 2];
+            values[2..4].copy_from_slice(&[0.25, 0.75]);
+            values
+        };
+        let strategies = vec![
+            super::public_belief::PublicBeliefStrategy {
+                public_history: turn_history.clone(),
+                actor: 0,
+                action_labels: vec!["check".to_owned(), "bet".to_owned()],
+                probabilities: probabilities(),
+                action_values_bb: None,
+            },
+            super::public_belief::PublicBeliefStrategy {
+                public_history: river_history
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once("chance:river:20".to_owned()))
+                    .collect(),
+                actor: 0,
+                action_labels: vec!["check".to_owned(), "bet".to_owned()],
+                probabilities: probabilities(),
+                action_values_bb: None,
+            },
+            super::public_belief::PublicBeliefStrategy {
+                public_history: river_history.clone(),
+                actor: 1,
+                action_labels: vec!["check".to_owned(), "bet".to_owned()],
+                probabilities: probabilities(),
+                action_values_bb: None,
+            },
+        ];
+        let stale_key = [255; 32];
+        let stale = Arc::new(ResolvedPolicyCachedRow {
+            actor: 1,
+            action_labels: vec!["fold".to_owned()],
+            probabilities: vec![1.0; COMBO_COUNT],
+        });
+        let mut cache = TurnStrategyCache {
+            rows: BTreeMap::from([(stale_key, stale.clone())]),
+            safe_scope: None,
+        };
+        let root = cache_safe_turn_river_policy_rows(
+            &mut cache,
+            turn_key,
+            &turn_board,
+            &turn_history,
+            0,
+            strategies.clone(),
+            8,
+        )
+        .unwrap();
+        assert_eq!(root.actor, 0);
+        assert_eq!(cache.rows.len(), 3);
+        assert!(!cache.rows.contains_key(&stale_key));
+        assert!(cache.rows.contains_key(&turn_key));
+        assert!(cache.rows.contains_key(&river_key));
+        assert!(cache.rows.contains_key(&opponent_turn_key));
+        let scope = cache.safe_scope.as_ref().unwrap();
+        assert_eq!(scope.turn_board, turn_board);
+        assert_eq!(scope.root_history, turn_history);
+        assert_eq!(scope.resolving_player, 0);
+        match cache
+            .safe_route(Street::River, 0, &river_board, &river_history, &river_key)
+            .unwrap()
+        {
+            Some(SafeTurnRuntimeRoute::Resolved(row)) => assert_eq!(row.actor, 0),
+            _ => panic!("resolving player did not retain its river strategy"),
+        }
+        match cache
+            .safe_route(
+                Street::Turn,
+                1,
+                &turn_board,
+                &river_history,
+                &opponent_turn_key,
+            )
+            .unwrap()
+        {
+            Some(SafeTurnRuntimeRoute::FrozenOpponent(row)) => assert_eq!(row.actor, 1),
+            _ => panic!("opponent action did not stay on the frozen policy"),
+        }
+        let outside_history = vec!["different-root".to_owned()];
+        assert!(cache
+            .safe_route(Street::Turn, 0, &turn_board, &outside_history, &[8; 32])
+            .unwrap()
+            .is_none());
+        let missing = cache.safe_route(Street::Turn, 0, &turn_board, &river_history, &[9; 32]);
+        assert!(missing.is_err());
+
+        let mut undersized = TurnStrategyCache {
+            rows: BTreeMap::from([(stale_key, stale)]),
+            safe_scope: None,
+        };
+        let error = match cache_safe_turn_river_policy_rows(
+            &mut undersized,
+            turn_key,
+            &turn_board,
+            &turn_history,
+            0,
+            strategies,
+            1,
+        ) {
+            Ok(_) => panic!("undersized safe turn cache unexpectedly accepted a generation"),
+            Err(error) => error,
+        };
+        assert!(error.contains("exceeds its 1-row cache capacity"));
+        assert_eq!(undersized.rows.len(), 1);
+        assert!(undersized.rows.contains_key(&stale_key));
+        assert!(undersized.safe_scope.is_none());
+    }
+
+    #[test]
+    fn short_turn_anchor_replays_the_configured_river_resolver() {
+        let scorer = || DenseScorer {
+            layers: vec![DenseLayer {
+                input_size: MODEL_INPUT_COUNT,
+                output_size: 1,
+                activation: DenseActivation::Linear,
+                weights: vec![0.0; MODEL_INPUT_COUNT],
+                biases: vec![0.0],
+            }],
+        };
+        let policy = FrozenPolicy {
+            bundle: TrainingNetworkBundle {
+                schema: TRAINING_NETWORK_SCHEMA.to_owned(),
+                input_size: MODEL_INPUT_COUNT,
+                strategy_transform: StrategyTransform::Softmax,
+                networks: vec![scorer(), scorer()],
+                postflop_networks: None,
+                sampling_baseline: None,
+                sampling_baseline_scale: None,
+            },
+            bundle_sha256: "test-only".to_owned(),
+            range_policy: None,
+            range_cache: Mutex::new(BTreeMap::new()),
+            preflop_range_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(BTreeMap::new()),
+            turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
+            river_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_resolver: Some(RiverResolverConfig {
+                iterations: 4,
+                averaging_delay: 0,
+            }),
+            turn_resolver: None,
+            flop_resolver: None,
+        };
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 4.0;
+        game.action_abstraction.turn_river_bet_pot_fractions = vec![1.0];
+        game.action_abstraction.postflop_raise_pot_fractions = vec![1.0];
+        let board = [0, 5, 10, 15];
+        let mut ranges = [vec![1.0; COMBO_COUNT], vec![1.0; COMBO_COUNT]];
+        normalize_ranges_for_board(&mut ranges, &board).unwrap();
+        let root = GameState {
+            street: Street::Turn,
+            actor: 1,
+            invested: [1.0, 1.0],
+            street_invested: [0.0, 0.0],
+            last_full_raise: 1.0,
+            aggressions: 0,
+            checks: 0,
+            raise_reopened: true,
+            public_history: vec!["public_belief:turn_start".to_owned()],
+            trajectory: Vec::new(),
+            terminal: None,
+        };
+        let solve_config = super::public_belief::TurnRiverSolveConfig {
+            game: game.clone(),
+            state: PublicBeliefState::from_game_state(board.to_vec(), &root, ranges.clone()),
+            iterations: 2,
+            averaging_delay: 0,
+            river_refinement_iterations: 0,
+            regret_matching_plus: false,
+        };
+        let joint = super::public_belief::solve_turn_river_policy(solve_config.clone()).unwrap();
+        let turn_rows = joint
+            .into_iter()
+            .filter(|strategy| {
+                !strategy
+                    .public_history
+                    .last()
+                    .is_some_and(|part| part.starts_with("chance:river:"))
+            })
+            .map(|strategy| stabilize_public_belief_strategy(strategy).unwrap())
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let anchored = policy
+            .turn_resolver_anchor_strategies(
+                root.clone(),
+                &board,
+                ranges.clone(),
+                &game,
+                solve_config.clone(),
+            )
+            .unwrap();
+        let safe =
+            super::public_belief::solve_turn_river_safe_policy(solve_config, &anchored, root.actor)
+                .unwrap();
+        assert!(safe.opponent_maximum_cfv_excess_bb <= 0.05);
+
+        // Replay the deterministic check/check turn line using exactly the
+        // frozen two-iteration turn rows, then independently solve its river.
+        let mut river_state = root;
+        let mut river_ranges = ranges;
+        for _ in 0..2 {
+            normalize_ranges_for_board(&mut river_ranges, &board).unwrap();
+            let actions = river_state.legal_actions(&game);
+            let check = actions
+                .iter()
+                .position(|action| action.label == "check")
+                .unwrap();
+            let strategy = turn_rows.get(&river_state.public_history).unwrap();
+            for combo in 0..COMBO_COUNT {
+                river_ranges[river_state.actor][combo] *=
+                    f64::from(strategy.probabilities[combo * actions.len() + check]);
+            }
+            river_state = river_state.apply(&actions[check], &game);
+        }
+        assert_eq!(river_state.street, Street::River);
+        let river = 20;
+        let mut river_board = board.to_vec();
+        river_board.push(river);
+        normalize_ranges_for_board(&mut river_ranges, &river_board).unwrap();
+        let expected =
+            super::public_belief::solve_river_policy(super::public_belief::RiverSolveConfig {
+                game,
+                state: PublicBeliefState::from_game_state(river_board, &river_state, river_ranges),
+                iterations: 4,
+                averaging_delay: 0,
+            })
+            .unwrap();
+        let anchored = anchored
+            .iter()
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        for expected in expected {
+            let mut expected = stabilize_public_belief_strategy(expected).unwrap();
+            expected
+                .public_history
+                .push(format!("chance:river:{river}"));
+            let measured = anchored.get(&expected.public_history).unwrap();
+            assert_eq!(measured.actor, expected.actor);
+            assert_eq!(measured.action_labels, expected.action_labels);
+            assert_eq!(measured.probabilities, expected.probabilities);
+        }
     }
 
     #[test]
@@ -6250,6 +7193,10 @@ mod tests {
                     averaging_delay: 0,
                     river_refinement_iterations: 0,
                     regret_matching_plus: false,
+                    threads: 1,
+                    safe_resolving: false,
+                    safe_anchor_iterations: 0,
+                    resolved_policy_weight: 1.0,
                 }),
                 flop_resolver: None,
             },

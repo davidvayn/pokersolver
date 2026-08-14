@@ -1824,6 +1824,16 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                 regret_matching_plus: args
                     .iter()
                     .any(|argument| argument == "--turn-resolver-regret-matching-plus"),
+                threads: parse_or(args, "--turn-resolver-threads", 1usize)?,
+                safe_resolving: args
+                    .iter()
+                    .any(|argument| argument == "--turn-resolver-safe"),
+                safe_anchor_iterations: parse_or(
+                    args,
+                    "--turn-resolver-safe-anchor-iterations",
+                    0u64,
+                )?,
+                resolved_policy_weight: parse_or(args, "--turn-resolver-policy-weight", 1.0f64)?,
             })
         })
         .transpose()?;
@@ -1832,6 +1842,10 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--turn-resolver-averaging-delay",
             "--turn-resolver-river-refinement-iterations",
             "--turn-resolver-regret-matching-plus",
+            "--turn-resolver-threads",
+            "--turn-resolver-safe",
+            "--turn-resolver-safe-anchor-iterations",
+            "--turn-resolver-policy-weight",
         ]
         .iter()
         .any(|name| args.iter().any(|argument| argument == name))
@@ -2525,6 +2539,16 @@ Neural certificate options:
                                   Default: 0 frozen-turn refinement updates
   --turn-resolver-regret-matching-plus
                                   Use regret-matching+ in joint turn search
+  --turn-resolver-threads <N>     Parallel frozen-blueprint river workers
+                                  Default: 1
+  --turn-resolver-safe            Protect anchor-policy opponent CFVs and deploy
+                                  only the acting player's turn/river policy
+  --turn-resolver-safe-anchor-iterations <N>
+                                  Protect an N-iteration turn resolver with
+                                  the configured river policy
+  --turn-resolver-policy-weight <0..1>
+                                  Blend resolved turn actions toward the
+                                  frozen policy. Default: 1
   --flop-resolver-iterations <N>  Replace every reached flop action with a
                                   depth-limited exact-range CFR solve
   --flop-resolver-value-network <path>

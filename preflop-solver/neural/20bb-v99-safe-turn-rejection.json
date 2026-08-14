@@ -1,0 +1,66 @@
+{
+  "schema": "hu-20bb-safe-turn-resolver-pilot-v1",
+  "date": "2026-08-14",
+  "status": "rejected_directional_candidate",
+  "activationAllowed": false,
+  "purpose": "Test whether an eight-iteration turn solve can improve the validated two-iteration continual-resolving leader while protecting every board-compatible opponent hand against the exact served two-iteration turn plus on-reach river anchor.",
+  "leader": {
+    "artifact": "neural/runs/20bb-v92-multivalue-pilot/fullgame-single-v6-flop-i2-turn-i2-river-i2-seed19801-d2.json",
+    "flopResolverIterations": 2,
+    "turnResolverIterations": 2,
+    "riverResolverIterations": 2,
+    "sampleMeanExploitabilityBb": 1.4127416606284693,
+    "sampleExploitabilitiesBb": [
+      1.4275307174373433,
+      1.3979526038195953
+    ],
+    "sampleResponseValuesBb": [
+      [-0.19980318233315938, 3.054864617207846],
+      [1.1143477108051705, 1.68155749683402]
+    ]
+  },
+  "candidate": {
+    "artifact": "neural/runs/20bb-v99-i2-safe-anchor-pilot/fullgame-turn-i8-safe-anchor-i2-v6-flop-i2-river-i2-seed19801-d2.json",
+    "artifactSha256": "987c99145df8f5e2973c3f885d00d75bad5f44b34f8dc4fd1e16ec9e330bfa38",
+    "deals": 2,
+    "seed": 19801,
+    "flopResolverIterations": 2,
+    "turnResolverIterations": 8,
+    "turnResolverSafe": true,
+    "turnResolverSafeAnchorIterations": 2,
+    "riverResolverIterations": 2,
+    "sampleMeanExploitabilityBb": 1.4971020151992787,
+    "sampleExploitabilitiesBb": [
+      1.3990576551349498,
+      1.5951463752636077
+    ],
+    "sampleResponseValuesBb": [
+      [-0.25674930693794645, 3.054864617207846],
+      [1.5087352536931955, 1.68155749683402]
+    ],
+    "maximumResidentBytes": 2363555840,
+    "processSwaps": 0,
+    "wallSeconds": 1664.69
+  },
+  "comparison": {
+    "sampleMeanExploitabilityDeltaBb": 0.0843603545708094,
+    "sampleResponseValueDeltasBb": [
+      [-0.05694612460478707, 0.0],
+      [0.394387542888025, 0.0]
+    ],
+    "interpretation": "The protected deeper turn policy slightly improved the first responder-zero value but materially worsened the second. Both responder-one values were bit-for-bit unchanged, so this mechanism cannot address the dominant remaining responder-one leak. Do not tune more turn iterations from this branch."
+  },
+  "implementationEvidence": {
+    "anchorParity": "The protected anchor composes stabilized two-iteration turn rows with a separately solved two-iteration river policy on every exact propagated river range, matching runtime continual-resolver semantics.",
+    "safety": "Every accepted generation is checked against an exact per-private-hand opponent best response and projected toward its anchor until maximum opponent CFV excess is at most 0.05bb.",
+    "routing": "One atomic generation contains the resolving actor and frozen anchor opponent through the river; missing protected descendants fail closed and evaluator workers use isolated caches.",
+    "regression": "short_turn_anchor_replays_the_configured_river_resolver invokes the exact safe solver and byte-compares the independently solved river continuation on a replayed turn line."
+  },
+  "releaseGate": {
+    "maximumSampleMeanExploitabilityBb": 0.5,
+    "maximumOneSided99PercentUpperBoundBb": 0.5,
+    "passed": false,
+    "reason": "The two-deal directional mean is above the release gate and is worse than the validated leader. Two deals are not sufficient evidence for a release confidence bound."
+  },
+  "nextExperiment": "Target the unchanged responder-one leak with a bilateral, anchor-consistent flop policy update; retain the 1.4127416606284693 leader and keep activation disabled."
+}
