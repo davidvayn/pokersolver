@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 const CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v2";
 const LEGACY_CONTINUATION_SCHEMA: &str = "hu-preflop-continuation-cache-v1";
+const RANGE_CONTINUATION_SCHEMA: &str = "hu-preflop-range-continuation-cache-v1";
 const POLICY_SCHEMA: &str = "hu-tabular-preflop-dcfr-v1";
 const EVALUATION_SCHEMA: &str = "hu-preflop-information-set-response-v2";
 const ATTRIBUTION_SCHEMA: &str = "hu-preflop-local-leak-attribution-v1";
@@ -73,6 +74,22 @@ pub struct ResolverContinuationCacheConfig {
     pub threads: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct RangeContinuationCacheConfig {
+    pub seed: u64,
+    pub maximum_flop_orbits: usize,
+    pub maximum_leaves: usize,
+    pub resolver_iterations: u64,
+    pub resolver_averaging_delay: u64,
+    pub resolver_regret_matching_plus: bool,
+    pub resolver_dcfr: DcfrParameters,
+    pub value_uncertainty_bb: f64,
+    pub value_network_path: PathBuf,
+    pub evaluation_value_network_path: Option<PathBuf>,
+    pub range_policy_path: PathBuf,
+    pub threads: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ResolverContinuationProvenance {
     pub iterations: u64,
@@ -101,6 +118,13 @@ pub struct CachedDeal {
     pub holes: [[u8; 2]; 2],
     pub board: [u8; 5],
     pub continuations: BTreeMap<u64, ContinuationEstimate>,
+    /// Optional normalized continuation values for every exact private combo,
+    /// indexed `[player][combo]`. The public-belief flop solver computes this
+    /// full vector before a legacy exact-deal cache selects one combo per
+    /// player. Retaining it enables Rao-Blackwellized preflop evaluation that
+    /// integrates the opponent range instead of sampling one opponent hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_combo_continuations_bb: Option<BTreeMap<u64, [Vec<f32>; 2]>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -146,6 +170,30 @@ pub struct ContinuationCache {
     pub public_histories: BTreeMap<u64, Vec<String>>,
     pub deals: Vec<CachedDeal>,
     pub validation: ContinuationValidation,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RangeContinuationBoard {
+    pub board: [u8; 3],
+    pub orbit_size: usize,
+    pub continuations: BTreeMap<u64, [Vec<f32>; 2]>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RangeContinuationCache {
+    pub schema: String,
+    pub depth_bb: f64,
+    pub seed: u64,
+    pub chance_sampling: String,
+    pub complete_canonical_flop_enumeration: bool,
+    pub covered_raw_flops: usize,
+    pub game: BlueprintConfig,
+    pub policy_model_version: String,
+    pub policy_sha256: String,
+    pub resolver_provenance: ResolverContinuationProvenance,
+    pub public_histories: BTreeMap<u64, Vec<String>>,
+    pub leaf_reach_probabilities: BTreeMap<u64, f64>,
+    pub boards: Vec<RangeContinuationBoard>,
 }
 
 fn complete_source_deal_cycles(indices: &[usize]) -> usize {
@@ -289,6 +337,25 @@ impl ContinuationCache {
                         .continuations
                         .keys()
                         .any(|key| !self.public_histories.contains_key(key))
+                    || deal
+                        .exact_combo_continuations_bb
+                        .as_ref()
+                        .is_some_and(|values| {
+                            values.len() != expected
+                                || values
+                                    .keys()
+                                    .any(|key| !self.public_histories.contains_key(key))
+                                || values.values().any(|players| {
+                                    players.iter().any(|combos| {
+                                        combos.len() != super::public_belief::COMBO_COUNT
+                                            || combos.iter().any(|value| {
+                                                !value.is_finite()
+                                                    || f64::from(*value).abs()
+                                                        > self.depth_bb + EPSILON
+                                            })
+                                    })
+                                })
+                        })
             })
         {
             return Err("preflop continuation cache is incomplete".into());
@@ -355,6 +422,136 @@ impl ContinuationCache {
                     -estimate.mean_utility_p0_bb
                 }
             })
+    }
+}
+
+impl RangeContinuationCache {
+    pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let file = fs::File::open(path)?;
+        let reader = BufReader::new(file);
+        let cache: Self = if path.extension().is_some_and(|extension| extension == "gz") {
+            serde_json::from_reader(GzDecoder::new(reader))?
+        } else {
+            serde_json::from_reader(reader)?
+        };
+        cache.validate()?;
+        Ok(cache)
+    }
+
+    pub fn write(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.validate()?;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let temporary = path.with_extension("tmp");
+        let file = fs::File::create(&temporary)?;
+        let writer = BufWriter::new(file);
+        if path.extension().is_some_and(|extension| extension == "gz") {
+            let mut gzip = GzEncoder::new(writer, Compression::fast());
+            serde_json::to_writer(&mut gzip, self)?;
+            gzip.finish()?.flush()?;
+        } else {
+            let mut writer = writer;
+            serde_json::to_writer(&mut writer, self)?;
+            writer.flush()?;
+        }
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn validate_policy_file(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if sha256_file(path)? != self.policy_sha256 {
+            return Err(
+                "range continuation cache policy digest differs from evaluated policy".into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        let valid_digest = |digest: &str| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        };
+        let history_keys = self
+            .public_histories
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let board_keys = self
+            .boards
+            .iter()
+            .map(|board| board.board)
+            .collect::<BTreeSet<_>>();
+        let covered_raw_flops = self
+            .boards
+            .iter()
+            .map(|board| board.orbit_size)
+            .sum::<usize>();
+        if self.schema != RANGE_CONTINUATION_SCHEMA
+            || self.boards.len() < 2
+            || self.public_histories.is_empty()
+            || self.public_histories.len() != self.leaf_reach_probabilities.len()
+            || self
+                .leaf_reach_probabilities
+                .keys()
+                .any(|history| !history_keys.contains(history))
+            || self
+                .leaf_reach_probabilities
+                .values()
+                .any(|reach| !reach.is_finite() || !(0.0..=1.0).contains(reach))
+            || board_keys.len() != self.boards.len()
+            || self.boards.iter().any(|board| {
+                board.board != canonical_flop_suits(board.board)
+                    || ![4, 12, 24].contains(&board.orbit_size)
+                    || board.continuations.keys().copied().collect::<BTreeSet<_>>() != history_keys
+                    || board.continuations.values().any(|players| {
+                        players.iter().any(|values| {
+                            values.len() != super::public_belief::COMBO_COUNT
+                                || values.iter().any(|value| {
+                                    !value.is_finite()
+                                        || f64::from(*value).abs()
+                                            > self.game.effective_stack_bb + EPSILON
+                                })
+                        })
+                    })
+            })
+            || covered_raw_flops != self.covered_raw_flops
+            || self.complete_canonical_flop_enumeration
+                != (self.boards.len() == 1_755 && self.covered_raw_flops == 22_100)
+            || self.depth_bb != self.game.effective_stack_bb
+            || self.policy_model_version.trim().is_empty()
+            || !valid_digest(&self.policy_sha256)
+            || !valid_digest(&self.resolver_provenance.value_network_sha256)
+            || self
+                .resolver_provenance
+                .evaluation_value_network_sha256
+                .as_ref()
+                .is_some_and(|digest| !valid_digest(digest))
+            || self.resolver_provenance.range_policy_sha256.as_deref()
+                != Some(self.policy_sha256.as_str())
+            || self.resolver_provenance.iterations < 2
+            || self.resolver_provenance.averaging_delay >= self.resolver_provenance.iterations
+            || self.resolver_provenance.threads == 0
+            || !self.resolver_provenance.value_uncertainty_bb.is_finite()
+            || self.resolver_provenance.value_uncertainty_bb < 0.0
+            || !self
+                .resolver_provenance
+                .dcfr
+                .positive_regret_exponent
+                .is_finite()
+            || !self
+                .resolver_provenance
+                .dcfr
+                .negative_regret_exponent
+                .is_finite()
+            || !self.resolver_provenance.dcfr.strategy_exponent.is_finite()
+        {
+            return Err("range continuation cache is incomplete or incompatible".into());
+        }
+        self.game.validate()?;
+        Ok(())
     }
 }
 
@@ -521,6 +718,54 @@ pub struct PreflopLeakAttribution {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_action_ev_standard_error_bb: Option<f64>,
     pub interpretation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeContinuationPrecisionReport {
+    pub schema: String,
+    pub policy_model_version: String,
+    pub sampled_flops: usize,
+    pub evaluated_information_groups: usize,
+    pub insufficient_sample_groups: usize,
+    pub reach_weighted_standard_error_coverage: f64,
+    pub standard_error_threshold_bb: f64,
+    pub reach_weighted_median_standard_error_bb: f64,
+    pub reach_weighted_p95_standard_error_bb: f64,
+    pub maximum_standard_error_bb: f64,
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflopLeafReach {
+    pub history_key: String,
+    pub public_history: Vec<String>,
+    pub actor: usize,
+    pub invested_bb: [f64; 2],
+    pub reach_probability: f64,
+    pub cumulative_flop_reach_fraction: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflopLeafReachReport {
+    pub schema: String,
+    pub policy_model_version: String,
+    pub total_flop_reach_probability: f64,
+    pub leaves: Vec<PreflopLeafReach>,
+    pub leaves_for_95_percent_flop_reach: usize,
+    pub leaves_for_99_percent_flop_reach: usize,
+    #[serde(rename = "leavesFor99Point9PercentFlopReach")]
+    pub leaves_for_99_9_percent_flop_reach: usize,
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalFlopOrbit {
+    pub board: [u8; 3],
+    pub orbit_size: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1075,6 +1320,7 @@ pub fn build_continuation_cache(
             holes: deal.holes,
             board: deal.board,
             continuations,
+            exact_combo_continuations_bb: None,
         });
     }
     let leaf_values = deals.len() * leaves.len();
@@ -1285,18 +1531,20 @@ pub fn build_resolver_continuation_cache(
                         let reconstructed = (counterfactual_values_bb[0][first] as f64
                             - counterfactual_values_bb[1][second] as f64)
                             / 2.0;
+                        let selected_values = [
+                            counterfactual_values_bb[0][first] as f64,
+                            counterfactual_values_bb[1][second] as f64,
+                        ];
                         results.push((
                             deal_index,
                             *history,
                             ContinuationEstimate {
                                 mean_utility_p0_bb: reconstructed
                                     .clamp(-game.effective_stack_bb, game.effective_stack_bb),
-                                conditional_utilities_bb: Some([
-                                    counterfactual_values_bb[0][first] as f64,
-                                    counterfactual_values_bb[1][second] as f64,
-                                ]),
+                                conditional_utilities_bb: Some(selected_values),
                                 action_standard_error_bb: config.value_uncertainty_bb,
                             },
+                            counterfactual_values_bb,
                         ));
                     }
                 }
@@ -1319,10 +1567,16 @@ pub fn build_resolver_continuation_cache(
             holes: cached.holes,
             board: cached.board,
             continuations: BTreeMap::new(),
+            exact_combo_continuations_bb: Some(BTreeMap::new()),
         })
         .collect::<Vec<_>>();
-    for (deal_index, history, estimate) in solved {
+    for (deal_index, history, estimate, exact_combo_values) in solved {
         deals[deal_index].continuations.insert(history, estimate);
+        deals[deal_index]
+            .exact_combo_continuations_bb
+            .as_mut()
+            .expect("resolver cache retains exact-combo continuation vectors")
+            .insert(history, exact_combo_values);
     }
     let validation = continuation_validation(&deals, &public_histories);
     let network_sha256 = sha256_file(&config.value_network_path)?;
@@ -1383,6 +1637,201 @@ pub fn build_resolver_continuation_cache(
         public_histories,
         deals,
         validation,
+    };
+    cache.validate()?;
+    Ok(cache)
+}
+
+pub fn build_range_continuation_cache(
+    config: RangeContinuationCacheConfig,
+) -> Result<RangeContinuationCache, Box<dyn Error>> {
+    if config.maximum_flop_orbits < 2
+        || config.maximum_flop_orbits > 1_755
+        || config.maximum_leaves == 0
+        || config.resolver_iterations < 2
+        || config.resolver_averaging_delay >= config.resolver_iterations
+        || !config.value_uncertainty_bb.is_finite()
+        || config.value_uncertainty_bb < 0.0
+        || config.threads == 0
+    {
+        return Err("range continuation cache configuration is invalid".into());
+    }
+    let policy = PreflopPolicyArtifact::read(&config.range_policy_path)?;
+    let policy_sha256 = sha256_file(&config.range_policy_path)?;
+    let network = super::public_belief::PublicValueNetwork::read(&config.value_network_path)?;
+    let evaluation_network = config
+        .evaluation_value_network_path
+        .as_ref()
+        .map(|path| super::public_belief::PublicValueNetwork::read(path))
+        .transpose()?;
+    if evaluation_network
+        .as_ref()
+        .is_some_and(|evaluation| !network.has_distinct_training_identity(evaluation))
+    {
+        return Err(
+            "range continuation cross-scoring requires an independent value network".into(),
+        );
+    }
+    let leaf_ranges = resolver_leaf_ranges(&policy)?;
+    let states = enumerate_flop_leaves(&policy.game);
+    let reach_report = preflop_leaf_reach_report(&policy)?;
+    let selected_histories = reach_report
+        .leaves
+        .iter()
+        .take(config.maximum_leaves.min(reach_report.leaves.len()))
+        .map(|leaf| u64::from_str_radix(&leaf.history_key, 16))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let public_histories = selected_histories
+        .iter()
+        .map(|history| {
+            (
+                *history,
+                states
+                    .get(history)
+                    .expect("ranked reach leaves exist in the game")
+                    .public_history
+                    .clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let leaf_reach_probabilities = reach_report
+        .leaves
+        .iter()
+        .filter_map(|leaf| {
+            let history = u64::from_str_radix(&leaf.history_key, 16).ok()?;
+            selected_histories
+                .contains(&history)
+                .then_some((history, leaf.reach_probability))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut orbits = canonical_flop_orbits();
+    orbits.sort_by_key(|orbit| {
+        let mut digest = Sha256::new();
+        digest.update(b"hu-canonical-flop-orbit-order-v1");
+        digest.update(config.seed.to_le_bytes());
+        digest.update(orbit.board);
+        <[u8; 32]>::from(digest.finalize())
+    });
+    orbits.truncate(config.maximum_flop_orbits);
+    orbits.sort_by_key(|orbit| orbit.board);
+
+    let worker_count = config.threads.min(orbits.len()).max(1);
+    let resolver_threads = (config.threads / worker_count).max(1);
+    let resolver_iterations = config.resolver_iterations;
+    let resolver_averaging_delay = config.resolver_averaging_delay;
+    let resolver_regret_matching_plus = config.resolver_regret_matching_plus;
+    let solved = std::thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for worker in 0..worker_count {
+            let assigned = orbits
+                .iter()
+                .skip(worker)
+                .step_by(worker_count)
+                .cloned()
+                .collect::<Vec<_>>();
+            let network = network.clone();
+            let evaluation_network = evaluation_network.clone();
+            let mut game = policy.game.clone();
+            game.dcfr = config.resolver_dcfr.clone();
+            let states = &states;
+            let leaf_ranges = &leaf_ranges;
+            let selected_histories = &selected_histories;
+            workers.push(scope.spawn(move || {
+                let mut boards = Vec::with_capacity(assigned.len());
+                for orbit in assigned {
+                    let mut continuations = BTreeMap::new();
+                    for history in selected_histories {
+                        let leaf = states
+                            .get(history)
+                            .expect("selected range continuation leaf exists");
+                        let ranges = leaf_ranges
+                            .get(history)
+                            .expect("selected range continuation ranges exist")
+                            .clone();
+                        let resolver = super::public_belief::FlopResolveConfig {
+                            game: game.clone(),
+                            state: super::public_belief::PublicBeliefState::flop_start(
+                                orbit.board,
+                                leaf.actor,
+                                leaf.invested,
+                                ranges,
+                            ),
+                            iterations: resolver_iterations,
+                            averaging_delay: resolver_averaging_delay,
+                            regret_matching_plus: resolver_regret_matching_plus,
+                            value_network: network.clone(),
+                            auxiliary_value_networks: Vec::new(),
+                            continuation_selection:
+                                super::public_belief::FlopContinuationSelection::Mean,
+                            threads: resolver_threads,
+                        };
+                        let values = if let Some(evaluation) = &evaluation_network {
+                            super::public_belief::solve_flop_cross_evaluated(
+                                resolver,
+                                evaluation.clone(),
+                            )?
+                            .counterfactual_values_bb
+                        } else {
+                            super::public_belief::solve_flop_continuation_values(resolver)?
+                                .counterfactual_values_bb
+                        };
+                        continuations.insert(*history, values);
+                    }
+                    boards.push(RangeContinuationBoard {
+                        board: orbit.board,
+                        orbit_size: orbit.orbit_size,
+                        continuations,
+                    });
+                }
+                Ok::<_, String>(boards)
+            }));
+        }
+        let mut boards = Vec::with_capacity(orbits.len());
+        for worker in workers {
+            boards.extend(
+                worker
+                    .join()
+                    .map_err(|_| "range continuation worker panicked".to_owned())??,
+            );
+        }
+        Ok::<_, String>(boards)
+    })?;
+    let mut boards = solved;
+    boards.sort_by_key(|board| board.board);
+    let value_network_sha256 = sha256_file(&config.value_network_path)?;
+    let evaluation_value_network_sha256 = config
+        .evaluation_value_network_path
+        .as_ref()
+        .map(|path| sha256_file(path))
+        .transpose()?;
+    let covered_raw_flops = boards.iter().map(|board| board.orbit_size).sum::<usize>();
+    let cache = RangeContinuationCache {
+        schema: RANGE_CONTINUATION_SCHEMA.to_owned(),
+        depth_bb: policy.depth_bb,
+        seed: config.seed,
+        chance_sampling:
+            "seeded_without_replacement_suit_isomorphic_flop_orbits_with_exact_combo_ranges"
+                .to_owned(),
+        complete_canonical_flop_enumeration: boards.len() == 1_755 && covered_raw_flops == 22_100,
+        covered_raw_flops,
+        game: policy.game,
+        policy_model_version: policy.model_version,
+        policy_sha256: policy_sha256.clone(),
+        resolver_provenance: ResolverContinuationProvenance {
+            iterations: config.resolver_iterations,
+            averaging_delay: config.resolver_averaging_delay,
+            regret_matching_plus: config.resolver_regret_matching_plus,
+            dcfr: config.resolver_dcfr,
+            value_uncertainty_bb: config.value_uncertainty_bb,
+            threads: config.threads,
+            value_network_sha256,
+            evaluation_value_network_sha256,
+            range_policy_sha256: Some(policy_sha256),
+        },
+        public_histories,
+        leaf_reach_probabilities,
+        boards,
     };
     cache.validate()?;
     Ok(cache)
@@ -1476,6 +1925,134 @@ fn resolver_leaf_ranges(
         return Err("range policy did not cover every preflop continuation leaf".into());
     }
     Ok(leaves)
+}
+
+pub fn preflop_leaf_reach_report(
+    artifact: &PreflopPolicyArtifact,
+) -> Result<PreflopLeafReachReport, Box<dyn Error>> {
+    let ranges = resolver_leaf_ranges(artifact)?;
+    let states = enumerate_flop_leaves(&artifact.game);
+    let combos = all_combos();
+    let conflicts = combos
+        .iter()
+        .map(|first| {
+            combos
+                .iter()
+                .enumerate()
+                .filter_map(|(combo, second)| first.overlaps(*second).then_some(combo))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let joint_mass = |reaches: &[Vec<f64>; 2]| {
+        let total_opponent = reaches[1].iter().sum::<f64>();
+        reaches[0]
+            .iter()
+            .zip(&conflicts)
+            .map(|(reach, blocked)| {
+                reach
+                    * (total_opponent
+                        - blocked
+                            .iter()
+                            .map(|opponent| reaches[1][*opponent])
+                            .sum::<f64>())
+                    .max(0.0)
+            })
+            .sum::<f64>()
+    };
+    let uniform = std::array::from_fn(|_| vec![1.0; super::public_belief::COMBO_COUNT]);
+    let root_mass = joint_mass(&uniform);
+    let mut leaves = ranges
+        .iter()
+        .map(|(history, reaches)| {
+            let state = states
+                .get(history)
+                .expect("resolver ranges and flop states have identical keys");
+            PreflopLeafReach {
+                history_key: format!("{history:016x}"),
+                public_history: state.public_history.clone(),
+                actor: state.actor,
+                invested_bb: state.invested,
+                reach_probability: joint_mass(reaches) / root_mass,
+                cumulative_flop_reach_fraction: 0.0,
+            }
+        })
+        .collect::<Vec<_>>();
+    leaves.sort_by(|left, right| {
+        right
+            .reach_probability
+            .total_cmp(&left.reach_probability)
+            .then_with(|| left.history_key.cmp(&right.history_key))
+    });
+    let total_flop_reach_probability = leaves
+        .iter()
+        .map(|leaf| leaf.reach_probability)
+        .sum::<f64>();
+    let mut cumulative = 0.0;
+    for leaf in &mut leaves {
+        cumulative += leaf.reach_probability;
+        leaf.cumulative_flop_reach_fraction =
+            cumulative / total_flop_reach_probability.max(EPSILON);
+    }
+    let count_for = |fraction: f64| {
+        leaves
+            .iter()
+            .position(|leaf| leaf.cumulative_flop_reach_fraction + EPSILON >= fraction)
+            .map_or(leaves.len(), |index| index + 1)
+    };
+    Ok(PreflopLeafReachReport {
+        schema: "hu-preflop-leaf-reach-v1".to_owned(),
+        policy_model_version: artifact.model_version.clone(),
+        total_flop_reach_probability,
+        leaves_for_95_percent_flop_reach: count_for(0.95),
+        leaves_for_99_percent_flop_reach: count_for(0.99),
+        leaves_for_99_9_percent_flop_reach: count_for(0.999),
+        leaves,
+        interpretation: "exact card-removal-aware preflop policy reach over the abstract betting tree; cumulative fractions are conditional on reaching a nonterminal flop leaf".to_owned(),
+    })
+}
+
+fn canonical_flop_suits(board: [u8; 3]) -> [u8; 3] {
+    let mut best = [u8::MAX; 3];
+    for first in 0..4u8 {
+        for second in 0..4u8 {
+            if second == first {
+                continue;
+            }
+            for third in 0..4u8 {
+                if third == first || third == second {
+                    continue;
+                }
+                for fourth in 0..4u8 {
+                    if fourth == first || fourth == second || fourth == third {
+                        continue;
+                    }
+                    let permutation = [first, second, third, fourth];
+                    let mut candidate =
+                        board.map(|card| (card & !3) | permutation[(card & 3) as usize]);
+                    candidate.sort_unstable();
+                    best = best.min(candidate);
+                }
+            }
+        }
+    }
+    best
+}
+
+pub fn canonical_flop_orbits() -> Vec<CanonicalFlopOrbit> {
+    let mut orbits = BTreeMap::<[u8; 3], usize>::new();
+    for first in 0..50u8 {
+        for second in (first + 1)..51u8 {
+            for third in (second + 1)..52u8 {
+                *orbits
+                    .entry(canonical_flop_suits([first, second, third]))
+                    .or_default() += 1;
+            }
+        }
+    }
+    orbits
+        .into_iter()
+        .map(|(board, orbit_size)| CanonicalFlopOrbit { board, orbit_size })
+        .collect()
 }
 
 fn condition_range_for_action(
@@ -2197,6 +2774,254 @@ pub fn attribute_policy_action_values(
     Ok(attribution)
 }
 
+/// Measures the chance-sampling error at preflop continuation leaves after
+/// integrating the complete compatible opponent range. This is a diagnostic
+/// for the variance-reduced action-value path, not a substitute for the final
+/// action-EV gate: it deliberately stops at the flop continuation boundary.
+pub fn evaluate_range_continuation_precision(
+    cache: &ContinuationCache,
+    artifact: &PreflopPolicyArtifact,
+) -> Result<RangeContinuationPrecisionReport, Box<dyn Error>> {
+    if cache.game != artifact.game || cache.deals.len() < 2 {
+        return Err("range continuation precision requires a matching policy and two flops".into());
+    }
+    if cache
+        .deals
+        .iter()
+        .any(|deal| deal.exact_combo_continuations_bb.is_none())
+    {
+        return Err("range continuation precision requires retained exact-combo vectors".into());
+    }
+    let boards = cache
+        .deals
+        .iter()
+        .map(|deal| RangePrecisionBoard {
+            flop: [deal.board[0], deal.board[1], deal.board[2]],
+            chance_weight: 1.0,
+            continuations: deal
+                .exact_combo_continuations_bb
+                .as_ref()
+                .expect("validated exact-combo continuation vectors"),
+        })
+        .collect::<Vec<_>>();
+    evaluate_range_continuation_precision_source(
+        artifact,
+        &cache.public_histories,
+        cache.depth_bb,
+        &boards,
+        false,
+    )
+}
+
+pub fn evaluate_canonical_range_continuation_precision(
+    cache: &RangeContinuationCache,
+    artifact: &PreflopPolicyArtifact,
+) -> Result<RangeContinuationPrecisionReport, Box<dyn Error>> {
+    cache.validate()?;
+    if cache.game != artifact.game || cache.policy_model_version != artifact.model_version {
+        return Err("canonical range cache and evaluated policy identity differ".into());
+    }
+    let boards = cache
+        .boards
+        .iter()
+        .map(|board| RangePrecisionBoard {
+            flop: board.board,
+            chance_weight: board.orbit_size as f64,
+            continuations: &board.continuations,
+        })
+        .collect::<Vec<_>>();
+    evaluate_range_continuation_precision_source(
+        artifact,
+        &cache.public_histories,
+        cache.depth_bb,
+        &boards,
+        cache.complete_canonical_flop_enumeration,
+    )
+}
+
+struct RangePrecisionBoard<'a> {
+    flop: [u8; 3],
+    chance_weight: f64,
+    continuations: &'a BTreeMap<u64, [Vec<f32>; 2]>,
+}
+
+fn evaluate_range_continuation_precision_source(
+    artifact: &PreflopPolicyArtifact,
+    public_histories: &BTreeMap<u64, Vec<String>>,
+    depth_bb: f64,
+    boards: &[RangePrecisionBoard<'_>],
+    complete_enumeration: bool,
+) -> Result<RangeContinuationPrecisionReport, Box<dyn Error>> {
+    if boards.len() < 2 {
+        return Err("range continuation precision requires two sampled flop clusters".into());
+    }
+    let mut leaf_ranges = resolver_leaf_ranges(artifact)?;
+    leaf_ranges.retain(|history, _| public_histories.contains_key(history));
+    if leaf_ranges.len() != public_histories.len() {
+        return Err("range continuation leaves do not match the evaluated policy".into());
+    }
+
+    let combos = all_combos();
+    let mut class_combos = BTreeMap::<String, Vec<usize>>::new();
+    for (combo, cards) in combos.iter().enumerate() {
+        class_combos.entry(cards.label()).or_default().push(combo);
+    }
+    let conflicts = combos
+        .iter()
+        .map(|first| {
+            combos
+                .iter()
+                .enumerate()
+                .filter_map(|(combo, second)| first.overlaps(*second).then_some(combo))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    type GroupKey = (usize, u64, String);
+    let mut samples = BTreeMap::<GroupKey, Vec<(f64, f64)>>::new();
+    for board in boards {
+        let flop = &board.flop;
+        let exact = board.continuations;
+        for (history, ranges) in &leaf_ranges {
+            let values = exact
+                .get(history)
+                .ok_or("exact-combo cache missed a policy continuation leaf")?;
+            for player in 0..2 {
+                let opponent = 1 - player;
+                let masked_opponent = ranges[opponent]
+                    .iter()
+                    .zip(&combos)
+                    .map(|(reach, combo)| {
+                        if combo.cards().iter().any(|card| flop.contains(card)) {
+                            0.0
+                        } else {
+                            *reach
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let total_opponent_mass = masked_opponent.iter().sum::<f64>();
+                let compatible_masses = conflicts
+                    .iter()
+                    .zip(&combos)
+                    .map(|(blocked, combo)| {
+                        if combo.cards().iter().any(|card| flop.contains(card)) {
+                            0.0
+                        } else {
+                            (total_opponent_mass
+                                - blocked
+                                    .iter()
+                                    .map(|other| masked_opponent[*other])
+                                    .sum::<f64>())
+                            .max(0.0)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for (hand_class, keys) in &class_combos {
+                    let mut numerator = 0.0;
+                    let mut denominator = 0.0;
+                    for combo in keys {
+                        let weight = ranges[player][*combo] * compatible_masses[*combo];
+                        numerator += weight * f64::from(values[player][*combo]);
+                        denominator += weight;
+                    }
+                    if denominator > EPSILON {
+                        samples
+                            .entry((player, *history, hand_class.clone()))
+                            .or_default()
+                            .push((
+                                numerator * board.chance_weight,
+                                denominator * board.chance_weight,
+                            ));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut weighted_errors = Vec::<(f64, f64)>::new();
+    let mut covered_weight = 0.0;
+    let mut total_weight = 0.0;
+    let mut insufficient_sample_groups = 0usize;
+    let mut maximum_standard_error = 0.0f64;
+    for group in samples.values() {
+        let weight = group
+            .iter()
+            .map(|(_, denominator)| denominator)
+            .sum::<f64>()
+            / group.len() as f64;
+        if weight <= EPSILON {
+            continue;
+        }
+        total_weight += weight;
+        let standard_error = if complete_enumeration {
+            0.0
+        } else if let Some(standard_error) = ratio_of_means_standard_error(group) {
+            standard_error
+        } else {
+            insufficient_sample_groups += 1;
+            weighted_errors.push((depth_bb, weight));
+            continue;
+        };
+        if standard_error <= 0.02 {
+            covered_weight += weight;
+        }
+        maximum_standard_error = maximum_standard_error.max(standard_error);
+        weighted_errors.push((standard_error, weight));
+    }
+    if total_weight <= EPSILON || weighted_errors.is_empty() {
+        return Err("range continuation precision produced no weighted groups".into());
+    }
+    weighted_errors.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let weighted_quantile = |quantile: f64| {
+        let target = total_weight * quantile;
+        let mut cumulative = 0.0;
+        for (value, weight) in &weighted_errors {
+            cumulative += weight;
+            if cumulative + EPSILON >= target {
+                return *value;
+            }
+        }
+        weighted_errors.last().expect("non-empty errors").0
+    };
+    Ok(RangeContinuationPrecisionReport {
+        schema: "hu-preflop-range-continuation-precision-v1".to_owned(),
+        policy_model_version: artifact.model_version.clone(),
+        sampled_flops: boards.len(),
+        evaluated_information_groups: samples.len(),
+        insufficient_sample_groups,
+        reach_weighted_standard_error_coverage: covered_weight / total_weight,
+        standard_error_threshold_bb: 0.02,
+        reach_weighted_median_standard_error_bb: weighted_quantile(0.5),
+        reach_weighted_p95_standard_error_bb: weighted_quantile(0.95),
+        maximum_standard_error_bb: maximum_standard_error,
+        interpretation: if complete_enumeration {
+            "diagnostic-only flop-leaf values with exact compatible-opponent-range integration and complete suit-isomorphic flop enumeration; chance-sampling standard error is zero, while frozen resolver/value-network approximation remains a separate, unmeasured error source"
+                .to_owned()
+        } else {
+            "diagnostic-only flop-leaf values with exact compatible-opponent-range integration; standard errors use distinct sampled flop clusters and retain frozen resolver/value-network approximation as a separate, unmeasured error source"
+                .to_owned()
+        },
+    })
+}
+
+fn ratio_of_means_standard_error(samples: &[(f64, f64)]) -> Option<f64> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let numerator = samples.iter().map(|(value, _)| value).sum::<f64>();
+    let denominator = samples.iter().map(|(_, mass)| mass).sum::<f64>();
+    if denominator <= EPSILON {
+        return None;
+    }
+    let ratio = numerator / denominator;
+    let squared_residual = samples
+        .iter()
+        .map(|(value, mass)| (value - ratio * mass).powi(2))
+        .sum::<f64>();
+    let count = samples.len() as f64;
+    Some((count * squared_residual / ((count - 1.0) * denominator.powi(2))).sqrt())
+}
+
 fn action_ev_precision_weights(
     reach_probability: f64,
     policy_probabilities: &[f64],
@@ -2853,6 +3678,7 @@ mod tests {
                         )
                     })
                     .collect(),
+                exact_combo_continuations_bb: None,
             })
             .collect::<Vec<_>>();
         let leaf_values = deals.len() * leaves.len();
@@ -2908,6 +3734,48 @@ mod tests {
             .conditional_utilities_bb = Some([0.75, -0.10]);
         assert_eq!(cache.continuation_utility(0, &state, 0), 0.75);
         assert_eq!(cache.continuation_utility(0, &state, 1), -0.10);
+    }
+
+    #[test]
+    fn exact_combo_continuation_vectors_are_complete_and_bounded() {
+        let mut cache = synthetic_cache(8);
+        let exact = cache
+            .public_histories
+            .keys()
+            .map(|history| {
+                (
+                    *history,
+                    [
+                        vec![0.25f32; crate::blueprint::public_belief::COMBO_COUNT],
+                        vec![-0.25f32; crate::blueprint::public_belief::COMBO_COUNT],
+                    ],
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        cache.deals[0].exact_combo_continuations_bb = Some(exact);
+        cache.validate().unwrap();
+
+        cache.deals[0]
+            .exact_combo_continuations_bb
+            .as_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()[0]
+            .pop();
+        assert!(cache.validate().is_err());
+    }
+
+    #[test]
+    fn clustered_ratio_standard_error_preserves_zero_variance_controls() {
+        assert_eq!(
+            ratio_of_means_standard_error(&[(2.0, 1.0), (4.0, 2.0), (6.0, 3.0)]),
+            Some(0.0)
+        );
+        assert!(
+            (ratio_of_means_standard_error(&[(1.0, 1.0), (3.0, 1.0)]).unwrap() - 1.0).abs() < 1e-12
+        );
+        assert_eq!(ratio_of_means_standard_error(&[(1.0, 1.0)]), None);
     }
 
     #[test]
@@ -2997,6 +3865,73 @@ mod tests {
         assert_eq!(exact_combo_count("AA"), 6);
         assert_eq!(exact_combo_count("AKs"), 4);
         assert_eq!(exact_combo_count("AKo"), 12);
+    }
+
+    #[test]
+    fn canonical_flop_orbits_cover_every_raw_flop_once() {
+        let orbits = canonical_flop_orbits();
+        assert_eq!(orbits.len(), 1_755);
+        assert_eq!(
+            orbits.iter().map(|orbit| orbit.orbit_size).sum::<usize>(),
+            22_100
+        );
+        assert!(orbits
+            .iter()
+            .all(|orbit| orbit.board == canonical_flop_suits(orbit.board)));
+    }
+
+    #[test]
+    fn range_continuation_cache_rejects_incomplete_exact_combo_rows() {
+        let game = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            ..BlueprintConfig::default()
+        };
+        let history = 7u64;
+        let public_histories = BTreeMap::from([(history, vec!["deal:Flop".to_owned()])]);
+        let orbits = canonical_flop_orbits();
+        let boards = orbits
+            .iter()
+            .take(2)
+            .map(|orbit| RangeContinuationBoard {
+                board: orbit.board,
+                orbit_size: orbit.orbit_size,
+                continuations: BTreeMap::from([(
+                    history,
+                    [
+                        vec![0.0; crate::blueprint::public_belief::COMBO_COUNT],
+                        vec![0.0; crate::blueprint::public_belief::COMBO_COUNT],
+                    ],
+                )]),
+            })
+            .collect::<Vec<_>>();
+        let mut cache = RangeContinuationCache {
+            schema: RANGE_CONTINUATION_SCHEMA.to_owned(),
+            depth_bb: 20.0,
+            seed: 11,
+            chance_sampling: "test".to_owned(),
+            complete_canonical_flop_enumeration: false,
+            covered_raw_flops: boards.iter().map(|board| board.orbit_size).sum(),
+            game,
+            policy_model_version: "test-policy".to_owned(),
+            policy_sha256: "a".repeat(64),
+            resolver_provenance: ResolverContinuationProvenance {
+                iterations: 2,
+                averaging_delay: 0,
+                regret_matching_plus: false,
+                dcfr: DcfrParameters::default(),
+                value_uncertainty_bb: 1.0,
+                threads: 1,
+                value_network_sha256: "b".repeat(64),
+                evaluation_value_network_sha256: None,
+                range_policy_sha256: Some("a".repeat(64)),
+            },
+            public_histories,
+            leaf_reach_probabilities: BTreeMap::from([(history, 0.5)]),
+            boards,
+        };
+        cache.validate().unwrap();
+        cache.boards[0].continuations.get_mut(&history).unwrap()[1].pop();
+        assert!(cache.validate().is_err());
     }
 
     #[test]
