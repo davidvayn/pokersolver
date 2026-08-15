@@ -68,6 +68,13 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
       </div>
     );
   }
+  const bestActions = feedback.policyActions.filter((action) => {
+    const loss = estimatedActionLoss(feedback.bestActionEvBb, action.evBb);
+    return loss !== null && loss <= 1e-9;
+  });
+  const bestActionLabel = bestActions.length
+    ? bestActions.map((action) => action.label).join(' / ')
+    : 'Unavailable';
   return (
     <div className="space-y-5 p-4">
       <div>
@@ -84,6 +91,10 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
       </div>
 
       <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-wide text-muted">
+          <span>Policy mix</span>
+          <span>Solver frequency</span>
+        </div>
         {feedback.policyActions.map((action) => {
           const loss = estimatedActionLoss(
             feedback.bestActionEvBb,
@@ -100,7 +111,7 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
                   {action.label}
                   {isBestEstimate && (
                     <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
-                      Best estimated EV
+                      Best EV action
                     </span>
                   )}
                 </span>
@@ -126,9 +137,13 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
         })}
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-t border-border pt-4 text-xs">
+      <div className="grid grid-cols-2 gap-x-2 gap-y-4 border-t border-border pt-4 text-xs">
+        <div className="col-span-2">
+          <p className="text-muted">Best action by estimated EV</p>
+          <p className="mt-1 font-semibold">{bestActionLabel}</p>
+        </div>
         <div>
-          <p className="text-muted">Estimated EV loss</p>
+          <p className="text-muted">Your estimated EV loss</p>
           <p className="mt-1 font-mono font-semibold">
             {feedback.evLossBb === null ? 'Not graded' : `${feedback.evLossBb.toFixed(3)}bb`}
           </p>

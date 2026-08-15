@@ -84,8 +84,12 @@ describe('AnalystRail decision feedback', () => {
     expect(html).toContain('75%');
     expect(html).toContain('Estimated loss 0.150bb');
     expect(html).toContain('Estimated loss 0.000bb');
-    expect(html).toContain('Best estimated EV');
-    expect(html).toContain('Estimated EV loss');
+    expect(html).toContain('Policy mix');
+    expect(html).toContain('Solver frequency');
+    expect(html).toContain('Best EV action');
+    expect(html).toContain('Best action by estimated EV');
+    expect(html).toContain('Bet 50%');
+    expect(html).toContain('Your estimated EV loss');
   });
 
   it('does not invent a zero sampling error when uncertainty is unavailable', () => {
