@@ -236,11 +236,17 @@ impl PracticePreflopActionValues {
         let bytes = super::read_json_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let artifact: super::preflop::PreflopLeakAttribution = serde_json::from_slice(&bytes)?;
-        if artifact.schema != "hu-preflop-local-leak-attribution-v1"
+        let legacy = artifact.schema == "hu-preflop-local-leak-attribution-v1";
+        let canonical = artifact.schema == "hu-preflop-canonical-range-action-values-v1";
+        if (!legacy && !canonical)
             || artifact.corpus_deals == 0
             || artifact.policy_lookup_coverage < 0.9999
             || artifact.evaluated_information_sets.iter().sum::<usize>()
                 != artifact.players.iter().map(Vec::len).sum::<usize>()
+            || (canonical
+                && artifact
+                    .action_ev_standard_error_coverage
+                    .is_none_or(|coverage| coverage < 0.95))
         {
             return Err("practice preflop action-value artifact is incomplete".into());
         }
@@ -1997,10 +2003,10 @@ impl PracticePolicyEngine {
                     amount_to_bb,
                     probability,
                     ev_bb,
-                    // These values come from a deterministic exact-card
-                    // profile traversal, so they have no Monte Carlo sampling
-                    // error. Confidence remains low because the flop cutoff
-                    // still uses a frozen learned continuation approximation.
+                    // Accepted canonical preflop values pass the declared
+                    // chance-sampling precision gate. Confidence remains low
+                    // because the flop cutoff still uses a frozen learned
+                    // continuation approximation.
                     standard_error_bb,
                     confidence: if ev_bb.is_some() {
                         "low"
@@ -6792,6 +6798,70 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn practice_reader_requires_canonical_action_ev_precision_gate() {
+        use crate::blueprint::preflop::{
+            PreflopLeakAttribution, PreflopLeakEntry, PreflopPublicHistoryLeak,
+        };
+
+        let artifact = |coverage| PreflopLeakAttribution {
+            schema: "hu-preflop-canonical-range-action-values-v1".to_owned(),
+            corpus_deals: 22_100,
+            policy_model_version: "test".to_owned(),
+            top_per_player: usize::MAX,
+            evaluated_information_sets: [1, 0],
+            total_policy_reach_weighted_local_gain_bb: [0.0, 0.0],
+            policy_lookup_coverage: 1.0,
+            players: [
+                vec![PreflopLeakEntry {
+                    key: "test-key".to_owned(),
+                    player: 0,
+                    hand_class: "AA".to_owned(),
+                    public_history: vec!["root".to_owned()],
+                    reach_probability: 1.0,
+                    action_labels: vec!["fold".to_owned()],
+                    policy_probabilities: vec![1.0],
+                    action_values_bb: vec![-0.5],
+                    action_value_standard_errors_bb: vec![0.0],
+                    policy_value_bb: -0.5,
+                    best_action: "fold".to_owned(),
+                    best_action_value_bb: -0.5,
+                    conditional_ev_gain_bb: 0.0,
+                    reach_weighted_ev_gain_bb_per_hand: 0.0,
+                }],
+                Vec::new(),
+            ],
+            public_histories: [
+                vec![PreflopPublicHistoryLeak {
+                    player: 0,
+                    public_history: vec!["root".to_owned()],
+                    information_sets: 1,
+                    policy_reach_probability: 1.0,
+                    reach_weighted_ev_gain_bb_per_hand: 0.0,
+                }],
+                Vec::new(),
+            ],
+            action_ev_standard_error_coverage: Some(coverage),
+            maximum_action_ev_standard_error_bb: Some(0.0),
+            interpretation: "test".to_owned(),
+        };
+        let accepted = std::env::temp_dir().join(format!(
+            "accepted-canonical-action-values-{}.json.gz",
+            std::process::id()
+        ));
+        artifact(0.95).write(&accepted).unwrap();
+        assert!(PracticePreflopActionValues::read(&accepted).is_ok());
+        fs::remove_file(&accepted).unwrap();
+
+        let rejected = std::env::temp_dir().join(format!(
+            "rejected-canonical-action-values-{}.json.gz",
+            std::process::id()
+        ));
+        artifact(0.949_999).write(&rejected).unwrap();
+        assert!(PracticePreflopActionValues::read(&rejected).is_err());
+        fs::remove_file(rejected).unwrap();
+    }
 
     #[test]
     fn resolved_policy_stabilization_preserves_blocked_rows_and_full_support() {

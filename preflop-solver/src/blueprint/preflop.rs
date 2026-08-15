@@ -727,6 +727,31 @@ pub struct PreflopLeakAttribution {
     pub interpretation: String,
 }
 
+impl PreflopLeakAttribution {
+    pub fn write(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let temporary = path.with_extension("tmp");
+        let file = fs::File::create(&temporary)?;
+        let writer = BufWriter::new(file);
+        if path.extension().is_some_and(|extension| extension == "gz") {
+            let mut gzip = GzEncoder::new(writer, Compression::fast());
+            serde_json::to_writer(&mut gzip, self)?;
+            gzip.finish()?.flush()?;
+        } else {
+            let mut writer = writer;
+            serde_json::to_writer_pretty(&mut writer, self)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+        }
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RangeContinuationPrecisionReport {
@@ -4801,6 +4826,21 @@ mod tests {
             .flatten()
             .all(|entry| entry.action_values_bb.iter().all(|value| value.is_finite())));
         assert!(report.action_ev_standard_error_coverage.unwrap() > 0.0);
+        let output = std::env::temp_dir().join(format!(
+            "canonical-range-action-values-{}.json.gz",
+            std::process::id()
+        ));
+        report.write(&output).unwrap();
+        let round_trip: PreflopLeakAttribution = serde_json::from_reader(GzDecoder::new(
+            BufReader::new(fs::File::open(&output).unwrap()),
+        ))
+        .unwrap();
+        assert_eq!(round_trip.schema, report.schema);
+        assert_eq!(
+            round_trip.evaluated_information_sets,
+            report.evaluated_information_sets
+        );
+        fs::remove_file(output).unwrap();
     }
 
     #[test]

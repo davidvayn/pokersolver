@@ -2089,16 +2089,21 @@ fn run_preflop_range_action_values(args: &[String]) -> Result<(), Box<dyn Error>
     let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
     let attribution =
         blueprint::preflop::attribute_canonical_range_policy_action_values(&cache, &policy)?;
-    let output = serde_json::to_string_pretty(&attribution)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-        fs::write(path, format!("{output}\n"))?;
+        attribution.write(&path)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "output": path,
+                "informationSets": attribution.evaluated_information_sets,
+                "policyLookupCoverage": attribution.policy_lookup_coverage,
+                "actionEvStandardErrorCoverage": attribution.action_ev_standard_error_coverage,
+                "maximumActionEvStandardErrorBb": attribution.maximum_action_ev_standard_error_bb,
+            }))?
+        );
+    } else {
+        println!("{}", serde_json::to_string_pretty(&attribution)?);
     }
-    println!("{output}");
     Ok(())
 }
 
