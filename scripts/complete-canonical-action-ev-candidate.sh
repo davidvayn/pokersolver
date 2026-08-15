@@ -17,6 +17,7 @@ validation_model_dir="$repo_root/preflop-solver/models/validation"
 holdout_dir="$repo_root/preflop-solver/neural/runs/20bb-v82-residual-policy/s3000-b16-cos3e4-3e5"
 preflop_validation="$repo_root/preflop-solver/neural/v27-preflop-sequence.json"
 candidate_freeze="$repo_root/preflop-solver/neural/20bb-v50-full-hand-candidate-freeze.json"
+manifest_registry="$repo_root/data/practice/full-hand-manifests.json"
 
 require_sha256() {
   local file=$1
@@ -99,8 +100,18 @@ npm run practice:promote-action-values -- \
 npm run practice:verify-resolver-artifacts -- --model-version "$model_version"
 
 comparison=$(mktemp)
+activation_backup=
+activation_complete=false
 cleanup() {
   rm -f "$comparison"
+  if [[ -n "$activation_backup" && -f "$activation_backup" ]]; then
+    if [[ "$activation_complete" == true ]]; then
+      rm -f "$activation_backup"
+    else
+      mv "$activation_backup" "$manifest_registry"
+      echo "restored inactive resolver manifest after failed activation checks" >&2
+    fi
+  fi
 }
 trap cleanup EXIT
 "$binary" range-policy-compare \
@@ -180,15 +191,27 @@ jq -e \
 cargo test --release --manifest-path preflop-solver/Cargo.toml
 npm run test:practice-tools
 npm test
+
+activation_backup=$(mktemp "$manifest_registry.activation-backup.XXXXXX")
+cp "$manifest_registry" "$activation_backup"
+npm run practice:activate-experimental -- --model-version "$model_version"
+npm run practice:verify-resolver-artifacts -- --model-version "$model_version"
+npm test -- \
+  lib/practice-models.test.ts \
+  app/api/practice/practice-api.test.ts \
+  app/api/practice/resolve/route-post.test.ts
 npm run build
 npm run practice:verify-resolver-build
-npm run test:practice-resolver-integration
+PRACTICE_RESOLVER_THREADS=1 npm run test:practice-resolver-integration
 
 jq -e --arg version "$model_version" '
   [.[] | select(.version == $version)] as $models |
   ($models | length) == 1 and
-  $models[0].active == false and
-  $models[0].validation.status != "accepted"
+  $models[0].label == "Experimental self-play" and
+  $models[0].active == true and
+  $models[0].validation.status == "accepted" and
+  $models[0].validation.exploitabilityGateDeferred == true
 ' data/practice/full-hand-manifests.json >/dev/null
 
-echo "canonical action-EV release candidate is promoted and verified but remains inactive"
+activation_complete=true
+echo "canonical action-EV release candidate is active as Experimental self-play"

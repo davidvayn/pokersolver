@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 import {
   ACTIVE_FULL_HAND_MANIFESTS,
   isExperimentalFullHandManifest,
@@ -72,8 +73,19 @@ function acceptedManifest(): PolicyManifest {
 }
 
 describe('database-free full-hand activation registry', () => {
-  it('keeps the checked-in continual-resolver candidate hidden while normal gates fail', () => {
-    expect(ACTIVE_FULL_HAND_MANIFESTS).toEqual([]);
+  it('serves exactly the checked-in manifests that pass a complete serving predicate', () => {
+    const expected = (fullHandManifests as unknown[]).filter(
+      (manifest) =>
+        isValidatedFullHandManifest(manifest) ||
+        isExperimentalFullHandManifest(manifest)
+    );
+    expect(ACTIVE_FULL_HAND_MANIFESTS).toEqual(expected);
+    expect(
+      ACTIVE_FULL_HAND_MANIFESTS.every(
+        (manifest) =>
+          manifest.active && manifest.validation.status === 'accepted'
+      )
+    ).toBe(true);
   });
 
   it('accepts a neural manifest only when every promotion gate is present', () => {

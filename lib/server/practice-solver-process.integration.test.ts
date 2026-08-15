@@ -15,6 +15,7 @@ import type {
 
 vi.mock('server-only', () => ({}));
 
+import { POST as resolvePracticeRequest } from '@/app/api/practice/resolve/route';
 import {
   PRACTICE_RESOLVER_IDENTITY,
   practiceSolverProcess,
@@ -22,6 +23,12 @@ import {
 } from '@/lib/server/practice-solver-process';
 
 const runIntegration = process.env.PRACTICE_RESOLVER_INTEGRATION === '1';
+const activeResolver = fullHandManifests.some(
+  (manifest) =>
+    manifest.version === PRACTICE_RESOLVER_IDENTITY.modelVersion &&
+    manifest.active === true &&
+    manifest.validation.status === 'accepted'
+);
 
 interface ResolverAction {
   kind: string;
@@ -186,5 +193,48 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
       }
     },
     180_000
+  );
+
+  it.skipIf(!activeResolver)(
+    'serves a pinned decision through the production HTTP route after activation',
+    async () => {
+      const stateHash = 'b'.repeat(64);
+      const state = createHand({
+        id: 'resolver-route-integration',
+        modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
+        depthBb: 20,
+        button: 'button-small-blind',
+        hero: 'button-small-blind',
+        random: seededRandom(107),
+      });
+      const response = await resolvePracticeRequest(
+        new Request('http://localhost/api/practice/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
+            depthBb: 20,
+            stateHash,
+            state,
+          }),
+        })
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('private, no-store');
+      const result = (await response.json()) as ResolverResult;
+      expect(result).toMatchObject({
+        schema: 'hu-practice-continual-resolver-query-v1',
+        stateHash,
+        modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
+        depthBb: 20,
+        networkSha256: PRACTICE_RESOLVER_IDENTITY.networkSha256,
+        rangePolicySha256: PRACTICE_RESOLVER_IDENTITY.rangePolicySha256,
+        valueNetworkSha256: PRACTICE_RESOLVER_IDENTITY.valueNetworkSha256,
+        preflopActionValuesSha256:
+          PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
+      });
+      assertNormalizedActions(result);
+    },
+    120_000
   );
 });
