@@ -101,4 +101,29 @@ describe('AnalystRail decision feedback', () => {
     expect(html).toContain('0.100bb EV · uncertainty unavailable');
     expect(html).not.toContain('0.100bb EV ± 0.000bb');
   });
+
+  it('preserves small policy frequencies and renders true zero as zero', () => {
+    const smallMix = {
+      ...feedback,
+      policyActions: feedback.policyActions.map((action, index) => ({
+        ...action,
+        probability: index === 0 ? 0.004 : 0.996,
+      })),
+    };
+    const smallMixHtml = renderFeedback(smallMix);
+    expect(smallMixHtml).toContain('0.4%');
+    expect(smallMixHtml).toContain('99.6%');
+    expect(smallMixHtml).toContain('width:0.4%');
+
+    const pureMix = {
+      ...feedback,
+      policyActions: feedback.policyActions.map((action, index) => ({
+        ...action,
+        probability: index === 0 ? 0 : 1,
+      })),
+    };
+    const pureMixHtml = renderFeedback(pureMix);
+    expect(pureMixHtml).toContain('width:0%');
+    expect(pureMixHtml).toContain('100%');
+  });
 });

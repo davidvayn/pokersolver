@@ -43,7 +43,9 @@ const TABS: Array<{ value: RailTab; label: string; icon: typeof Info }> = [
 ];
 
 function pct(value: number): string {
-  return `${(value * 100).toFixed(value > 0.995 ? 1 : 0)}%`;
+  const percentage = value * 100;
+  if (percentage > 0 && percentage < 0.1) return '<0.1%';
+  return `${percentage.toFixed(1).replace(/\.0$/, '')}%`;
 }
 
 function estimatedActionLoss(
@@ -107,7 +109,7 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
               <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-2">
                 <div
                   className="h-full rounded-full bg-accent"
-                  style={{ width: `${Math.max(1, action.probability * 100)}%` }}
+                  style={{ width: `${action.probability * 100}%` }}
                 />
               </div>
               <p className="mt-1 text-[11px] text-muted">
