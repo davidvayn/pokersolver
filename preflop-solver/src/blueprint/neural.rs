@@ -228,6 +228,7 @@ pub struct PracticePolicyEngine {
 
 struct PracticePreflopActionValues {
     sha256: String,
+    source_policy_sha256: Option<String>,
     entries: BTreeMap<String, (Vec<String>, Vec<f64>, Vec<f64>)>,
 }
 
@@ -238,6 +239,12 @@ impl PracticePreflopActionValues {
         let artifact: super::preflop::PreflopLeakAttribution = serde_json::from_slice(&bytes)?;
         let legacy = artifact.schema == "hu-preflop-local-leak-attribution-v1";
         let canonical = artifact.schema == "hu-preflop-canonical-range-action-values-v1";
+        let valid_digest = |digest: &str| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        };
         if (!legacy && !canonical)
             || artifact.corpus_deals == 0
             || artifact.policy_lookup_coverage < 0.9999
@@ -247,9 +254,20 @@ impl PracticePreflopActionValues {
                 && artifact
                     .action_ev_standard_error_coverage
                     .is_none_or(|coverage| coverage < 0.95))
+            || (canonical
+                && artifact
+                    .policy_artifact_sha256
+                    .as_deref()
+                    .is_none_or(|digest| !valid_digest(digest)))
+            || (canonical
+                && artifact
+                    .source_policy_sha256
+                    .as_deref()
+                    .is_none_or(|digest| !valid_digest(digest)))
         {
             return Err("practice preflop action-value artifact is incomplete".into());
         }
+        let source_policy_sha256 = artifact.source_policy_sha256.clone();
         let mut entries = BTreeMap::new();
         for entry in artifact.players.into_iter().flatten() {
             if entry.action_labels.is_empty()
@@ -278,7 +296,22 @@ impl PracticePreflopActionValues {
                 return Err("practice preflop action-value rows are invalid".into());
             }
         }
-        Ok(Self { sha256, entries })
+        Ok(Self {
+            sha256,
+            source_policy_sha256,
+            entries,
+        })
+    }
+
+    fn validate_source_policy_sha256(&self, expected: &str) -> Result<(), Box<dyn Error>> {
+        if self
+            .source_policy_sha256
+            .as_deref()
+            .is_some_and(|digest| digest != expected)
+        {
+            return Err("practice preflop action values target a different served policy".into());
+        }
+        Ok(())
     }
 
     fn values(
@@ -1929,6 +1962,9 @@ impl PracticePolicyEngine {
             .as_deref()
             .map(PracticePreflopActionValues::read)
             .transpose()?;
+        if let Some(values) = &preflop_action_values {
+            values.validate_source_policy_sha256(policy.bundle_sha256())?;
+        }
         if let Some(resolver) = config.river_resolver {
             policy.enable_river_resolver(resolver)?;
         }
@@ -6809,6 +6845,8 @@ mod tests {
             schema: "hu-preflop-canonical-range-action-values-v1".to_owned(),
             corpus_deals: 22_100,
             policy_model_version: "test".to_owned(),
+            policy_artifact_sha256: Some("a".repeat(64)),
+            source_policy_sha256: Some("b".repeat(64)),
             top_per_player: usize::MAX,
             evaluated_information_sets: [1, 0],
             total_policy_reach_weighted_local_gain_bb: [0.0, 0.0],
@@ -6851,7 +6889,13 @@ mod tests {
             std::process::id()
         ));
         artifact(0.95).write(&accepted).unwrap();
-        assert!(PracticePreflopActionValues::read(&accepted).is_ok());
+        let values = PracticePreflopActionValues::read(&accepted).unwrap();
+        assert!(values
+            .validate_source_policy_sha256(&"b".repeat(64))
+            .is_ok());
+        assert!(values
+            .validate_source_policy_sha256(&"c".repeat(64))
+            .is_err());
         fs::remove_file(&accepted).unwrap();
 
         let rejected = std::env::temp_dir().join(format!(

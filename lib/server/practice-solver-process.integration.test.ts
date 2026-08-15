@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 
 vi.mock('server-only', () => ({}));
 
@@ -59,6 +60,18 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
         stateHash,
         modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
         depthBb: 20,
+        networkSha256: PRACTICE_RESOLVER_IDENTITY.networkSha256,
+        rangePolicySha256: PRACTICE_RESOLVER_IDENTITY.rangePolicySha256,
+        valueNetworkSha256: PRACTICE_RESOLVER_IDENTITY.valueNetworkSha256,
+        preflopActionValuesSha256:
+          PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
+      });
+      const manifest = fullHandManifests.find(
+        (candidate) =>
+          candidate.version === PRACTICE_RESOLVER_IDENTITY.modelVersion
+      );
+      expect(manifest?.runtime).toMatchObject({
+        kind: 'rust-continual-resolver-v1',
         networkSha256: PRACTICE_RESOLVER_IDENTITY.networkSha256,
         rangePolicySha256: PRACTICE_RESOLVER_IDENTITY.rangePolicySha256,
         valueNetworkSha256: PRACTICE_RESOLVER_IDENTITY.valueNetworkSha256,

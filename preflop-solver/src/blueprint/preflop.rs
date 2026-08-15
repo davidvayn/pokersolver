@@ -719,6 +719,10 @@ pub struct PreflopLeakAttribution {
     pub schema: String,
     pub corpus_deals: usize,
     pub policy_model_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_artifact_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_policy_sha256: Option<String>,
     pub top_per_player: usize,
     pub evaluated_information_sets: [usize; 2],
     pub total_policy_reach_weighted_local_gain_bb: [f64; 2],
@@ -2974,6 +2978,8 @@ pub fn attribute_policy_leaks(
         schema: ATTRIBUTION_SCHEMA.to_owned(),
         corpus_deals: cache.deals.len(),
         policy_model_version: artifact.model_version.clone(),
+        policy_artifact_sha256: None,
+        source_policy_sha256: artifact.source_policy_sha256.clone(),
         top_per_player,
         evaluated_information_sets,
         total_policy_reach_weighted_local_gain_bb,
@@ -3558,6 +3564,8 @@ pub fn attribute_canonical_range_policy_action_values(
         schema: "hu-preflop-canonical-range-action-values-v1".to_owned(),
         corpus_deals: cache.covered_raw_flops,
         policy_model_version: artifact.model_version.clone(),
+        policy_artifact_sha256: Some(cache.policy_sha256.clone()),
+        source_policy_sha256: artifact.source_policy_sha256.clone(),
         top_per_player: usize::MAX,
         evaluated_information_sets,
         total_policy_reach_weighted_local_gain_bb,

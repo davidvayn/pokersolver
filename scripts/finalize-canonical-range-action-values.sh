@@ -59,4 +59,23 @@ fi
   --output "$action_values"
 gzip -t "$merged_cache"
 gzip -t "$action_values"
+policy_sha256=$(shasum -a 256 "$policy" | awk '{print $1}')
+source_policy_sha256=$(jq -er '.source_policy_sha256' "$policy")
+action_policy_sha256=$(gzip -dc "$action_values" | jq -er '.policy_artifact_sha256')
+action_source_policy_sha256=$(gzip -dc "$action_values" | jq -er '.source_policy_sha256')
+if [[ "$action_policy_sha256" != "$policy_sha256" ]]; then
+  echo "canonical action values target policy $action_policy_sha256, expected $policy_sha256" >&2
+  exit 1
+fi
+if [[ "$action_source_policy_sha256" != "$source_policy_sha256" ]]; then
+  echo "canonical action values target source policy $action_source_policy_sha256, expected $source_policy_sha256" >&2
+  exit 1
+fi
+gzip -dc "$action_values" | jq -e '
+  .schema == "hu-preflop-canonical-range-action-values-v1" and
+  .corpus_deals == 22100 and
+  .policy_lookup_coverage >= 0.9999 and
+  .action_ev_standard_error_coverage >= 0.95 and
+  .evaluated_information_sets == [8450, 8450]
+' >/dev/null
 shasum -a 256 "$merged_cache" "$action_values"
