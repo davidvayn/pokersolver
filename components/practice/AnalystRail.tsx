@@ -46,6 +46,14 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(value > 0.995 ? 1 : 0)}%`;
 }
 
+function estimatedActionLoss(
+  bestActionEvBb: number | null,
+  actionEvBb: number | null
+): number | null {
+  if (bestActionEvBb === null || actionEvBb === null) return null;
+  return Math.max(0, bestActionEvBb - actionEvBb);
+}
+
 function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }) {
   if (!feedback) {
     return (
@@ -74,35 +82,47 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
       </div>
 
       <div className="space-y-3">
-        {feedback.policyActions.map((action) => (
-          <div key={action.id}>
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="flex items-center gap-1.5 font-medium">
-                {action.id === feedback.chosenAction.id && (
-                  <Check className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
-                )}
-                {action.label}
-              </span>
-              <span className="font-mono">{pct(action.probability)}</span>
+        {feedback.policyActions.map((action) => {
+          const loss = estimatedActionLoss(
+            feedback.bestActionEvBb,
+            action.evBb
+          );
+          const isBestEstimate = loss !== null && loss <= 1e-9;
+          return (
+            <div key={action.id}>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                  {action.id === feedback.chosenAction.id && (
+                    <Check className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                  )}
+                  {action.label}
+                  {isBestEstimate && (
+                    <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
+                      Best estimated EV
+                    </span>
+                  )}
+                </span>
+                <span className="font-mono">{pct(action.probability)}</span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-2">
+                <div
+                  className="h-full rounded-full bg-accent"
+                  style={{ width: `${Math.max(1, action.probability * 100)}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-muted">
+                {action.evBb === null
+                  ? 'Action EV and estimated loss unavailable in this model version'
+                  : `${action.evBb.toFixed(3)}bb EV ± ${(action.standardErrorBb ?? 0).toFixed(3)}bb · Estimated loss ${loss?.toFixed(3) ?? '—'}bb`}
+              </p>
             </div>
-            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-2">
-              <div
-                className="h-full rounded-full bg-accent"
-                style={{ width: `${Math.max(1, action.probability * 100)}%` }}
-              />
-            </div>
-            <p className="mt-1 text-[11px] text-muted">
-              {action.evBb === null
-                ? 'Action EV unavailable in this model version'
-                : `${action.evBb.toFixed(3)}bb EV ± ${(action.standardErrorBb ?? 0).toFixed(3)}bb`}
-            </p>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="grid grid-cols-2 gap-2 border-t border-border pt-4 text-xs">
         <div>
-          <p className="text-muted">EV loss</p>
+          <p className="text-muted">Estimated EV loss</p>
           <p className="mt-1 font-mono font-semibold">
             {feedback.evLossBb === null ? 'Not graded' : `${feedback.evLossBb.toFixed(3)}bb`}
           </p>

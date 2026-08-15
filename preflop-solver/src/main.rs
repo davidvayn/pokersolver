@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-compact" => run_preflop_compact(&args[1..]),
         "preflop-distill-samples" => run_preflop_distill_samples(&args[1..]),
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
+        "preflop-export-neural-policy" => run_preflop_export_neural_policy(&args[1..]),
         "full-game-lbr" => run_full_game_lbr(&args[1..]),
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
@@ -1858,6 +1859,41 @@ fn run_preflop_evaluate_neural(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_preflop_export_neural_policy(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for neural preflop export")?;
+    let network_path = value(args, "--networks")
+        .map(PathBuf::from)
+        .ok_or("--networks is required for neural preflop export")?;
+    let model_version = value(args, "--model-version")
+        .ok_or("--model-version is required for neural preflop export")?
+        .to_owned();
+    let output = value(args, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("preflop-neural-serving-policy.json"));
+    let cache = blueprint::preflop::ContinuationCache::read(&cache_path)?;
+    let artifact = blueprint::preflop::export_neural_preflop_policy(
+        &cache,
+        &cache_path,
+        &network_path,
+        model_version,
+    )?;
+    artifact.write(&output)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "output": output,
+            "modelVersion": artifact.model_version,
+            "sourcePolicySha256": artifact.source_policy_sha256,
+            "informationSets": artifact.strategies.len(),
+            "policyLookupCoverage": artifact.training_evaluation.policy_lookup_coverage,
+            "preflopExploitabilityBbPerHand": artifact.training_evaluation.exploitability_bb_per_hand,
+        }))?
+    );
+    Ok(())
+}
+
 fn run_preflop_distill_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     let cache_path = value(args, "--cache")
         .map(PathBuf::from)
@@ -3005,6 +3041,8 @@ Preflop continuation/solve options:
   preflop-compact --policy <json> [--output <bin>]
   preflop-distill-samples --cache <json.gz> --policy <json> --output <jsonl.gz>
   preflop-evaluate-neural --cache <json.gz> --networks <json> [--output <json>]
+  preflop-export-neural-policy --cache <json.gz> --networks <json.gz>
+    --model-version <version> [--output <json>]
 
 Full-game learned-response options:
   --effective-stack-bb <number>   Default: 20

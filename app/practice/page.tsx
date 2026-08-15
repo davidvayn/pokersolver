@@ -482,6 +482,7 @@ export default function PracticePage() {
     };
     setState(finished);
     setActiveNode(null);
+    setFeedback(decisions.at(-1) ?? null);
     const profileHistory = [
       handRecord,
       ...recentHandsRef.current.filter((hand) => hand.id !== handRecord.id),
@@ -604,6 +605,7 @@ export default function PracticePage() {
     const currentRequest = ++requestId.current;
     setStatus('loading');
     setSelectedActionId(null);
+    setFeedback(null);
     setErrorMessage('');
     try {
       const advanced = await advancePolicyToHero({
@@ -683,6 +685,8 @@ export default function PracticePage() {
   const modelLabel = manifest
     ? `${manifest.label} · ${manifest.version}`
     : 'No active model';
+  const visibleFeedback =
+    status === 'feedback' || status === 'review' ? feedback : null;
 
   return (
     <div className="pb-8">
@@ -755,7 +759,7 @@ export default function PracticePage() {
             idPrefix="desktop-rail"
             tab={railTab}
             onTabChange={setRailTab}
-            feedback={feedback}
+            feedback={visibleFeedback}
             recentHands={recentHands}
             settings={settings}
             pendingSettings={pendingSettings}
@@ -807,7 +811,7 @@ export default function PracticePage() {
               idPrefix="mobile-rail"
               tab={railTab}
               onTabChange={setRailTab}
-              feedback={feedback}
+              feedback={visibleFeedback}
               recentHands={recentHands}
               settings={settings}
               pendingSettings={pendingSettings}

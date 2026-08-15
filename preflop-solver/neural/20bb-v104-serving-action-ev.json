@@ -1,0 +1,33 @@
+{
+  "schema": "hu-20bb-serving-action-ev-handoff-v1",
+  "modelVersion": "hu-20bb-v104-served-v57-seed7601",
+  "status": "canonical_evaluation_retargeted_to_served_policy",
+  "servedNetwork": {
+    "path": "models/practice/v57-seed7601-networks.json.gz",
+    "decodedSha256": "310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3",
+    "preflopSource": "v27-seed7601 distilled neural student"
+  },
+  "servingPolicyExport": {
+    "path": "neural/runs/20bb-v104-action-ev/served-v57-seed7601-preflop-policy.json",
+    "sha256": "1b14fa8987663f37cd0f0f2889fa2574aaf7d31455d6f66d0fca6fe9ceec1114",
+    "informationSets": 16900,
+    "policyLookupCoverage": 1.0,
+    "directNeuralEvaluationMatchesExportExactly": true,
+    "preflopInformationSetExploitabilityBbPerHand": 0.20333753832701768
+  },
+  "rejectedTeacherEvaluationSource": {
+    "path": "neural/runs/20bb-v27-mixed10-tabular-seed7601-r10000000.json",
+    "sha256": "bc4e8b0015464cf55e941596c641b0d8b4e530cef58e53457ee516fbceedc456",
+    "probabilityCount": 50193,
+    "unweightedProbabilityMaeVersusServedStudent": 0.07917926201083064,
+    "maximumProbabilityDeltaVersusServedStudent": 0.9244783179159723,
+    "exactlyEqual": false
+  },
+  "decision": {
+    "oldCanonicalRunStopped": true,
+    "completedOldShardsPreserved": 9,
+    "reason": "The old run evaluated the tabular teacher's ranges and continuation policy, but the website queries the distilled neural student. Its action values could not validly grade the served policy.",
+    "next": "Generate all 1755 suit-isomorphic flop boards as atomic single-board shards against the serving-policy export, using two disjoint resumable workers, then merge with provenance checks and install only the complete compressed action-value report."
+  },
+  "interpretation": "The export invokes the same frozen Rust neural inference used by practice serving and materializes all 8450 preflop information sets per player. Exact equality of the direct neural and exported-table information-set response metrics verifies routing identity; it is not an equilibrium or exploitability release certificate."
+}

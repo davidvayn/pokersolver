@@ -581,6 +581,8 @@ pub struct PreflopPolicyEntry {
 pub struct PreflopPolicyArtifact {
     pub schema: String,
     pub model_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_policy_sha256: Option<String>,
     pub depth_bb: f64,
     pub seed: u64,
     pub iterations: u64,
@@ -635,6 +637,9 @@ impl PreflopPolicyArtifact {
                 .continuation_cache_sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
+            || self.source_policy_sha256.as_ref().is_some_and(|digest| {
+                digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
         {
             return Err("tabular preflop policy metadata is invalid".into());
         }
@@ -1148,6 +1153,7 @@ impl<'a> PreflopDcfrSolver<'a> {
         let mut artifact = PreflopPolicyArtifact {
             schema: POLICY_SCHEMA.to_owned(),
             model_version,
+            source_policy_sha256: None,
             depth_bb: self.cache.depth_bb,
             seed,
             iterations: self.iterations,
@@ -3813,6 +3819,114 @@ pub fn evaluate_neural_policy(
     })
 }
 
+/// Materialize the exact preflop probabilities produced by the frozen neural
+/// serving runtime into the class/public-history table consumed by the
+/// range-conditioned continuation evaluator.  Preflop state features are
+/// invariant under suit renaming, so one deterministic exact-card
+/// representative per 169-class information set is sufficient.
+pub fn export_neural_preflop_policy(
+    cache: &ContinuationCache,
+    cache_path: &Path,
+    network_path: &Path,
+    model_version: String,
+) -> Result<PreflopPolicyArtifact, Box<dyn Error>> {
+    fn visit_public_states(
+        state: GameState,
+        game: &BlueprintConfig,
+        states: &mut BTreeMap<Vec<String>, GameState>,
+    ) {
+        if state.terminal.is_some() || state.street != Street::Preflop {
+            return;
+        }
+        if states
+            .insert(state.public_history.clone(), state.clone())
+            .is_some()
+        {
+            return;
+        }
+        for action in state.legal_actions(game) {
+            visit_public_states(state.apply(&action, game), game, states);
+        }
+    }
+
+    fn representative_deal(combo: Combo, actor: usize) -> Deal {
+        let opponent = all_combos()
+            .into_iter()
+            .find(|candidate| !combo.overlaps(*candidate))
+            .expect("a private combo always has compatible opponent cards");
+        let mut holes = [[0u8; 2]; 2];
+        holes[actor] = combo.cards();
+        holes[1 - actor] = opponent.cards();
+        let board = (0..52u8)
+            .filter(|card| !holes.iter().flatten().any(|known| known == card))
+            .take(5)
+            .collect::<Vec<_>>();
+        Deal::from_sampled_cards(holes, [board[0], board[1], board[2], board[3], board[4]])
+    }
+
+    cache.validate()?;
+    let frozen = FrozenPolicy::load(network_path)?;
+    let source_policy_sha256 = frozen.bundle_sha256().to_owned();
+    let representatives = all_combos()
+        .into_iter()
+        .map(|combo| (combo.label(), combo))
+        .collect::<BTreeMap<_, _>>();
+    if representatives.len() != 169 {
+        return Err("neural preflop export did not find all 169 hand classes".into());
+    }
+    let mut states = BTreeMap::new();
+    visit_public_states(GameState::initial(&cache.game), &cache.game, &mut states);
+    let mut strategies = Vec::with_capacity(states.len() * representatives.len());
+    for state in states.values() {
+        let actions = state.legal_actions(&cache.game);
+        let action_labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        for (hand_class, combo) in &representatives {
+            let deal = representative_deal(*combo, state.actor);
+            let probabilities = frozen.strategy(&state, &deal, &actions, &cache.game);
+            strategies.push(PreflopPolicyEntry {
+                key: information_key(state, &deal),
+                actor: state.actor,
+                hand_class: hand_class.clone(),
+                public_history: state.public_history.clone(),
+                action_labels: action_labels.clone(),
+                probabilities,
+                positive_regret_sum_bb: 0.0,
+                regret_updates: 0,
+                average_visits: 0,
+                average_reach_weight: 0.0,
+            });
+        }
+    }
+    let expected = states.len() * representatives.len();
+    if strategies.len() != expected {
+        return Err("neural preflop export missed a public-state hand class".into());
+    }
+    let mut artifact = PreflopPolicyArtifact {
+        schema: POLICY_SCHEMA.to_owned(),
+        model_version,
+        source_policy_sha256: Some(source_policy_sha256),
+        depth_bb: cache.depth_bb,
+        seed: 0,
+        iterations: 1,
+        sampling_exploration_probability: 0.0,
+        solver_dcfr: DcfrParameters::default(),
+        solver_variant: PreflopSolverVariant::Dcfr,
+        continuation_cache_sha256: sha256_file(cache_path)?,
+        game: cache.game.clone(),
+        strategies,
+        training_evaluation: empty_evaluation(cache.deals.len()),
+    };
+    artifact.validate()?;
+    artifact.training_evaluation = evaluate_policy(cache, &artifact);
+    if artifact.training_evaluation.policy_lookup_coverage < 1.0 - EPSILON {
+        return Err("exported neural preflop table missed a serving information set".into());
+    }
+    Ok(artifact)
+}
+
 pub fn export_distillation_dataset(
     cache: &ContinuationCache,
     artifact: &PreflopPolicyArtifact,
@@ -4746,6 +4860,7 @@ mod tests {
         let policy = PreflopPolicyArtifact {
             schema: POLICY_SCHEMA.to_owned(),
             model_version: "test-range-policy".to_owned(),
+            source_policy_sha256: None,
             depth_bb: 20.0,
             seed: 1,
             iterations: 1,
@@ -4841,6 +4956,48 @@ mod tests {
             report.evaluated_information_sets
         );
         fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn neural_preflop_export_uses_the_served_network_identity_and_full_table() {
+        let cache = synthetic_cache(19);
+        let cache_path = std::env::temp_dir().join(format!(
+            "neural-preflop-export-cache-{}.json.gz",
+            std::process::id()
+        ));
+        cache.write(&cache_path).unwrap();
+        let network_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("models/practice/v57-seed7601-networks.json.gz");
+        let artifact = export_neural_preflop_policy(
+            &cache,
+            &cache_path,
+            &network_path,
+            "test-served-v57".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(artifact.strategies.len(), 16_900);
+        assert_eq!(
+            artifact.source_policy_sha256.as_deref(),
+            Some("310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3")
+        );
+        assert_eq!(artifact.training_evaluation.policy_lookup_coverage, 1.0);
+        assert_eq!(
+            artifact
+                .strategies
+                .iter()
+                .filter(|entry| entry.actor == 0)
+                .count(),
+            8_450
+        );
+        assert_eq!(
+            artifact
+                .strategies
+                .iter()
+                .filter(|entry| entry.actor == 1)
+                .count(),
+            8_450
+        );
+        fs::remove_file(cache_path).unwrap();
     }
 
     #[test]
