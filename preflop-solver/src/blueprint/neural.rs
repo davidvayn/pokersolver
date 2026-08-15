@@ -8725,6 +8725,7 @@ mod tests {
         let range_path = directory.join(format!("{prefix}-range.json"));
         let value_path = directory.join(format!("{prefix}-value.json"));
         let output_path = directory.join(format!("{prefix}.jsonl.gz"));
+        let mismatched_actor_path = directory.join(format!("{prefix}-mismatched-actor.jsonl.gz"));
         let self_play_first_path = directory.join(format!("{prefix}-self-play-first.jsonl.gz"));
         let self_play_second_path = directory.join(format!("{prefix}-self-play-second.jsonl.gz"));
         let self_play_tiny_reach_path =
@@ -8973,7 +8974,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(records.len(), attribution.retained_records);
         assert!(!records.is_empty());
-        for record in records {
+        for record in &records {
             assert_eq!(
                 record["record_type"],
                 "range_conditioned_causal_policy_attribution"
@@ -9020,10 +9021,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(evaluation.records, attribution.retained_records);
+        assert_eq!(evaluation.target_actor, Some(0));
         assert!(evaluation.weighted_policy_value_gain_bb.abs() < 1e-12);
         assert!(evaluation.maximum_reverse_kl_from_frozen < 1e-12);
         assert!(evaluation.maximum_stored_source_probability_difference < 1e-6);
         assert_eq!(evaluation.validation.status, "rejected");
+
+        let mut mismatched_payloads = vec![metadata.clone()];
+        mismatched_payloads.extend(records.iter().cloned());
+        mismatched_payloads[1]["state"]["actor"] = serde_json::json!(1);
+        let file = fs::File::create(&mismatched_actor_path).unwrap();
+        let mut writer = GzEncoder::new(BufWriter::new(file), Compression::fast());
+        for payload in &mismatched_payloads {
+            serde_json::to_writer(&mut writer, payload).unwrap();
+            writer.write_all(b"\n").unwrap();
+        }
+        writer.finish().unwrap().flush().unwrap();
+        let mismatch = crate::blueprint::public_belief::evaluate_causal_range_policy(
+            crate::blueprint::public_belief::CausalRangePolicyEvaluationConfig {
+                network_path: range_path.clone(),
+                frozen_network_path: range_path.clone(),
+                attribution_network_path: range_path.clone(),
+                dataset_path: mismatched_actor_path.clone(),
+                source_policy_path: None,
+                minimum_policy_value_gain_bb: 0.000001,
+                maximum_node_kl: 0.005,
+                maximum_weighted_kl: 0.0015,
+            },
+        )
+        .unwrap_err();
+        assert!(mismatch
+            .to_string()
+            .contains("record does not match its target actor"));
 
         let self_play_config = |output| RangeSelfPlaySampleConfig {
             game: game.clone(),
@@ -9139,6 +9168,7 @@ mod tests {
         fs::remove_file(value_path).unwrap();
         fs::remove_file(range_path).unwrap();
         fs::remove_file(output_path).unwrap();
+        fs::remove_file(mismatched_actor_path).unwrap();
         fs::remove_file(self_play_first_path).unwrap();
         fs::remove_file(self_play_second_path).unwrap();
         fs::remove_file(self_play_tiny_reach_path).unwrap();

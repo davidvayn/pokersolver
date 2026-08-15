@@ -161,7 +161,11 @@ def load_dataset(
         raise ValueError(f"incompatible causal range-policy dataset: {path}")
     records = _cap_records(records, maximum_records)
     target_actor = metadata.get("target_actor")
-    if target_actor is not None and target_actor not in (0, 1):
+    if target_actor is not None and (
+        not isinstance(target_actor, int)
+        or isinstance(target_actor, bool)
+        or target_actor not in (0, 1)
+    ):
         raise ValueError(f"invalid causal range-policy target actor in {path}")
     expected_record_type = DIRECTIONAL_RECORD_TYPES[metadata["schema"]]
     count = len(records)
@@ -196,7 +200,12 @@ def load_dataset(
             else None
         )
         board = np.asarray(state.get("board"), dtype=np.int16)
-        actor = int(state.get("actor", -1))
+        raw_actor = state.get("actor")
+        actor = (
+            raw_actor
+            if isinstance(raw_actor, int) and not isinstance(raw_actor, bool)
+            else -1
+        )
         focal = int(record.get("focal_combo", -1))
         weight = float(record.get("weight", float("nan")))
         if (

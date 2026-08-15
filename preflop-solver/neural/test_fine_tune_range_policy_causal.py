@@ -241,6 +241,15 @@ class CausalRangePolicyTests(unittest.TestCase):
             targeted_records = json.loads(json.dumps(records))
             for record in targeted_records:
                 record["state"]["actor"] = 0
+            for invalid_target_actor in (-1, 2, 0.0, "0", False):
+                invalid_metadata = dict(targeted_metadata)
+                invalid_metadata["target_actor"] = invalid_target_actor
+                with gzip.open(targeted_path, "wt", encoding="utf-8") as stream:
+                    stream.write(json.dumps(invalid_metadata) + "\n")
+                    for record in targeted_records:
+                        stream.write(json.dumps(record) + "\n")
+                with self.assertRaisesRegex(ValueError, "invalid.*target actor"):
+                    module.load_dataset(targeted_path, 6, None, 1)
             with gzip.open(targeted_path, "wt", encoding="utf-8") as stream:
                 stream.write(json.dumps(targeted_metadata) + "\n")
                 for record in targeted_records:
@@ -254,6 +263,14 @@ class CausalRangePolicyTests(unittest.TestCase):
                     stream.write(json.dumps(record) + "\n")
             with self.assertRaisesRegex(ValueError, "invalid causal range-policy"):
                 module.load_dataset(targeted_path, 6, None, 1)
+            for invalid_record_actor in (0.0, "0", False):
+                targeted_records[0]["state"]["actor"] = invalid_record_actor
+                with gzip.open(targeted_path, "wt", encoding="utf-8") as stream:
+                    stream.write(json.dumps(targeted_metadata) + "\n")
+                    for record in targeted_records:
+                        stream.write(json.dumps(record) + "\n")
+                with self.assertRaisesRegex(ValueError, "invalid causal range-policy"):
+                    module.load_dataset(targeted_path, 6, None, 1)
             self_play_path = Path(temporary) / "self-play.jsonl.gz"
             self_play_metadata = dict(metadata)
             self_play_metadata["schema"] = module.SELF_PLAY_SCHEMA

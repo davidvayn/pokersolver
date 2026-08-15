@@ -1478,6 +1478,24 @@ fn causal_probability_parity_accepted(
         && maximum_sum_error <= MAXIMUM_CAUSAL_PROBABILITY_SUM_ERROR
 }
 
+fn causal_target_actor(metadata: &serde_json::Value) -> Result<Option<usize>, &'static str> {
+    let value = &metadata["target_actor"];
+    if value.is_null() {
+        return Ok(None);
+    }
+    let actor = value
+        .as_u64()
+        .ok_or("causal range-policy target actor must be player 0 or player 1")?;
+    if actor > 1 {
+        return Err("causal range-policy target actor must be player 0 or player 1");
+    }
+    Ok(Some(actor as usize))
+}
+
+fn causal_record_matches_target_actor(target_actor: Option<usize>, actor: usize) -> bool {
+    target_actor.is_none_or(|target| actor == target)
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct CausalRangePolicyAttributionRecord {
     record_type: String,
@@ -1499,6 +1517,8 @@ pub struct CausalRangePolicyEvaluationReport {
     pub frozen_network_sha256: String,
     pub attribution_network_sha256: String,
     pub dataset_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_actor: Option<usize>,
     pub records: usize,
     pub total_objective_weight: f64,
     pub weighted_policy_value_gain_bb: f64,
@@ -1596,6 +1616,7 @@ pub fn evaluate_causal_range_policy(
     {
         return Err("causal range-policy metadata is incompatible".into());
     }
+    let target_actor = causal_target_actor(&metadata)?;
     let depth = metadata["depth_bb"]
         .as_f64()
         .ok_or("causal range-policy dataset omits its depth")?;
@@ -1629,6 +1650,9 @@ pub fn evaluate_causal_range_policy(
             || record.ranges.iter().any(|range| range.len() != COMBO_COUNT)
         {
             return Err("causal range-policy record is invalid".into());
+        }
+        if !causal_record_matches_target_actor(target_actor, record.state.actor) {
+            return Err("causal range-policy record does not match its target actor".into());
         }
         let state = PublicBeliefState {
             street: record.state.street,
@@ -1776,6 +1800,7 @@ pub fn evaluate_causal_range_policy(
         frozen_network_sha256,
         attribution_network_sha256,
         dataset_sha256,
+        target_actor,
         records,
         total_objective_weight: total_weight,
         weighted_policy_value_gain_bb: weighted_gain,
@@ -11922,6 +11947,40 @@ mod tests {
             f64::from_bits(MAXIMUM_CAUSAL_PROBABILITY_SUM_ERROR.to_bits() + 1),
         ));
         assert!(!causal_probability_parity_accepted(f64::NAN, 0.0));
+    }
+
+    #[test]
+    fn causal_target_actor_is_strict_and_records_must_match() {
+        assert_eq!(causal_target_actor(&serde_json::json!({})).unwrap(), None);
+        assert_eq!(
+            causal_target_actor(&serde_json::json!({ "target_actor": null })).unwrap(),
+            None
+        );
+        assert_eq!(
+            causal_target_actor(&serde_json::json!({ "target_actor": 0 })).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            causal_target_actor(&serde_json::json!({ "target_actor": 1 })).unwrap(),
+            Some(1)
+        );
+        for invalid in [
+            serde_json::json!(-1),
+            serde_json::json!(2),
+            serde_json::json!(0.0),
+            serde_json::json!("0"),
+        ] {
+            assert!(causal_target_actor(&serde_json::json!({
+                "target_actor": invalid
+            }))
+            .is_err());
+        }
+        assert!(causal_record_matches_target_actor(None, 0));
+        assert!(causal_record_matches_target_actor(None, 1));
+        assert!(causal_record_matches_target_actor(Some(0), 0));
+        assert!(!causal_record_matches_target_actor(Some(0), 1));
+        assert!(causal_record_matches_target_actor(Some(1), 1));
+        assert!(!causal_record_matches_target_actor(Some(1), 0));
     }
 
     #[test]
