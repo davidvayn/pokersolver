@@ -13,6 +13,12 @@
     "runtime": {
       "kind": "rust-continual-resolver-v1",
       "endpoint": "/api/practice/resolve",
+      "artifactFiles": {
+        "networks": "v57-seed7601-networks.json.gz",
+        "rangePolicy": "v102-seed20931-range-policy.json.gz",
+        "preflopActionValues": "v101-seed7601-preflop-action-values.json.gz",
+        "flopValueNetwork": "v91-seed22501-turn-value.json.gz"
+      },
       "networkSha256": "310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3",
       "rangePolicySha256": "7296e5a54cd0c310f5fd7dc126937b41131c54d00b0bc2c6807d7791c14772f0",
       "valueNetworkSha256": "2764959d5ddf004dc7ad9146a831250bbf2db2b3fcf86a3f3daf2cc51e458202",
@@ -55,7 +61,7 @@
       "primaryActionAgreement": 0.878940809,
       "maximumAggregateActionDelta": 0.0145675627,
       "policyCoverage": 1,
-      "actionEvStandardErrorCoverage": 0.303753917,
+      "actionEvStandardErrorCoverage": 0.30375391669702995,
       "projectedStorageBytes": 42613516,
       "rawProbabilitySumsValid": true,
       "quantizedProbabilitySumsValid": true,

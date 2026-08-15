@@ -116,6 +116,12 @@ describe('database-free full-hand activation registry', () => {
       runtime: {
         kind: 'rust-continual-resolver-v1',
         endpoint: '/api/practice/resolve',
+        artifactFiles: {
+          networks: 'networks.json.gz',
+          rangePolicy: 'range-policy.json.gz',
+          preflopActionValues: 'preflop-action-values.json.gz',
+          flopValueNetwork: 'flop-value-network.json.gz',
+        },
         networkSha256: 'a'.repeat(64),
         rangePolicySha256: 'b'.repeat(64),
         valueNetworkSha256: 'c'.repeat(64),
@@ -142,6 +148,22 @@ describe('database-free full-hand activation registry', () => {
       },
     };
     expect(isExperimentalFullHandManifest(experimental)).toBe(true);
+    const resolverRuntime = experimental.runtime;
+    if (resolverRuntime?.kind !== 'rust-continual-resolver-v1') {
+      throw new Error('test manifest must use a continual resolver');
+    }
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        runtime: {
+          ...resolverRuntime,
+          artifactFiles: {
+            ...resolverRuntime.artifactFiles,
+            preflopActionValues: '../unverified.json.gz',
+          },
+        },
+      })
+    ).toBe(false);
     expect(
       isExperimentalFullHandManifest({
         ...experimental,

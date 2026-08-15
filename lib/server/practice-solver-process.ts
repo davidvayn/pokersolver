@@ -4,25 +4,36 @@ import { randomUUID } from 'node:crypto';
 import { cpus } from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import fullHandManifests from '@/data/practice/full-hand-manifests.json';
+import type {
+  ContinualResolverRuntime,
+  PolicyManifest,
+} from '@/lib/practice-types';
 
 const MODEL_VERSION = 'hu-20bb-v102-consensus-continual-resolver-experimental';
-const NETWORK_SHA256 =
-  '310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3';
-const RANGE_POLICY_SHA256 =
-  '7296e5a54cd0c310f5fd7dc126937b41131c54d00b0bc2c6807d7791c14772f0';
-const VALUE_NETWORK_SHA256 =
-  '2764959d5ddf004dc7ad9146a831250bbf2db2b3fcf86a3f3daf2cc51e458202';
-const PREFLOP_ACTION_VALUES_SHA256 =
-  '8369f6dde1f6de8380e0bc32cf54003524791478939741c9fc427b47d3efa70a';
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_STDERR_BYTES = 16_384;
 
+const resolverManifest = (fullHandManifests as PolicyManifest[]).find(
+  (manifest) => manifest.version === MODEL_VERSION
+);
+if (resolverManifest?.runtime?.kind !== 'rust-continual-resolver-v1') {
+  throw new Error('The pinned continual resolver manifest is missing');
+}
+const resolverRuntime: ContinualResolverRuntime = resolverManifest.runtime;
+const resolverArtifactFiles = resolverRuntime.artifactFiles;
+for (const [kind, file] of Object.entries(resolverArtifactFiles)) {
+  if (!/^[a-z0-9][a-z0-9.-]*\.json\.gz$/.test(file)) {
+    throw new Error(`The pinned continual resolver ${kind} file is unsafe`);
+  }
+}
+
 export const PRACTICE_RESOLVER_IDENTITY = {
   modelVersion: MODEL_VERSION,
-  networkSha256: NETWORK_SHA256,
-  rangePolicySha256: RANGE_POLICY_SHA256,
-  valueNetworkSha256: VALUE_NETWORK_SHA256,
-  preflopActionValuesSha256: PREFLOP_ACTION_VALUES_SHA256,
+  networkSha256: resolverRuntime.networkSha256,
+  rangePolicySha256: resolverRuntime.rangePolicySha256,
+  valueNetworkSha256: resolverRuntime.valueNetworkSha256,
+  preflopActionValuesSha256: resolverRuntime.preflopActionValuesSha256,
 } as const;
 
 interface PendingRequest {
@@ -58,17 +69,17 @@ function command(): { executable: string; args: string[] } {
       '--effective-stack-bb',
       '20',
       '--networks',
-      path.join(modelRoot, 'v57-seed7601-networks.json.gz'),
+      path.join(modelRoot, resolverArtifactFiles.networks),
       '--range-policy',
-      path.join(modelRoot, 'v102-seed20931-range-policy.json.gz'),
+      path.join(modelRoot, resolverArtifactFiles.rangePolicy),
       '--preflop-action-values',
-      path.join(modelRoot, 'v101-seed7601-preflop-action-values.json.gz'),
+      path.join(modelRoot, resolverArtifactFiles.preflopActionValues),
       '--flop-resolver-iterations',
       '2',
       '--flop-resolver-averaging-delay',
       '0',
       '--flop-resolver-value-network',
-      path.join(modelRoot, 'v91-seed22501-turn-value.json.gz'),
+      path.join(modelRoot, resolverArtifactFiles.flopValueNetwork),
       '--flop-resolver-threads',
       String(threads),
       '--turn-resolver-iterations',

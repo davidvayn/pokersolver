@@ -166,6 +166,12 @@ describe('practice policy client', () => {
       runtime: {
         kind: 'rust-continual-resolver-v1',
         endpoint: '/api/practice/resolve',
+        artifactFiles: {
+          networks: 'networks.json.gz',
+          rangePolicy: 'range-policy.json.gz',
+          preflopActionValues: 'preflop-action-values.json.gz',
+          flopValueNetwork: 'flop-value-network.json.gz',
+        },
         networkSha256: 'a'.repeat(64),
         rangePolicySha256: 'b'.repeat(64),
         valueNetworkSha256: 'c'.repeat(64),

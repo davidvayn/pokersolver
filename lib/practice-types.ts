@@ -155,6 +155,12 @@ export interface ShardedPolicyRuntime {
 export interface ContinualResolverRuntime {
   kind: 'rust-continual-resolver-v1';
   endpoint: '/api/practice/resolve';
+  artifactFiles: {
+    networks: string;
+    rangePolicy: string;
+    preflopActionValues: string;
+    flopValueNetwork: string;
+  };
   networkSha256: string;
   rangePolicySha256: string;
   valueNetworkSha256: string;

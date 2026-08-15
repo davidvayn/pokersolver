@@ -125,8 +125,24 @@ function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
     return true;
   }
   if (runtime?.kind === 'rust-continual-resolver-v1') {
+    const artifactFiles = runtime.artifactFiles;
+    const requiredArtifactFiles = artifactFiles
+      ? [
+          artifactFiles.networks,
+          artifactFiles.rangePolicy,
+          artifactFiles.preflopActionValues,
+          artifactFiles.flopValueNetwork,
+        ]
+      : [];
     return (
       runtime.endpoint === '/api/practice/resolve' &&
+      Object.keys(artifactFiles ?? {}).length === 4 &&
+      requiredArtifactFiles.length === 4 &&
+      requiredArtifactFiles.every(
+        (file) =>
+          typeof file === 'string' &&
+          /^[a-z0-9][a-z0-9.-]*\.json\.gz$/.test(file)
+      ) &&
       /^[a-f0-9]{64}$/.test(runtime.networkSha256) &&
       /^[a-f0-9]{64}$/.test(runtime.rangePolicySha256) &&
       /^[a-f0-9]{64}$/.test(runtime.valueNetworkSha256) &&
