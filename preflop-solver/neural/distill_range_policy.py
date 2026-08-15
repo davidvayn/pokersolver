@@ -1398,11 +1398,22 @@ def normalized_tower_payload(
     return payload
 
 
+def read_json_artifact(path: Path) -> dict[str, Any]:
+    """Read a served JSON artifact without conflating gzip bytes and payload."""
+    raw = path.read_bytes()
+    if raw.startswith(b"\x1f\x8b"):
+        raw = gzip.decompress(raw)
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("served JSON artifact must contain an object")
+    return payload
+
+
 def load_exported_model(
     model: RangeConditionedPolicy, path: Path
 ) -> dict[str, Any]:
     """Load a served JSON artifact back into the matching MLX architecture."""
-    payload = json.loads(path.read_text())
+    payload = read_json_artifact(path)
     if (
         payload.get("schema") != NETWORK_SCHEMA
         or payload.get("architecture") != model.architecture

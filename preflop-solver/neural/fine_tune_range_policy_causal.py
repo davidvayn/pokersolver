@@ -32,6 +32,7 @@ from distill_range_policy import (
     add_features,
     export_model_from_source,
     load_exported_model,
+    read_json_artifact,
     sha256,
 )
 
@@ -583,7 +584,7 @@ def train_candidate(
 ) -> tuple[RangeConditionedPolicy, dict[str, Any], dict[str, Any]]:
     if paired_corpus_gradient and not full_corpus_gradient:
         raise ValueError("paired-corpus gradient requires full-corpus accumulation")
-    source_payload = json.loads(source_path.read_text())
+    source_payload = read_json_artifact(source_path)
     model = RangeConditionedPolicy(
         str(source_payload["architecture"]),
         str(source_payload.get("policyComposition", "replace")),
@@ -601,7 +602,7 @@ def train_candidate(
     if same_attribution_policy:
         attribution_training = source_training
     else:
-        attribution_payload = json.loads(attribution_path.read_text())
+        attribution_payload = read_json_artifact(attribution_path)
         attribution_model = RangeConditionedPolicy(
             str(attribution_payload["architecture"]),
             str(attribution_payload.get("policyComposition", "replace")),

@@ -520,10 +520,11 @@ class CausalRangePolicyTests(unittest.TestCase):
             )
             del trained
 
-            attribution_path = Path(temporary) / "attribution.json"
+            attribution_path = Path(temporary) / "attribution.json.gz"
             attribution_payload = json.loads(source_path.read_text())
             attribution_payload["seed"] = 109
-            attribution_path.write_text(json.dumps(attribution_payload) + "\n")
+            with gzip.open(attribution_path, "wt", encoding="utf-8") as stream:
+                stream.write(json.dumps(attribution_payload) + "\n")
             self.assertNotEqual(
                 module.sha256(source_path), module.sha256(attribution_path)
             )
