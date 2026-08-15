@@ -52,7 +52,10 @@ interface ResolverResult {
   actions: ResolverAction[];
 }
 
-function assertNormalizedActions(result: ResolverResult): void {
+function assertNormalizedActions(
+  result: ResolverResult,
+  uncertainty: 'measured' | 'unavailable'
+): void {
   expect(result.maximumProbabilitySumError).toBeLessThanOrEqual(1e-6);
   expect(result.actions.length).toBeGreaterThanOrEqual(2);
   expect(
@@ -62,9 +65,13 @@ function assertNormalizedActions(result: ResolverResult): void {
     expect(action.probability).toBeGreaterThanOrEqual(0);
     expect(action.evBb).not.toBeNull();
     expect(Number.isFinite(action.evBb)).toBe(true);
-    expect(action.standardErrorBb).not.toBeNull();
-    expect(Number.isFinite(action.standardErrorBb)).toBe(true);
-    expect(action.standardErrorBb).toBeGreaterThanOrEqual(0);
+    if (uncertainty === 'measured') {
+      expect(action.standardErrorBb).not.toBeNull();
+      expect(Number.isFinite(action.standardErrorBb)).toBe(true);
+      expect(action.standardErrorBb).toBeGreaterThanOrEqual(0);
+    } else {
+      expect(action.standardErrorBb).toBeNull();
+    }
     expect(action.confidence).toBe('low');
   }
 }
@@ -141,7 +148,7 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
           PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
       });
       expect(result.actions).toHaveLength(8);
-      assertNormalizedActions(result);
+      assertNormalizedActions(result, 'measured');
       expect(result.actions.map((action) => action.kind)).toContain('all_in');
     },
     120_000
@@ -188,7 +195,7 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
           preflopActionValuesSha256:
             PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
         });
-        assertNormalizedActions(result);
+        assertNormalizedActions(result, 'unavailable');
         expect(result.actions.map((action) => action.kind)).toContain('check');
       }
     },
@@ -233,7 +240,7 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
         preflopActionValuesSha256:
           PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
       });
-      assertNormalizedActions(result);
+      assertNormalizedActions(result, 'measured');
     },
     120_000
   );

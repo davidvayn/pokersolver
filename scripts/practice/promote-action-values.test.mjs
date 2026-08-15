@@ -123,6 +123,10 @@ test('installs a passing artifact and updates the inactive manifest atomically',
       files.compressed
     );
     assert.match(manifest.validation.notes.at(-1), /96\.000%/);
+    assert.match(
+      manifest.validation.notes.at(-1),
+      /conservative full-hand sampling-error lower bound/
+    );
   } finally {
     await rm(files.root, { recursive: true, force: true });
   }

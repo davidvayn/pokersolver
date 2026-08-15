@@ -1996,9 +1996,12 @@ impl PracticePolicyEngine {
         let (probabilities, mut action_values_bb) = self
             .policy
             .strategy_with_action_values(&state, &deal, &legal, &self.game)?;
-        let mut action_value_standard_errors_bb = action_values_bb
-            .as_ref()
-            .map(|values| vec![0.0; values.len()]);
+        // Postflop values are deterministic outputs of the online resolver,
+        // but their learned continuation approximation has no calibrated
+        // uncertainty estimate. Do not present determinism as a zero-width
+        // confidence interval. Canonical preflop values carry measured
+        // chance-sampling standard errors and replace this `None` below.
+        let mut action_value_standard_errors_bb = None;
         if state.street == Street::Preflop {
             let preflop = self
                 .preflop_action_values

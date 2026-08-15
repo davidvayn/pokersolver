@@ -71,7 +71,7 @@
         "Inactive and fail-closed: exploitability is deferred, not passed.",
         "The conservative full-hand cross-seed summary takes the weakest metric across the frozen served preflop-student validation and exact v102 postflop consensus comparison; seed 20931 is pinned only for the inactive experimental preview because it has the lower heldout teacher-EV loss, not as an exploitability-based release selection.",
         "Complete per-round logs measure 10.282785437 and 10.275821583 hours across the paired narrow/wide seed paths; the release verifier pins the log hashes and frozen lineage mapping.",
-        "The ten-cycle preflop action-value corpus has 30.375% policy-action-weighted coverage at 0.02bb standard error, so its feedback is low confidence and cannot activate this candidate.",
+        "The ten-cycle preflop action-value corpus has 30.375% policy-action-weighted coverage at 0.02bb standard error, so its conservative full-hand sampling-error lower bound fails and cannot activate this candidate. Deterministic postflop resolver values require no Monte Carlo sampling, but their learned-continuation approximation remains separately labeled low confidence with uncalibrated uncertainty.",
         "The immutable losslessly compressed solver bundle is 42,613,516 bytes; no database is required for this embedded runtime."
       ]
     }
