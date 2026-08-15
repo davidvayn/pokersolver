@@ -358,6 +358,9 @@ pub struct CausalPolicyAttributionConfig {
     pub range_policy_path: Option<PathBuf>,
     pub public_branches_per_street: u32,
     pub opponent_samples_per_runout: u32,
+    /// Retain directional postflop rows only for this fixed policy seat while
+    /// still solving both responders for a paired full-game diagnostic.
+    pub target_actor: Option<usize>,
     pub max_records: usize,
     pub output: PathBuf,
 }
@@ -414,6 +417,8 @@ pub struct CausalPolicyAttributionReport {
     pub threads: usize,
     pub public_branches_per_street: u32,
     pub opponent_samples_per_runout: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_actor: Option<usize>,
     pub scenarios_per_deal: u64,
     pub response_tree_nodes: u64,
     pub attribution_tree_nodes: u64,
@@ -5390,6 +5395,7 @@ fn fixed_causal_response_policy_values(
     deal_index: u64,
     candidate_index: &mut u64,
     objective_scale: f64,
+    target_actor: Option<usize>,
     collector: &mut BoundedCausalAttributionCollector,
     stats: &mut CausalAttributionWalkStats,
 ) -> Result<Vec<f64>, String> {
@@ -5446,6 +5452,7 @@ fn fixed_causal_response_policy_values(
                 deal_index,
                 candidate_index,
                 objective_scale,
+                target_actor,
                 collector,
                 stats,
             )?;
@@ -5499,6 +5506,7 @@ fn fixed_causal_response_policy_values(
             deal_index,
             candidate_index,
             objective_scale,
+            target_actor,
             collector,
             stats,
         )?);
@@ -5525,7 +5533,8 @@ fn fixed_causal_response_policy_values(
             .zip(&responder_values)
             .map(|(probability, value)| probability * value)
             .sum();
-        if state.street != Street::Preflop {
+        if state.street != Street::Preflop && target_actor.is_none_or(|actor| actor == state.actor)
+        {
             let policy_values = responder_values
                 .into_iter()
                 .map(|value| -value)
@@ -5625,6 +5634,9 @@ pub fn generate_causal_policy_attribution(
     }
     if config.public_branches_per_street == 0 || config.opponent_samples_per_runout == 0 {
         return Err("causal attribution requires public and hidden-hand samples".into());
+    }
+    if config.target_actor.is_some_and(|actor| actor > 1) {
+        return Err("causal attribution target actor must be player 0 or 1".into());
     }
     if config.max_records < 3 {
         return Err("causal attribution requires at least three retained records".into());
@@ -5727,6 +5739,7 @@ pub fn generate_causal_policy_attribution(
                             index,
                             &mut candidate_index,
                             objective_scale,
+                            config.target_actor,
                             &mut collector,
                             &mut stats,
                         )?;
@@ -5864,6 +5877,7 @@ pub fn generate_causal_policy_attribution(
         "policy_objective": "maximize_negated_responder_utility_with_a_trust_region",
         "public_branches_per_street": config.public_branches_per_street,
         "opponent_samples_per_runout": config.opponent_samples_per_runout,
+        "target_actor": config.target_actor,
         "scenarios_per_deal": scenarios_per_deal,
         "source_network_sha256": network_sha256,
         "source_range_policy_sha256": range_policy_sha256,
@@ -5894,6 +5908,7 @@ pub fn generate_causal_policy_attribution(
         threads: worker_count,
         public_branches_per_street: config.public_branches_per_street,
         opponent_samples_per_runout: config.opponent_samples_per_runout,
+        target_actor: config.target_actor,
         scenarios_per_deal,
         response_tree_nodes,
         attribution_tree_nodes,
@@ -7360,6 +7375,27 @@ mod tests {
     }
 
     #[test]
+    fn causal_attribution_rejects_an_invalid_target_actor_before_artifact_io() {
+        let error = generate_causal_policy_attribution(CausalPolicyAttributionConfig {
+            game: BlueprintConfig::default(),
+            deals: 1,
+            seed: 1,
+            threads: 1,
+            network_path: PathBuf::from("missing-network.json"),
+            range_policy_path: None,
+            public_branches_per_street: 1,
+            opponent_samples_per_runout: 1,
+            target_actor: Some(2),
+            max_records: 3,
+            output: PathBuf::from("unused.jsonl.gz"),
+        })
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("target actor must be player 0 or 1"));
+    }
+
+    #[test]
     fn practice_reader_requires_canonical_action_ev_precision_gate() {
         use crate::blueprint::preflop::{
             PreflopLeakAttribution, PreflopLeakEntry, PreflopPublicHistoryLeak,
@@ -8473,6 +8509,7 @@ mod tests {
             range_policy_path: None,
             public_branches_per_street: 1,
             opponent_samples_per_runout: 1,
+            target_actor: None,
             max_records: 60,
             output,
         };
@@ -8842,6 +8879,7 @@ mod tests {
             range_policy_path: Some(range_path.clone()),
             public_branches_per_street: 1,
             opponent_samples_per_runout: 1,
+            target_actor: Some(0),
             max_records: 60,
             output: output_path.clone(),
         })
@@ -8928,6 +8966,8 @@ mod tests {
         );
         assert_eq!(metadata["uses_exact_ranges"], true);
         assert_eq!(metadata["focal_combo_attribution"], true);
+        assert_eq!(metadata["target_actor"], 0);
+        assert_eq!(attribution.target_actor, Some(0));
         let records = lines
             .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
             .collect::<Vec<_>>();
@@ -8938,6 +8978,7 @@ mod tests {
                 record["record_type"],
                 "range_conditioned_causal_policy_attribution"
             );
+            assert_eq!(record["state"]["actor"], 0);
             assert_ne!(record["state"]["street"], "preflop");
             assert!(record["focal_combo"].as_u64().unwrap() < COMBO_COUNT as u64);
             let ranges = record["ranges"].as_array().unwrap();

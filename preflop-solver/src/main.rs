@@ -2439,6 +2439,9 @@ fn run_neural_causal_attribution(args: &[String]) -> Result<(), Box<dyn Error>> 
             range_policy_path: value(args, "--range-policy").map(PathBuf::from),
             public_branches_per_street: parse_or(args, "--public-branches-per-street", 2u32)?,
             opponent_samples_per_runout: parse_or(args, "--opponent-samples-per-runout", 4u32)?,
+            target_actor: value(args, "--target-actor")
+                .map(|actor| actor.parse::<usize>())
+                .transpose()?,
             max_records: parse_or(args, "--max-records", 100_000usize)?,
             output,
         },
@@ -3046,6 +3049,17 @@ Neural certificate options:
   --flop-resolver-actor <0|1>     Resolve only BTN/SB (0) or BB (1) actions
   --compact-serving-grid          Match an opt-in reduced-open model
   --output <path>                 Optional JSON certificate file
+
+Neural causal-attribution options:
+  --networks <path>               Required frozen policy-network JSON
+  --range-policy <path>           Optional frozen exact-range policy JSON
+  --deals <N>                     Default: 8 paired outer games
+  --public-branches-per-street <N> Default: 2
+  --opponent-samples-per-runout <N> Default: 4
+  --target-actor <0|1>            Retain only BTN/SB (0) or BB (1) policy rows
+  --max-records <N>               Default: 100000 bounded output guard
+  --output <path>                 Default: causal-policy-attribution.jsonl.gz
+  --report <path>                 Optional generation report JSON
 
 Preflop continuation/solve options:
   preflop-cache --networks <json> [--networks-b <json>] [--deals 2652] [--rollouts-per-leaf 8]
