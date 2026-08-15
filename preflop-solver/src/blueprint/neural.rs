@@ -8723,6 +8723,7 @@ mod tests {
         let directory = std::env::temp_dir();
         let network_path = directory.join(format!("{prefix}-network.json"));
         let range_path = directory.join(format!("{prefix}-range.json"));
+        let range_gzip_path = directory.join(format!("{prefix}-range.json.gz"));
         let value_path = directory.join(format!("{prefix}-value.json"));
         let output_path = directory.join(format!("{prefix}.jsonl.gz"));
         let mismatched_actor_path = directory.join(format!("{prefix}-mismatched-actor.jsonl.gz"));
@@ -8733,6 +8734,11 @@ mod tests {
         fs::write(&network_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let range_bytes = serde_json::to_vec(&range_policy).unwrap();
         fs::write(&range_path, &range_bytes).unwrap();
+        let file = fs::File::create(&range_gzip_path).unwrap();
+        let mut writer = GzEncoder::new(BufWriter::new(file), Compression::fast());
+        writer.write_all(&range_bytes).unwrap();
+        writer.finish().unwrap().flush().unwrap();
+        let range_gzip_bytes = fs::read(&range_gzip_path).unwrap();
         fs::write(&value_path, serde_json::to_vec(&value_network).unwrap()).unwrap();
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 2.0;
@@ -8877,7 +8883,7 @@ mod tests {
             seed: 83,
             threads: 2,
             network_path: network_path.clone(),
-            range_policy_path: Some(range_path.clone()),
+            range_policy_path: Some(range_gzip_path.clone()),
             public_branches_per_street: 1,
             opponent_samples_per_runout: 1,
             target_actor: Some(0),
@@ -8935,7 +8941,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             attribution.range_policy_sha256,
-            Some(format!("{:x}", Sha256::digest(&range_bytes)))
+            Some(format!("{:x}", Sha256::digest(&range_gzip_bytes)))
         );
         assert!(
             (attribution.sample_mean_exploitability_bb - certificate.sample_mean_exploitability_bb)
@@ -9011,7 +9017,7 @@ mod tests {
             crate::blueprint::public_belief::CausalRangePolicyEvaluationConfig {
                 network_path: range_path.clone(),
                 frozen_network_path: range_path.clone(),
-                attribution_network_path: range_path.clone(),
+                attribution_network_path: range_gzip_path.clone(),
                 dataset_path: output_path.clone(),
                 source_policy_path: None,
                 minimum_policy_value_gain_bb: 0.000001,
@@ -9022,6 +9028,22 @@ mod tests {
         .unwrap();
         assert_eq!(evaluation.records, attribution.retained_records);
         assert_eq!(evaluation.target_actor, Some(0));
+        assert_eq!(
+            evaluation.network_artifact_sha256,
+            format!("{:x}", Sha256::digest(&range_bytes))
+        );
+        assert_eq!(
+            evaluation.frozen_network_artifact_sha256,
+            format!("{:x}", Sha256::digest(&range_bytes))
+        );
+        assert_eq!(
+            evaluation.attribution_network_artifact_sha256,
+            format!("{:x}", Sha256::digest(&range_gzip_bytes))
+        );
+        assert_eq!(
+            evaluation.attribution_network_sha256,
+            format!("{:x}", Sha256::digest(&range_bytes))
+        );
         assert!(evaluation.weighted_policy_value_gain_bb.abs() < 1e-12);
         assert!(evaluation.maximum_reverse_kl_from_frozen < 1e-12);
         assert!(evaluation.maximum_stored_source_probability_difference < 1e-6);
@@ -9041,7 +9063,7 @@ mod tests {
             crate::blueprint::public_belief::CausalRangePolicyEvaluationConfig {
                 network_path: range_path.clone(),
                 frozen_network_path: range_path.clone(),
-                attribution_network_path: range_path.clone(),
+                attribution_network_path: range_gzip_path.clone(),
                 dataset_path: mismatched_actor_path.clone(),
                 source_policy_path: None,
                 minimum_policy_value_gain_bb: 0.000001,
@@ -9167,6 +9189,7 @@ mod tests {
         fs::remove_file(network_path).unwrap();
         fs::remove_file(value_path).unwrap();
         fs::remove_file(range_path).unwrap();
+        fs::remove_file(range_gzip_path).unwrap();
         fs::remove_file(output_path).unwrap();
         fs::remove_file(mismatched_actor_path).unwrap();
         fs::remove_file(self_play_first_path).unwrap();

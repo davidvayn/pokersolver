@@ -108,6 +108,9 @@ class CausalRangePolicyTests(unittest.TestCase):
                 "networkSha256": module.sha256(candidate),
                 "frozenNetworkSha256": module.sha256(frozen),
                 "attributionNetworkSha256": module.sha256(frozen),
+                "networkArtifactSha256": module.sha256(candidate),
+                "frozenNetworkArtifactSha256": module.sha256(frozen),
+                "attributionNetworkArtifactSha256": module.sha256(frozen),
                 "datasetSha256": module.sha256(dataset),
                 "validation": {"status": "accepted_for_directional_evaluation"},
             }
@@ -172,6 +175,27 @@ class CausalRangePolicyTests(unittest.TestCase):
                         0.005,
                         0.0015,
                         0,
+                    )
+            report["targetActor"] = None
+            report["attributionNetworkArtifactSha256"] = "0" * 64
+            with patch.object(
+                module.subprocess,
+                "run",
+                return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(report), stderr=""
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "not pinned"):
+                    module.rust_evaluate(
+                        Path("solver"),
+                        candidate,
+                        frozen,
+                        frozen,
+                        dataset,
+                        1e-6,
+                        0.005,
+                        0.0015,
+                        None,
                     )
 
     def test_rust_evaluator_surfaces_solver_diagnostics(self):

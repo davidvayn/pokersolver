@@ -421,6 +421,15 @@ def source_parity_metrics(
     return result
 
 
+def _rust_artifact_hash_matches(
+    report: dict[str, Any], artifact_key: str, legacy_key: str, path: Path
+) -> bool:
+    measured = report.get(artifact_key)
+    if measured is None:
+        measured = report.get(legacy_key)
+    return measured == sha256(path)
+
+
 def rust_evaluate(
     evaluator: Path,
     candidate: Path,
@@ -465,9 +474,18 @@ def rust_evaluate(
     report = json.loads(completed.stdout)
     if (
         report.get("schema") != "hu-range-conditioned-causal-policy-rust-evaluation-v1"
-        or report.get("networkSha256") != sha256(candidate)
-        or report.get("frozenNetworkSha256") != sha256(frozen)
-        or report.get("attributionNetworkSha256") != sha256(attribution)
+        or not _rust_artifact_hash_matches(
+            report, "networkArtifactSha256", "networkSha256", candidate
+        )
+        or not _rust_artifact_hash_matches(
+            report, "frozenNetworkArtifactSha256", "frozenNetworkSha256", frozen
+        )
+        or not _rust_artifact_hash_matches(
+            report,
+            "attributionNetworkArtifactSha256",
+            "attributionNetworkSha256",
+            attribution,
+        )
         or report.get("datasetSha256") != sha256(dataset)
         or report.get("targetActor") != target_actor
     ):
@@ -520,9 +538,21 @@ def reuse_exact_dataset_parity(
         if (
             report.get("schema")
             != "hu-range-conditioned-causal-policy-rust-evaluation-v1"
-            or report.get("networkSha256") != sha256(source)
-            or report.get("frozenNetworkSha256") != sha256(source)
-            or report.get("attributionNetworkSha256") != sha256(attribution)
+            or not _rust_artifact_hash_matches(
+                report, "networkArtifactSha256", "networkSha256", source
+            )
+            or not _rust_artifact_hash_matches(
+                report,
+                "frozenNetworkArtifactSha256",
+                "frozenNetworkSha256",
+                source,
+            )
+            or not _rust_artifact_hash_matches(
+                report,
+                "attributionNetworkArtifactSha256",
+                "attributionNetworkSha256",
+                attribution,
+            )
             or report.get("datasetSha256") != dataset.sha256
             or report.get("targetActor") != dataset.metadata.get("target_actor")
             or report.get("records") != len(dataset.records)

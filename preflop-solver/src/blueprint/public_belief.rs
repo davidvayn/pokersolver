@@ -1513,6 +1513,9 @@ struct CausalRangePolicyAttributionRecord {
 #[serde(rename_all = "camelCase")]
 pub struct CausalRangePolicyEvaluationReport {
     pub schema: &'static str,
+    pub network_artifact_sha256: String,
+    pub frozen_network_artifact_sha256: String,
+    pub attribution_network_artifact_sha256: String,
     pub network_sha256: String,
     pub frozen_network_sha256: String,
     pub attribution_network_sha256: String,
@@ -1552,6 +1555,15 @@ pub fn evaluate_causal_range_policy(
     }
     let dataset_bytes = fs::read(&config.dataset_path)?;
     let dataset_sha256 = format!("{:x}", Sha256::digest(&dataset_bytes));
+    let network_artifact_sha256 = format!("{:x}", Sha256::digest(fs::read(&config.network_path)?));
+    let frozen_network_artifact_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&config.frozen_network_path)?)
+    );
+    let attribution_network_artifact_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&config.attribution_network_path)?)
+    );
     let network = RangeConditionedPolicyNetwork::read(&config.network_path)?;
     let frozen = RangeConditionedPolicyNetwork::read(&config.frozen_network_path)?;
     let attribution = RangeConditionedPolicyNetwork::read(&config.attribution_network_path)?;
@@ -1611,7 +1623,7 @@ pub fn evaluate_causal_range_policy(
         || metadata["postflop_only"] != true
         || metadata["preflop_policy_frozen"] != true
         || metadata["source_range_policy_sha256"].as_str()
-            != Some(attribution_network_sha256.as_str())
+            != Some(attribution_network_artifact_sha256.as_str())
         || metadata["records"].as_u64().unwrap_or(0) == 0
     {
         return Err("causal range-policy metadata is incompatible".into());
@@ -1796,6 +1808,9 @@ pub fn evaluate_causal_range_policy(
         && causal_probability_parity_accepted(maximum_source_difference, maximum_sum_error);
     Ok(CausalRangePolicyEvaluationReport {
         schema: "hu-range-conditioned-causal-policy-rust-evaluation-v1",
+        network_artifact_sha256,
+        frozen_network_artifact_sha256,
+        attribution_network_artifact_sha256,
         network_sha256,
         frozen_network_sha256,
         attribution_network_sha256,
