@@ -43,6 +43,25 @@
       "actionEvStandardErrorCoverage": 0.3056618783183542,
       "maximumActionEvStandardErrorBb": 4.143589874507773,
       "expectedResult": "failed_precision_gate"
+    },
+    "thirtyEightOrbitCheckpoint": {
+      "coveredRawFlops": 444,
+      "evaluatedInformationSets": [
+        8450,
+        8450
+      ],
+      "policyLookupCoverage": 1.0,
+      "actionEvStandardErrorCoverage": 0.30031611969104693,
+      "maximumActionEvStandardErrorBb": 2.1582925932735058,
+      "projectedCoverageFromMeasuredActionSeDistribution": {
+        "878": 0.3081257034209056,
+        "1500": 0.486507856594649,
+        "1650": 0.7878322182800251,
+        "1700": 0.8918807728422986,
+        "1725": 0.9504542893384692,
+        "1755": 1.0
+      },
+      "projectionAssumption": "Per-action cluster variance remains stable while standard errors scale by the without-replacement finite-population factor from the measured 38-orbit sample."
     }
   },
   "interpretation": "The export invokes the same frozen Rust neural inference used by practice serving and materializes all 8450 preflop information sets per player. Exact equality of the direct neural and exported-table information-set response metrics verifies routing identity; it is not an equilibrium or exploitability release certificate."
