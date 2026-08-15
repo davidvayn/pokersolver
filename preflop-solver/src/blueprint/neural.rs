@@ -414,6 +414,8 @@ pub struct CausalPolicyAttributionReport {
     pub retained_records_by_street: [usize; 3],
     pub truncated: bool,
     pub sample_mean_exploitability_bb: f64,
+    pub mean_response_values_bb: [f64; 2],
+    pub response_diagnostics: [CausalResponderDiagnostics; 2],
     pub maximum_root_value_reconstruction_error_bb: f64,
     pub minimum_frozen_policy_action_probability: f64,
     pub maximum_target_probability_sum_error: f64,
@@ -422,6 +424,28 @@ pub struct CausalPolicyAttributionReport {
     pub output: PathBuf,
     pub output_sha256: String,
     pub validation_status: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CausalActionReachDiagnostic {
+    pub street: Street,
+    pub action_label: String,
+    /// Expected times this action is selected per outer response game. This
+    /// is reach mass, not a normalized action frequency: several decisions
+    /// can occur on one hand.
+    pub expected_reach: f64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CausalResponderDiagnostics {
+    pub responder: usize,
+    pub mean_response_value_bb: f64,
+    pub expected_response_decision_reach_by_street: [f64; 4],
+    pub expected_frozen_policy_decision_reach_by_street: [f64; 4],
+    pub expected_terminal_reach_by_street: [f64; 4],
+    pub expected_terminal_response_value_by_street_bb: [f64; 4],
+    pub selected_response_actions: Vec<CausalActionReachDiagnostic>,
+    pub frozen_policy_actions: Vec<CausalActionReachDiagnostic>,
 }
 
 #[derive(Clone, Debug)]
@@ -531,6 +555,8 @@ pub struct ExploitabilityCertificate {
     /// Per observation, responder-zero and responder-one values before their
     /// average is clamped into the reported exploitability sample.
     pub sample_response_values_bb: Vec<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_diagnostics: Option<[CausalResponderDiagnostics; 2]>,
     pub sample_mean_exploitability_bb: f64,
     pub sample_standard_error_bb: f64,
     pub hoeffding_margin_bb: f64,
@@ -4554,6 +4580,7 @@ fn observed_public_board(deal: &Deal, street: Street) -> Vec<u8> {
     key
 }
 
+#[cfg(test)]
 fn causal_sample_game_response_value(
     generator: &SampleGenerator,
     state: GameState,
@@ -4673,13 +4700,24 @@ fn solve_causal_response_plan(
     weights: &[f64],
     responder: usize,
     visited_nodes: &mut u64,
-) -> Result<(f64, CausalResponsePlan), String> {
+) -> Result<
+    (
+        f64,
+        CausalResponsePlan,
+        CausalResponderDiagnosticsAccumulator,
+    ),
+    String,
+> {
     *visited_nodes += 1;
     if scenarios.len() != weights.len() {
         return Err("causal response scenarios and weights differ".to_owned());
     }
     if weights.iter().all(|weight| *weight <= 0.0) {
-        return Ok((0.0, BTreeMap::new()));
+        return Ok((
+            0.0,
+            BTreeMap::new(),
+            CausalResponderDiagnosticsAccumulator::default(),
+        ));
     }
     if state.terminal.is_some() {
         let value = scenarios
@@ -4695,7 +4733,9 @@ fn solve_causal_response_plan(
                     }
             })
             .sum();
-        return Ok((value, BTreeMap::new()));
+        let mut diagnostics = CausalResponderDiagnosticsAccumulator::default();
+        diagnostics.record_terminal(state.street, weights.iter().sum(), value);
+        return Ok((value, BTreeMap::new(), diagnostics));
     }
     let actions = state.legal_actions(&generator.config.game);
     if state.actor == responder {
@@ -4710,10 +4750,16 @@ fn solve_causal_response_plan(
         }
         let mut total = 0.0;
         let mut plan = BTreeMap::new();
+        let mut diagnostics = CausalResponderDiagnosticsAccumulator::default();
         for (observed_board, information_set_weights) in information_sets {
-            let mut best: Option<(usize, f64, CausalResponsePlan)> = None;
+            let mut best: Option<(
+                usize,
+                f64,
+                CausalResponsePlan,
+                CausalResponderDiagnosticsAccumulator,
+            )> = None;
             for (action_index, action) in actions.iter().enumerate() {
-                let (value, child_plan) = solve_causal_response_plan(
+                let (value, child_plan, child_diagnostics) = solve_causal_response_plan(
                     generator,
                     state.apply(action, &generator.config.game),
                     scenarios,
@@ -4723,15 +4769,21 @@ fn solve_causal_response_plan(
                 )?;
                 if best
                     .as_ref()
-                    .is_none_or(|(_, best_value, _)| value > *best_value)
+                    .is_none_or(|(_, best_value, _, _)| value > *best_value)
                 {
-                    best = Some((action_index, value, child_plan));
+                    best = Some((action_index, value, child_plan, child_diagnostics));
                 }
             }
-            let (selected_action, value, child_plan) =
+            let (selected_action, value, child_plan, mut child_diagnostics) =
                 best.ok_or_else(|| "causal responder has no legal action".to_owned())?;
             total += value;
             merge_causal_response_plan(&mut plan, child_plan)?;
+            child_diagnostics.record_response_action(
+                state.street,
+                &actions[selected_action],
+                information_set_weights.iter().sum(),
+            );
+            diagnostics.merge(child_diagnostics);
             let information_set = CausalResponseInformationSet {
                 public_history: state.public_history.clone(),
                 observed_board,
@@ -4742,7 +4794,7 @@ fn solve_causal_response_plan(
                 }
             }
         }
-        return Ok((total, plan));
+        return Ok((total, plan, diagnostics));
     }
 
     let mut branch_weights = vec![vec![0.0; scenarios.len()]; actions.len()];
@@ -4757,8 +4809,10 @@ fn solve_causal_response_plan(
     }
     let mut total = 0.0;
     let mut plan = BTreeMap::new();
+    let mut diagnostics = CausalResponderDiagnosticsAccumulator::default();
     for (action, child_weights) in actions.iter().zip(branch_weights) {
-        let (value, child_plan) = solve_causal_response_plan(
+        let action_reach = child_weights.iter().sum();
+        let (value, child_plan, mut child_diagnostics) = solve_causal_response_plan(
             generator,
             state.apply(action, &generator.config.game),
             scenarios,
@@ -4768,8 +4822,10 @@ fn solve_causal_response_plan(
         )?;
         total += value;
         merge_causal_response_plan(&mut plan, child_plan)?;
+        child_diagnostics.record_frozen_policy_action(state.street, action, action_reach);
+        diagnostics.merge(child_diagnostics);
     }
-    Ok((total, plan))
+    Ok((total, plan, diagnostics))
 }
 
 type AttributionReservoirKey = (u64, u64, u64, u8, u64);
@@ -4876,6 +4932,182 @@ struct CausalAttributionWalkStats {
     maximum_target_sum_error: f64,
     minimum_policy_value: f64,
     maximum_policy_value: f64,
+    response_diagnostics: [CausalResponderDiagnosticsAccumulator; 2],
+}
+
+#[derive(Default)]
+struct CausalResponderDiagnosticsAccumulator {
+    response_decision_reach_by_street: [f64; 4],
+    frozen_policy_decision_reach_by_street: [f64; 4],
+    terminal_reach_by_street: [f64; 4],
+    terminal_response_value_by_street_bb: [f64; 4],
+    selected_response_actions: BTreeMap<(u8, String), f64>,
+    frozen_policy_actions: BTreeMap<(u8, String), f64>,
+}
+
+fn diagnostic_street_index(street: Street) -> usize {
+    match street {
+        Street::Preflop => 0,
+        Street::Flop => 1,
+        Street::Turn => 2,
+        Street::River => 3,
+    }
+}
+
+fn diagnostic_street(index: u8) -> Street {
+    match index {
+        0 => Street::Preflop,
+        1 => Street::Flop,
+        2 => Street::Turn,
+        3 => Street::River,
+        _ => unreachable!("diagnostic street index is bounded"),
+    }
+}
+
+impl CausalResponderDiagnosticsAccumulator {
+    fn record_response_action(&mut self, street: Street, action: &LegalAction, reach: f64) {
+        if reach <= 0.0 {
+            return;
+        }
+        let street_index = diagnostic_street_index(street);
+        self.response_decision_reach_by_street[street_index] += reach;
+        *self
+            .selected_response_actions
+            .entry((street_index as u8, action.label.clone()))
+            .or_default() += reach;
+    }
+
+    fn record_frozen_policy_action(&mut self, street: Street, action: &LegalAction, reach: f64) {
+        if reach <= 0.0 {
+            return;
+        }
+        let street_index = diagnostic_street_index(street);
+        self.frozen_policy_decision_reach_by_street[street_index] += reach;
+        *self
+            .frozen_policy_actions
+            .entry((street_index as u8, action.label.clone()))
+            .or_default() += reach;
+    }
+
+    fn record_terminal(&mut self, street: Street, reach: f64, response_value_bb: f64) {
+        let street_index = diagnostic_street_index(street);
+        self.terminal_reach_by_street[street_index] += reach;
+        self.terminal_response_value_by_street_bb[street_index] += response_value_bb;
+    }
+
+    fn merge(&mut self, other: Self) {
+        for street in 0..4 {
+            self.response_decision_reach_by_street[street] +=
+                other.response_decision_reach_by_street[street];
+            self.frozen_policy_decision_reach_by_street[street] +=
+                other.frozen_policy_decision_reach_by_street[street];
+            self.terminal_reach_by_street[street] += other.terminal_reach_by_street[street];
+            self.terminal_response_value_by_street_bb[street] +=
+                other.terminal_response_value_by_street_bb[street];
+        }
+        for (key, reach) in other.selected_response_actions {
+            *self.selected_response_actions.entry(key).or_default() += reach;
+        }
+        for (key, reach) in other.frozen_policy_actions {
+            *self.frozen_policy_actions.entry(key).or_default() += reach;
+        }
+    }
+
+    fn finish(
+        self,
+        responder: usize,
+        deals: u64,
+        mean_response_value_bb: f64,
+    ) -> CausalResponderDiagnostics {
+        let scale = 1.0 / deals as f64;
+        let actions = |entries: BTreeMap<(u8, String), f64>| {
+            entries
+                .into_iter()
+                .map(
+                    |((street, action_label), reach)| CausalActionReachDiagnostic {
+                        street: diagnostic_street(street),
+                        action_label,
+                        expected_reach: reach * scale,
+                    },
+                )
+                .collect()
+        };
+        CausalResponderDiagnostics {
+            responder,
+            mean_response_value_bb,
+            expected_response_decision_reach_by_street: self
+                .response_decision_reach_by_street
+                .map(|reach| reach * scale),
+            expected_frozen_policy_decision_reach_by_street: self
+                .frozen_policy_decision_reach_by_street
+                .map(|reach| reach * scale),
+            expected_terminal_reach_by_street: self
+                .terminal_reach_by_street
+                .map(|reach| reach * scale),
+            expected_terminal_response_value_by_street_bb: self
+                .terminal_response_value_by_street_bb
+                .map(|value| value * scale),
+            selected_response_actions: actions(self.selected_response_actions),
+            frozen_policy_actions: actions(self.frozen_policy_actions),
+        }
+    }
+}
+
+fn finish_causal_response_diagnostics(
+    accumulators: [CausalResponderDiagnosticsAccumulator; 2],
+    deals: u64,
+    mean_response_values_bb: [f64; 2],
+) -> Result<[CausalResponderDiagnostics; 2], String> {
+    let [responder_zero, responder_one] = accumulators;
+    let diagnostics = [
+        responder_zero.finish(0, deals, mean_response_values_bb[0]),
+        responder_one.finish(1, deals, mean_response_values_bb[1]),
+    ];
+    for diagnostic in &diagnostics {
+        let terminal_reach = diagnostic
+            .expected_terminal_reach_by_street
+            .iter()
+            .sum::<f64>();
+        let terminal_value = diagnostic
+            .expected_terminal_response_value_by_street_bb
+            .iter()
+            .sum::<f64>();
+        if (terminal_reach - 1.0).abs() > 1e-8
+            || (terminal_value - diagnostic.mean_response_value_bb).abs() > 1e-8
+            || diagnostic.selected_response_actions.is_empty()
+            || diagnostic.frozen_policy_actions.is_empty()
+        {
+            return Err("causal response diagnostics do not reconstruct the response".to_owned());
+        }
+        for (actions, expected_by_street) in [
+            (
+                &diagnostic.selected_response_actions,
+                diagnostic.expected_response_decision_reach_by_street,
+            ),
+            (
+                &diagnostic.frozen_policy_actions,
+                diagnostic.expected_frozen_policy_decision_reach_by_street,
+            ),
+        ] {
+            let mut observed_by_street = [0.0; 4];
+            for action in actions {
+                if !action.expected_reach.is_finite() || action.expected_reach <= 0.0 {
+                    return Err("causal response diagnostics contain invalid reach".to_owned());
+                }
+                observed_by_street[diagnostic_street_index(action.street)] += action.expected_reach;
+            }
+            if observed_by_street
+                .iter()
+                .zip(expected_by_street)
+                .any(|(observed, expected)| {
+                    !expected.is_finite() || (*observed - expected).abs() > 1e-8
+                })
+            {
+                return Err("causal response action reach does not reconcile by street".to_owned());
+            }
+        }
+    }
+    Ok(diagnostics)
 }
 
 #[derive(Serialize)]
@@ -4971,6 +5203,9 @@ impl Default for CausalAttributionWalkStats {
             maximum_target_sum_error: 0.0,
             minimum_policy_value: f64::INFINITY,
             maximum_policy_value: f64::NEG_INFINITY,
+            response_diagnostics: std::array::from_fn(|_| {
+                CausalResponderDiagnosticsAccumulator::default()
+            }),
         }
     }
 }
@@ -5303,7 +5538,7 @@ pub fn generate_causal_policy_attribution(
                             &mut scenario_rng,
                         );
                         let weights = vec![1.0 / scenarios.len() as f64; scenarios.len()];
-                        let (response, plan) = solve_causal_response_plan(
+                        let (response, plan, response_diagnostics) = solve_causal_response_plan(
                             generator,
                             GameState::initial(game),
                             &scenarios,
@@ -5311,6 +5546,7 @@ pub fn generate_causal_policy_attribution(
                             responder,
                             &mut response_nodes,
                         )?;
+                        stats.response_diagnostics[responder].merge(response_diagnostics);
                         let mut candidate_index = 0u64;
                         let reconstructed_values = fixed_causal_response_policy_values(
                             generator,
@@ -5337,6 +5573,7 @@ pub fn generate_causal_policy_attribution(
                     deal_results.push((
                         index,
                         ((responses[0] + responses[1]) / 2.0).clamp(0.0, game.effective_stack_bb),
+                        responses,
                         maximum_reconstruction_error,
                     ));
                 }
@@ -5358,6 +5595,8 @@ pub fn generate_causal_policy_attribution(
     let mut maximum_sum_error = 0.0f64;
     let mut minimum_policy_value = f64::INFINITY;
     let mut maximum_policy_value = f64::NEG_INFINITY;
+    let mut response_diagnostics: [CausalResponderDiagnosticsAccumulator; 2] =
+        std::array::from_fn(|_| CausalResponderDiagnosticsAccumulator::default());
     let mut deal_results = Vec::with_capacity(config.deals as usize);
     for (collector, response_nodes, stats, worker_deals) in worker_results {
         let (mut worker_records, candidate_by_street, retained_by_street) =
@@ -5373,15 +5612,36 @@ pub fn generate_causal_policy_attribution(
         maximum_sum_error = maximum_sum_error.max(stats.maximum_target_sum_error);
         minimum_policy_value = minimum_policy_value.min(stats.minimum_policy_value);
         maximum_policy_value = maximum_policy_value.max(stats.maximum_policy_value);
+        for (target, source) in response_diagnostics
+            .iter_mut()
+            .zip(stats.response_diagnostics)
+        {
+            target.merge(source);
+        }
         deal_results.extend(worker_deals);
     }
-    deal_results.sort_by_key(|(index, _, _)| *index);
-    let sample_mean_exploitability =
-        deal_results.iter().map(|(_, value, _)| value).sum::<f64>() / config.deals as f64;
+    deal_results.sort_by_key(|(index, _, _, _)| *index);
+    let sample_mean_exploitability = deal_results
+        .iter()
+        .map(|(_, value, _, _)| value)
+        .sum::<f64>()
+        / config.deals as f64;
+    let mean_response_values_bb: [f64; 2] = std::array::from_fn(|responder| {
+        deal_results
+            .iter()
+            .map(|(_, _, responses, _)| responses[responder])
+            .sum::<f64>()
+            / config.deals as f64
+    });
     let maximum_reconstruction_error = deal_results
         .iter()
-        .map(|(_, _, error)| *error)
+        .map(|(_, _, _, error)| *error)
         .fold(0.0f64, f64::max);
+    let response_diagnostics = finish_causal_response_diagnostics(
+        response_diagnostics,
+        config.deals,
+        mean_response_values_bb,
+    )?;
     if records.is_empty()
         || records.len() > config.max_records
         || maximum_reconstruction_error > 1e-8 * config.game.effective_stack_bb.max(1.0)
@@ -5455,7 +5715,7 @@ pub fn generate_causal_policy_attribution(
     fs::rename(&temporary, &config.output)?;
     let output_sha256 = sha256_path(&config.output)?;
     Ok(CausalPolicyAttributionReport {
-        schema: "hu-neural-causal-policy-attribution-report-v1",
+        schema: "hu-neural-causal-policy-attribution-report-v2",
         method: "fixed_information_set_causal_best_response_policy_action_subgradient",
         depth_bb: config.game.effective_stack_bb,
         deals: config.deals,
@@ -5474,6 +5734,8 @@ pub fn generate_causal_policy_attribution(
         retained_records_by_street,
         truncated: retained_records_by_street.iter().sum::<usize>() < candidate_records,
         sample_mean_exploitability_bb: sample_mean_exploitability,
+        mean_response_values_bb,
+        response_diagnostics,
         maximum_root_value_reconstruction_error_bb: maximum_reconstruction_error,
         minimum_frozen_policy_action_probability: minimum_probability,
         maximum_target_probability_sum_error: maximum_sum_error,
@@ -6231,6 +6493,7 @@ pub fn certify_exploitability_upper_bound(
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
+        response_diagnostics: None,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: margin,
@@ -6522,6 +6785,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
+        response_diagnostics: None,
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: hoeffding_margin,
@@ -6619,9 +6883,14 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
                 let generator = &worker_generator;
                 chunk
                     .into_iter()
-                    .map(|(index, sampled_holes)| {
+                    .map(|(index, sampled_holes)| -> Result<_, String> {
                         let mut visited_nodes = 0u64;
-                        let responses: [f64; 2] = std::array::from_fn(|responder| {
+                        let mut responses = [0.0; 2];
+                        let mut diagnostics: [CausalResponderDiagnosticsAccumulator; 2] =
+                            std::array::from_fn(|_| {
+                                CausalResponderDiagnosticsAccumulator::default()
+                            });
+                        for responder in 0..2 {
                             let seed = config.seed
                                 ^ index.wrapping_mul(0x9e37_79b9_7f4a_7c15)
                                 ^ (responder as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -6634,40 +6903,52 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
                                 &mut scenario_rng,
                             );
                             let weights = vec![1.0 / scenarios.len() as f64; scenarios.len()];
-                            causal_sample_game_response_value(
-                                generator,
-                                GameState::initial(game),
-                                &scenarios,
-                                &weights,
-                                responder,
-                                &mut visited_nodes,
-                            )
-                        });
-                        (
+                            let (response, _plan, response_diagnostics) =
+                                solve_causal_response_plan(
+                                    generator,
+                                    GameState::initial(game),
+                                    &scenarios,
+                                    &weights,
+                                    responder,
+                                    &mut visited_nodes,
+                                )?;
+                            responses[responder] = response;
+                            diagnostics[responder].merge(response_diagnostics);
+                        }
+                        Ok((
                             ((responses[0] + responses[1]) / 2.0)
                                 .clamp(0.0, game.effective_stack_bb),
                             responses,
+                            diagnostics,
                             visited_nodes,
-                        )
+                        ))
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, _>>()
             }));
         }
         handles
             .into_iter()
-            .flat_map(|handle| handle.join().expect("certificate worker panicked"))
-            .collect::<Vec<_>>()
-    });
+            .map(|handle| handle.join().expect("certificate worker panicked"))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|chunks| chunks.into_iter().flatten().collect::<Vec<_>>())
+    })?;
     let mut visited_nodes = 0u64;
     let mut mean = 0.0;
     let mut squared_deviation_sum = 0.0;
     let mut sample_exploitabilities = Vec::with_capacity(config.deals as usize);
     let mut sample_responses = Vec::with_capacity(config.deals as usize);
+    let mut response_diagnostics: [CausalResponderDiagnosticsAccumulator; 2] =
+        std::array::from_fn(|_| CausalResponderDiagnosticsAccumulator::default());
     let depth = config.game.effective_stack_bb;
-    for (index, (exploitability, responses, nodes)) in evaluated.into_iter().enumerate() {
+    for (index, (exploitability, responses, diagnostics, nodes)) in
+        evaluated.into_iter().enumerate()
+    {
         visited_nodes += nodes;
         sample_exploitabilities.push(exploitability);
         sample_responses.push(responses);
+        for (target, source) in response_diagnostics.iter_mut().zip(diagnostics) {
+            target.merge(source);
+        }
         let sample_index = index + 1;
         let delta = exploitability - mean;
         mean += delta / sample_index as f64;
@@ -6683,6 +6964,18 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         config.deals,
         config.confidence,
     );
+    let mean_response_values_bb: [f64; 2] = std::array::from_fn(|responder| {
+        sample_responses
+            .iter()
+            .map(|responses| responses[responder])
+            .sum::<f64>()
+            / config.deals as f64
+    });
+    let response_diagnostics = finish_causal_response_diagnostics(
+        response_diagnostics,
+        config.deals,
+        mean_response_values_bb,
+    )?;
     let mut assumptions = vec![
         "outer responder-card samples are independent and exact under card removal",
         "nested flop, turn, river, and hidden-hand branches have the exact conditional card distribution",
@@ -6821,6 +7114,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
+        response_diagnostics: Some(response_diagnostics),
         sample_mean_exploitability_bb: mean,
         sample_standard_error_bb: sample_standard_error,
         hoeffding_margin_bb: hoeffding_margin,
@@ -7701,6 +7995,53 @@ mod tests {
             certify_causal_sample_game_exploitability_upper_bound(make(), 2, 2).unwrap();
         let causal_second =
             certify_causal_sample_game_exploitability_upper_bound(make(), 2, 2).unwrap();
+        let generator = SampleGenerator::new(SampleGenerationConfig {
+            game: game.clone(),
+            traversals: 1,
+            start_iteration: 0,
+            seed: 73,
+            max_records: 1,
+            output: PathBuf::from("unused-response-trace-parity.jsonl.gz"),
+            network_path: Some(path.clone()),
+            trajectory_sampling: false,
+            evaluate_trajectory_values: false,
+            value_rollouts_per_action: 1,
+            enumerate_turn_river_chance: false,
+        })
+        .unwrap();
+        let scenarios = sample_causal_scenarios([48, 49], 0, 2, 2, &mut SplitMix64::new(101));
+        let weights = vec![1.0 / scenarios.len() as f64; scenarios.len()];
+        let mut direct_nodes = 0;
+        let direct = causal_sample_game_response_value(
+            &generator,
+            GameState::initial(&game),
+            &scenarios,
+            &weights,
+            0,
+            &mut direct_nodes,
+        );
+        let mut traced_nodes = 0;
+        let (traced, _plan, trace) = solve_causal_response_plan(
+            &generator,
+            GameState::initial(&game),
+            &scenarios,
+            &weights,
+            0,
+            &mut traced_nodes,
+        )
+        .unwrap();
+        assert!((direct - traced).abs() < 1e-12);
+        assert_eq!(direct_nodes, traced_nodes);
+        assert!((trace.terminal_reach_by_street.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(
+            (trace
+                .terminal_response_value_by_street_bb
+                .iter()
+                .sum::<f64>()
+                - traced)
+                .abs()
+                < 1e-12
+        );
         fs::remove_file(path).unwrap();
         assert_eq!(
             serde_json::to_vec(&first).unwrap(),
@@ -7758,6 +8099,30 @@ mod tests {
         assert_eq!(causal_first.public_branches_per_street, Some(2));
         assert_eq!(causal_first.scenarios_per_deal, Some(16));
         assert!(causal_first.exact_betting_tree_nodes > 0);
+        let causal_diagnostics = causal_first.response_diagnostics.as_ref().unwrap();
+        for (responder, diagnostic) in causal_diagnostics.iter().enumerate() {
+            assert_eq!(diagnostic.responder, responder);
+            assert!(diagnostic.expected_response_decision_reach_by_street[0] > 0.0);
+            assert!(diagnostic.expected_frozen_policy_decision_reach_by_street[0] > 0.0);
+            assert!(
+                (diagnostic
+                    .expected_terminal_reach_by_street
+                    .iter()
+                    .sum::<f64>()
+                    - 1.0)
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (diagnostic
+                    .expected_terminal_response_value_by_street_bb
+                    .iter()
+                    .sum::<f64>()
+                    - diagnostic.mean_response_value_bb)
+                    .abs()
+                    < 1e-12
+            );
+        }
         assert!(causal_first.sample_mean_exploitability_bb >= 0.0);
         assert!(
             causal_first.exploitability_upper_bound_bb
@@ -7873,6 +8238,7 @@ mod tests {
             fs::read(&second_path).unwrap()
         );
         assert_eq!(first.output_sha256, second.output_sha256);
+        assert_eq!(first.response_diagnostics, second.response_diagnostics);
         assert!(
             (first.sample_mean_exploitability_bb - certificate.sample_mean_exploitability_bb).abs()
                 < 1e-12
@@ -7882,6 +8248,49 @@ mod tests {
         assert!(first.retained_records > 0);
         assert!(first.minimum_frozen_policy_action_probability > 0.0);
         assert!(first.maximum_target_probability_sum_error < 1e-12);
+        for diagnostic in &first.response_diagnostics {
+            assert!(diagnostic.expected_response_decision_reach_by_street[0] > 0.0);
+            assert!(diagnostic.expected_frozen_policy_decision_reach_by_street[0] > 0.0);
+            assert!(
+                (diagnostic
+                    .expected_terminal_reach_by_street
+                    .iter()
+                    .sum::<f64>()
+                    - 1.0)
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (diagnostic
+                    .expected_terminal_response_value_by_street_bb
+                    .iter()
+                    .sum::<f64>()
+                    - diagnostic.mean_response_value_bb)
+                    .abs()
+                    < 1e-12
+            );
+            for (actions, expected_by_street) in [
+                (
+                    &diagnostic.selected_response_actions,
+                    diagnostic.expected_response_decision_reach_by_street,
+                ),
+                (
+                    &diagnostic.frozen_policy_actions,
+                    diagnostic.expected_frozen_policy_decision_reach_by_street,
+                ),
+            ] {
+                let mut observed_by_street = [0.0; 4];
+                for action in actions {
+                    observed_by_street[diagnostic_street_index(action.street)] +=
+                        action.expected_reach;
+                }
+                for street in 0..4 {
+                    assert!(
+                        (observed_by_street[street] - expected_by_street[street]).abs() < 1e-12
+                    );
+                }
+            }
+        }
         assert_eq!(source_evaluation.records, first.retained_records);
         assert!(source_evaluation.feature_hashes_verified);
         assert!(source_evaluation.weighted_policy_value_gain_bb.abs() < 1e-12);
