@@ -1,0 +1,192 @@
+{
+  "schema": "hu-20bb-seat-targeted-causal-policy-action-result-v1",
+  "depth_bb": 20.0,
+  "status": "rejected_non_material_matched_full_game_effect",
+  "baseline": "v102 paired range-conditioned policies over the retained v57 direct networks with BB-only continual resolving",
+  "purpose": "test whether information-set-consistent causal values targeted only at BTN/SB postflop actions produce a material matched reduction in full-game exploitability",
+  "causal_attribution": {
+    "target_actor": 0,
+    "datasets": [
+      {
+        "name": "A",
+        "seed": 19811,
+        "deals": 2,
+        "source_network_artifact_sha256": "5a89abc98ce7c30611517f2e4079fc68a930e66efd2eea07362e7e710ff95036",
+        "source_range_policy_artifact_sha256": "6da23d0bb3a257a55789490da2ba8f8b1cece1b38b178c3daad84430c57e07b7",
+        "records": 17,
+        "records_by_street": [
+          7,
+          5,
+          5
+        ],
+        "maximum_root_value_reconstruction_error_bb": 8.881784197001252e-16,
+        "maximum_target_probability_sum_error": 3.3306690738754696e-16,
+        "dataset_sha256": "49e821e352aa499efb6d09f7333efece50d98de838f90ac6c661e160dd4543b2",
+        "report_sha256": "cea0e35896d94996eac43e7500d7ebb6bfa2e9a908e7fa98c40f0c25c43b3b30",
+        "validation_status": "accepted_for_trust_region_training"
+      },
+      {
+        "name": "B",
+        "seed": 19812,
+        "deals": 2,
+        "source_network_artifact_sha256": "b04b5485a9a50ff343b07446de7a333699f22ae4df7d3611bcde330db7b866ef",
+        "source_range_policy_artifact_sha256": "0d22a70bb87ffc788ded83bf00cde3fa633d043ae20fb3a7dbd7adacd143d423",
+        "records": 70,
+        "records_by_street": [
+          27,
+          38,
+          5
+        ],
+        "maximum_root_value_reconstruction_error_bb": 4.440892098500626e-16,
+        "maximum_target_probability_sum_error": 2.220446049250313e-16,
+        "dataset_sha256": "3138f94fa34ea00770829b7156c29b3f9d11aefd72b4c6485bb0443ffe7b14c8",
+        "report_sha256": "cb66ee4d3425a4ff005ff4306e4dfedcbde4f16f379fce652d5973440a0bcaa3",
+        "validation_status": "accepted_for_trust_region_training"
+      }
+    ]
+  },
+  "training": {
+    "update_operator": "mirror_prox_corrector_from_frozen_parent",
+    "steps": 1,
+    "batch_size": 16,
+    "learning_rate": 0.000001,
+    "mirror_step_per_bb": 0.1,
+    "full_corpus_gradient": true,
+    "paired_corpus_gradient": true,
+    "paired_corpus_weighting": "equal_corpus_mass",
+    "maximum_realized_node_kl": 0.005,
+    "maximum_realized_weighted_kl": 0.0015,
+    "report_sha256": "401f2fa0ecf6bc148d1c935fe79987dd6a48e403dcc2f53a9b76070535b226bd",
+    "accepted_for_directional_evaluation": true,
+    "activation_eligible": false,
+    "activation_reason": "full-game exploitability and every release gate remain mandatory"
+  },
+  "paired_full_game_screen": {
+    "interpretation": "deterministic paired directional screen only; two deals cannot certify a release bound",
+    "config": {
+      "seed": 19801,
+      "deals": 2,
+      "confidence": 0.99,
+      "public_branches_per_street": 1,
+      "opponent_samples_per_runout": 1,
+      "flop_resolver_iterations": 2,
+      "turn_resolver_iterations": 2,
+      "river_resolver_iterations": 2,
+      "resolved_actor": 1,
+      "value_network_artifact_sha256": "d00388ff1f067227928f8ebf5c3e18f6fe1426b7d97ba409f7d97248f71bfdbd"
+    },
+    "evaluator_provenance": {
+      "baseline_a_revision": "f693bd0",
+      "baseline_a_binary_sha256": "739a66629f823db0138ae2a7dc731d5c3e89a474fb250f9e66c7fec3c5ca71f0",
+      "candidate_and_baseline_b_revision": "a01b630",
+      "candidate_and_baseline_b_binary_sha256": "df77aea38c5df7d6ec9ce4ea6afafa709fa9aaa231b9cf838a354cf0f08c580c",
+      "certificate_semantics_review": "The intervening Rust diff changes causal-attribution target-seat selection and artifact provenance only; it does not change neural-certificate traversal or settlement. Seed B uses one identical binary for parent and candidate."
+    },
+    "release_gate": {
+      "maximum_point_estimate_bb_per_hand": 0.5,
+      "maximum_one_sided_99_percent_upper_bound_bb_per_hand": 0.5
+    },
+    "candidates": [
+      {
+        "name": "A",
+        "seed": 21101,
+        "source_range_policy_artifact_sha256": "6da23d0bb3a257a55789490da2ba8f8b1cece1b38b178c3daad84430c57e07b7",
+        "candidate_range_policy_sha256": "64dcbdbcb41a165feaab0856b36fa70c0ff3c93ef21fd462b88ddbeeda1be13c",
+        "exact_directional_value_gains_bb": [
+          0.0008113849728100891,
+          0.01077133672118919
+        ],
+        "maximum_reverse_kl_from_frozen": 0.00006261174959350378,
+        "maximum_weighted_reverse_kl_from_frozen": 0.00001602511741097696,
+        "weighted_primary_action_agreement": 1.0,
+        "passes_paired_directional_trust_gate": true,
+        "parent_report_sha256": "a4f99bddfb99567520fb6549062e928d72529ff8f39c974f3acf1f13b037467f",
+        "candidate_report_sha256": "d6ab85dca444ade25a3f2e9f2167c5836510491680e4acf8325143db18c2e661",
+        "parent_sample_exploitabilities_bb": [
+          1.1938568818996307,
+          1.3382374244287996
+        ],
+        "candidate_sample_exploitabilities_bb": [
+          1.1933198815429762,
+          1.3375436508074028
+        ],
+        "sample_deltas_bb": [
+          -0.0005370003566544934,
+          -0.000693773621396776
+        ],
+        "parent_mean_exploitability_bb": 1.266047153164215,
+        "candidate_mean_exploitability_bb": 1.2654317661751895,
+        "candidate_delta_bb": -0.0006153869890255237,
+        "relative_change_fraction": -0.00048606956501382674,
+        "responder_mean_deltas_bb": [
+          0.00009805740758062065,
+          -0.00132883138563189
+        ],
+        "parent_standard_error_bb": 0.0721902712645845,
+        "candidate_standard_error_bb": 0.0721118846322133,
+        "parent_one_sided_99_percent_upper_bound_bb": 20.0,
+        "candidate_one_sided_99_percent_upper_bound_bb": 20.0,
+        "fraction_of_point_estimate_release_gap_closed": 0.0008033278192910472,
+        "decision": "rejected_non_material"
+      },
+      {
+        "name": "B",
+        "seed": 21102,
+        "source_range_policy_artifact_sha256": "0d22a70bb87ffc788ded83bf00cde3fa633d043ae20fb3a7dbd7adacd143d423",
+        "candidate_range_policy_sha256": "948007bfdd9284bbac63421869cf996969d4abb96f0c3fbfdae8c251a8eefb44",
+        "exact_directional_value_gains_bb": [
+          0.0010765281247393256,
+          0.009686891683915042
+        ],
+        "maximum_reverse_kl_from_frozen": 0.00006430499890462443,
+        "maximum_weighted_reverse_kl_from_frozen": 0.000014637749138634089,
+        "weighted_primary_action_agreement": 1.0,
+        "passes_paired_directional_trust_gate": true,
+        "parent_report_sha256": "1e26642921425fee9bc4385cf70be78eb29f1d4329c4b6fd3f7c8cf385699655",
+        "candidate_report_sha256": "99d57877dc8d59e40b51e8f0ea220e46a058e427b488907d687520c250b8a96a",
+        "parent_sample_exploitabilities_bb": [
+          1.1629775422586563,
+          1.4347317693486707
+        ],
+        "candidate_sample_exploitabilities_bb": [
+          1.1626998118120129,
+          1.4343729126351192
+        ],
+        "sample_deltas_bb": [
+          -0.000277730446643476,
+          -0.00035885671355151416
+        ],
+        "parent_mean_exploitability_bb": 1.2988546558036635,
+        "candidate_mean_exploitability_bb": 1.2985363622235662,
+        "candidate_delta_bb": -0.00031829358009738407,
+        "relative_change_fraction": -0.00024505711911271597,
+        "responder_mean_deltas_bb": [
+          0.000029992445112592137,
+          -0.0006665796053075823
+        ],
+        "parent_standard_error_bb": 0.1358771135450072,
+        "candidate_standard_error_bb": 0.13583655041155313,
+        "parent_one_sided_99_percent_upper_bound_bb": 20.0,
+        "candidate_one_sided_99_percent_upper_bound_bb": 20.0,
+        "fraction_of_point_estimate_release_gap_closed": 0.0003984374100907936,
+        "decision": "rejected_non_material"
+      }
+    ]
+  },
+  "selection": {
+    "all_exact_directional_evaluations_pass": true,
+    "both_candidates_improve_both_matched_deals": true,
+    "selected_candidate": null,
+    "reason": "Candidate A closes 0.0803% and candidate B closes 0.0398% of their respective point-estimate gaps to the 0.50bb/hand gate. Both changes are directionally correct but leave effectively the entire gap and the 20bb two-deal confidence bound unchanged.",
+    "diagnosis": "The large response remains against the frozen BTN/SB policy. Seat targeting is correct, but 17 and 70 retained postflop rows plus roughly 0.2% reach-weighted action movement are too narrow and conservative to materially change the routed full-game policy. More iterations of the same tiny trust-region update are not justified by this result."
+  },
+  "remaining_release_gates": {
+    "full_game_exploitability_point_estimate": "failed",
+    "full_game_exploitability_one_sided_99_percent_upper_bound": "failed_and_not_estimable_from_a_two_deal_directional_screen",
+    "canonical_action_ev_standard_error_coverage": "in_progress",
+    "approximate_gto_activation": "fail_closed"
+  },
+  "conclusion": "Reject both v107 students, retain the frozen v102 pair, and do not serve or activate either policy. The canonical action-EV run remains useful for the non-exploit release gates, but neither its completion nor cross-seed stability can substitute for a qualifying full-game exploitability certificate.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}
