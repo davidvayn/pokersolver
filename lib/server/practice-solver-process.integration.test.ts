@@ -1,5 +1,17 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import fullHandManifests from '@/data/practice/full-hand-manifests.json';
+import {
+  applyAction,
+  createHand,
+  engineLegalActions,
+  seededRandom,
+} from '@/lib/practice-engine';
+import { resolverQueryPayload } from '@/lib/server/practice-resolver-request';
+import type {
+  HandState,
+  LegalAction,
+  PracticeStreet,
+} from '@/lib/practice-types';
 
 vi.mock('server-only', () => ({}));
 
@@ -10,6 +22,67 @@ import {
 } from '@/lib/server/practice-solver-process';
 
 const runIntegration = process.env.PRACTICE_RESOLVER_INTEGRATION === '1';
+
+interface ResolverAction {
+  kind: string;
+  amountToBb: number | null;
+  probability: number;
+  evBb: number | null;
+  standardErrorBb: number | null;
+  confidence: string;
+}
+
+interface ResolverResult {
+  schema: string;
+  stateHash: string;
+  modelVersion: string;
+  depthBb: number;
+  networkSha256: string;
+  rangePolicySha256: string;
+  valueNetworkSha256: string;
+  preflopActionValuesSha256: string;
+  maximumProbabilitySumError: number;
+  actions: ResolverAction[];
+}
+
+function assertNormalizedActions(result: ResolverResult): void {
+  expect(result.maximumProbabilitySumError).toBeLessThanOrEqual(1e-6);
+  expect(result.actions.length).toBeGreaterThanOrEqual(2);
+  expect(
+    result.actions.reduce((sum, action) => sum + action.probability, 0)
+  ).toBeCloseTo(1, 10);
+  for (const action of result.actions) {
+    expect(action.probability).toBeGreaterThanOrEqual(0);
+    expect(action.evBb).not.toBeNull();
+    expect(Number.isFinite(action.evBb)).toBe(true);
+    expect(action.standardErrorBb).not.toBeNull();
+    expect(Number.isFinite(action.standardErrorBb)).toBe(true);
+    expect(action.standardErrorBb).toBeGreaterThanOrEqual(0);
+    expect(action.confidence).toBe('low');
+  }
+}
+
+function play(state: HandState, kind: LegalAction['kind']): HandState {
+  const matching = engineLegalActions(state).filter(
+    (action) => action.kind === kind
+  );
+  expect(matching).toHaveLength(1);
+  return applyAction(state, matching[0]);
+}
+
+async function queryState(
+  state: HandState,
+  stateHash: string
+): Promise<ResolverResult> {
+  return (await practiceSolverProcess().query(
+    resolverQueryPayload(
+      state,
+      stateHash,
+      PRACTICE_RESOLVER_IDENTITY.modelVersion,
+      20
+    )
+  )) as ResolverResult;
+}
 
 describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', () => {
   afterAll(async () => {
@@ -35,25 +108,7 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
         lastFullRaiseBb: 1,
         raiseReopened: true,
         actions: [],
-      })) as {
-        schema: string;
-        stateHash: string;
-        modelVersion: string;
-        depthBb: number;
-        networkSha256: string;
-        rangePolicySha256: string;
-        valueNetworkSha256: string;
-        preflopActionValuesSha256: string;
-        maximumProbabilitySumError: number;
-        actions: Array<{
-          kind: string;
-          amountToBb: number | null;
-          probability: number;
-          evBb: number | null;
-          standardErrorBb: number | null;
-          confidence: string;
-        }>;
-      };
+      })) as ResolverResult;
 
       expect(result).toMatchObject({
         schema: 'hu-practice-continual-resolver-query-v1',
@@ -79,21 +134,57 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
           PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
       });
       expect(result.actions).toHaveLength(8);
-      expect(result.maximumProbabilitySumError).toBeLessThanOrEqual(1e-6);
-      expect(
-        result.actions.reduce((sum, action) => sum + action.probability, 0)
-      ).toBeCloseTo(1, 10);
-      for (const action of result.actions) {
-        expect(action.probability).toBeGreaterThanOrEqual(0);
-        expect(action.evBb).not.toBeNull();
-        expect(Number.isFinite(action.evBb)).toBe(true);
-        expect(action.standardErrorBb).not.toBeNull();
-        expect(Number.isFinite(action.standardErrorBb)).toBe(true);
-        expect(action.standardErrorBb).toBeGreaterThanOrEqual(0);
-        expect(action.confidence).toBe('low');
-      }
+      assertNormalizedActions(result);
       expect(result.actions.map((action) => action.kind)).toContain('all_in');
     },
     120_000
+  );
+
+  it(
+    'replays a website trajectory and returns action EVs on every postflop street',
+    async () => {
+      let state = createHand({
+        id: 'resolver-postflop-integration',
+        modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
+        depthBb: 20,
+        button: 'button-small-blind',
+        hero: 'button-small-blind',
+        random: seededRandom(104),
+      });
+
+      state = play(state, 'call');
+      state = play(state, 'check');
+      const streetStates: Array<[PracticeStreet, HandState, string]> = [
+        ['flop', state, 'f'.repeat(64)],
+      ];
+
+      state = play(state, 'check');
+      state = play(state, 'check');
+      streetStates.push(['turn', state, 'd'.repeat(64)]);
+
+      state = play(state, 'check');
+      state = play(state, 'check');
+      streetStates.push(['river', state, 'c'.repeat(64)]);
+
+      for (const [street, snapshot, stateHash] of streetStates) {
+        expect(snapshot.street).toBe(street);
+        expect(snapshot.terminal).toBe(false);
+        const result = await queryState(snapshot, stateHash);
+        expect(result).toMatchObject({
+          schema: 'hu-practice-continual-resolver-query-v1',
+          stateHash,
+          modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
+          depthBb: 20,
+          networkSha256: PRACTICE_RESOLVER_IDENTITY.networkSha256,
+          rangePolicySha256: PRACTICE_RESOLVER_IDENTITY.rangePolicySha256,
+          valueNetworkSha256: PRACTICE_RESOLVER_IDENTITY.valueNetworkSha256,
+          preflopActionValuesSha256:
+            PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256,
+        });
+        assertNormalizedActions(result);
+        expect(result.actions.map((action) => action.kind)).toContain('check');
+      }
+    },
+    180_000
   );
 });
