@@ -80,10 +80,35 @@ matrix backend also regressed to 467.9 seconds. These controls indicate that
 the dominant remaining work is repeated full postflop traversal/value
 inference for each distinct preflop leaf, not the tested equity-loop surfaces.
 
-The evaluator still needs to propagate exact weighted leaf vectors through
-the preflop policy tree and measure the declared served-action-weighted
-action-EV gate. Approximation error from the frozen resolver/value network
-remains separate from sampling error and must continue to carry a
-low-confidence warning.
+Leaf-level profiling then found that concurrent boards were contending for the
+same cores. On one canonical board, one high-reach leaf took 12.77 seconds,
+two leaves took 26.71 seconds, and all nine took 102.26 seconds with eight
+resolver threads. Giving a single board all ten local cores reduced the
+nine-leaf time to 91.50 seconds. A complete 49-flop-leaf board took 171.31 to
+196.62 seconds. The range-cache scheduler now defaults to one board worker,
+records the actual ten resolver threads in provenance, and emits version-two
+single-board shards that can be resumed independently. The observed complete
+endpoint projection is approximately 90 hours for all 1,755 canonical boards
+on this host, not the earlier multi-board extrapolation.
+
+Version two also includes all 50 distinct preflop all-in showdown endpoints.
+For each canonical flop it reuses the exact equity matrix and enumerates every
+compatible turn/river; a fixed-combo reference test matches the direct 990
+runouts. This closes the forced-all-in action-value gap without measurable
+extra board time.
+
+The new canonical action-value pass propagates those 99 endpoint vectors
+(49 flop lines plus 50 all-in lines) through the frozen preflop policy. It
+integrates exact compatible private ranges and board blockers at every
+information set and reports the declared policy-reach/action-frequency
+weighted SE. On a real two-orbit pilot it evaluated 8,450 information sets per
+player with 100% lookup coverage. Precision remains intentionally failed at
+31.8152% coverage and 12.6767bb maximum SE; two flops are only a plumbing
+check, not validation evidence.
+
+The resumable exhaustive shard run remains necessary before the action-EV gate
+can pass. Complete 1,755-orbit enumeration makes finite-game chance-sampling
+SE exactly zero; approximation error from the frozen resolver/value network
+remains separate and must continue to carry a low-confidence warning.
 
 No activation status, gate threshold, or served fallback was changed.

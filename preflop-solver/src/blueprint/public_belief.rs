@@ -5297,6 +5297,58 @@ fn exact_flop_all_in_equities(
     .clone()
 }
 
+pub(crate) fn exact_flop_showdown_continuation_values(
+    game: &BlueprintConfig,
+    board: [u8; 3],
+    actor: usize,
+    invested_bb: [f64; 2],
+    ranges: [Vec<f64>; 2],
+    threads: usize,
+) -> Result<[Vec<f32>; 2], String> {
+    let state = PublicBeliefState::flop_start(board, actor, invested_bb, ranges)
+        .validate_street_and_normalize(game, Street::Flop, 3)?;
+    let legal: [Vec<bool>; 2] = std::array::from_fn(|player| {
+        state.ranges[player]
+            .iter()
+            .map(|weight| *weight > 0.0)
+            .collect()
+    });
+    let conflicts = combo_conflicts();
+    let equities = exact_flop_all_in_equities(board, &legal, threads);
+    let mut raw = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+    for player_zero in 0..COMBO_COUNT {
+        if !legal[0][player_zero] {
+            continue;
+        }
+        let row = player_zero * COMBO_COUNT;
+        for player_one in 0..COMBO_COUNT {
+            let equity_p0 = equities[row + player_one];
+            if !equity_p0.is_finite() {
+                continue;
+            }
+            let utility_p0 =
+                equity_p0 as f64 * invested_bb[1] - (1.0 - equity_p0 as f64) * invested_bb[0];
+            raw[0][player_zero] += state.ranges[1][player_one] * utility_p0;
+            raw[1][player_one] -= state.ranges[0][player_zero] * utility_p0;
+        }
+    }
+    Ok(std::array::from_fn(|player| {
+        raw[player]
+            .iter()
+            .enumerate()
+            .map(|(combo, value)| {
+                let mass =
+                    compatible_mass_from_conflicts(&state.ranges[1 - player], &conflicts, combo);
+                if mass > EPSILON {
+                    (*value / mass) as f32
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }))
+}
+
 fn compute_exact_flop_all_in_equities(
     flop: [u8; 3],
     legal: &[Vec<bool>; 2],
@@ -11685,6 +11737,61 @@ fn joint_compatibility_mass(ranges: &[Vec<f64>; 2]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_flop_showdown_vectors_match_a_fixed_combo_runout() {
+        let game = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            ..BlueprintConfig::default()
+        };
+        let board = [0, 5, 10];
+        let hero = Combo::new(51, 47);
+        let villain = Combo::new(46, 42);
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        ranges[0][hero.key()] = 1.0;
+        ranges[1][villain.key()] = 1.0;
+        let values =
+            exact_flop_showdown_continuation_values(&game, board, 0, [20.0, 20.0], ranges, 2)
+                .unwrap();
+
+        let blocked = [
+            board[0],
+            board[1],
+            board[2],
+            hero.high,
+            hero.low,
+            villain.high,
+            villain.low,
+        ];
+        let available = (0..52u8)
+            .filter(|card| !blocked.contains(card))
+            .collect::<Vec<_>>();
+        let mut units = 0u64;
+        let mut runouts = 0u64;
+        for turn_index in 0..available.len() {
+            for river in &available[turn_index + 1..] {
+                let turn = available[turn_index];
+                let hero_score = evaluate(&[
+                    hero.high, hero.low, board[0], board[1], board[2], turn, *river,
+                ]);
+                let villain_score = evaluate(&[
+                    villain.high,
+                    villain.low,
+                    board[0],
+                    board[1],
+                    board[2],
+                    turn,
+                    *river,
+                ]);
+                units += u64::from(equity_units(hero_score, villain_score));
+                runouts += 1;
+            }
+        }
+        assert_eq!(runouts, 990);
+        let expected = 40.0 * units as f64 / (2 * runouts) as f64 - 20.0;
+        assert!((f64::from(values[0][hero.key()]) - expected).abs() < 1e-5);
+        assert!((f64::from(values[1][villain.key()]) + expected).abs() < 1e-5);
+    }
 
     #[test]
     fn causal_probability_parity_limits_are_closed_and_finite() {

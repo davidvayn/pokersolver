@@ -37,6 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-range-continuation-precision" => {
             run_preflop_range_continuation_precision(&args[1..])
         }
+        "preflop-range-action-values" => run_preflop_range_action_values(&args[1..]),
         "preflop-leaf-reach" => run_preflop_leaf_reach(&args[1..]),
         "preflop-compact" => run_preflop_compact(&args[1..]),
         "preflop-distill-samples" => run_preflop_distill_samples(&args[1..]),
@@ -290,6 +291,7 @@ fn run_preflop_range_cache(args: &[String]) -> Result<(), Box<dyn Error>> {
             seed: parse_or(args, "--seed", 1u64)?,
             orbit_offset: parse_or(args, "--orbit-offset", 0usize)?,
             maximum_flop_orbits: parse_or(args, "--maximum-flop-orbits", 8usize)?,
+            board_workers: parse_or(args, "--board-workers", 1usize)?,
             maximum_leaves: parse_or(args, "--maximum-leaves", 9usize)?,
             resolver_iterations: iterations,
             resolver_averaging_delay: parse_or(
@@ -2075,6 +2077,31 @@ fn run_preflop_range_continuation_precision(args: &[String]) -> Result<(), Box<d
     Ok(())
 }
 
+fn run_preflop_range_action_values(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let cache_path = value(args, "--cache")
+        .map(PathBuf::from)
+        .ok_or("--cache is required for canonical range action values")?;
+    let policy_path = value(args, "--policy")
+        .map(PathBuf::from)
+        .ok_or("--policy is required for canonical range action values")?;
+    let cache = blueprint::preflop::RangeContinuationCache::read(&cache_path)?;
+    cache.validate_policy_file(&policy_path)?;
+    let policy = blueprint::preflop::PreflopPolicyArtifact::read(&policy_path)?;
+    let attribution =
+        blueprint::preflop::attribute_canonical_range_policy_action_values(&cache, &policy)?;
+    let output = serde_json::to_string_pretty(&attribution)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(path, format!("{output}\n"))?;
+    }
+    println!("{output}");
+    Ok(())
+}
+
 fn run_preflop_leaf_reach(args: &[String]) -> Result<(), Box<dyn Error>> {
     let policy_path = value(args, "--policy")
         .map(PathBuf::from)
@@ -2794,6 +2821,7 @@ Usage:
   preflop-solver preflop-distill-samples [options]
   preflop-solver preflop-evaluate-neural [options]
   preflop-solver preflop-range-continuation-precision --cache <json.gz> --policy <json> [options]
+  preflop-solver preflop-range-action-values --cache <json.gz> --policy <json> [--output <json>]
   preflop-solver preflop-leaf-reach --policy <json> [--output <json>]
   preflop-solver full-game-lbr [options]
   preflop-solver river-pbs-solve [options]
