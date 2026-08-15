@@ -62,6 +62,13 @@
         "1755": 1.0
       },
       "projectionAssumption": "Per-action cluster variance remains stable while standard errors scale by the without-replacement finite-population factor from the measured 38-orbit sample."
+    },
+    "binaryRebuildReplay": {
+      "canonicalOrbitOffset": 0,
+      "originalCompressedSha256": "0faec9712120bea301d893854f738e31ec55329179abf2105e4f960849594740",
+      "replayedCompressedSha256": "0faec9712120bea301d893854f738e31ec55329179abf2105e4f960849594740",
+      "compressedBytesIdentical": true,
+      "reason": "A release rebuild changed only practice-response uncertainty metadata while canonical generation was live; replaying a completed orbit with identical five-thread generation parameters proved the preflop range-cache output remained byte-identical."
     }
   },
   "interpretation": "The export invokes the same frozen Rust neural inference used by practice serving and materializes all 8450 preflop information sets per player. Exact equality of the direct neural and exported-table information-set response metrics verifies routing identity; it is not an equilibrium or exploitability release certificate."

@@ -17,6 +17,7 @@ validation_model_dir="$repo_root/preflop-solver/models/validation"
 holdout_dir="$repo_root/preflop-solver/neural/runs/20bb-v82-residual-policy/s3000-b16-cos3e4-3e5"
 preflop_validation="$repo_root/preflop-solver/neural/v27-preflop-sequence.json"
 candidate_freeze="$repo_root/preflop-solver/neural/20bb-v50-full-hand-candidate-freeze.json"
+action_ev_handoff="$repo_root/preflop-solver/neural/20bb-v104-serving-action-ev.json"
 manifest_registry="$repo_root/data/practice/full-hand-manifests.json"
 
 require_sha256() {
@@ -72,6 +73,18 @@ jq -e '
     "neural/runs/20bb-long-v1-wide-seed5102"
   ]
 ' "$candidate_freeze" >/dev/null
+jq -e '
+  .schema == "hu-20bb-serving-action-ev-handoff-v1" and
+  .servedNetwork.decodedSha256 ==
+    "310b9d1a39a3ecd6beff4ac99533a8ce5847dba05d9627b650a446c36e26b7c3" and
+  .servingPolicyExport.sha256 ==
+    "1b14fa8987663f37cd0f0f2889fa2574aaf7d31455d6f66d0fca6fe9ceec1114" and
+  .varianceGate.binaryRebuildReplay.compressedBytesIdentical == true and
+  .varianceGate.binaryRebuildReplay.originalCompressedSha256 ==
+    .varianceGate.binaryRebuildReplay.replayedCompressedSha256 and
+  .varianceGate.binaryRebuildReplay.replayedCompressedSha256 ==
+    "0faec9712120bea301d893854f738e31ec55329179abf2105e4f960849594740"
+' "$action_ev_handoff" >/dev/null
 
 action_values=
 for milestone in 878 1500 1650 1725 1755; do
