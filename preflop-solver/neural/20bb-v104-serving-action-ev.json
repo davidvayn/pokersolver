@@ -27,7 +27,23 @@
     "oldCanonicalRunStopped": true,
     "completedOldShardsPreserved": 9,
     "reason": "The old run evaluated the tabular teacher's ranges and continuation policy, but the website queries the distilled neural student. Its action values could not validly grade the served policy.",
-    "next": "Generate all 1755 suit-isomorphic flop boards as atomic single-board shards against the serving-policy export, using two disjoint resumable workers, then merge with provenance checks and install only the complete compressed action-value report."
+    "next": "Generate the seeded without-replacement suit-isomorphic flop-orbit sample as atomic single-board shards against the serving-policy export. Evaluate at frozen milestones with the finite-population ratio-estimator correction and stop only if at least 95% of served policy-action weight has standard error at most 0.02bb; otherwise enumerate all 1755 orbits."
+  },
+  "varianceGate": {
+    "populationOrbits": 1755,
+    "sampling": "sha256-seeded simple random permutation without replacement",
+    "estimator": "clustered ratio-of-means standard error with finite-population correction",
+    "coverageThreshold": 0.95,
+    "standardErrorThresholdBb": 0.02,
+    "checkpointOrbits": [878, 1500, 1650, 1725, 1755],
+    "tenOrbitControl": {
+      "coveredRawFlops": 112,
+      "evaluatedInformationSets": [8450, 8450],
+      "policyLookupCoverage": 1.0,
+      "actionEvStandardErrorCoverage": 0.3056618783183542,
+      "maximumActionEvStandardErrorBb": 4.143589874507773,
+      "expectedResult": "failed_precision_gate"
+    }
   },
   "interpretation": "The export invokes the same frozen Rust neural inference used by practice serving and materializes all 8450 preflop information sets per player. Exact equality of the direct neural and exported-table information-set response metrics verifies routing identity; it is not an equilibrium or exploitability release certificate."
 }

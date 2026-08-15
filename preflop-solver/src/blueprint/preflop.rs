@@ -3479,7 +3479,7 @@ pub fn attribute_canonical_range_policy_action_values(
                 if cache.complete_canonical_flop_enumeration {
                     0.0
                 } else {
-                    ratio_of_means_standard_error(action).unwrap_or(cache.depth_bb)
+                    finite_population_ratio_standard_error(action, 1_755).unwrap_or(cache.depth_bb)
                 }
             })
             .collect::<Vec<_>>();
@@ -3578,7 +3578,7 @@ pub fn attribute_canonical_range_policy_action_values(
             "policy-reach-and-action-frequency-weighted one-step deviation EVs with exact compatible private ranges, exact card removal, exact preflop all-in runouts, and complete suit-isomorphic flop enumeration; chance-sampling SE is zero while frozen resolver/value-network approximation remains separately disclosed"
                 .to_owned()
         } else {
-            "policy-reach-and-action-frequency-weighted one-step deviation EVs with exact compatible private ranges, exact card removal, and exact preflop all-in runouts; SE uses distinct sampled canonical-flop clusters while frozen resolver/value-network approximation remains separately disclosed"
+            "policy-reach-and-action-frequency-weighted one-step deviation EVs with exact compatible private ranges, exact card removal, and exact preflop all-in runouts; SE uses seeded canonical-flop-orbit sampling without replacement with the finite-population correction, while frozen resolver/value-network approximation remains separately disclosed"
                 .to_owned()
         },
     })
@@ -3765,6 +3765,18 @@ fn ratio_of_means_standard_error(samples: &[(f64, f64)]) -> Option<f64> {
         .sum::<f64>();
     let count = samples.len() as f64;
     Some((count * squared_residual / ((count - 1.0) * denominator.powi(2))).sqrt())
+}
+
+fn finite_population_ratio_standard_error(
+    samples: &[(f64, f64)],
+    population: usize,
+) -> Option<f64> {
+    if population < 2 || samples.len() > population {
+        return None;
+    }
+    let standard_error = ratio_of_means_standard_error(samples)?;
+    let remaining_fraction = (population - samples.len()) as f64 / population as f64;
+    Some(standard_error * remaining_fraction.sqrt())
 }
 
 fn action_ev_precision_weights(
@@ -4629,6 +4641,19 @@ mod tests {
             (ratio_of_means_standard_error(&[(1.0, 1.0), (3.0, 1.0)]).unwrap() - 1.0).abs() < 1e-12
         );
         assert_eq!(ratio_of_means_standard_error(&[(1.0, 1.0)]), None);
+        let sample = [(1.0, 1.0), (3.0, 1.0)];
+        assert!(
+            (finite_population_ratio_standard_error(&sample, 4).unwrap() - 0.5f64.sqrt()).abs()
+                < 1e-12
+        );
+        assert_eq!(
+            finite_population_ratio_standard_error(
+                &[(0.0, 1.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0)],
+                4,
+            ),
+            Some(0.0)
+        );
+        assert_eq!(finite_population_ratio_standard_error(&sample, 1), None);
     }
 
     #[test]
