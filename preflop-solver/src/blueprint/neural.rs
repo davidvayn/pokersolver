@@ -437,6 +437,22 @@ pub struct CausalActionReachDiagnostic {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CausalPreflopActionReachDiagnostic {
+    pub public_history: Vec<String>,
+    pub action_label: String,
+    /// Expected times this action is selected at this exact public preflop
+    /// history per outer response game.
+    pub expected_reach: f64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CausalPreflopTerminalDiagnostic {
+    pub public_history: Vec<String>,
+    pub expected_reach: f64,
+    pub expected_response_value_bb: f64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct CausalResponderDiagnostics {
     pub responder: usize,
     pub mean_response_value_bb: f64,
@@ -446,6 +462,9 @@ pub struct CausalResponderDiagnostics {
     pub expected_terminal_response_value_by_street_bb: [f64; 4],
     pub selected_response_actions: Vec<CausalActionReachDiagnostic>,
     pub frozen_policy_actions: Vec<CausalActionReachDiagnostic>,
+    pub selected_response_preflop_actions: Vec<CausalPreflopActionReachDiagnostic>,
+    pub frozen_policy_preflop_actions: Vec<CausalPreflopActionReachDiagnostic>,
+    pub preflop_terminals: Vec<CausalPreflopTerminalDiagnostic>,
 }
 
 #[derive(Clone, Debug)]
@@ -4734,7 +4753,7 @@ fn solve_causal_response_plan(
             })
             .sum();
         let mut diagnostics = CausalResponderDiagnosticsAccumulator::default();
-        diagnostics.record_terminal(state.street, weights.iter().sum(), value);
+        diagnostics.record_terminal(&state, weights.iter().sum(), value);
         return Ok((value, BTreeMap::new(), diagnostics));
     }
     let actions = state.legal_actions(&generator.config.game);
@@ -4779,7 +4798,7 @@ fn solve_causal_response_plan(
             total += value;
             merge_causal_response_plan(&mut plan, child_plan)?;
             child_diagnostics.record_response_action(
-                state.street,
+                &state,
                 &actions[selected_action],
                 information_set_weights.iter().sum(),
             );
@@ -4822,7 +4841,7 @@ fn solve_causal_response_plan(
         )?;
         total += value;
         merge_causal_response_plan(&mut plan, child_plan)?;
-        child_diagnostics.record_frozen_policy_action(state.street, action, action_reach);
+        child_diagnostics.record_frozen_policy_action(&state, action, action_reach);
         diagnostics.merge(child_diagnostics);
     }
     Ok((total, plan, diagnostics))
@@ -4943,6 +4962,9 @@ struct CausalResponderDiagnosticsAccumulator {
     terminal_response_value_by_street_bb: [f64; 4],
     selected_response_actions: BTreeMap<(u8, String), f64>,
     frozen_policy_actions: BTreeMap<(u8, String), f64>,
+    selected_response_preflop_actions: BTreeMap<(Vec<String>, String), f64>,
+    frozen_policy_preflop_actions: BTreeMap<(Vec<String>, String), f64>,
+    preflop_terminals: BTreeMap<Vec<String>, (f64, f64)>,
 }
 
 fn diagnostic_street_index(street: Street) -> usize {
@@ -4965,34 +4987,54 @@ fn diagnostic_street(index: u8) -> Street {
 }
 
 impl CausalResponderDiagnosticsAccumulator {
-    fn record_response_action(&mut self, street: Street, action: &LegalAction, reach: f64) {
+    fn record_response_action(&mut self, state: &GameState, action: &LegalAction, reach: f64) {
         if reach <= 0.0 {
             return;
         }
-        let street_index = diagnostic_street_index(street);
+        let street_index = diagnostic_street_index(state.street);
         self.response_decision_reach_by_street[street_index] += reach;
         *self
             .selected_response_actions
             .entry((street_index as u8, action.label.clone()))
             .or_default() += reach;
+        if state.street == Street::Preflop {
+            *self
+                .selected_response_preflop_actions
+                .entry((state.public_history.clone(), action.label.clone()))
+                .or_default() += reach;
+        }
     }
 
-    fn record_frozen_policy_action(&mut self, street: Street, action: &LegalAction, reach: f64) {
+    fn record_frozen_policy_action(&mut self, state: &GameState, action: &LegalAction, reach: f64) {
         if reach <= 0.0 {
             return;
         }
-        let street_index = diagnostic_street_index(street);
+        let street_index = diagnostic_street_index(state.street);
         self.frozen_policy_decision_reach_by_street[street_index] += reach;
         *self
             .frozen_policy_actions
             .entry((street_index as u8, action.label.clone()))
             .or_default() += reach;
+        if state.street == Street::Preflop {
+            *self
+                .frozen_policy_preflop_actions
+                .entry((state.public_history.clone(), action.label.clone()))
+                .or_default() += reach;
+        }
     }
 
-    fn record_terminal(&mut self, street: Street, reach: f64, response_value_bb: f64) {
-        let street_index = diagnostic_street_index(street);
+    fn record_terminal(&mut self, state: &GameState, reach: f64, response_value_bb: f64) {
+        let street_index = diagnostic_street_index(state.street);
         self.terminal_reach_by_street[street_index] += reach;
         self.terminal_response_value_by_street_bb[street_index] += response_value_bb;
+        if state.street == Street::Preflop {
+            let entry = self
+                .preflop_terminals
+                .entry(state.public_history.clone())
+                .or_default();
+            entry.0 += reach;
+            entry.1 += response_value_bb;
+        }
     }
 
     fn merge(&mut self, other: Self) {
@@ -5011,6 +5053,20 @@ impl CausalResponderDiagnosticsAccumulator {
         for (key, reach) in other.frozen_policy_actions {
             *self.frozen_policy_actions.entry(key).or_default() += reach;
         }
+        for (key, reach) in other.selected_response_preflop_actions {
+            *self
+                .selected_response_preflop_actions
+                .entry(key)
+                .or_default() += reach;
+        }
+        for (key, reach) in other.frozen_policy_preflop_actions {
+            *self.frozen_policy_preflop_actions.entry(key).or_default() += reach;
+        }
+        for (history, (reach, value)) in other.preflop_terminals {
+            let entry = self.preflop_terminals.entry(history).or_default();
+            entry.0 += reach;
+            entry.1 += value;
+        }
     }
 
     fn finish(
@@ -5026,6 +5082,18 @@ impl CausalResponderDiagnosticsAccumulator {
                 .map(
                     |((street, action_label), reach)| CausalActionReachDiagnostic {
                         street: diagnostic_street(street),
+                        action_label,
+                        expected_reach: reach * scale,
+                    },
+                )
+                .collect()
+        };
+        let preflop_actions = |entries: BTreeMap<(Vec<String>, String), f64>| {
+            entries
+                .into_iter()
+                .map(
+                    |((public_history, action_label), reach)| CausalPreflopActionReachDiagnostic {
+                        public_history,
                         action_label,
                         expected_reach: reach * scale,
                     },
@@ -5049,6 +5117,21 @@ impl CausalResponderDiagnosticsAccumulator {
                 .map(|value| value * scale),
             selected_response_actions: actions(self.selected_response_actions),
             frozen_policy_actions: actions(self.frozen_policy_actions),
+            selected_response_preflop_actions: preflop_actions(
+                self.selected_response_preflop_actions,
+            ),
+            frozen_policy_preflop_actions: preflop_actions(self.frozen_policy_preflop_actions),
+            preflop_terminals: self
+                .preflop_terminals
+                .into_iter()
+                .map(
+                    |(public_history, (reach, value))| CausalPreflopTerminalDiagnostic {
+                        public_history,
+                        expected_reach: reach * scale,
+                        expected_response_value_bb: value * scale,
+                    },
+                )
+                .collect(),
         }
     }
 }
@@ -5105,6 +5188,56 @@ fn finish_causal_response_diagnostics(
             {
                 return Err("causal response action reach does not reconcile by street".to_owned());
             }
+        }
+        for (actions, expected) in [
+            (
+                &diagnostic.selected_response_preflop_actions,
+                diagnostic.expected_response_decision_reach_by_street[0],
+            ),
+            (
+                &diagnostic.frozen_policy_preflop_actions,
+                diagnostic.expected_frozen_policy_decision_reach_by_street[0],
+            ),
+        ] {
+            if actions.iter().any(|action| {
+                action.public_history.iter().any(String::is_empty)
+                    || action.action_label.is_empty()
+                    || !action.expected_reach.is_finite()
+                    || action.expected_reach <= 0.0
+            }) || (actions
+                .iter()
+                .map(|action| action.expected_reach)
+                .sum::<f64>()
+                - expected)
+                .abs()
+                > 1e-8
+            {
+                return Err("causal response preflop action reach does not reconcile".to_owned());
+            }
+        }
+        let preflop_terminal_reach = diagnostic
+            .preflop_terminals
+            .iter()
+            .map(|terminal| terminal.expected_reach)
+            .sum::<f64>();
+        let preflop_terminal_value = diagnostic
+            .preflop_terminals
+            .iter()
+            .map(|terminal| terminal.expected_response_value_bb)
+            .sum::<f64>();
+        if diagnostic.preflop_terminals.iter().any(|terminal| {
+            terminal.public_history.iter().any(String::is_empty)
+                || !terminal.expected_reach.is_finite()
+                || terminal.expected_reach <= 0.0
+                || !terminal.expected_response_value_bb.is_finite()
+        }) || (preflop_terminal_reach - diagnostic.expected_terminal_reach_by_street[0]).abs()
+            > 1e-8
+            || (preflop_terminal_value
+                - diagnostic.expected_terminal_response_value_by_street_bb[0])
+                .abs()
+                > 1e-8
+        {
+            return Err("causal response preflop terminals do not reconcile".to_owned());
         }
     }
     Ok(diagnostics)
@@ -5715,7 +5848,7 @@ pub fn generate_causal_policy_attribution(
     fs::rename(&temporary, &config.output)?;
     let output_sha256 = sha256_path(&config.output)?;
     Ok(CausalPolicyAttributionReport {
-        schema: "hu-neural-causal-policy-attribution-report-v2",
+        schema: "hu-neural-causal-policy-attribution-report-v3",
         method: "fixed_information_set_causal_best_response_policy_action_subgradient",
         depth_bb: config.game.effective_stack_bb,
         deals: config.deals,
@@ -8104,6 +8237,49 @@ mod tests {
             assert_eq!(diagnostic.responder, responder);
             assert!(diagnostic.expected_response_decision_reach_by_street[0] > 0.0);
             assert!(diagnostic.expected_frozen_policy_decision_reach_by_street[0] > 0.0);
+            assert!(!diagnostic.selected_response_preflop_actions.is_empty());
+            assert!(!diagnostic.frozen_policy_preflop_actions.is_empty());
+            assert!(!diagnostic.preflop_terminals.is_empty());
+            assert!(
+                (diagnostic
+                    .selected_response_preflop_actions
+                    .iter()
+                    .map(|action| action.expected_reach)
+                    .sum::<f64>()
+                    - diagnostic.expected_response_decision_reach_by_street[0])
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (diagnostic
+                    .frozen_policy_preflop_actions
+                    .iter()
+                    .map(|action| action.expected_reach)
+                    .sum::<f64>()
+                    - diagnostic.expected_frozen_policy_decision_reach_by_street[0])
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (diagnostic
+                    .preflop_terminals
+                    .iter()
+                    .map(|terminal| terminal.expected_reach)
+                    .sum::<f64>()
+                    - diagnostic.expected_terminal_reach_by_street[0])
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (diagnostic
+                    .preflop_terminals
+                    .iter()
+                    .map(|terminal| terminal.expected_response_value_bb)
+                    .sum::<f64>()
+                    - diagnostic.expected_terminal_response_value_by_street_bb[0])
+                    .abs()
+                    < 1e-12
+            );
             assert!(
                 (diagnostic
                     .expected_terminal_reach_by_street
@@ -8238,6 +8414,10 @@ mod tests {
             fs::read(&second_path).unwrap()
         );
         assert_eq!(first.output_sha256, second.output_sha256);
+        assert_eq!(
+            first.schema,
+            "hu-neural-causal-policy-attribution-report-v3"
+        );
         assert_eq!(first.response_diagnostics, second.response_diagnostics);
         assert!(
             (first.sample_mean_exploitability_bb - certificate.sample_mean_exploitability_bb).abs()
