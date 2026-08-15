@@ -1,3 +1,25 @@
+const fullHandManifests = require('./data/practice/full-hand-manifests.json');
+
+const resolverArtifactFiles = [
+  ...new Set(
+    fullHandManifests
+      .filter(
+        (manifest) => manifest?.runtime?.kind === 'rust-continual-resolver-v1'
+      )
+      .flatMap((manifest) => Object.values(manifest.runtime.artifactFiles ?? {}))
+  ),
+];
+if (
+  resolverArtifactFiles.length === 0 ||
+  resolverArtifactFiles.some(
+    (file) =>
+      typeof file !== 'string' ||
+      !/^[a-z0-9][a-z0-9.-]*\.json\.gz$/.test(file)
+  )
+) {
+  throw new Error('Continual-resolver manifests contain invalid artifact files');
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -18,7 +40,9 @@ const nextConfig = {
   outputFileTracingIncludes: {
     '/api/practice/resolve': [
       './preflop-solver/target/release/preflop-solver',
-      './preflop-solver/models/practice/*.json.gz',
+      ...resolverArtifactFiles.map(
+        (file) => `./preflop-solver/models/practice/${file}`
+      ),
     ],
   },
   // Cross-origin isolation is required for SharedArrayBuffer, which the

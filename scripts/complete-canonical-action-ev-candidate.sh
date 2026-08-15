@@ -181,6 +181,7 @@ cargo test --release --manifest-path preflop-solver/Cargo.toml
 npm run test:practice-tools
 npm test
 npm run build
+npm run practice:verify-resolver-build
 npm run test:practice-resolver-integration
 
 jq -e --arg version "$model_version" '
