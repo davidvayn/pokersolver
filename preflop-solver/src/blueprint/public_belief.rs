@@ -813,7 +813,7 @@ impl PublicValueNetwork {
             .iter()
             .map(|private| !private.cards().iter().any(|card| board.contains(card)))
             .collect::<Vec<_>>();
-        std::array::from_fn(|player| {
+        let mut result = std::array::from_fn(|player| {
             output[player * COMBO_COUNT..(player + 1) * COMBO_COUNT]
                 .iter()
                 .enumerate()
@@ -825,7 +825,15 @@ impl PublicValueNetwork {
                     }
                 })
                 .collect()
-        })
+        });
+        let conflicts = combo_conflicts();
+        let masses = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
+                .collect::<Vec<_>>()
+        });
+        project_value_predictions_to_payoff_bounds(&mut result, board, invested, ranges, &masses);
+        result
     }
 
     fn predict_shared_combo(
@@ -959,27 +967,7 @@ impl PublicValueNetwork {
             }
             values
         });
-        let joint_mass = ranges[0]
-            .iter()
-            .zip(&masses[0])
-            .map(|(reach, mass)| reach * mass)
-            .sum::<f64>()
-            .max(EPSILON);
-        let aggregate = |player: usize| {
-            ranges[player]
-                .iter()
-                .zip(&result[player])
-                .zip(&masses[player])
-                .map(|((reach, value), mass)| reach * value * mass)
-                .sum::<f64>()
-                / joint_mass
-        };
-        let residual = aggregate(0) + aggregate(1);
-        for player in 0..2 {
-            for combo in &legal_combos[player] {
-                result[player][*combo] -= residual / 2.0;
-            }
-        }
+        project_value_predictions_to_payoff_bounds(&mut result, board, invested, ranges, &masses);
         result
     }
 
@@ -11697,6 +11685,94 @@ fn compatible_mass_from_conflicts(range: &[f64], conflicts: &[Vec<usize>], own: 
     .max(0.0)
 }
 
+fn project_value_predictions_to_payoff_bounds(
+    values: &mut [Vec<f64>; 2],
+    board: &[u8],
+    invested: [f64; 2],
+    ranges: &[Vec<f64>; 2],
+    masses: &[Vec<f64>; 2],
+) {
+    let board_cards = board.iter().copied().collect::<BTreeSet<_>>();
+    let legal = all_combos()
+        .iter()
+        .map(|combo| !combo.cards().iter().any(|card| board_cards.contains(card)))
+        .collect::<Vec<_>>();
+    let joint_mass = ranges[0]
+        .iter()
+        .zip(&masses[0])
+        .map(|(reach, mass)| reach * mass)
+        .sum::<f64>()
+        .max(EPSILON);
+    for player in 0..2 {
+        let minimum = -invested[player];
+        let maximum = invested[1 - player];
+        for (combo, value) in values[player].iter_mut().enumerate() {
+            if legal[combo] {
+                *value = value.clamp(minimum, maximum);
+            } else {
+                *value = 0.0;
+            }
+        }
+    }
+    let aggregate = |player: usize, candidates: &[f64]| {
+        ranges[player]
+            .iter()
+            .zip(candidates)
+            .zip(&masses[player])
+            .map(|((reach, value), mass)| reach * value * mass)
+            .sum::<f64>()
+            / joint_mass
+    };
+    let aggregates: [f64; 2] = std::array::from_fn(|player| aggregate(player, &values[player]));
+    let midpoint = (aggregates[0] - aggregates[1]) / 2.0;
+    for player in 0..2 {
+        let minimum = -invested[player];
+        let maximum = invested[1 - player];
+        let target = if player == 0 { midpoint } else { -midpoint };
+        if (aggregates[player] - target).abs() <= 1e-12 {
+            continue;
+        }
+        let legal_values = values[player]
+            .iter()
+            .enumerate()
+            .filter_map(|(combo, value)| legal[combo].then_some(*value));
+        let (smallest, largest) = legal_values.fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(smallest, largest), value| (smallest.min(value), largest.max(value)),
+        );
+        let mut low = minimum - largest;
+        let mut high = maximum - smallest;
+        for _ in 0..80 {
+            let shift = (low + high) / 2.0;
+            let shifted = ranges[player]
+                .iter()
+                .zip(&values[player])
+                .zip(&masses[player])
+                .enumerate()
+                .map(|(combo, ((reach, value), mass))| {
+                    if legal[combo] {
+                        reach * (value + shift).clamp(minimum, maximum) * mass
+                    } else {
+                        0.0
+                    }
+                })
+                .sum::<f64>()
+                / joint_mass;
+            if shifted < target {
+                low = shift;
+            } else {
+                high = shift;
+            }
+        }
+        let shift = (low + high) / 2.0;
+        for (combo, value) in values[player].iter_mut().enumerate() {
+            if legal[combo] {
+                *value = (*value + shift).clamp(minimum, maximum);
+            }
+        }
+    }
+}
+
 pub fn uniform_range(board: &[u8]) -> Vec<f64> {
     let blocked = board.iter().copied().collect::<BTreeSet<_>>();
     let mut range = all_combos()
@@ -11993,6 +12069,51 @@ mod tests {
         let routed = network.predict(&board, 0, [4.0, 4.0], &ranges);
         let expected = network.predict_shared_combo(&board, 0, [4.0, 4.0], &ranges);
         assert_eq!(routed, expected);
+    }
+
+    #[test]
+    fn public_value_inference_respects_payoff_bounds_and_zero_sum() {
+        let mut network = zero_shared_value_network();
+        network.query_tower[0].weights[94] = 10.0;
+        network.head[0].weights[1] = 1.0;
+        network.validate().expect("valid adversarial value network");
+
+        let board = [8, 9, 16, 20];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let invested = [4.0, 7.0];
+        let values = network.predict(&board, 0, invested, &ranges);
+        let conflicts = combo_conflicts();
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+            (0..COMBO_COUNT)
+                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
+                .collect()
+        });
+        let joint = joint_compatibility_mass(&ranges);
+        let aggregate = |player: usize| {
+            ranges[player]
+                .iter()
+                .zip(&values[player])
+                .zip(&masses[player])
+                .map(|((reach, value), mass)| reach * value * mass)
+                .sum::<f64>()
+                / joint
+        };
+        for player in 0..2 {
+            let minimum = -invested[player];
+            let maximum = invested[1 - player];
+            for combo in all_combos() {
+                if combo.cards().iter().all(|card| !board.contains(card)) {
+                    assert!(
+                        (minimum - 1e-9..=maximum + 1e-9)
+                            .contains(&values[player][combo.key()]),
+                        "player {player} combo {:?} has illegal value {} outside [{minimum}, {maximum}]",
+                        combo.cards(),
+                        values[player][combo.key()]
+                    );
+                }
+            }
+        }
+        assert!((aggregate(0) + aggregate(1)).abs() < 1e-9);
     }
 
     fn check_preferring_range_policy() -> RangeConditionedPolicyNetwork {

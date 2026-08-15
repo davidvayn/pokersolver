@@ -28,6 +28,7 @@ const RANGE_CONTINUATION_SCHEMA: &str = "hu-preflop-range-continuation-cache-v2"
 const POLICY_SCHEMA: &str = "hu-tabular-preflop-dcfr-v1";
 const EVALUATION_SCHEMA: &str = "hu-preflop-information-set-response-v2";
 const ATTRIBUTION_SCHEMA: &str = "hu-preflop-local-leak-attribution-v1";
+const VALUE_PROJECTION: &str = "state_payoff_box_constrained_reach_weighted_zero_sum_v1";
 const EXTERNAL_SAMPLING_EXPLORATION: f64 = 0.05;
 const RESOLVER_RANGE_PROBABILITY_FLOOR: f64 = 1e-9;
 
@@ -100,6 +101,8 @@ pub struct ResolverContinuationProvenance {
     pub dcfr: DcfrParameters,
     pub value_uncertainty_bb: f64,
     pub threads: usize,
+    #[serde(default)]
+    pub value_projection: String,
     pub value_network_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_value_network_sha256: Option<String>,
@@ -284,6 +287,7 @@ impl ContinuationCache {
                     && resolver.value_uncertainty_bb.is_finite()
                     && resolver.value_uncertainty_bb >= 0.0
                     && resolver.threads > 0
+                    && resolver.value_projection == VALUE_PROJECTION
                     && valid_digest(&resolver.value_network_sha256)
                     && resolver.value_network_sha256 == self.network_sha256
                     && self.network_sha256s.first() == Some(&resolver.value_network_sha256)
@@ -538,6 +542,7 @@ impl RangeContinuationCache {
             || self.resolver_provenance.iterations < 2
             || self.resolver_provenance.averaging_delay >= self.resolver_provenance.iterations
             || self.resolver_provenance.threads == 0
+            || self.resolver_provenance.value_projection != VALUE_PROJECTION
             || !self.resolver_provenance.value_uncertainty_bb.is_finite()
             || self.resolver_provenance.value_uncertainty_bb < 0.0
             || !self
@@ -1675,6 +1680,7 @@ pub fn build_resolver_continuation_cache(
             dcfr: config.resolver_dcfr,
             value_uncertainty_bb: config.value_uncertainty_bb,
             threads: config.threads,
+            value_projection: VALUE_PROJECTION.to_owned(),
             value_network_sha256: network_sha256.clone(),
             evaluation_value_network_sha256: evaluation_network_sha256.clone(),
             range_policy_sha256,
@@ -1900,6 +1906,7 @@ pub fn build_range_continuation_cache(
             dcfr: config.resolver_dcfr,
             value_uncertainty_bb: config.value_uncertainty_bb,
             threads: resolver_threads,
+            value_projection: VALUE_PROJECTION.to_owned(),
             value_network_sha256,
             evaluation_value_network_sha256,
             range_policy_sha256: Some(policy_sha256),
@@ -4817,6 +4824,7 @@ mod tests {
                 dcfr: DcfrParameters::default(),
                 value_uncertainty_bb: 1.0,
                 threads: 1,
+                value_projection: VALUE_PROJECTION.to_owned(),
                 value_network_sha256: "b".repeat(64),
                 evaluation_value_network_sha256: None,
                 range_policy_sha256: Some("a".repeat(64)),
@@ -4836,6 +4844,13 @@ mod tests {
         let merged = merge_range_continuation_caches(&[first.clone(), second.clone()]).unwrap();
         assert_eq!(merged.boards.len(), 2);
         assert!(merge_range_continuation_caches(&[first.clone(), first.clone()]).is_err());
+
+        let mut stale_projection = cache.clone();
+        stale_projection
+            .resolver_provenance
+            .value_projection
+            .clear();
+        assert!(stale_projection.validate().is_err());
 
         let mut incompatible_resolution = second;
         incompatible_resolution.chance_sampling = "different-resolution-mode".to_owned();
@@ -4955,6 +4970,7 @@ mod tests {
                 dcfr: DcfrParameters::default(),
                 value_uncertainty_bb: 1.0,
                 threads: 2,
+                value_projection: VALUE_PROJECTION.to_owned(),
                 value_network_sha256: "b".repeat(64),
                 evaluation_value_network_sha256: None,
                 range_policy_sha256: Some("a".repeat(64)),
@@ -5277,6 +5293,7 @@ mod tests {
             },
             value_uncertainty_bb: 0.02,
             threads: 10,
+            value_projection: VALUE_PROJECTION.to_owned(),
             value_network_sha256: "0".repeat(64),
             evaluation_value_network_sha256: Some("2".repeat(64)),
             range_policy_sha256: Some("3".repeat(64)),
