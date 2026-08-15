@@ -16,6 +16,61 @@ model_dir="$repo_root/preflop-solver/models/practice"
 validation_model_dir="$repo_root/preflop-solver/models/validation"
 holdout_dir="$repo_root/preflop-solver/neural/runs/20bb-v82-residual-policy/s3000-b16-cos3e4-3e5"
 preflop_validation="$repo_root/preflop-solver/neural/v27-preflop-sequence.json"
+candidate_freeze="$repo_root/preflop-solver/neural/20bb-v50-full-hand-candidate-freeze.json"
+
+require_sha256() {
+  local file=$1
+  local expected=$2
+  local actual
+  actual=$(shasum -a 256 "$file" | awk '{print $1}')
+  if [[ "$actual" != "$expected" ]]; then
+    echo "$file SHA-256 $actual differs from $expected" >&2
+    exit 1
+  fi
+}
+
+seed_5101_narrow="$repo_root/preflop-solver/neural/runs/20bb-long-v1-narrow-seed5101/metrics.jsonl"
+seed_5101_wide="$repo_root/preflop-solver/neural/runs/20bb-long-v1-wide-seed5101/metrics.jsonl"
+seed_5102_narrow="$repo_root/preflop-solver/neural/runs/20bb-long-v1-narrow-seed5102/metrics.jsonl"
+seed_5102_wide="$repo_root/preflop-solver/neural/runs/20bb-long-v1-wide-seed5102/metrics.jsonl"
+require_sha256 "$seed_5101_narrow" 6a9d2c7faf5774f43e9a9eab62a6aa0515872b50036d429bad3a261f69117874
+require_sha256 "$seed_5101_wide" d6922d764eba1b9f81168dd1357f9a2a161c37404dbdd9933fb00a3c5c375f43
+require_sha256 "$seed_5102_narrow" 37579b2827251656dc471284818ada3dde38aad23980b6da1a07d6c776a48d84
+require_sha256 "$seed_5102_wide" 2c4ce9c53e01c162d90a47aa62d8e9206b0d0b18ca29dfc14e25b67b3dcf48a0
+
+training_hours_7601=$(jq -s -e '
+  if length == 518 and (map(.elapsed_seconds) | all(type == "number" and . > 0))
+  then (map(.elapsed_seconds) | add) / 3600
+  else error("seed 7601 training metrics are incomplete")
+  end
+' "$seed_5101_narrow" "$seed_5101_wide")
+training_hours_7602=$(jq -s -e '
+  if length == 515 and (map(.elapsed_seconds) | all(type == "number" and . > 0))
+  then (map(.elapsed_seconds) | add) / 3600
+  else error("seed 7602 training metrics are incomplete")
+  end
+' "$seed_5102_narrow" "$seed_5102_wide")
+training_hours=$(jq -cn \
+  --argjson first "$training_hours_7601" \
+  --argjson second "$training_hours_7602" \
+  '[$first, $second]')
+jq -en --argjson hours "$training_hours" '
+  ($hours | length) == 2 and ($hours | all(. >= 8 and . <= 12))
+' >/dev/null
+jq -e '
+  .schema == "hu-routed-full-hand-candidate-freeze-v1" and
+  .depthBb == 20 and
+  .reproducibility.status == "byte-identical" and
+  [.candidates[].candidateSeed] == [7601, 7602] and
+  [.candidates[].preflop.run] == [
+    "neural/runs/20bb-long-v1-narrow-seed5101",
+    "neural/runs/20bb-long-v1-narrow-seed5102"
+  ] and
+  [.candidates[].postflop.run] == [
+    "neural/runs/20bb-long-v1-wide-seed5101",
+    "neural/runs/20bb-long-v1-wide-seed5102"
+  ]
+' "$candidate_freeze" >/dev/null
 
 action_values=
 for milestone in 878 1500 1650 1725 1755; do
@@ -72,6 +127,7 @@ jq -e '
 # even when both the report and the manifest happen to pass independently.
 jq -e \
   --arg version "$model_version" \
+  --argjson training_hours "$training_hours" \
   --slurpfile comparison "$comparison" \
   --slurpfile preflop "$preflop_validation" '
   [.[] | select(.version == $version)] as $models |
@@ -116,7 +172,8 @@ jq -e \
     $validation.quantizedProbabilitySumsValid == true and
     $validation.independentSeedCount == 2 and
     ($validation.trainingHoursPerSeed | length) == 2 and
-    ($validation.trainingHoursPerSeed | all(. >= 8 and . <= 12)) and
+    ((($validation.trainingHoursPerSeed[0] - $training_hours[0]) | abs) <= 1e-9) and
+    ((($validation.trainingHoursPerSeed[1] - $training_hours[1]) | abs) <= 1e-9) and
     $comparison[0].maximumProbabilitySumError <= 1e-6)
 ' data/practice/full-hand-manifests.json >/dev/null
 
