@@ -199,6 +199,15 @@ class PracticeSolverProcess {
       });
     });
   }
+
+  async stop(): Promise<void> {
+    const child = this.child;
+    if (!child || child.exitCode !== null) return;
+    child.stdin.end();
+    await new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+    });
+  }
 }
 
 const globalResolver = globalThis as typeof globalThis & {
@@ -208,4 +217,12 @@ const globalResolver = globalThis as typeof globalThis & {
 export function practiceSolverProcess(): PracticeSolverProcess {
   globalResolver.__practiceSolverProcess ??= new PracticeSolverProcess();
   return globalResolver.__practiceSolverProcess;
+}
+
+/** Release the long-lived child process in integration tests and shutdown hooks. */
+export async function stopPracticeSolverProcess(): Promise<void> {
+  const resolver = globalResolver.__practiceSolverProcess;
+  if (!resolver) return;
+  await resolver.stop();
+  delete globalResolver.__practiceSolverProcess;
 }
