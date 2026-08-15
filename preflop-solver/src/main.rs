@@ -99,6 +99,9 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--river-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                resolved_actor: value(args, "--river-resolver-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
             })
         })
         .transpose()?;
@@ -130,6 +133,9 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     0u64,
                 )?,
                 resolved_policy_weight: parse_or(args, "--turn-resolver-policy-weight", 1.0f64)?,
+                resolved_actor: value(args, "--turn-resolver-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
             })
         })
         .transpose()?;
@@ -177,6 +183,9 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     .iter()
                     .any(|argument| argument == "--flop-resolver-safe-bilateral"),
                 resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
+                resolved_actor: value(args, "--flop-resolver-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
             })
         })
         .transpose()?;
@@ -2199,11 +2208,18 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--river-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                resolved_actor: value(args, "--river-resolver-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
             })
         })
         .transpose()?;
-    if river_resolver.is_none() && value(args, "--river-resolver-averaging-delay").is_some() {
-        return Err("--river-resolver-averaging-delay requires --river-resolver-iterations".into());
+    if river_resolver.is_none()
+        && ["--river-resolver-averaging-delay", "--river-resolver-actor"]
+            .iter()
+            .any(|name| args.iter().any(|argument| argument == name))
+    {
+        return Err("river resolver options require --river-resolver-iterations".into());
     }
     let turn_resolver_iterations = value(args, "--turn-resolver-iterations")
         .map(|iterations| iterations.parse::<u64>())
@@ -2235,6 +2251,9 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     0u64,
                 )?,
                 resolved_policy_weight: parse_or(args, "--turn-resolver-policy-weight", 1.0f64)?,
+                resolved_actor: value(args, "--turn-resolver-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
             })
         })
         .transpose()?;
@@ -2247,6 +2266,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--turn-resolver-safe",
             "--turn-resolver-safe-anchor-iterations",
             "--turn-resolver-policy-weight",
+            "--turn-resolver-actor",
         ]
         .iter()
         .any(|name| args.iter().any(|argument| argument == name))
@@ -2299,6 +2319,9 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     .iter()
                     .any(|argument| argument == "--flop-resolver-safe-bilateral"),
                 resolved_policy_weight: parse_or(args, "--flop-resolver-policy-weight", 1.0f64)?,
+                resolved_actor: value(args, "--flop-resolver-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
             })
         })
         .transpose()?;
@@ -2314,6 +2337,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--flop-resolver-safe-anchor-iterations",
             "--flop-resolver-safe-bilateral",
             "--flop-resolver-policy-weight",
+            "--flop-resolver-actor",
         ]
         .iter()
         .any(|name| args.iter().any(|argument| argument == name))
@@ -2975,6 +2999,7 @@ Neural certificate options:
                                   an exact-range public-belief CFR solve
   --river-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
+  --river-resolver-actor <0|1>    Resolve only BTN/SB (0) or BB (1) actions
   --turn-resolver-iterations <N>  Replace every reached turn action with a
                                   joint exact-range turn/river CFR solve
   --turn-resolver-averaging-delay <N>
@@ -2993,6 +3018,7 @@ Neural certificate options:
   --turn-resolver-policy-weight <0..1>
                                   Blend resolved turn actions toward the
                                   frozen policy. Default: 1
+  --turn-resolver-actor <0|1>     Resolve only BTN/SB (0) or BB (1) actions
   --flop-resolver-iterations <N>  Replace every reached flop action with a
                                   depth-limited exact-range CFR solve
   --flop-resolver-value-network <path>
@@ -3017,6 +3043,7 @@ Neural certificate options:
   --flop-resolver-policy-weight <0..1>
                                   Blend resolved actions with the frozen
                                   blueprint; default: 1 (pure resolve)
+  --flop-resolver-actor <0|1>     Resolve only BTN/SB (0) or BB (1) actions
   --compact-serving-grid          Match an opt-in reduced-open model
   --output <path>                 Optional JSON certificate file
 

@@ -83,6 +83,9 @@ impl ExploitabilityCertificateConfig {
 pub struct RiverResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
+    /// Restrict resolved action replacement to one fixed seat. Player 0 is
+    /// the BTN/SB and player 1 is the BB in the pinned heads-up game.
+    pub resolved_actor: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -107,6 +110,9 @@ pub struct TurnResolverConfig {
     /// average policy. The remainder stays anchored to the frozen policy at
     /// the same exact public belief.
     pub resolved_policy_weight: f64,
+    /// Restrict new turn solves to one fixed seat. A safe solve still serves
+    /// its frozen-opponent rows inside the protected subtree.
+    pub resolved_actor: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +137,9 @@ pub struct FlopResolverConfig {
     /// strategy. The remainder stays anchored to the frozen blueprint at the
     /// same exact public belief, preventing unconstrained strategy grafting.
     pub resolved_policy_weight: f64,
+    /// Restrict new flop solves to one fixed seat. Player 0 is BTN/SB and
+    /// player 1 is BB; `None` preserves bilateral deployment.
+    pub resolved_actor: Option<usize>,
 }
 
 /// Immutable runtime configuration for website policy queries. The same
@@ -531,6 +540,8 @@ pub struct ExploitabilityCertificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub river_resolver_averaging_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_resolved_actor: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_averaging_delay: Option<u64>,
@@ -546,6 +557,8 @@ pub struct ExploitabilityCertificate {
     pub turn_resolver_policy_weight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_safe_anchor_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_resolved_actor: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -567,6 +580,8 @@ pub struct ExploitabilityCertificate {
     pub flop_resolver_safe_anchor_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_safe_bilateral: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_resolved_actor: Option<usize>,
     pub exact_betting_tree_nodes: u64,
     /// Retained outer-game observations permit paired candidate comparisons,
     /// deterministic replay, and honest inspection of chance-sampling noise.
@@ -626,6 +641,10 @@ struct FlopResolverRuntime {
     config: FlopResolverConfig,
     value_network: super::public_belief::PublicValueNetwork,
     auxiliary_value_networks: Vec<super::public_belief::PublicValueNetwork>,
+}
+
+fn resolver_serves_actor(resolved_actor: Option<usize>, actor: usize) -> bool {
+    resolved_actor.is_none_or(|configured| configured == actor)
 }
 
 struct RangePolicyCachedNode {
@@ -937,11 +956,10 @@ impl FrozenPolicy {
                     resolved.probabilities.clone()
                 }
             }
-        } else if let Some(resolver) = self
-            .flop_resolver
-            .as_ref()
-            .filter(|_| state.street == Street::Flop)
-        {
+        } else if let Some(resolver) = self.flop_resolver.as_ref().filter(|resolver| {
+            state.street == Street::Flop
+                && resolver_serves_actor(resolver.config.resolved_actor, state.actor)
+        }) {
             let resolved = self
                 .flop_strategy_cache
                 .lock()
@@ -1094,7 +1112,10 @@ impl FrozenPolicy {
             } else {
                 resolved.probabilities.clone()
             }
-        } else if let Some(resolver) = self.turn_resolver.filter(|_| state.street == Street::Turn) {
+        } else if let Some(resolver) = self.turn_resolver.filter(|resolver| {
+            state.street == Street::Turn
+                && resolver_serves_actor(resolver.resolved_actor, state.actor)
+        }) {
             let resolved = self
                 .turn_strategy_cache
                 .lock()
@@ -1229,10 +1250,10 @@ impl FrozenPolicy {
             } else {
                 resolved.probabilities.clone()
             }
-        } else if let Some(resolver) = self
-            .river_resolver
-            .filter(|_| state.street == Street::River)
-        {
+        } else if let Some(resolver) = self.river_resolver.filter(|resolver| {
+            state.street == Street::River
+                && resolver_serves_actor(resolver.resolved_actor, state.actor)
+        }) {
             let resolved = self
                 .river_strategy_cache
                 .lock()
@@ -1284,10 +1305,10 @@ impl FrozenPolicy {
         };
         let action_values_bb = match state.street {
             Street::Flop
-                if self
-                    .flop_resolver
-                    .as_ref()
-                    .is_some_and(|resolver| resolver.config.resolved_policy_weight == 1.0) =>
+                if self.flop_resolver.as_ref().is_some_and(|resolver| {
+                    resolver.config.resolved_policy_weight == 1.0
+                        && resolver_serves_actor(resolver.config.resolved_actor, state.actor)
+                }) =>
             {
                 self.flop_strategy_cache
                     .lock()
@@ -1297,9 +1318,10 @@ impl FrozenPolicy {
                     .and_then(|row| row.action_values_bb.clone())
             }
             Street::Turn
-                if self
-                    .turn_resolver
-                    .is_some_and(|resolver| resolver.resolved_policy_weight == 1.0) =>
+                if self.turn_resolver.is_some_and(|resolver| {
+                    resolver.resolved_policy_weight == 1.0
+                        && resolver_serves_actor(resolver.resolved_actor, state.actor)
+                }) =>
             {
                 self.turn_strategy_cache
                     .lock()
@@ -1308,12 +1330,17 @@ impl FrozenPolicy {
                     .get(&key)
                     .and_then(|row| row.action_values_bb.clone())
             }
-            Street::River if self.river_resolver.is_some() => self
-                .river_strategy_cache
-                .lock()
-                .expect("river strategy cache")
-                .get(&key)
-                .and_then(|row| row.action_values_bb.clone()),
+            Street::River
+                if self.river_resolver.is_some_and(|resolver| {
+                    resolver_serves_actor(resolver.resolved_actor, state.actor)
+                }) =>
+            {
+                self.river_strategy_cache
+                    .lock()
+                    .expect("river strategy cache")
+                    .get(&key)
+                    .and_then(|row| row.action_values_bb.clone())
+            }
             _ => None,
         };
         let cached = Arc::new(RangePolicyCachedNode {
@@ -1496,7 +1523,10 @@ impl FrozenPolicy {
                 river_board.push(card);
                 let mut river_ranges = ranges.clone();
                 normalize_ranges_for_board(&mut river_ranges, &river_board)?;
-                if let Some(resolver) = self.river_resolver {
+                if let Some(resolver) = self
+                    .river_resolver
+                    .filter(|resolver| resolver_serves_actor(resolver.resolved_actor, state.actor))
+                {
                     let public =
                         PublicBeliefState::from_game_state(river_board, &state, river_ranges);
                     let mut strategies = super::public_belief::solve_river_policy(
@@ -1890,6 +1920,8 @@ impl FrozenPolicy {
             || !resolver.resolved_policy_weight.is_finite()
             || !(0.0..=1.0).contains(&resolver.resolved_policy_weight)
             || resolver.safe_anchor_iterations == 1
+            || resolver.resolved_actor.is_some_and(|actor| actor > 1)
+            || (resolver.resolved_actor.is_some() && resolver.safe_bilateral)
             || (!resolver.safe_resolving
                 && (resolver.safe_anchor_iterations > 0 || resolver.safe_bilateral))
         {
@@ -1928,6 +1960,7 @@ impl FrozenPolicy {
             || !resolver.resolved_policy_weight.is_finite()
             || !(0.0..=1.0).contains(&resolver.resolved_policy_weight)
             || resolver.safe_anchor_iterations == 1
+            || resolver.resolved_actor.is_some_and(|actor| actor > 1)
             || (!resolver.safe_resolving && resolver.safe_anchor_iterations > 0)
         {
             return Err("turn resolver configuration is invalid".to_owned());
@@ -1953,7 +1986,10 @@ impl FrozenPolicy {
         if self.range_policy.is_none() {
             return Err("river resolving requires a range-conditioned policy".to_owned());
         }
-        if resolver.iterations < 2 || resolver.averaging_delay >= resolver.iterations {
+        if resolver.iterations < 2
+            || resolver.averaging_delay >= resolver.iterations
+            || resolver.resolved_actor.is_some_and(|actor| actor > 1)
+        {
             return Err("river resolver configuration is invalid".to_owned());
         }
         self.river_resolver = Some(resolver);
@@ -6478,15 +6514,19 @@ pub fn certify_exploitability_upper_bound(
         "the frozen opponent network is evaluated exactly on every reached betting action",
         "utilities are zero-sum and bounded to the effective stack in absolute value",
     ];
-    if config.river_resolver.is_some() {
-        assumptions.push(
-            "every reached river action is replaced by deterministic exact-range public-belief CFR",
-        );
+    if let Some(resolver) = config.river_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy"
+        } else {
+            "every reached river action is replaced by deterministic exact-range public-belief CFR"
+        });
     }
-    if config.turn_resolver.is_some() {
-        assumptions.push(
-            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
-        );
+    if let Some(resolver) = config.turn_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached turn actions for the configured fixed seat initiate deterministic exact-range joint turn/river public-belief CFR; the other seat retains the frozen policy outside protected safe subtrees"
+        } else {
+            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR"
+        });
         if config
             .turn_resolver
             .is_some_and(|resolver| resolver.safe_resolving)
@@ -6506,10 +6546,12 @@ pub fn certify_exploitability_upper_bound(
             });
         }
     }
-    if config.flop_resolver.is_some() {
-        assumptions.push(
-            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
-        );
+    if let Some(resolver) = &config.flop_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
+        } else {
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
+        });
         if config.flop_resolver.as_ref().is_some_and(|resolver| {
             resolver.continuation_selection
                 == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
@@ -6569,6 +6611,9 @@ pub fn certify_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_resolved_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.resolved_actor),
         turn_resolver_iterations: config.turn_resolver.map(|resolver| resolver.iterations),
         turn_resolver_averaging_delay: config
             .turn_resolver
@@ -6589,6 +6634,9 @@ pub fn certify_exploitability_upper_bound(
         turn_resolver_safe_anchor_iterations: config
             .turn_resolver
             .map(|resolver| resolver.safe_anchor_iterations),
+        turn_resolver_resolved_actor: config
+            .turn_resolver
+            .and_then(|resolver| resolver.resolved_actor),
         flop_resolver_iterations: config
             .flop_resolver
             .as_ref()
@@ -6623,6 +6671,10 @@ pub fn certify_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.safe_bilateral),
+        flop_resolver_resolved_actor: config
+            .flop_resolver
+            .as_ref()
+            .and_then(|resolver| resolver.resolved_actor),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -6788,20 +6840,26 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         "complete sampled runouts settle every showdown exactly",
         "utilities are zero-sum and bounded to the effective stack in absolute value",
     ];
-    if config.river_resolver.is_some() {
-        assumptions.push(
-            "every reached river action is replaced by deterministic exact-range public-belief CFR",
-        );
+    if let Some(resolver) = config.river_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy"
+        } else {
+            "every reached river action is replaced by deterministic exact-range public-belief CFR"
+        });
     }
-    if config.turn_resolver.is_some() {
-        assumptions.push(
-            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
-        );
+    if let Some(resolver) = config.turn_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached turn actions for the configured fixed seat initiate deterministic exact-range joint turn/river public-belief CFR; the other seat retains the frozen policy outside protected safe subtrees"
+        } else {
+            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR"
+        });
     }
-    if config.flop_resolver.is_some() {
-        assumptions.push(
-            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
-        );
+    if let Some(resolver) = &config.flop_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
+        } else {
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
+        });
         if config.flop_resolver.as_ref().is_some_and(|resolver| {
             resolver.continuation_selection
                 == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
@@ -6861,6 +6919,9 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_resolved_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.resolved_actor),
         turn_resolver_iterations: config.turn_resolver.map(|resolver| resolver.iterations),
         turn_resolver_averaging_delay: config
             .turn_resolver
@@ -6881,6 +6942,9 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         turn_resolver_safe_anchor_iterations: config
             .turn_resolver
             .map(|resolver| resolver.safe_anchor_iterations),
+        turn_resolver_resolved_actor: config
+            .turn_resolver
+            .and_then(|resolver| resolver.resolved_actor),
         flop_resolver_iterations: config
             .flop_resolver
             .as_ref()
@@ -6915,6 +6979,10 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.safe_bilateral),
+        flop_resolver_resolved_actor: config
+            .flop_resolver
+            .as_ref()
+            .and_then(|resolver| resolver.resolved_actor),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -7117,20 +7185,26 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         "complete sampled runouts settle every showdown exactly",
         "utilities are zero-sum and bounded to the effective stack in absolute value",
     ];
-    if config.river_resolver.is_some() {
-        assumptions.push(
-            "every reached river action is replaced by deterministic exact-range public-belief CFR",
-        );
+    if let Some(resolver) = config.river_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy"
+        } else {
+            "every reached river action is replaced by deterministic exact-range public-belief CFR"
+        });
     }
-    if config.turn_resolver.is_some() {
-        assumptions.push(
-            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR",
-        );
+    if let Some(resolver) = config.turn_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached turn actions for the configured fixed seat initiate deterministic exact-range joint turn/river public-belief CFR; the other seat retains the frozen policy outside protected safe subtrees"
+        } else {
+            "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR"
+        });
     }
-    if config.flop_resolver.is_some() {
-        assumptions.push(
-            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network",
-        );
+    if let Some(resolver) = &config.flop_resolver {
+        assumptions.push(if resolver.resolved_actor.is_some() {
+            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
+        } else {
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
+        });
         if config.flop_resolver.as_ref().is_some_and(|resolver| {
             resolver.continuation_selection
                 == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
@@ -7190,6 +7264,9 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_resolved_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.resolved_actor),
         turn_resolver_iterations: config.turn_resolver.map(|resolver| resolver.iterations),
         turn_resolver_averaging_delay: config
             .turn_resolver
@@ -7210,6 +7287,9 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         turn_resolver_safe_anchor_iterations: config
             .turn_resolver
             .map(|resolver| resolver.safe_anchor_iterations),
+        turn_resolver_resolved_actor: config
+            .turn_resolver
+            .and_then(|resolver| resolver.resolved_actor),
         flop_resolver_iterations: config
             .flop_resolver
             .as_ref()
@@ -7244,6 +7324,10 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.safe_bilateral),
+        flop_resolver_resolved_actor: config
+            .flop_resolver
+            .as_ref()
+            .and_then(|resolver| resolver.resolved_actor),
         exact_betting_tree_nodes: visited_nodes,
         sample_exploitabilities_bb: sample_exploitabilities,
         sample_response_values_bb: sample_responses,
@@ -7264,6 +7348,16 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolver_actor_scope_is_exact_and_seat_stable() {
+        assert!(resolver_serves_actor(None, 0));
+        assert!(resolver_serves_actor(None, 1));
+        assert!(resolver_serves_actor(Some(0), 0));
+        assert!(!resolver_serves_actor(Some(0), 1));
+        assert!(!resolver_serves_actor(Some(1), 0));
+        assert!(resolver_serves_actor(Some(1), 1));
+    }
 
     #[test]
     fn practice_reader_requires_canonical_action_ev_precision_gate() {
@@ -7537,6 +7631,7 @@ mod tests {
             river_resolver: Some(RiverResolverConfig {
                 iterations: 4,
                 averaging_delay: 0,
+                resolved_actor: None,
             }),
             turn_resolver: None,
             flop_resolver: None,
@@ -8625,6 +8720,7 @@ mod tests {
                 safe_anchor_iterations: 0,
                 safe_bilateral: false,
                 resolved_policy_weight: 0.5,
+                resolved_actor: None,
             }),
         };
         let mut resolver_generator = SampleGenerator::new_with_range(
@@ -8710,6 +8806,13 @@ mod tests {
             .expect("flop resolver configured");
         bilateral.safe_anchor_iterations = 2;
         bilateral.safe_bilateral = true;
+        bilateral.resolved_actor = Some(1);
+        assert!(enable_certificate_resolvers(&mut resolver_generator, &bilateral_config).is_err());
+        bilateral_config
+            .flop_resolver
+            .as_mut()
+            .expect("flop resolver configured")
+            .resolved_actor = None;
         enable_certificate_resolvers(&mut resolver_generator, &bilateral_config).unwrap();
         let bilateral_root = resolver_generator.current_strategy(&flop_state, &deal, &flop_actions);
         assert!((bilateral_root.iter().sum::<f64>() - 1.0).abs() < 1e-8);
@@ -8772,6 +8875,7 @@ mod tests {
                 river_resolver: Some(RiverResolverConfig {
                     iterations: 2,
                     averaging_delay: 0,
+                    resolved_actor: Some(1),
                 }),
                 turn_resolver: Some(TurnResolverConfig {
                     iterations: 2,
@@ -8782,6 +8886,7 @@ mod tests {
                     safe_resolving: false,
                     safe_anchor_iterations: 0,
                     resolved_policy_weight: 1.0,
+                    resolved_actor: Some(1),
                 }),
                 flop_resolver: None,
             },
@@ -8803,6 +8908,8 @@ mod tests {
             resolved_certificate.schema,
             "hu-neural-continual-resolved-causal-sample-game-upper-bound-v1"
         );
+        assert_eq!(resolved_certificate.river_resolver_resolved_actor, Some(1));
+        assert_eq!(resolved_certificate.turn_resolver_resolved_actor, Some(1));
         assert_eq!(resolved_certificate.river_resolver_iterations, Some(2));
         assert_eq!(resolved_certificate.river_resolver_averaging_delay, Some(0));
         assert_eq!(resolved_certificate.turn_resolver_iterations, Some(2));
