@@ -1,0 +1,112 @@
+{
+  "schema": "hu-20bb-hybrid-river-routing-result-v1",
+  "depth_bb": 20.0,
+  "status": "rejected_matched_full_game_regression",
+  "purpose": "test whether resolving both seats only on the river improves the retained BB-only flop, turn, and river routing",
+  "evaluation": {
+    "seed": 19801,
+    "deals": 2,
+    "confidence": 0.99,
+    "public_branches_per_street": 1,
+    "opponent_samples_per_runout": 1,
+    "resolver_iterations": {
+      "flop": 2,
+      "turn": 2,
+      "river": 2
+    },
+    "baseline_resolved_actors": {
+      "flop": 1,
+      "turn": 1,
+      "river": 1
+    },
+    "candidate_resolved_actors": {
+      "flop": 1,
+      "turn": 1,
+      "river": null
+    },
+    "network_artifact_sha256": "5a89abc98ce7c30611517f2e4079fc68a930e66efd2eea07362e7e710ff95036",
+    "range_policy_artifact_sha256": "6da23d0bb3a257a55789490da2ba8f8b1cece1b38b178c3daad84430c57e07b7",
+    "value_network_artifact_sha256": "d00388ff1f067227928f8ebf5c3e18f6fe1426b7d97ba409f7d97248f71bfdbd",
+    "evaluator_binary_sha256": "df77aea38c5df7d6ec9ce4ea6afafa709fa9aaa231b9cf838a354cf0f08c580c",
+    "baseline_report_sha256": "a4f99bddfb99567520fb6549062e928d72529ff8f39c974f3acf1f13b037467f",
+    "candidate_report_sha256": "f2cd81fceffaaa9969381ce90c72159f5da2cd4a32617734c348cffb9c0526c5"
+  },
+  "matched_full_game_screen": {
+    "interpretation": "deterministic paired directional screen only; two deals cannot certify a release bound",
+    "baseline_sample_exploitabilities_bb": [
+      1.1938568818996307,
+      1.3382374244287996
+    ],
+    "candidate_sample_exploitabilities_bb": [
+      1.2664761113899623,
+      1.5205149120463959
+    ],
+    "sample_deltas_bb": [
+      0.07261922949033162,
+      0.18227748761759632
+    ],
+    "baseline_mean_exploitability_bb": 1.266047153164215,
+    "candidate_mean_exploitability_bb": 1.393495511718179,
+    "candidate_delta_bb": 0.12744835855396408,
+    "relative_change_fraction": 0.10066636004467454,
+    "fraction_of_point_estimate_release_gap_closed": -0.16637142769544813,
+    "baseline_standard_error_bb": 0.0721902712645845,
+    "candidate_standard_error_bb": 0.1270194003282168,
+    "baseline_one_sided_99_percent_upper_bound_bb": 20.0,
+    "candidate_one_sided_99_percent_upper_bound_bb": 20.0,
+    "baseline_responder_means_bb": [
+      0.4695158730560103,
+      2.06257843327242
+    ],
+    "candidate_responder_means_bb": [
+      0.4695158730560103,
+      2.317475150380348
+    ],
+    "responder_mean_deltas_bb": [
+      0.0,
+      0.25489671710792816
+    ]
+  },
+  "street_attribution": {
+    "responder_0_changed": false,
+    "responder_1_decision_reach_deltas_by_street": {
+      "preflop": 0.0,
+      "flop": -0.009105189811156239,
+      "turn": 0.017108146799775847,
+      "river": 0.055745973738955276
+    },
+    "responder_1_terminal_reach_deltas_by_street": {
+      "preflop": 0.0,
+      "flop": -0.018183483945241604,
+      "turn": -0.00525875968880114,
+      "river": 0.023442243634042764
+    },
+    "responder_1_terminal_value_deltas_bb_by_street": {
+      "preflop": 0.0,
+      "flop": -0.21758542029768232,
+      "turn": -0.09280481082472744,
+      "river": 0.5652869482303378
+    },
+    "diagnosis": "Bilateral river resolving leaves responder 0 byte-for-byte equivalent in the matched diagnostics, but shifts responder-1 reach toward the river and increases its river terminal response value enough to dominate the smaller flop and turn reductions."
+  },
+  "selection": {
+    "both_matched_deals_improve": false,
+    "material_improvement": false,
+    "independent_seed_b_confirmation_run": false,
+    "selected_routing": {
+      "flop_resolved_actor": 1,
+      "turn_resolved_actor": 1,
+      "river_resolved_actor": 1
+    },
+    "reason": "The candidate worsens both matched deals and raises the point estimate by 0.127448bb/hand, so an independent confirmation would waste compute and cannot reverse the seed-A rejection."
+  },
+  "remaining_release_gates": {
+    "full_game_exploitability_point_estimate": "failed",
+    "full_game_exploitability_one_sided_99_percent_upper_bound": "failed_and_not_estimable_from_a_two_deal_directional_screen",
+    "canonical_action_ev_standard_error_coverage": "in_progress",
+    "approximate_gto_activation": "fail_closed"
+  },
+  "conclusion": "Reject bilateral river routing, retain BB-only resolving on flop, turn, and river, and do not change the active model or serving manifest.",
+  "activation_eligible": false,
+  "active_model_changed": false
+}
