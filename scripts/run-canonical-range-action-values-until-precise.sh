@@ -22,6 +22,25 @@ runner="$repo_root/scripts/run-canonical-range-shards.sh"
 finalizer="$repo_root/scripts/finalize-canonical-range-action-values.sh"
 shard_dir="$output_dir/served-full-leaves"
 
+terminate_worker_tree() {
+  local parent_pid=$1
+  local child_pid
+  for child_pid in $(pgrep -P "$parent_pid" 2>/dev/null || true); do
+    terminate_worker_tree "$child_pid"
+  done
+  kill -TERM "$parent_pid" 2>/dev/null || true
+}
+
+worker_status_dir=
+cleanup_worker_status() {
+  if [[ -n "$worker_status_dir" ]]; then
+    rm -f "$worker_status_dir/status"
+    rmdir "$worker_status_dir" 2>/dev/null || true
+    worker_status_dir=
+  fi
+}
+trap cleanup_worker_status EXIT
+
 IFS=',' read -r -a milestones <<<"$milestones_csv"
 previous=0
 for milestone in "${milestones[@]}"; do
@@ -34,22 +53,48 @@ for milestone in "${milestones[@]}"; do
   if ((worker_count > range_size)); then
     worker_count=$range_size
   fi
+  worker_status_dir=$(mktemp -d /tmp/pokersolver-action-ev-workers.XXXXXX)
+  status_fifo="$worker_status_dir/status"
+  mkfifo "$status_fifo"
   runner_pids=()
   for ((worker = 0; worker < worker_count; worker++)); do
     worker_start=$((previous + range_size * worker / worker_count))
     worker_end=$((previous + range_size * (worker + 1) / worker_count))
     echo "canonical shard worker $((worker + 1))/$worker_count covers [$worker_start, $worker_end)"
-    "$runner" \
-      "$worker_start" "$worker_end" "$threads" \
-      "$policy" "$value_network" "$shard_dir" "$seed" &
+    (
+      set +e
+      "$runner" \
+        "$worker_start" "$worker_end" "$threads" \
+        "$policy" "$value_network" "$shard_dir" "$seed"
+      worker_status=$?
+      printf '%d %d\n' "$worker" "$worker_status" >"$status_fifo"
+      exit "$worker_status"
+    ) &
     runner_pids+=("$!")
   done
   runner_status=0
-  for runner_pid in "${runner_pids[@]}"; do
-    if ! wait "$runner_pid"; then
+  for ((completed = 0; completed < worker_count; completed++)); do
+    if ! read -r finished_worker finished_status <"$status_fifo"; then
       runner_status=1
+      break
+    fi
+    if ((finished_status != 0)); then
+      echo "canonical shard worker $((finished_worker + 1))/$worker_count failed" >&2
+      runner_status=1
+      break
     fi
   done
+  if ((runner_status != 0)); then
+    for runner_pid in "${runner_pids[@]}"; do
+      if kill -0 "$runner_pid" 2>/dev/null; then
+        terminate_worker_tree "$runner_pid"
+      fi
+    done
+  fi
+  for runner_pid in "${runner_pids[@]}"; do
+    wait "$runner_pid" 2>/dev/null || true
+  done
+  cleanup_worker_status
   if ((runner_status != 0)); then
     echo "canonical shard worker failed before checkpoint $milestone" >&2
     exit 1
