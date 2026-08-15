@@ -160,6 +160,9 @@ def load_dataset(
     ):
         raise ValueError(f"incompatible causal range-policy dataset: {path}")
     records = _cap_records(records, maximum_records)
+    target_actor = metadata.get("target_actor")
+    if target_actor is not None and target_actor not in (0, 1):
+        raise ValueError(f"invalid causal range-policy target actor in {path}")
     expected_record_type = DIRECTIONAL_RECORD_TYPES[metadata["schema"]]
     count = len(records)
     maximum_actions = max(len(record.get("action_labels", [])) for record in records)
@@ -213,6 +216,7 @@ def load_dataset(
             )
             or board.shape not in ((3,), (4,), (5,))
             or actor not in (0, 1)
+            or (target_actor is not None and actor != target_actor)
             or not 0 <= focal < COMBO_COUNT
             or not np.isfinite(weight)
             or weight <= 0
@@ -904,6 +908,10 @@ def main() -> None:
         raise ValueError("causal range-policy datasets need independent seeds")
     if datasets[0].metadata["depth_bb"] != datasets[1].metadata["depth_bb"]:
         raise ValueError("causal range-policy dataset depths differ")
+    if datasets[0].metadata.get("target_actor") != datasets[1].metadata.get(
+        "target_actor"
+    ):
+        raise ValueError("causal range-policy dataset target actors differ")
     for dataset, attribution in zip(datasets, attributions, strict=True):
         if dataset.metadata["source_range_policy_sha256"] != sha256(attribution):
             raise ValueError("directional dataset does not pin its attribution policy")
@@ -1055,6 +1063,7 @@ def main() -> None:
     report = {
         "schema": REPORT_SCHEMA,
         "depthBb": datasets[0].metadata["depth_bb"],
+        "targetActor": datasets[0].metadata.get("target_actor"),
         "datasets": [
             {
                 "path": str(dataset.path),

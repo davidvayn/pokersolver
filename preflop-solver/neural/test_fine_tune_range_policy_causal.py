@@ -235,6 +235,25 @@ class CausalRangePolicyTests(unittest.TestCase):
                 dataset.queries.shape,
                 (6, 2, module.COMBO_COUNT, distill.QUERY_SIZE),
             )
+            targeted_path = Path(temporary) / "targeted.jsonl.gz"
+            targeted_metadata = dict(metadata)
+            targeted_metadata["target_actor"] = 0
+            targeted_records = json.loads(json.dumps(records))
+            for record in targeted_records:
+                record["state"]["actor"] = 0
+            with gzip.open(targeted_path, "wt", encoding="utf-8") as stream:
+                stream.write(json.dumps(targeted_metadata) + "\n")
+                for record in targeted_records:
+                    stream.write(json.dumps(record) + "\n")
+            targeted = module.load_dataset(targeted_path, 6, None, 1)
+            self.assertTrue(np.all(targeted.actors == 0))
+            targeted_records[0]["state"]["actor"] = 1
+            with gzip.open(targeted_path, "wt", encoding="utf-8") as stream:
+                stream.write(json.dumps(targeted_metadata) + "\n")
+                for record in targeted_records:
+                    stream.write(json.dumps(record) + "\n")
+            with self.assertRaisesRegex(ValueError, "invalid causal range-policy"):
+                module.load_dataset(targeted_path, 6, None, 1)
             self_play_path = Path(temporary) / "self-play.jsonl.gz"
             self_play_metadata = dict(metadata)
             self_play_metadata["schema"] = module.SELF_PLAY_SCHEMA
