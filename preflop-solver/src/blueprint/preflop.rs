@@ -1928,6 +1928,7 @@ pub fn merge_range_continuation_caches(
             || cache.policy_model_version != first.policy_model_version
             || cache.policy_sha256 != first.policy_sha256
             || cache.resolver_provenance != first.resolver_provenance
+            || cache.chance_sampling != first.chance_sampling
             || cache.board_workers != first.board_workers
             || cache.public_histories != first.public_histories
             || cache.leaf_reach_probabilities != first.leaf_reach_probabilities
@@ -1945,9 +1946,7 @@ pub fn merge_range_continuation_caches(
         schema: RANGE_CONTINUATION_SCHEMA.to_owned(),
         depth_bb: first.depth_bb,
         seed: first.seed,
-        chance_sampling:
-            "merged_provenance_checked_suit_isomorphic_flop_orbits_with_exact_combo_ranges"
-                .to_owned(),
+        chance_sampling: format!("merged_provenance_checked:{}", first.chance_sampling),
         complete_canonical_flop_enumeration: boards.len() == 1_755 && covered_raw_flops == 22_100,
         covered_raw_flops,
         board_workers: first.board_workers,
@@ -4834,9 +4833,15 @@ mod tests {
         let mut second = cache.clone();
         second.boards.drain(..1);
         second.covered_raw_flops = second.boards[0].orbit_size;
-        let merged = merge_range_continuation_caches(&[first.clone(), second]).unwrap();
+        let merged = merge_range_continuation_caches(&[first.clone(), second.clone()]).unwrap();
         assert_eq!(merged.boards.len(), 2);
-        assert!(merge_range_continuation_caches(&[first.clone(), first]).is_err());
+        assert!(merge_range_continuation_caches(&[first.clone(), first.clone()]).is_err());
+
+        let mut incompatible_resolution = second;
+        incompatible_resolution.chance_sampling = "different-resolution-mode".to_owned();
+        assert!(
+            merge_range_continuation_caches(&[first.clone(), incompatible_resolution]).is_err()
+        );
 
         cache.boards[0].continuations.get_mut(&history).unwrap()[1].pop();
         assert!(cache.validate().is_err());
