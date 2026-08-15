@@ -17,8 +17,8 @@ function seed(id, delta = 0) {
     trainingHours: 10,
     projectedStorageBytes: 1_000_000,
     evaluation: {
-      exploitabilityEstimateBb: 0.04,
-      exploitabilityUpper99Bb: id === 1 ? 0.08 : 0.07,
+      exploitabilityEstimateBb: 0.49,
+      exploitabilityUpper99Bb: id === 1 ? 0.5 : 0.499,
       policyLookupCoverage: 0.99995,
     },
     nodes: [
@@ -44,13 +44,15 @@ test('accepts two stable independent seeds and chooses the lower upper bound', (
 
 test('fails closed on exploitability, coverage, EV error, and instability', () => {
   const bad = seed(2, 0.4);
-  bad.evaluation.exploitabilityUpper99Bb = 0.11;
+  bad.evaluation.exploitabilityEstimateBb = 0.500001;
+  bad.evaluation.exploitabilityUpper99Bb = 0.500001;
   bad.evaluation.policyLookupCoverage = 0.99;
   bad.nodes[0].actions[0].standardErrorBb = 0.03;
   bad.nodes[0].actions[1].evBb = null;
   const report = validateSeeds(seed(1), bad);
   assert.equal(report.passed, false);
   assert.equal(report.selectedSeed, null);
+  assert.equal(report.seedAudits[1].checks.exploitabilityEstimate, false);
   assert.equal(report.seedAudits[1].checks.exploitabilityUpper99, false);
   assert.equal(report.seedAudits[1].checks.policyLookupCoverage, false);
   assert.equal(report.seedAudits[1].checks.servedNodeIntegrity, false);
@@ -67,8 +69,8 @@ test('export gate requires the complete full-hand validation summary', () => {
     depthsBb: [20],
     validation: {
       status: 'accepted',
-      exploitabilityEstimateBb: 0.05,
-      exploitabilityUpper99Bb: 0.1,
+      exploitabilityEstimateBb: 0.5,
+      exploitabilityUpper99Bb: 0.5,
       crossSeedFrequencyMae: 0.05,
       primaryActionAgreement: 0.85,
       maximumAggregateActionDelta: 0.03,

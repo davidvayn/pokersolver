@@ -55,8 +55,8 @@ function acceptedManifest(): PolicyManifest {
     },
     validation: {
       status: 'accepted',
-      exploitabilityEstimateBb: 0.05,
-      exploitabilityUpper99Bb: 0.1,
+      exploitabilityEstimateBb: 0.5,
+      exploitabilityUpper99Bb: 0.5,
       crossSeedFrequencyMae: 0.05,
       primaryActionAgreement: 0.85,
       maximumAggregateActionDelta: 0.03,
@@ -95,7 +95,16 @@ describe('database-free full-hand activation registry', () => {
         ...acceptedManifest(),
         validation: {
           ...acceptedManifest().validation,
-          exploitabilityUpper99Bb: 0.101,
+          exploitabilityEstimateBb: 0.500001,
+        },
+      })
+    ).toBe(false);
+    expect(
+      isValidatedFullHandManifest({
+        ...acceptedManifest(),
+        validation: {
+          ...acceptedManifest().validation,
+          exploitabilityUpper99Bb: 0.500001,
         },
       })
     ).toBe(false);

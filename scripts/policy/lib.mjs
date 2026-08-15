@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 
 export const MAX_HOSTED_BYTES = 20 * 1024 ** 3;
+// Frozen in 20bb-v50-full-hand-candidate-freeze.json. Both the point estimate
+// and its one-sided 99% upper bound must fit under this total full-game limit.
+export const MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB = 0.5;
 export const NORMAL_ITEM_BYTES = 24 * 1024;
 export const MAX_ITEM_BYTES = 400 * 1024;
 export const POLICY_REGION = 'us-west-2';
@@ -166,8 +169,16 @@ export function assertAcceptedManifest(manifest) {
   }
   const validation = manifest.validation;
   const gates = [
-    ['exploitabilityEstimateBb', validation.exploitabilityEstimateBb <= 0.05],
-    ['exploitabilityUpper99Bb', validation.exploitabilityUpper99Bb <= 0.1],
+    [
+      'exploitabilityEstimateBb',
+      validation.exploitabilityEstimateBb <=
+        MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB,
+    ],
+    [
+      'exploitabilityUpper99Bb',
+      validation.exploitabilityUpper99Bb <=
+        MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB,
+    ],
     ['crossSeedFrequencyMae', validation.crossSeedFrequencyMae <= 0.05],
     ['primaryActionAgreement', validation.primaryActionAgreement >= 0.85],
     ['maximumAggregateActionDelta', validation.maximumAggregateActionDelta <= 0.03],

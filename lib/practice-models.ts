@@ -4,6 +4,9 @@ import type { CompactPushFoldScenario } from '@/data/preflop/artifacts/types';
 import type { ActionAbstraction, PolicyManifest } from '@/lib/practice-types';
 
 const scenarios = solvedScenarios as CompactPushFoldScenario[];
+// Frozen in 20bb-v50-full-hand-candidate-freeze.json. Both the point estimate
+// and its one-sided 99% upper bound must fit under this total full-game limit.
+export const MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB = 0.5;
 const newestGeneratedAt = Math.max(
   ...scenarios.map((scenario) => scenario.generated_at_unix_seconds)
 );
@@ -63,9 +66,11 @@ export function isValidatedFullHandManifest(
   if (!validFullHandRuntime(manifest.runtime)) return false;
   return (
     typeof validation.exploitabilityEstimateBb === 'number' &&
-    validation.exploitabilityEstimateBb <= 0.05 &&
+    validation.exploitabilityEstimateBb <=
+      MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB &&
     typeof validation.exploitabilityUpper99Bb === 'number' &&
-    validation.exploitabilityUpper99Bb <= 0.1 &&
+    validation.exploitabilityUpper99Bb <=
+      MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB &&
     normalFullHandGatesPass(validation)
   );
 }

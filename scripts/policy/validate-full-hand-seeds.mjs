@@ -1,7 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { MAX_HOSTED_BYTES, parseArgs, required } from './lib.mjs';
+import {
+  MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB,
+  MAX_HOSTED_BYTES,
+  parseArgs,
+  required,
+} from './lib.mjs';
 
 const PROBABILITY_TOLERANCE = 1e-6;
 const QUANTIZED_TOLERANCE = 1 / 65_535 + 1e-9;
@@ -150,8 +155,14 @@ function seedChecks(seed) {
   const computedActionEvCoverage = actionEvCoverage(seed);
   const checks = {
     trainingHours: finite(seed.trainingHours) && seed.trainingHours >= 8 && seed.trainingHours <= 12,
-    exploitabilityEstimate: finite(seed.evaluation?.exploitabilityEstimateBb) && seed.evaluation.exploitabilityEstimateBb <= 0.05,
-    exploitabilityUpper99: finite(seed.evaluation?.exploitabilityUpper99Bb) && seed.evaluation.exploitabilityUpper99Bb <= 0.1,
+    exploitabilityEstimate:
+      finite(seed.evaluation?.exploitabilityEstimateBb) &&
+      seed.evaluation.exploitabilityEstimateBb <=
+        MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB,
+    exploitabilityUpper99:
+      finite(seed.evaluation?.exploitabilityUpper99Bb) &&
+      seed.evaluation.exploitabilityUpper99Bb <=
+        MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB,
     policyLookupCoverage: finite(seed.evaluation?.policyLookupCoverage) && seed.evaluation.policyLookupCoverage >= 0.9999,
     servedNodeIntegrity: servedNodeIntegrity(seed),
     rawProbabilitySums: probabilities.validInputs && probabilities.rawMaximumError <= PROBABILITY_TOLERANCE,
