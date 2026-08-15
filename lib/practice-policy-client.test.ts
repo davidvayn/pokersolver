@@ -182,8 +182,11 @@ describe('practice policy client', () => {
         actionAbstraction,
         resolver: {
           flopIterations: 2,
+          flopResolvedActor: 1,
           turnIterations: 2,
+          turnResolvedActor: 1,
           riverIterations: 2,
+          riverResolvedActor: 1,
           deterministic: true,
         },
       },

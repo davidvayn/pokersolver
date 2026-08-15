@@ -75,6 +75,15 @@ async function fixture(coverage = 0.96) {
       rangePolicySha256: sha256(artifacts.rangePolicy),
       valueNetworkSha256: sha256(artifacts.flopValueNetwork),
       preflopActionValuesSha256: sha256(artifacts.preflopActionValues),
+      resolver: {
+        flopIterations: 2,
+        flopResolvedActor: 1,
+        turnIterations: 2,
+        turnResolvedActor: 1,
+        riverIterations: 2,
+        riverResolvedActor: 1,
+        deterministic: true,
+      },
     },
   };
   await writeFile(manifestPath, JSON.stringify([manifest]));
@@ -123,6 +132,23 @@ test('leaves the registry unchanged when action-EV precision fails', async () =>
     const [manifest] = JSON.parse(await readFile(files.manifestPath, 'utf8'));
     assert.equal(manifest.active, false);
     assert.equal(manifest.validation.status, 'rejected');
+  } finally {
+    await rm(files.root, { recursive: true, force: true });
+  }
+});
+
+test('leaves the registry unchanged when per-street actor routing is missing', async () => {
+  const files = await fixture();
+  try {
+    const [manifest] = JSON.parse(await readFile(files.manifestPath, 'utf8'));
+    delete manifest.runtime.resolver.riverResolvedActor;
+    await writeFile(files.manifestPath, JSON.stringify([manifest]));
+    const result = activate(files);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /resolverConfiguration/);
+    const [unchanged] = JSON.parse(await readFile(files.manifestPath, 'utf8'));
+    assert.equal(unchanged.active, false);
+    assert.equal(unchanged.validation.status, 'rejected');
   } finally {
     await rm(files.root, { recursive: true, force: true });
   }

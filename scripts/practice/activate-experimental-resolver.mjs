@@ -26,10 +26,24 @@ if (manifest.active === true || manifest.validation?.status === 'accepted') {
 }
 
 const validation = manifest.validation ?? {};
+const resolver = manifest.runtime?.resolver;
+const validResolvedActor = (actor) =>
+  actor === null || actor === 0 || actor === 1;
 const gates = {
   experimentalLabel: manifest.label === 'Experimental self-play',
   fullHandSubtype: manifest.subtype === 'full-hand',
   continualResolver: manifest.runtime?.kind === 'rust-continual-resolver-v1',
+  resolverConfiguration:
+    Number.isInteger(resolver?.flopIterations) &&
+    resolver.flopIterations >= 2 &&
+    validResolvedActor(resolver.flopResolvedActor) &&
+    Number.isInteger(resolver.turnIterations) &&
+    resolver.turnIterations >= 2 &&
+    validResolvedActor(resolver.turnResolvedActor) &&
+    Number.isInteger(resolver.riverIterations) &&
+    resolver.riverIterations >= 2 &&
+    validResolvedActor(resolver.riverResolvedActor) &&
+    resolver.deterministic === true,
   exploitabilityExplicitlyDeferred: validation.exploitabilityGateDeferred === true,
   crossSeedFrequencyMae:
     Number.isFinite(validation.crossSeedFrequencyMae) &&

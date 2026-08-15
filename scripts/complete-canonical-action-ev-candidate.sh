@@ -195,6 +195,15 @@ jq -e \
     $validation.rawProbabilitySumsValid == true and
     $validation.quantizedProbabilitySumsValid == true and
     $validation.independentSeedCount == 2 and
+    $models[0].runtime.resolver == {
+      "flopIterations": 2,
+      "flopResolvedActor": 1,
+      "turnIterations": 2,
+      "turnResolvedActor": 1,
+      "riverIterations": 2,
+      "riverResolvedActor": 1,
+      "deterministic": true
+    } and
     ($validation.trainingHoursPerSeed | length) == 2 and
     ((($validation.trainingHoursPerSeed[0] - $training_hours[0]) | abs) <= 1e-9) and
     ((($validation.trainingHoursPerSeed[1] - $training_hours[1]) | abs) <= 1e-9) and

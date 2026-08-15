@@ -171,8 +171,11 @@ export interface ContinualResolverRuntime {
   actionAbstraction: ActionAbstraction;
   resolver: {
     flopIterations: number;
+    flopResolvedActor: 0 | 1 | null;
     turnIterations: number;
+    turnResolvedActor: 0 | 1 | null;
     riverIterations: number;
+    riverResolvedActor: 0 | 1 | null;
     deterministic: true;
   };
 }

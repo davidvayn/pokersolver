@@ -46,7 +46,17 @@ function configuredPath(environmentName: string, fallback: string): string {
   return path.resolve(process.env[environmentName] ?? fallback);
 }
 
-function command(): { executable: string; args: string[] } {
+function resolvedActorArgs(
+  flag: string,
+  resolvedActor: 0 | 1 | null
+): string[] {
+  return resolvedActor === null ? [] : [flag, String(resolvedActor)];
+}
+
+export function practiceResolverCommand(): {
+  executable: string;
+  args: string[];
+} {
   const root = process.cwd();
   const modelRoot = configuredPath(
     'PRACTICE_RESOLVER_MODEL_DIR',
@@ -75,23 +85,35 @@ function command(): { executable: string; args: string[] } {
       '--preflop-action-values',
       path.join(modelRoot, resolverArtifactFiles.preflopActionValues),
       '--flop-resolver-iterations',
-      '2',
+      String(resolverRuntime.resolver.flopIterations),
       '--flop-resolver-averaging-delay',
       '0',
       '--flop-resolver-value-network',
       path.join(modelRoot, resolverArtifactFiles.flopValueNetwork),
       '--flop-resolver-threads',
       String(threads),
+      ...resolvedActorArgs(
+        '--flop-resolver-actor',
+        resolverRuntime.resolver.flopResolvedActor
+      ),
       '--turn-resolver-iterations',
-      '2',
+      String(resolverRuntime.resolver.turnIterations),
       '--turn-resolver-averaging-delay',
       '0',
       '--turn-resolver-threads',
       String(threads),
+      ...resolvedActorArgs(
+        '--turn-resolver-actor',
+        resolverRuntime.resolver.turnResolvedActor
+      ),
       '--river-resolver-iterations',
-      '2',
+      String(resolverRuntime.resolver.riverIterations),
       '--river-resolver-averaging-delay',
       '0',
+      ...resolvedActorArgs(
+        '--river-resolver-actor',
+        resolverRuntime.resolver.riverResolvedActor
+      ),
     ],
   };
 }
@@ -109,7 +131,7 @@ class PracticeSolverProcess {
     }
     if (this.starting) return this.starting;
     this.starting = new Promise((resolve, reject) => {
-      const { executable, args } = command();
+      const { executable, args } = practiceResolverCommand();
       const child = spawn(executable, args, {
         cwd: process.cwd(),
         env: process.env,

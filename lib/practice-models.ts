@@ -139,6 +139,9 @@ function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
           artifactFiles.flopValueNetwork,
         ]
       : [];
+    const resolver = runtime.resolver;
+    const validResolvedActor = (actor: unknown) =>
+      actor === null || actor === 0 || actor === 1;
     return (
       runtime.endpoint === '/api/practice/resolve' &&
       Object.keys(artifactFiles ?? {}).length === 4 &&
@@ -157,13 +160,16 @@ function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
         'rank-suit-invariant-combo-policy-query-v2' &&
       runtime.actionFeatureSchema === 'hu-cash-legal-action-v1' &&
       validActionAbstraction(runtime.actionAbstraction) &&
-      Number.isInteger(runtime.resolver.flopIterations) &&
-      runtime.resolver.flopIterations >= 2 &&
-      Number.isInteger(runtime.resolver.turnIterations) &&
-      runtime.resolver.turnIterations >= 2 &&
-      Number.isInteger(runtime.resolver.riverIterations) &&
-      runtime.resolver.riverIterations >= 2 &&
-      runtime.resolver.deterministic === true
+      Number.isInteger(resolver?.flopIterations) &&
+      resolver.flopIterations >= 2 &&
+      validResolvedActor(resolver.flopResolvedActor) &&
+      Number.isInteger(resolver.turnIterations) &&
+      resolver.turnIterations >= 2 &&
+      validResolvedActor(resolver.turnResolvedActor) &&
+      Number.isInteger(resolver.riverIterations) &&
+      resolver.riverIterations >= 2 &&
+      validResolvedActor(resolver.riverResolvedActor) &&
+      resolver.deterministic === true
     );
   }
   return runtime?.kind === 'binary-policy-shards-v1';
