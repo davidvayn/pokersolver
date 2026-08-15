@@ -216,6 +216,26 @@ describe('EV grading and settings', () => {
     expect(validatePolicyNode(node)).toEqual([]);
   });
 
+  it('accepts explicitly low-confidence EVs without invented uncertainty', () => {
+    const lowConfidenceNode: PolicyNode = {
+      ...node,
+      actions: node.actions.map((action, index) =>
+        index === 0
+          ? { ...action, standardErrorBb: null, confidence: 'low' }
+          : action
+      ),
+    };
+    expect(validatePolicyNode(lowConfidenceNode)).toEqual([]);
+    expect(
+      validatePolicyNode({
+        ...lowConfidenceNode,
+        actions: lowConfidenceNode.actions.map((action, index) =>
+          index === 0 ? { ...action, confidence: 'high' } : action
+        ),
+      })
+    ).toContain('Invalid action EV data for fold');
+  });
+
   it('falls back safely for malformed persisted settings and alternates seats', () => {
     expect(sanitizePracticeSettings({ mode: 'bogus', depthBb: 999 }).mode).toBe(
       'full-hand'

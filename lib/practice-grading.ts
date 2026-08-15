@@ -69,13 +69,18 @@ export function validatePolicyNode(node: PolicyNode): string[] {
     } else {
       sum += action.probability;
     }
-    if (
-      action.evBb !== null &&
-      (!Number.isFinite(action.evBb) ||
-        action.standardErrorBb === null ||
-        !Number.isFinite(action.standardErrorBb) ||
-        action.standardErrorBb < 0)
-    ) {
+    if (!['high', 'low', 'unavailable'].includes(action.confidence)) {
+      errors.push(`Invalid confidence for ${action.id}`);
+    }
+    const invalidEv =
+      action.evBb === null
+        ? action.standardErrorBb !== null
+        : !Number.isFinite(action.evBb) ||
+          (action.standardErrorBb !== null &&
+            (!Number.isFinite(action.standardErrorBb) ||
+              action.standardErrorBb < 0)) ||
+          (action.standardErrorBb === null && action.confidence === 'high');
+    if (invalidEv) {
       errors.push(`Invalid action EV data for ${action.id}`);
     }
   }

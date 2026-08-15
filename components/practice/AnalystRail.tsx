@@ -113,7 +113,11 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
               <p className="mt-1 text-[11px] text-muted">
                 {action.evBb === null
                   ? 'Action EV and estimated loss unavailable in this model version'
-                  : `${action.evBb.toFixed(3)}bb EV ± ${(action.standardErrorBb ?? 0).toFixed(3)}bb · Estimated loss ${loss?.toFixed(3) ?? '—'}bb`}
+                  : `${action.evBb.toFixed(3)}bb EV${
+                      action.standardErrorBb === null
+                        ? ' · uncertainty unavailable'
+                        : ` ± ${action.standardErrorBb.toFixed(3)}bb`
+                    } · Estimated loss ${loss?.toFixed(3) ?? '—'}bb`}
               </p>
             </div>
           );

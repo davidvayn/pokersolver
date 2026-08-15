@@ -87,4 +87,18 @@ describe('AnalystRail decision feedback', () => {
     expect(html).toContain('Best estimated EV');
     expect(html).toContain('Estimated EV loss');
   });
+
+  it('does not invent a zero sampling error when uncertainty is unavailable', () => {
+    const lowConfidence = {
+      ...feedback,
+      policyActions: feedback.policyActions.map((action, index) =>
+        index === 0
+          ? { ...action, standardErrorBb: null, confidence: 'low' as const }
+          : action
+      ),
+    };
+    const html = renderFeedback(lowConfidence);
+    expect(html).toContain('0.100bb EV · uncertainty unavailable');
+    expect(html).not.toContain('0.100bb EV ± 0.000bb');
+  });
 });
