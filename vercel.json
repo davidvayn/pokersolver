@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "fluid": true,
+  "installCommand": "(command -v cargo >/dev/null || dnf install rust cargo --assumeyes) && npm ci"
+}

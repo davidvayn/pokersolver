@@ -20,7 +20,7 @@ vi.mock('@/lib/server/practice-solver-process', () => ({
   practiceSolverProcess: () => ({ query: mocks.query }),
 }));
 
-import { POST } from '@/app/api/practice/resolve/route';
+import { maxDuration, POST, runtime } from '@/app/api/practice/resolve/route';
 import { createHand, seededRandom } from '@/lib/practice-engine';
 
 const stateHash = 'e'.repeat(64);
@@ -52,6 +52,11 @@ describe('practice continual-resolver POST route', () => {
       },
     });
     mocks.query.mockResolvedValue(resolverResponse());
+  });
+
+  it('uses the full Node runtime with the Hobby Fluid Compute duration ceiling', () => {
+    expect(runtime).toBe('nodejs');
+    expect(maxDuration).toBe(300);
   });
 
   it('replays an exact pinned request and strips the non-acting private hand', async () => {

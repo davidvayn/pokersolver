@@ -9,6 +9,9 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// A cold start plus an exact postflop resolve must fit inside the Hobby Fluid
+// Compute ceiling. The process wrapper still fails closed on its own timeout.
+export const maxDuration = 300;
 
 function isCardPair(value: unknown): value is [number, number] {
   return (
