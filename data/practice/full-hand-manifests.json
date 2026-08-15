@@ -58,7 +58,7 @@
       "status": "rejected",
       "exploitabilityGateDeferred": true,
       "crossSeedFrequencyMae": 0.0493869325,
-      "primaryActionAgreement": 0.878940809,
+      "primaryActionAgreement": 0.873886382,
       "maximumAggregateActionDelta": 0.0145675627,
       "policyCoverage": 1,
       "actionEvStandardErrorCoverage": 0.30375391669702995,
@@ -69,7 +69,7 @@
       "trainingHoursPerSeed": [8, 8],
       "notes": [
         "Inactive and fail-closed: exploitability is deferred, not passed.",
-        "The paired v102 consensus policies pass the full exact cross-seed action gates; seed 20931 is pinned only for the inactive experimental preview because it has the lower heldout teacher-EV loss, not as an exploitability-based release selection.",
+        "The conservative full-hand cross-seed summary takes the weakest metric across the frozen served preflop-student validation and exact v102 postflop consensus comparison; seed 20931 is pinned only for the inactive experimental preview because it has the lower heldout teacher-EV loss, not as an exploitability-based release selection.",
         "The ten-cycle preflop action-value corpus has 30.375% policy-action-weighted coverage at 0.02bb standard error, so its feedback is low confidence and cannot activate this candidate.",
         "The immutable losslessly compressed solver bundle is 42,613,516 bytes; no database is required for this embedded runtime."
       ]

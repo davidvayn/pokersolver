@@ -15,6 +15,7 @@ binary="$repo_root/preflop-solver/target/release/preflop-solver"
 model_dir="$repo_root/preflop-solver/models/practice"
 validation_model_dir="$repo_root/preflop-solver/models/validation"
 holdout_dir="$repo_root/preflop-solver/neural/runs/20bb-v82-residual-policy/s3000-b16-cos3e4-3e5"
+preflop_validation="$repo_root/preflop-solver/neural/v27-preflop-sequence.json"
 
 action_values=
 for milestone in 878 1500 1650 1725 1755; do
@@ -66,10 +67,70 @@ jq -e '
   .validation.status == "accepted_for_full_game_pilot"
 ' "$comparison" >/dev/null
 
+# The exact comparison is the evidence for the manifest's cross-seed fields.
+# Reject rounded/stale metadata that no longer describes the pinned policies,
+# even when both the report and the manifest happen to pass independently.
+jq -e \
+  --arg version "$model_version" \
+  --slurpfile comparison "$comparison" \
+  --slurpfile preflop "$preflop_validation" '
+  [.[] | select(.version == $version)] as $models |
+  ($models | length) == 1 and
+  ($models[0].validation as $validation |
+    $preflop[0].schema == "hu-v27-preflop-sequence-v1" and
+    $preflop[0].depthBb == 20 and
+    $preflop[0].tabularDcfr.seeds == [7601, 7602] and
+    $preflop[0].distillation.studentSha256 == [
+      "151fc1d90a5c03f105e543c54d02d097df51c66a422d01e696731b9c83b409dd",
+      "fcb3c62aad24a86bd04b4bdd1be8a1cbe052a6f6552f830a4a3101965e00a9e"
+    ] and
+    ($preflop[0].routedFullHandValidation.authentic as $authentic |
+      $preflop[0].routedFullHandValidation.forcedDeviation as $forced |
+      ((($validation.crossSeedFrequencyMae - ([
+        $comparison[0].actionFrequencyMae,
+        $authentic.actionFrequencyMae,
+        $forced.actionFrequencyMae
+      ] | max)) | abs) <= 1e-9) and
+      ((($validation.primaryActionAgreement - ([
+        $comparison[0].primaryActionAgreement,
+        $authentic.primaryActionAgreement,
+        $forced.primaryActionAgreement
+      ] | min)) | abs) <= 1e-9) and
+      ((($validation.maximumAggregateActionDelta - ([
+        $comparison[0].maximumAggregateActionDelta,
+        $authentic.maximumAggregateActionDelta,
+        $forced.maximumAggregateActionDelta
+      ] | max)) | abs) <= 1e-9) and
+      ((($validation.policyCoverage - ([
+        $comparison[0].lookupCoverage,
+        $authentic.lookupCoverage,
+        $forced.lookupCoverage
+      ] | min)) | abs) <= 1e-12)) and
+    $validation.crossSeedFrequencyMae <= 0.05 and
+    $validation.primaryActionAgreement >= 0.85 and
+    $validation.maximumAggregateActionDelta <= 0.03 and
+    $validation.policyCoverage >= 0.9999 and
+    $validation.actionEvStandardErrorCoverage >= 0.95 and
+    $validation.projectedStorageBytes <= (20 * 1024 * 1024 * 1024) and
+    $validation.rawProbabilitySumsValid == true and
+    $validation.quantizedProbabilitySumsValid == true and
+    $validation.independentSeedCount == 2 and
+    ($validation.trainingHoursPerSeed | length) == 2 and
+    ($validation.trainingHoursPerSeed | all(. >= 8 and . <= 12)) and
+    $comparison[0].maximumProbabilitySumError <= 1e-6)
+' data/practice/full-hand-manifests.json >/dev/null
+
 cargo test --release --manifest-path preflop-solver/Cargo.toml
 npm run test:practice-tools
 npm test
 npm run build
 npm run test:practice-resolver-integration
+
+jq -e --arg version "$model_version" '
+  [.[] | select(.version == $version)] as $models |
+  ($models | length) == 1 and
+  $models[0].active == false and
+  $models[0].validation.status != "accepted"
+' data/practice/full-hand-manifests.json >/dev/null
 
 echo "canonical action-EV release candidate is promoted and verified but remains inactive"
