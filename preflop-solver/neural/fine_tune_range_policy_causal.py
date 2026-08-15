@@ -430,6 +430,7 @@ def rust_evaluate(
     minimum_policy_value_gain_bb: float,
     maximum_node_kl: float,
     maximum_weighted_kl: float,
+    target_actor: int | None,
 ) -> dict[str, Any]:
     command = [
         str(evaluator),
@@ -468,6 +469,7 @@ def rust_evaluate(
         or report.get("frozenNetworkSha256") != sha256(frozen)
         or report.get("attributionNetworkSha256") != sha256(attribution)
         or report.get("datasetSha256") != sha256(dataset)
+        or report.get("targetActor") != target_actor
     ):
         raise RuntimeError("Rust causal range-policy evaluation is not pinned")
     return report
@@ -522,6 +524,7 @@ def reuse_exact_dataset_parity(
             or report.get("frozenNetworkSha256") != sha256(source)
             or report.get("attributionNetworkSha256") != sha256(attribution)
             or report.get("datasetSha256") != dataset.sha256
+            or report.get("targetActor") != dataset.metadata.get("target_actor")
             or report.get("records") != len(dataset.records)
             or not exact_dataset_parity_accepted(report)
         ):
@@ -945,6 +948,7 @@ def main() -> None:
                 args.minimum_policy_value_gain_bb,
                 args.maximum_realized_node_kl,
                 args.maximum_realized_weighted_kl,
+                datasets[dataset_index].metadata.get("target_actor"),
             )
             if not exact_dataset_parity_accepted(report):
                 raise RuntimeError("exact Rust directional-dataset parity failed")
@@ -1043,6 +1047,7 @@ def main() -> None:
             args.minimum_policy_value_gain_bb,
             args.maximum_realized_node_kl,
             args.maximum_realized_weighted_kl,
+            datasets[dataset_index].metadata.get("target_actor"),
         )
         return student_index, dataset_index, evaluation
 

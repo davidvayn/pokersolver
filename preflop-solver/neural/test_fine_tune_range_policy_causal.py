@@ -36,13 +36,18 @@ class CausalRangePolicyTests(unittest.TestCase):
             attribution = directory / "attribution.json"
             source.write_text("source")
             attribution.write_text("attribution")
-            dataset = SimpleNamespace(sha256="d" * 64, records=[{}])
+            dataset = SimpleNamespace(
+                sha256="d" * 64,
+                records=[{}],
+                metadata={"target_actor": 0},
+            )
             exact = {
                 "schema": "hu-range-conditioned-causal-policy-rust-evaluation-v1",
                 "networkSha256": module.sha256(source),
                 "frozenNetworkSha256": module.sha256(source),
                 "attributionNetworkSha256": module.sha256(attribution),
                 "datasetSha256": dataset.sha256,
+                "targetActor": 0,
                 "records": 1,
                 "maximumStoredSourceProbabilityDifference": 1e-7,
                 "maximumProbabilitySumError": 1e-8,
@@ -75,6 +80,13 @@ class CausalRangePolicyTests(unittest.TestCase):
                     report, [dataset], [source], [attribution]
                 )
             exact["maximumStoredSourceProbabilityDifference"] = 1e-7
+            exact["targetActor"] = 1
+            report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
+            with self.assertRaisesRegex(ValueError, "not pinned"):
+                module.reuse_exact_dataset_parity(
+                    report, [dataset], [source], [attribution]
+                )
+            exact["targetActor"] = 0
             exact["datasetSha256"] = "0" * 64
             report.write_text(json.dumps({"exactRustDatasetParity": [exact]}) + "\n")
             with self.assertRaisesRegex(ValueError, "not pinned"):
@@ -112,6 +124,7 @@ class CausalRangePolicyTests(unittest.TestCase):
                     1e-6,
                     0.005,
                     0.0015,
+                    None,
                 )
             self.assertEqual(measured, report)
             command = run.call_args.args[0]
@@ -137,6 +150,28 @@ class CausalRangePolicyTests(unittest.TestCase):
                         1e-6,
                         0.005,
                         0.0015,
+                        None,
+                    )
+            report["datasetSha256"] = module.sha256(dataset)
+            report["targetActor"] = 1
+            with patch.object(
+                module.subprocess,
+                "run",
+                return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(report), stderr=""
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "not pinned"):
+                    module.rust_evaluate(
+                        Path("solver"),
+                        candidate,
+                        frozen,
+                        frozen,
+                        dataset,
+                        1e-6,
+                        0.005,
+                        0.0015,
+                        0,
                     )
 
     def test_rust_evaluator_surfaces_solver_diagnostics(self):
@@ -161,6 +196,7 @@ class CausalRangePolicyTests(unittest.TestCase):
                         1e-6,
                         0.005,
                         0.0015,
+                        None,
                     )
 
     def test_loader_builds_exact_belief_features_and_metrics_reward_better_action(self):
