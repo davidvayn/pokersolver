@@ -15,6 +15,7 @@
     "test:practice-tools": "node --test scripts/practice/*.test.mjs",
     "practice:verify-resolver-artifacts": "node scripts/practice/verify-resolver-artifacts.mjs",
     "practice:promote-action-values": "node scripts/practice/promote-action-values.mjs",
+    "practice:activate-experimental": "node scripts/practice/activate-experimental-resolver.mjs",
     "test:watch": "vitest",
     "preflop:catalog": "node scripts/generate-preflop-catalog.mjs",
     "preflop:compare-blueprints": "node scripts/compare-blueprint-artifacts.mjs",
