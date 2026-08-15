@@ -826,11 +826,9 @@ impl PublicValueNetwork {
                 })
                 .collect()
         });
-        let conflicts = combo_conflicts();
+        let combos = all_combos();
         let masses = std::array::from_fn(|player| {
-            (0..COMBO_COUNT)
-                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
-                .collect::<Vec<_>>()
+            compatible_masses_from_card_marginals(&combos, &ranges[1 - player])
         });
         project_value_predictions_to_payoff_bounds(&mut result, board, invested, ranges, &masses);
         result
@@ -891,10 +889,9 @@ impl PublicValueNetwork {
             }
             forward_batch_tower(&self.query_tower, &query_batch, legal_combos[player].len())
         });
+        let combos = all_combos();
         let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
-            (0..COMBO_COUNT)
-                .map(|combo| compatible_mass_from_conflicts(&ranges[1 - player], &conflicts, combo))
-                .collect()
+            compatible_masses_from_card_marginals(&combos, &ranges[1 - player])
         });
         let query_embedding_size = self
             .query_tower
@@ -2964,6 +2961,9 @@ fn shared_combo_features(
             class_mass[player][hand_class_index(first, second)] += weight;
         }
     }
+    let compatible_masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+        compatible_masses_from_card_marginals(&combos, &ranges[player])
+    });
     let uses_board_relative = matches!(
         feature_schema,
         SHARED_FEATURE_SCHEMA_V2 | SHARED_FEATURE_SCHEMA_V3 | RANGE_POLICY_FEATURE_SCHEMA_V1
@@ -2991,11 +2991,28 @@ fn shared_combo_features(
         }
     }
     let immediate_equity = [
-        current_range_equity(&board_features.strengths, &ranges[1], conflicts),
-        current_range_equity(&board_features.strengths, &ranges[0], conflicts),
+        current_range_equity(
+            &board_features.strengths,
+            &ranges[1],
+            &compatible_masses[1],
+            conflicts,
+        ),
+        current_range_equity(
+            &board_features.strengths,
+            &ranges[0],
+            &compatible_masses[0],
+            conflicts,
+        ),
     ];
     let exact_runout_equity = (feature_schema == SHARED_FEATURE_SCHEMA_V3)
-        .then(|| exact_turn_range_equities(board, ranges, conflicts));
+        .then(|| exact_turn_range_equities(board, ranges));
+    let blocked_board_relative: [Vec<[f64; 29]>; 2] = std::array::from_fn(|player| {
+        conflict_feature_masses_from_card_marginals(
+            &combos,
+            &ranges[player],
+            &board_relative_features,
+        )
+    });
     let (context_count, query_count) =
         shared_feature_sizes(feature_schema).expect("validated shared feature schema");
     let mut contexts: SharedContexts = std::array::from_fn(|_| Vec::new());
@@ -3073,8 +3090,8 @@ fn shared_combo_features(
             let key = combo.key();
             query[76] = scaled_log_feature(ranges[player][key], COMBO_COUNT as f64);
             query[77] = scaled_log_feature(ranges[opponent][key], COMBO_COUNT as f64);
-            query[78] = compatible_mass_from_conflicts(&ranges[opponent], conflicts, key) as f32;
-            query[79] = compatible_mass_from_conflicts(&ranges[player], conflicts, key) as f32;
+            query[78] = compatible_masses[opponent][key] as f32;
+            query[79] = compatible_masses[player][key] as f32;
             let (own_cards, opponent_cards, own_suits, opponent_suits) = if pair {
                 (
                     [
@@ -3144,14 +3161,9 @@ fn shared_combo_features(
                 .as_ref()
                 .map_or(immediate_equity[player][key], |values| values[player][key]);
             if uses_board_relative {
-                let compatible = compatible_mass_from_conflicts(&ranges[opponent], conflicts, key);
+                let compatible = compatible_masses[opponent][key];
                 for feature in 0..29 {
-                    let blocked = conflicts[key]
-                        .iter()
-                        .map(|other| {
-                            ranges[opponent][*other] * board_relative_features[*other][feature]
-                        })
-                        .sum::<f64>();
+                    let blocked = blocked_board_relative[opponent][key][feature];
                     query[SHARED_QUERY_COUNT + feature] = if compatible > EPSILON {
                         ((board_relative_totals[opponent][feature] - blocked) / compatible)
                             .clamp(0.0, 1.0) as f32
@@ -3169,6 +3181,7 @@ fn shared_combo_features(
 fn current_range_equity(
     strengths: &[u32],
     opponent_range: &[f64],
+    opponent_compatible_masses: &[f64],
     conflicts: &[Vec<usize>],
 ) -> Vec<f32> {
     let unique = strengths
@@ -3209,7 +3222,7 @@ fn current_range_equity(
                     std::cmp::Ordering::Greater => {}
                 }
             }
-            let compatible = compatible_mass_from_conflicts(opponent_range, conflicts, own);
+            let compatible = opponent_compatible_masses[own];
             if compatible > EPSILON {
                 ((lower.max(0.0) + equal.max(0.0) / 2.0) / compatible) as f32
             } else {
@@ -3219,11 +3232,7 @@ fn current_range_equity(
         .collect()
 }
 
-fn exact_turn_range_equities(
-    board: &[u8],
-    ranges: &[Vec<f64>; 2],
-    conflicts: &[Vec<usize>],
-) -> [Vec<f32>; 2] {
+fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>; 2] {
     assert_eq!(
         board.len(),
         4,
@@ -3251,11 +3260,14 @@ fn exact_turn_range_equities(
     let matrix = cell
         .get_or_init(|| compute_exact_turn_equity_units(key))
         .clone();
+    let combos = all_combos();
+    let compatible_masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
+        compatible_masses_from_card_marginals(&combos, &ranges[1 - player])
+    });
     std::array::from_fn(|player| {
         (0..COMBO_COUNT)
             .map(|own| {
-                let compatible =
-                    compatible_mass_from_conflicts(&ranges[1 - player], conflicts, own);
+                let compatible = compatible_masses[player][own];
                 if compatible > EPSILON {
                     let row = canonical_combo_keys[own] * COMBO_COUNT;
                     let numerator = ranges[1 - player]
@@ -4729,7 +4741,6 @@ impl FlopSolver {
                     .collect::<Vec<_>>();
                 let network = &self.config.value_network;
                 let auxiliary_networks = &self.config.auxiliary_value_networks;
-                let conflicts = self.conflicts.clone();
                 let board = self.config.state.board.clone();
                 workers.push(scope.spawn(move || {
                     assigned
@@ -4738,7 +4749,6 @@ impl FlopSolver {
                             turn_leaf_card_values(
                                 network,
                                 auxiliary_networks,
-                                &conflicts,
                                 &board,
                                 state.actor,
                                 state.invested,
@@ -5442,7 +5452,6 @@ fn equity_units(first: u32, second: u32) -> u16 {
 fn turn_leaf_card_values(
     network: &PublicValueNetwork,
     auxiliary_networks: &[PublicValueNetwork],
-    conflicts: &[Vec<usize>],
     flop_board: &[u8],
     actor: usize,
     invested: [f64; 2],
@@ -5454,10 +5463,9 @@ fn turn_leaf_card_values(
     let (masked, totals, _) = normalized_turn_ranges(reaches, turn)?;
     let mut board = flop_board.to_vec();
     board.push(turn);
+    let combos = all_combos();
     let masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
-        (0..COMBO_COUNT)
-            .map(|combo| compatible_mass_from_conflicts(&masked[1 - player], conflicts, combo))
-            .collect()
+        compatible_masses_from_card_marginals(&combos, &masked[1 - player])
     });
     let joint = joint_compatibility_mass(&masked);
     let project = |mut predicted: [Vec<f64>; 2]| {
@@ -6355,6 +6363,36 @@ fn compatible_masses_from_card_marginals(combos: &[Combo], range: &[f64]) -> Vec
             // The identical two-card holding occurs in both card marginals, so
             // add it back once after subtracting both blocked-card totals.
             (total - by_card[first as usize] - by_card[second as usize] + range[index]).max(0.0)
+        })
+        .collect()
+}
+
+fn conflict_feature_masses_from_card_marginals<const FEATURES: usize>(
+    combos: &[Combo],
+    range: &[f64],
+    features: &[[f64; FEATURES]],
+) -> Vec<[f64; FEATURES]> {
+    debug_assert_eq!(combos.len(), COMBO_COUNT);
+    debug_assert_eq!(range.len(), COMBO_COUNT);
+    debug_assert_eq!(features.len(), COMBO_COUNT);
+    let mut by_card = [[0.0f64; FEATURES]; 52];
+    for ((combo, weight), values) in combos.iter().zip(range).zip(features) {
+        let [first, second] = combo.cards();
+        for feature in 0..FEATURES {
+            let weighted = *weight * values[feature];
+            by_card[first as usize][feature] += weighted;
+            by_card[second as usize][feature] += weighted;
+        }
+    }
+    combos
+        .iter()
+        .enumerate()
+        .map(|(index, combo)| {
+            let [first, second] = combo.cards();
+            std::array::from_fn(|feature| {
+                by_card[first as usize][feature] + by_card[second as usize][feature]
+                    - range[index] * features[index][feature]
+            })
         })
         .collect()
 }
@@ -12408,11 +12446,9 @@ mod tests {
         network.head[0].biases[..COMBO_COUNT].fill(0.1);
         network.head[0].biases[COMBO_COUNT..].fill(-0.1);
         let turn = 15;
-        let conflicts = combo_conflicts();
         let (values, residual) = turn_leaf_card_values(
             &network,
             &[],
-            &conflicts,
             &board,
             0,
             [1.0, 1.0],
@@ -12451,13 +12487,11 @@ mod tests {
         second.artifact_sha256 = Some("b".repeat(64));
         second.head[0].biases[..COMBO_COUNT].fill(-0.05);
         second.head[0].biases[COMBO_COUNT..].fill(0.15);
-        let conflicts = combo_conflicts();
         let turn = 15;
         let values = |primary: &PublicValueNetwork, auxiliary: &[PublicValueNetwork]| {
             turn_leaf_card_values(
                 primary,
                 auxiliary,
-                &conflicts,
                 &board,
                 0,
                 [1.0, 1.0],
@@ -12498,12 +12532,10 @@ mod tests {
         second.source_validation_status = Some("accepted".to_owned());
         second.head[0].biases[..COMBO_COUNT].fill(-0.1);
         second.head[0].biases[COMBO_COUNT..].fill(0.1);
-        let conflicts = combo_conflicts();
         let evaluate = |traverser| {
             turn_leaf_card_values(
                 &first,
                 std::slice::from_ref(&second),
-                &conflicts,
                 &board,
                 0,
                 [1.0, 1.0],
@@ -12720,6 +12752,30 @@ mod tests {
         for own in 0..COMBO_COUNT {
             let reference = compatible_mass_from_conflicts(&range, &conflicts, own);
             assert!((fast_masses[own] - reference).abs() < 1e-11);
+        }
+        let features = combos
+            .iter()
+            .enumerate()
+            .map(|(index, combo)| {
+                let [first, second] = combo.cards();
+                [
+                    f64::from(first) / 52.0,
+                    f64::from(second) / 52.0,
+                    (index % 7) as f64 / 7.0,
+                    f64::from((first & 3) == (second & 3)),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let fast_feature_masses =
+            conflict_feature_masses_from_card_marginals(&combos, &range, &features);
+        for own in 0..COMBO_COUNT {
+            for feature in 0..features[own].len() {
+                let reference = conflicts[own]
+                    .iter()
+                    .map(|opponent| range[*opponent] * features[*opponent][feature])
+                    .sum::<f64>();
+                assert!((fast_feature_masses[own][feature] - reference).abs() < 1e-11);
+            }
         }
 
         let strengths = combos
