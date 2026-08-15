@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Test Rust release solver
+        run: cargo test --release --manifest-path preflop-solver/Cargo.toml
+
+      - name: Test practice release tools
+        run: npm run test:practice-tools
+
+      - name: Test TypeScript application
+        run: npm test
+
+      - name: Build production application and solver
+        run: npm run build
+
+      - name: Verify pinned production resolver bundle
+        run: npm run practice:verify-resolver-build
+
+      - name: Exercise real resolver on every street
+        run: PRACTICE_RESOLVER_THREADS=1 npm run test:practice-resolver-integration
