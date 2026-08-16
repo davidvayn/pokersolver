@@ -56,12 +56,18 @@ for milestone in "${milestones[@]}"; do
   worker_status_dir=$(mktemp -d /tmp/pokersolver-action-ev-workers.XXXXXX)
   status_fifo="$worker_status_dir/status"
   mkfifo "$status_fifo"
+  # Keep one read/write descriptor open for the whole milestone. Opening the
+  # FIFO separately for every `read` can be interrupted by SIGCHLD when a
+  # resumed worker skips an already-complete range and exits immediately.
+  # That used to report a healthy sibling as failed and terminate it.
+  exec 9<>"$status_fifo"
   runner_pids=()
   for ((worker = 0; worker < worker_count; worker++)); do
     worker_start=$((previous + range_size * worker / worker_count))
     worker_end=$((previous + range_size * (worker + 1) / worker_count))
     echo "canonical shard worker $((worker + 1))/$worker_count covers [$worker_start, $worker_end)"
     (
+      exec 9>&-
       set +e
       "$runner" \
         "$worker_start" "$worker_end" "$threads" \
@@ -74,7 +80,7 @@ for milestone in "${milestones[@]}"; do
   done
   runner_status=0
   for ((completed = 0; completed < worker_count; completed++)); do
-    if ! read -r finished_worker finished_status <"$status_fifo"; then
+    if ! read -r finished_worker finished_status <&9; then
       runner_status=1
       break
     fi
@@ -94,6 +100,7 @@ for milestone in "${milestones[@]}"; do
   for runner_pid in "${runner_pids[@]}"; do
     wait "$runner_pid" 2>/dev/null || true
   done
+  exec 9>&-
   cleanup_worker_status
   if ((runner_status != 0)); then
     echo "canonical shard worker failed before checkpoint $milestone" >&2
