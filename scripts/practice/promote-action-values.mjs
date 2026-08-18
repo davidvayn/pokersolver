@@ -96,9 +96,13 @@ const notes = Array.isArray(manifest.validation.notes)
       (note) =>
         typeof note === 'string' &&
         !note.includes('preflop action-value corpus') &&
-        !note.includes('feedback is low confidence')
+        !note.includes('feedback is low confidence') &&
+        !note.includes('immutable losslessly compressed solver bundle')
     )
   : [];
+notes.push(
+  `The immutable losslessly compressed solver bundle is ${manifest.validation.projectedStorageBytes.toLocaleString('en-US')} bytes; no database is required for this embedded runtime.`
+);
 notes.push(
   `Canonical preflop action values pass ${(100 * artifact.action_ev_standard_error_coverage).toFixed(3)}% policy-action-weighted coverage at 0.02bb standard error over ${artifact.corpus_deals} raw flops. This is a conservative full-hand sampling-error lower bound: deterministic postflop resolver values require no Monte Carlo sampling, while their learned-continuation approximation remains separately labeled low confidence with uncalibrated uncertainty.`
 );

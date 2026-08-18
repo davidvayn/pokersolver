@@ -162,7 +162,7 @@ jq -e \
     $preflop[0].tabularDcfr.seeds == [7601, 7602] and
     $preflop[0].distillation.studentSha256 == [
       "151fc1d90a5c03f105e543c54d02d097df51c66a422d01e696731b9c83b409dd",
-      "fcb3c62aad24a86bd04b4bdd1be8a1cbe052a6f6552f830a4a3101965e00a9e"
+      "fcb3c62aad24a86bd04b4bdd1be8a1cbe0522a6f6552f830a4a3101965e00a9e"
     ] and
     ($preflop[0].routedFullHandValidation.authentic as $authentic |
       $preflop[0].routedFullHandValidation.forcedDeviation as $forced |

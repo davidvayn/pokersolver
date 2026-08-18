@@ -59,7 +59,10 @@ async function fixture(coverage = 0.96) {
           status: 'rejected',
           actionEvStandardErrorCoverage: 0.3,
           projectedStorageBytes: 0,
-          notes: ['The preflop action-value corpus is too noisy.'],
+          notes: [
+            'The preflop action-value corpus is too noisy.',
+            'The immutable losslessly compressed solver bundle is 1 byte; no database is required for this embedded runtime.',
+          ],
         },
         runtime: {
           kind: 'rust-continual-resolver-v1',
@@ -126,6 +129,15 @@ test('installs a passing artifact and updates the inactive manifest atomically',
     assert.match(
       manifest.validation.notes.at(-1),
       /conservative full-hand sampling-error lower bound/
+    );
+    const storageNotes = manifest.validation.notes.filter((note) =>
+      note.includes('immutable losslessly compressed solver bundle')
+    );
+    assert.equal(storageNotes.length, 1);
+    assert.ok(
+      storageNotes[0].includes(
+        manifest.validation.projectedStorageBytes.toLocaleString('en-US')
+      )
     );
   } finally {
     await rm(files.root, { recursive: true, force: true });
