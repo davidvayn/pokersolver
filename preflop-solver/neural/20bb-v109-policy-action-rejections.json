@@ -1,0 +1,117 @@
+{
+  "schema": "hu-20bb-policy-action-rejections-v1",
+  "depthBb": 20,
+  "status": "rejected_directional_candidates",
+  "activationEligible": false,
+  "activeModelChanged": false,
+  "purpose": "Test two direct policy-action changes against the remaining full-game exploitability blocker without repeating plateaued student-training sweeps.",
+  "preflopActionValuePolicyIteration": {
+    "operator": "confidence_adjusted_positive_advantage_regret_matching_mixed_with_frozen_parent",
+    "parentPolicySha256": "1b14fa8987663f37cd0f0f2889fa2574aaf7d31455d6f66d0fca6fe9ceec1114",
+    "actionValuesArtifactSha256": "fb6a7416096105f2cb12dc4402ec3102fbe62630b38906905167c6382c9df309",
+    "confidenceZ": 2.5758293035489004,
+    "minimumAdvantageBb": 0.01,
+    "screen": "exact information-set best response in the frozen 26,520-deal mixed-v26 preflop continuation game; not a full-game certificate",
+    "parentExploitabilityBbPerHand": 0.20333753832701768,
+    "candidates": [
+      {
+        "name": "root-p0-mix025",
+        "actors": [0],
+        "rootOnly": true,
+        "mix": 0.25,
+        "predictedFrozenContinuationGainBbPerHand": 0.1063175108772514,
+        "measuredExploitabilityBbPerHand": 0.21100939211707634
+      },
+      {
+        "name": "root-p0-mix050",
+        "actors": [0],
+        "rootOnly": true,
+        "mix": 0.5,
+        "predictedFrozenContinuationGainBbPerHand": 0.2126350217545028,
+        "measuredExploitabilityBbPerHand": 0.23267344689044647
+      },
+      {
+        "name": "root-p0-mix075",
+        "actors": [0],
+        "rootOnly": true,
+        "mix": 0.75,
+        "predictedFrozenContinuationGainBbPerHand": 0.3189525326317545,
+        "measuredExploitabilityBbPerHand": 0.26931615321011304
+      },
+      {
+        "name": "root-p0-mix100",
+        "actors": [0],
+        "rootOnly": true,
+        "mix": 1.0,
+        "predictedFrozenContinuationGainBbPerHand": 0.4252700435090056,
+        "measuredExploitabilityBbPerHand": 0.32198235810301423
+      },
+      {
+        "name": "all-p0-mix050",
+        "actors": [0],
+        "rootOnly": false,
+        "mix": 0.5,
+        "predictedFrozenContinuationGainBbPerHand": 0.2872185070132561,
+        "measuredExploitabilityBbPerHand": 0.2504528333510368
+      },
+      {
+        "name": "all-both-mix025",
+        "actors": [0, 1],
+        "rootOnly": false,
+        "mix": 0.25,
+        "predictedFrozenContinuationGainBbPerHand": 0.23715286247982048,
+        "measuredExploitabilityBbPerHand": 0.3021224072396539
+      },
+      {
+        "name": "all-both-mix050",
+        "actors": [0, 1],
+        "rootOnly": false,
+        "mix": 0.5,
+        "predictedFrozenContinuationGainBbPerHand": 0.47430572495964096,
+        "measuredExploitabilityBbPerHand": 0.46087109934178005
+      }
+    ],
+    "decision": "Reject every candidate before neural distillation or full-game evaluation. Even the smallest root-only update worsened the exact preflop response metric. The measured local action-EV gain optimizes play against the frozen profile, not NashConv, so it is not a valid proxy for exploitability reduction."
+  },
+  "higherConvergenceBilateralRiver": {
+    "networkArtifactSha256": "5a89abc98ce7c30611517f2e4079fc68a930e66efd2eea07362e7e710ff95036",
+    "rangePolicyArtifactSha256": "6da23d0bb3a257a55789490da2ba8f8b1cece1b38b178c3daad84430c57e07b7",
+    "valueNetworkArtifactSha256": "d00388ff1f067227928f8ebf5c3e18f6fe1426b7d97ba409f7d97248f71bfdbd",
+    "reportSha256": "885e966753454c7169b7295b4597f53857185d54b2eb24761b490a99a9d7567d",
+    "matchedScreen": {
+      "seed": 19801,
+      "deals": 2,
+      "publicBranchesPerStreet": 1,
+      "opponentSamplesPerRunout": 1,
+      "flopResolverIterations": 2,
+      "flopResolvedActor": 1,
+      "turnResolverIterations": 2,
+      "turnResolvedActor": 1,
+      "riverResolverIterations": 20,
+      "riverResolverAveragingDelay": 2,
+      "riverResolvedActor": null
+    },
+    "retainedBbOnlyMeanExploitabilityBb": 1.266047153164215,
+    "twoIterationBilateralRiverMeanExploitabilityBb": 1.393495511718179,
+    "twentyIterationBilateralRiverSampleExploitabilitiesBb": [
+      1.1584329160811375,
+      1.907435061331872
+    ],
+    "twentyIterationBilateralRiverMeanExploitabilityBb": 1.5329339887065048,
+    "twentyIterationBilateralRiverStandardErrorBb": 0.37450107262536725,
+    "deltaVersusRetainedBbOnlyBb": 0.26688683554228985,
+    "deltaVersusTwoIterationBilateralRiverBb": 0.13943847698832577,
+    "responderMeansBb": [
+      1.0161225157423799,
+      2.0497454616706294
+    ],
+    "interpretation": "Twenty river iterations slightly reduced responder-one mean value by 0.012833bb versus the retained BB-only baseline, but increased responder-zero mean value by 0.546607bb. One matched deal improved by 0.035424bb and the other regressed by 0.569198bb. The joint mean is worse than both the retained routing and the two-iteration bilateral pilot.",
+    "decision": "Reject converged bilateral river routing. Do not spend compute increasing this branch to 50, 100, or 200 iterations and do not deploy its roughly 44-minute two-deal runtime configuration."
+  },
+  "remainingReleaseGates": {
+    "fullGameExploitabilityPointEstimateAtMost0_50Bb": "failed",
+    "fullGameExploitabilityOneSided99PercentUpperBoundAtMost0_50Bb": "failed",
+    "approximateGtoActivation": "fail_closed"
+  },
+  "conclusion": "Retain the v102 policy with BB-only two-iteration flop, turn, and river resolving. Neither frozen-profile action-EV policy iteration nor higher-convergence bilateral river solving is aligned with lower full-game exploitability on the matched screens."
+}
