@@ -19,12 +19,14 @@ import {
 } from '@/lib/practice-engine';
 import {
   gradePolicyChoice,
+  practiceActionChoices,
   samplePolicyAction,
   validatePolicyNode,
 } from '@/lib/practice-grading';
 import {
   loadPracticeSettings,
   nextHeroSeat,
+  postflopStreetForHand,
   savePracticeSettings,
   structuralSettingsChanged,
 } from '@/lib/practice';
@@ -59,6 +61,7 @@ import {
   type PracticeDecisionRecord,
   type PracticeHandRecord,
   type PracticeSettings,
+  type PracticeStreet,
 } from '@/lib/practice-types';
 
 type TableStatus =
@@ -71,12 +74,29 @@ type TableStatus =
 
 function unavailableCopy(settings: PracticeSettings): string {
   if (settings.mode === 'postflop') {
-    return 'No accepted postflop sample and policy shards are installed. The table will not replay or score a synthetic line.';
+    return `No accepted ${settings.depthBb}bb full-hand policy is available to replay a reachable postflop line. The table will not fabricate or score a fallback strategy.`;
   }
   if (settings.mode === 'preflop') {
     return 'No accepted full no-limit model is installed for a complete preflop round. Push/fold remains available as its validated subtype.';
   }
   return `The ${settings.depthBb}bb full-hand seeds have not passed every activation gate. The depth remains hidden and the table will not substitute a strategy.`;
+}
+
+const STREET_INDEX: Record<PracticeStreet, number> = {
+  preflop: 0,
+  flop: 1,
+  turn: 2,
+  river: 3,
+};
+
+function postflopReplayPause(): Promise<void> {
+  if (
+    typeof window === 'undefined' ||
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => window.setTimeout(resolve, 180));
 }
 
 function fullHandDepths(manifests: PolicyManifest[]): number[] {
@@ -177,6 +197,53 @@ async function advancePolicyToHero(input: {
   };
 }
 
+async function advancePolicyToPostflopDecision(input: {
+  client: PracticePolicyClient;
+  pinned: PinnedPracticeModel;
+  state: HandState;
+  targetStreet: Exclude<PracticeStreet, 'preflop'>;
+  profile: OpponentModelSnapshot;
+  onProgress: (state: HandState) => void;
+  onOpponentPolicy: (trace: OpponentPolicyTrace) => void;
+}): Promise<{ state: HandState; node: PolicyNode | null }> {
+  let state = input.state;
+  for (let actionCount = 0; actionCount < 64; actionCount++) {
+    if (state.terminal) return { state, node: null };
+    if (STREET_INDEX[state.street] > STREET_INDEX[input.targetStreet]) {
+      return { state, node: null };
+    }
+    if (state.street === input.targetStreet && state.toAct === state.hero) {
+      return {
+        state,
+        node: (
+          await checkedPolicyNode(
+            input.client,
+            input.pinned,
+            state,
+            input.profile,
+            'grading'
+          )
+        ).node,
+      };
+    }
+
+    const lookup = await checkedPolicyNode(
+      input.client,
+      input.pinned,
+      state,
+      input.profile,
+      state.toAct === state.hero ? 'grading' : 'opponent'
+    );
+    if (lookup.trace) input.onOpponentPolicy(lookup.trace);
+    state = applyAction(state, samplePolicyAction(lookup.node.actions));
+    input.onProgress(state);
+    await postflopReplayPause();
+  }
+  throw new PolicyUnavailableError(
+    'The sampled policy line exceeded the supported action history.'
+  );
+}
+
 export default function PracticePage() {
   const [settings, setSettings] = useState<PracticeSettings>(
     DEFAULT_PRACTICE_SETTINGS
@@ -242,16 +309,6 @@ export default function PracticePage() {
       goalReachedRef.current = false;
       pinnedModelRef.current = null;
 
-      if (nextSettings.mode === 'postflop') {
-        setSpot(null);
-        setState(null);
-        setHandManifest(null);
-        pinnedModelRef.current = null;
-        setStatus('unavailable');
-        setRailTab('settings');
-        return;
-      }
-
       setStatus('loading');
       try {
         if (nextSettings.mode === 'push-fold') {
@@ -295,6 +352,7 @@ export default function PracticePage() {
         // actually reaches the hero. Terminal folds before the first hero
         // decision are authentic but not useful practice spots, so resample.
         for (let attempt = 0; attempt < 128; attempt++) {
+          opponentQueriesRef.current = [];
           const initial = createHand({
             id: `full-${handNumber}-${attempt}-${pinned.manifest.version}`,
             modelVersion: pinned.manifest.version,
@@ -304,21 +362,37 @@ export default function PracticePage() {
           });
           if (currentRequest !== requestId.current) return;
           setState(initial);
-          const advanced = await advancePolicyToHero({
-            client,
-            pinned,
-            state: initial,
-            mode: nextSettings.mode,
-            profile,
-            onProgress: (progress) => {
+          const sharedCallbacks = {
+            onProgress: (progress: HandState) => {
               if (currentRequest === requestId.current) setState(progress);
             },
-            onOpponentPolicy: (trace) => {
+            onOpponentPolicy: (trace: OpponentPolicyTrace) => {
               if (currentRequest === requestId.current) {
                 opponentQueriesRef.current.push(trace);
               }
             },
-          });
+          };
+          const advanced =
+            nextSettings.mode === 'postflop'
+              ? await advancePolicyToPostflopDecision({
+                  client,
+                  pinned,
+                  state: initial,
+                  targetStreet: postflopStreetForHand(
+                    nextSettings.postflopStreets,
+                    handNumber
+                  ),
+                  profile,
+                  ...sharedCallbacks,
+                })
+              : await advancePolicyToHero({
+                  client,
+                  pinned,
+                  state: initial,
+                  mode: nextSettings.mode,
+                  profile,
+                  ...sharedCallbacks,
+                });
           if (currentRequest !== requestId.current) return;
           if (advanced.state.terminal) continue;
           setState(advanced.state);
@@ -533,6 +607,9 @@ export default function PracticePage() {
       ) {
         next = stopAfterPreflop(next);
       }
+      if (settings.mode === 'postflop' && !next.terminal) {
+        next = stopForReview(next, 'review-complete');
+      }
       const answeredAt = Date.now();
       const latestOpponentAction = [...state.actionHistory]
         .reverse()
@@ -563,6 +640,9 @@ export default function PracticePage() {
         board: [...next.board],
         heroCards: [...state.holeCards[state.hero]],
         chosenAction: action,
+        offeredActionIds: practiceActionChoices(node.actions).map(
+          (offered) => offered.id
+        ),
         policyActions: node.actions,
         ...grade,
         opponentModel: opponentModelRef.current ?? undefined,
@@ -670,6 +750,7 @@ export default function PracticePage() {
   function retry() {
     if (
       status === 'error' &&
+      settings.mode !== 'postflop' &&
       state &&
       !state.terminal &&
       pinnedModelRef.current
@@ -753,6 +834,7 @@ export default function PracticePage() {
           onAction={(action) => void chooseAction(action)}
           onContinue={continueHand}
           onRetry={retry}
+          onOpenAnalyst={() => setMobileRailOpen(true)}
         />
         <div className="hidden xl:block">
           <AnalystRail
@@ -772,17 +854,6 @@ export default function PracticePage() {
           />
         </div>
       </div>
-
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded={mobileRailOpen}
-        onClick={() => setMobileRailOpen(true)}
-        className="fixed bottom-[calc(8.8rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-surface px-4 text-sm font-semibold shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:hidden"
-      >
-        <BarChart3 className="h-4 w-4 text-accent" aria-hidden="true" />
-        Analyst
-      </button>
 
       {mobileRailOpen && (
         <div className="fixed inset-0 z-50 bg-black/45 xl:hidden" role="presentation" onMouseDown={(event) => {

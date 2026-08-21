@@ -167,19 +167,66 @@ textarea {
 }
 
 .practice-seat {
-  width: min(270px, 38vw);
-  border: 1px solid rgb(255 255 255 / 0.15);
-  border-radius: 8px;
-  background: rgb(7 12 16 / 0.78);
-  padding: 10px 12px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+  width: max-content;
   color: white;
-  transition: border-color 180ms ease, box-shadow 180ms ease;
+  filter: drop-shadow(0 8px 12px rgb(0 0 0 / 0.28));
 }
 
-.practice-seat-active {
-  border-color: rgb(var(--accent));
-  box-shadow: 0 0 0 2px rgb(var(--accent) / 0.25), 0 8px 24px rgb(0 0 0 / 0.24);
+.practice-seat-meta {
+  display: flex;
+  min-width: 132px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+  padding-inline: 2px;
+}
+
+.practice-seat-label,
+.practice-stack {
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 9999px;
+  background: rgb(4 10 12 / 0.72);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.18);
+  backdrop-filter: blur(8px);
+}
+
+.practice-seat-label {
+  padding: 3px 8px;
+  color: rgb(255 255 255 / 0.78);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.practice-seat-body,
+.practice-card-hand {
+  display: flex;
+  align-items: flex-end;
+}
+
+.practice-seat-body {
+  gap: 8px;
+}
+
+.practice-card-hand {
+  gap: 5px;
+  border-radius: 8px;
+  transition: filter 180ms ease;
+}
+
+.practice-seat-active .practice-card-hand {
+  filter: drop-shadow(0 0 7px rgb(var(--accent) / 0.9));
+}
+
+.practice-stack {
+  margin-bottom: 4px;
+  padding: 5px 8px;
+  color: white;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .practice-opponent-seat,
@@ -195,7 +242,7 @@ textarea {
 }
 
 .practice-hero-seat {
-  bottom: 30px;
+  bottom: 22px;
 }
 
 .practice-board {
@@ -227,37 +274,100 @@ textarea {
 }
 
 .playing-card {
-  display: inline-flex;
+  position: relative;
+  display: inline-block;
   width: 48px;
   height: 66px;
   flex: 0 0 auto;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgb(0 0 0 / 0.18);
-  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgb(15 23 42 / 0.24);
+  border-radius: 4px;
   background: rgb(255 255 255);
-  box-shadow: 0 3px 9px rgb(0 0 0 / 0.25);
-  color: rgb(17 24 39);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1.05;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.8) inset,
+    0 4px 9px rgb(0 0 0 / 0.28);
+  color: rgb(20 24 31);
+  font-family: ui-sans-serif, system-ui, sans-serif;
 }
 
-.playing-card-red {
-  color: rgb(190 24 93);
+.playing-card-suit-1,
+.playing-card-suit-2 {
+  color: rgb(190 24 57);
+}
+
+.playing-card-corner {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  width: 15px;
+  flex-direction: column;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 0.88;
+}
+
+.playing-card-corner strong {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.playing-card-corner-top {
+  left: 5px;
+  top: 5px;
+  width: auto;
+  align-items: flex-start;
+  flex-direction: row;
+  gap: 2px;
+  line-height: 1;
+}
+
+.playing-card-corner-top strong {
+  font-size: 20px;
+  letter-spacing: -0.06em;
+}
+
+.playing-card-corner-top span {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.playing-card-corner-bottom {
+  display: none;
+}
+
+.playing-card-center {
+  position: absolute;
+  right: 5px;
+  bottom: 4px;
+  font-size: 25px;
+  line-height: 1;
 }
 
 .playing-card-back {
+  display: grid;
+  place-items: center;
   border-color: rgb(255 255 255 / 0.35);
   background:
-    linear-gradient(135deg, transparent 42%, rgb(255 255 255 / 0.14) 42% 48%, transparent 48%),
-    linear-gradient(45deg, transparent 42%, rgb(255 255 255 / 0.12) 42% 48%, transparent 48%),
-    rgb(21 72 98);
-  background-size: 10px 10px;
+    repeating-linear-gradient(45deg, transparent 0 4px, rgb(255 255 255 / 0.1) 4px 5px),
+    repeating-linear-gradient(-45deg, transparent 0 4px, rgb(255 255 255 / 0.08) 4px 5px),
+    rgb(23 67 94);
+  background-size: 9px 9px;
   color: rgb(255 255 255 / 0.76);
-  font-size: 10px;
+}
+
+.playing-card-back-inner {
+  display: grid;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 0.55);
+  border-radius: 3px;
+  background: rgb(5 25 41 / 0.2);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
 }
 
 .playing-card-empty {
@@ -268,18 +378,28 @@ textarea {
 
 .practice-action-strip {
   position: absolute;
-  bottom: 10px;
-  left: 50%;
+  left: 14px;
+  top: 50%;
   z-index: 3;
   display: flex;
-  width: min(90%, 680px);
-  transform: translateX(-50%);
-  justify-content: center;
-  gap: 10px;
+  width: min(150px, 20%);
+  transform: translateY(-50%);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   overflow: hidden;
   color: rgb(255 255 255 / 0.82);
   font-size: 10px;
   white-space: nowrap;
+}
+
+.practice-action-strip li {
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: rgb(4 10 12 / 0.42);
+  padding: 3px 7px;
+  text-overflow: ellipsis;
 }
 
 .practice-table-overlay {
@@ -380,14 +500,9 @@ textarea {
     min-height: 480px;
   }
 
-  .practice-seat {
-    width: 280px;
-  }
-
   .playing-card {
     width: 56px;
     height: 76px;
-    font-size: 17px;
   }
 
   .practice-pot {
@@ -415,10 +530,6 @@ textarea {
     border-radius: 42% / 18%;
   }
 
-  .practice-seat {
-    width: min(250px, 78vw);
-  }
-
   .practice-board {
     gap: 3px;
   }
@@ -427,7 +538,6 @@ textarea {
     width: 40px;
     height: 56px;
     border-radius: 5px;
-    font-size: 13px;
   }
 
   .practice-pot {
@@ -435,7 +545,7 @@ textarea {
   }
 
   .practice-hero-seat {
-    bottom: 16px;
+    bottom: 14px;
   }
 
   .practice-opponent-seat {

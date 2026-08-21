@@ -110,13 +110,11 @@
         10.275821583
       ],
       "notes": [
-        "Inactive and fail-closed: exploitability is deferred, not passed.",
-        "The conservative full-hand cross-seed summary takes the weakest metric across the frozen served preflop-student validation and exact v102 postflop consensus comparison; seed 20931 is pinned only for the inactive experimental preview because it has the lower heldout teacher-EV loss, not as an exploitability-based release selection.",
+        "Active experimental practice model: exploitability is deferred, not passed.",
+        "The conservative full-hand cross-seed summary takes the weakest metric across the frozen served preflop-student validation and exact v102 postflop consensus comparison; seed 20931 is pinned for experimental practice because it has the lower heldout teacher-EV loss, not as an exploitability-based release selection.",
         "Complete per-round logs measure 10.282785437 and 10.275821583 hours across the paired narrow/wide seed paths; the release verifier pins the log hashes and frozen lineage mapping.",
-        "The inactive runtime explicitly pins BTN/SB as actor 0 and BB as actor 1. The current validated routing resolves only BB actions on flop, turn, and river; missing or invalid per-street actor metadata fails closed.",
+        "The runtime explicitly pins BTN/SB as actor 0 and BB as actor 1. The current validated routing resolves only BB actions on flop, turn, and river; missing or invalid per-street actor metadata fails closed.",
         "The immutable losslessly compressed solver bundle is 42,853,624 bytes; no database is required for this embedded runtime.",
-        "Canonical preflop action values pass 95.239% policy-action-weighted coverage at 0.02bb standard error over 21708 raw flops. This is a conservative full-hand sampling-error lower bound: deterministic postflop resolver values require no Monte Carlo sampling, while their learned-continuation approximation remains separately labeled low confidence with uncalibrated uncertainty.",
-        "Canonical preflop action values pass 95.239% policy-action-weighted coverage at 0.02bb standard error over 21708 raw flops. This is a conservative full-hand sampling-error lower bound: deterministic postflop resolver values require no Monte Carlo sampling, while their learned-continuation approximation remains separately labeled low confidence with uncalibrated uncertainty.",
         "Canonical preflop action values pass 95.239% policy-action-weighted coverage at 0.02bb standard error over 21708 raw flops. This is a conservative full-hand sampling-error lower bound: deterministic postflop resolver values require no Monte Carlo sampling, while their learned-continuation approximation remains separately labeled low confidence with uncalibrated uncertainty."
       ]
     }

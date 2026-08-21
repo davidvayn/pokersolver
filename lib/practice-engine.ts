@@ -190,11 +190,11 @@ function assertActionLegal(state: HandState, action: LegalAction): void {
   if (raiseSize + EPSILON < minimumRaise && !isAllIn) {
     throw new Error('Bet is smaller than the minimum full raise');
   }
-  if (action.kind === 'bet' && toCall > EPSILON) {
-    throw new Error('Use raise while facing a wager');
+  if (action.kind === 'bet' && highest > EPSILON) {
+    throw new Error('Use raise when a street wager already exists');
   }
-  if (action.kind === 'raise' && toCall <= EPSILON) {
-    throw new Error('Use bet when no wager is outstanding');
+  if (action.kind === 'raise' && highest <= EPSILON) {
+    throw new Error('Use bet when no street wager exists');
   }
   if (action.kind === 'all-in' && !isAllIn) {
     throw new Error('All-in amount must use the actor’s full stack');

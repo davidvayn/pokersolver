@@ -56,6 +56,27 @@ function estimatedActionLoss(
   return Math.max(0, bestActionEvBb - actionEvBb);
 }
 
+function gradeStyle(grade: PracticeDecisionRecord['grade']): string {
+  switch (grade) {
+    case 'perfect':
+      return 'border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200';
+    case 'excellent':
+      return 'border-cyan-500/35 bg-cyan-500/10 text-cyan-800 dark:text-cyan-200';
+    case 'good':
+      return 'border-blue-500/35 bg-blue-500/10 text-blue-800 dark:text-blue-200';
+    case 'inaccuracy':
+      return 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-200';
+    case 'mistake':
+      return 'border-orange-500/35 bg-orange-500/10 text-orange-800 dark:text-orange-200';
+    case 'blunder':
+      return 'border-red-500/35 bg-red-500/10 text-red-800 dark:text-red-200';
+  }
+}
+
+function gradeLabel(grade: PracticeDecisionRecord['grade']): string {
+  return grade.charAt(0).toUpperCase() + grade.slice(1);
+}
+
 function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }) {
   if (!feedback) {
     return (
@@ -75,15 +96,38 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
   const bestActionLabel = bestActions.length
     ? bestActions.map((action) => action.label).join(' / ')
     : 'Unavailable';
+  const chosenProbability =
+    feedback.chosenActionProbability ??
+    feedback.policyActions.find(
+      (action) => action.id === feedback.chosenAction.id
+    )?.probability ??
+    0;
+  const bestProbability =
+    feedback.bestActionProbability ??
+    Math.max(0, ...feedback.policyActions.map((action) => action.probability));
+  const offered = new Set(
+    feedback.offeredActionIds ?? feedback.policyActions.map((action) => action.id)
+  );
   return (
     <div className="space-y-5 p-4">
-      <div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-xs font-semibold uppercase text-muted">Decision</span>
-          <span className="rounded-full bg-surface-2 px-2 py-1 text-[11px] font-semibold capitalize">
-            {feedback.grade}
-          </span>
+      <div className={`rounded-lg border p-4 ${gradeStyle(feedback.grade)}`}>
+        <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
+          Frequency grade
+        </p>
+        <div className="mt-1 flex items-end justify-between gap-3">
+          <p className="text-2xl font-bold">{gradeLabel(feedback.grade)}</p>
+          <p className="font-mono text-sm font-semibold">
+            {pct(chosenProbability)} / {pct(bestProbability)}
+          </p>
         </div>
+        <p className="mt-2 text-xs leading-5 opacity-80">
+          You chose {feedback.chosenAction.label} at {pct(chosenProbability)}.
+          The most-played action appears at {pct(bestProbability)}.
+        </p>
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold uppercase text-muted">Decision</p>
         <p className="mt-2 text-lg font-semibold">{feedback.chosenAction.label}</p>
         <p className="mt-1 font-mono text-xs text-muted">
           {feedback.handBucket} · {feedback.position === 'button-small-blind' ? 'BTN / SB' : 'BB'}
@@ -92,8 +136,8 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
 
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-wide text-muted">
-          <span>Policy mix</span>
-          <span>Solver frequency</span>
+          <span>Full policy mix</span>
+          <span>Frozen frequency</span>
         </div>
         {feedback.policyActions.map((action) => {
           const loss = estimatedActionLoss(
@@ -101,6 +145,8 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
             action.evBb
           );
           const isBestEstimate = loss !== null && loss <= 1e-9;
+          const isTopFrequency =
+            action.probability >= bestProbability - 1e-9;
           return (
             <div key={action.id}>
               <div className="flex items-center justify-between gap-2 text-xs">
@@ -109,9 +155,19 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
                     <Check className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
                   )}
                   {action.label}
+                  {isTopFrequency && (
+                    <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                      Top frequency
+                    </span>
+                  )}
                   {isBestEstimate && (
                     <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
                       Best EV action
+                    </span>
+                  )}
+                  {!offered.has(action.id) && (
+                    <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                      Not offered
                     </span>
                   )}
                 </span>
@@ -143,6 +199,14 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
           <p className="mt-1 font-semibold">{bestActionLabel}</p>
         </div>
         <div>
+          <p className="text-muted">Your policy frequency</p>
+          <p className="mt-1 font-mono font-semibold">{pct(chosenProbability)}</p>
+        </div>
+        <div>
+          <p className="text-muted">Top policy frequency</p>
+          <p className="mt-1 font-mono font-semibold">{pct(bestProbability)}</p>
+        </div>
+        <div>
           <p className="text-muted">Your estimated EV loss</p>
           <p className="mt-1 font-mono font-semibold">
             {feedback.evLossBb === null ? 'Not graded' : `${feedback.evLossBb.toFixed(3)}bb`}
@@ -154,13 +218,26 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
         </div>
       </div>
 
+      <details className="rounded-md border border-border bg-surface-2 px-3 text-xs">
+        <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          How frequency grades work
+        </summary>
+        <p className="pb-3 leading-5 text-muted">
+          The highest-frequency action is Perfect. Other actions are Excellent
+          at 80%, Good at 50%, Inaccuracy at 25%, or Mistake at 10% of the top
+          action&apos;s frequency. Actions at 1% or less, below 10% of the top
+          frequency, or absent from the policy are Blunders. EV loss remains a
+          separate estimate below.
+        </p>
+      </details>
+
       {feedback.lowConfidence && (
         <div className="flex gap-2 rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-xs leading-5">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
           <p>
             {feedback.confidence === 'unavailable'
-              ? 'This model version does not contain per-action EV estimates. The choice is saved as ungraded.'
-              : 'This action value has a wider sampling or low-reach uncertainty bound. Treat the EV-loss grade as approximate.'}
+              ? 'This model version does not contain a usable EV estimate. The frequency grade is still available.'
+              : 'This action value has a wider sampling or low-reach uncertainty bound. Treat the EV-loss estimate as approximate; the frequency grade uses the frozen policy mix.'}
           </p>
         </div>
       )}

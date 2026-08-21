@@ -111,6 +111,17 @@ export function nextHeroSeat(
     : 'big-blind';
 }
 
+export function postflopStreetForHand(
+  streets: PracticeSettings['postflopStreets'],
+  completedHands: number
+): PracticeSettings['postflopStreets'][number] {
+  const available = streets.length
+    ? streets
+    : DEFAULT_PRACTICE_SETTINGS.postflopStreets;
+  const index = Math.abs(Math.trunc(completedHands)) % available.length;
+  return available[index];
+}
+
 export interface AdaptiveGroup {
   key: string;
   street: PracticeStreet;

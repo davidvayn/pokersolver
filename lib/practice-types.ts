@@ -21,7 +21,13 @@ export type ActionKind =
   | 'raise'
   | 'all-in';
 export type ConfidenceLevel = 'high' | 'low' | 'unavailable';
-export type EvGrade = 'optimal' | 'good' | 'mistake' | 'blunder' | 'ungraded';
+export type PracticeGrade =
+  | 'perfect'
+  | 'excellent'
+  | 'good'
+  | 'inaccuracy'
+  | 'mistake'
+  | 'blunder';
 
 export interface PracticeSettings {
   mode: PracticeMode;
@@ -261,11 +267,14 @@ export interface PracticeDecisionRecord {
   board: Card[];
   heroCards: [Card, Card];
   chosenAction: LegalAction;
+  offeredActionIds?: string[];
   policyActions: PolicyAction[];
+  chosenActionProbability?: number;
+  bestActionProbability?: number;
   chosenActionEvBb: number | null;
   bestActionEvBb: number | null;
   evLossBb: number | null;
-  grade: EvGrade;
+  grade: PracticeGrade;
   confidence: ConfidenceLevel;
   lowConfidence: boolean;
   opponentModel?: OpponentModelSnapshot;

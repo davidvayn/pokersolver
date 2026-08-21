@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   BadgeCheck,
+  BarChart3,
   CircleDollarSign,
   LoaderCircle,
   RefreshCw,
@@ -8,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cardRank, cardSuit, RANKS, type Card } from '@/lib/cards';
 import { totalPotBb } from '@/lib/practice-engine';
+import { practiceActionChoices } from '@/lib/practice-grading';
 import type {
   HandState,
   LegalAction,
@@ -37,9 +39,11 @@ interface PracticeTableProps {
   onAction: (action: LegalAction) => void;
   onContinue: () => void;
   onRetry: () => void;
+  onOpenAnalyst?: () => void;
 }
 
 const SUIT_GLYPHS = ['♣', '♦', '♥', '♠'] as const;
+const SUIT_NAMES = ['clubs', 'diamonds', 'hearts', 'spades'] as const;
 
 function CardView({ card, hidden = false }: { card?: Card; hidden?: boolean }) {
   if (hidden) {
@@ -48,7 +52,7 @@ function CardView({ card, hidden = false }: { card?: Card; hidden?: boolean }) {
         className="playing-card playing-card-back"
         aria-label="Face-down card"
       >
-        <span aria-hidden="true">PL</span>
+        <span className="playing-card-back-inner" aria-hidden="true">PL</span>
       </span>
     );
   }
@@ -56,15 +60,20 @@ function CardView({ card, hidden = false }: { card?: Card; hidden?: boolean }) {
     return <span className="playing-card playing-card-empty" aria-hidden="true" />;
   }
   const rank = RANKS[cardRank(card)];
-  const suit = SUIT_GLYPHS[cardSuit(card)];
-  const red = cardSuit(card) === 1 || cardSuit(card) === 2;
+  const suitIndex = cardSuit(card);
+  const suit = SUIT_GLYPHS[suitIndex];
   return (
     <span
-      className={`playing-card ${red ? 'playing-card-red' : ''}`}
-      aria-label={`${rank} ${suit}`}
+      className={`playing-card playing-card-suit-${suitIndex}`}
+      aria-label={`${rank} of ${SUIT_NAMES[suitIndex]}`}
     >
-      <span>{rank}</span>
-      <span aria-hidden="true">{suit}</span>
+      <span className="playing-card-corner playing-card-corner-top" aria-hidden="true">
+        <strong>{rank}</strong><span>{suit}</span>
+      </span>
+      <span className="playing-card-center" aria-hidden="true">{suit}</span>
+      <span className="playing-card-corner playing-card-corner-bottom" aria-hidden="true">
+        <strong>{rank}</strong><span>{suit}</span>
+      </span>
     </span>
   );
 }
@@ -88,8 +97,8 @@ function SeatDisplay({
       className={`practice-seat ${active ? 'practice-seat-active' : ''}`}
       aria-label={`${opponent ? 'Opponent' : 'Hero'}, ${label}, ${state.stacksBb[seat].toFixed(1)} big blinds`}
     >
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-white/65">
+      <div className="practice-seat-meta">
+        <span className="practice-seat-label">
           {opponent ? 'Opponent' : 'Hero'} · {label}
         </span>
         {seat === state.button && (
@@ -102,12 +111,12 @@ function SeatDisplay({
           </span>
         )}
       </div>
-      <div className="mt-2 flex items-end justify-between gap-3">
-        <div className="flex gap-1.5">
+      <div className="practice-seat-body">
+        <div className="practice-card-hand">
           <CardView card={cards[0]} hidden={opponent && !revealOpponent} />
           <CardView card={cards[1]} hidden={opponent && !revealOpponent} />
         </div>
-        <span className="font-mono text-sm font-semibold text-white">
+        <span className="practice-stack">
           {state.stacksBb[seat].toFixed(1)}bb
         </span>
       </div>
@@ -141,6 +150,7 @@ export function PracticeTable({
   onAction,
   onContinue,
   onRetry,
+  onOpenAnalyst,
 }: PracticeTableProps) {
   const opponent: Seat = state
     ? state.hero === 'button-small-blind'
@@ -176,9 +186,21 @@ export function PracticeTable({
             {modeLabel(mode)} · {state?.depthBb ?? 20}bb · 0.5/1bb · no rake
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-xs">
-          <BadgeCheck className="h-4 w-4 text-accent" aria-hidden="true" />
-          <span className="font-medium">{modelLabel}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-xs">
+            <BadgeCheck className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+            <span className="font-medium">{modelLabel}</span>
+          </div>
+          {onOpenAnalyst && (
+            <button
+              type="button"
+              onClick={onOpenAnalyst}
+              className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-surface px-3 text-xs font-semibold shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:hidden"
+            >
+              <BarChart3 className="h-4 w-4 text-accent" aria-hidden="true" />
+              Analyst
+            </button>
+          )}
         </div>
       </div>
 
@@ -298,7 +320,7 @@ export function PracticeTable({
       <div className="practice-action-dock">
         {status === 'decision' && node ? (
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:justify-center">
-            {node.actions.map((action) => (
+            {practiceActionChoices(node.actions).map((action) => (
               <button
                 key={action.id}
                 type="button"

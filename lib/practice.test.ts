@@ -3,6 +3,7 @@ import {
   adaptiveGroups,
   chooseAdaptiveGroup,
   nextHeroSeat,
+  postflopStreetForHand,
   sanitizePracticeSettings,
   structuralSettingsChanged,
 } from '@/lib/practice';
@@ -17,8 +18,9 @@ import {
   totalPotBb,
 } from '@/lib/practice-engine';
 import {
-  gradeEvLoss,
+  gradePolicyFrequency,
   gradePolicyChoice,
+  practiceActionChoices,
   validatePolicyNode,
 } from '@/lib/practice-grading';
 import type {
@@ -76,6 +78,31 @@ describe('heads-up hand engine', () => {
     expect(flop.toAct).toBe('big-blind');
     expect(totalPotBb(flop)).toBe(2);
     assertChipConservation(flop);
+  });
+
+  it('allows the big blind to raise its option after a limp', () => {
+    const limped = applyAction(hand(), {
+      id: 'call',
+      kind: 'call',
+      label: 'Call 0.5bb',
+    });
+    const raised = applyAction(limped, {
+      id: 'raise-3',
+      kind: 'raise',
+      label: 'Raise to 3.0bb',
+      amountToBb: 3,
+    });
+    expect(raised.toAct).toBe('button-small-blind');
+    expect(raised.streetBetsBb['big-blind']).toBe(3);
+    expect(() =>
+      applyAction(limped, {
+        id: 'bet-3',
+        kind: 'bet',
+        label: 'Bet to 3.0bb',
+        amountToBb: 3,
+      })
+    ).toThrow('Use raise when a street wager already exists');
+    assertChipConservation(raised);
   });
 
   it('validates raises, settles folds, and conserves chips', () => {
@@ -197,23 +224,44 @@ describe('EV grading and settings', () => {
     ],
   };
 
-  it('uses the specified EV-loss boundaries and preserves confidence', () => {
-    expect(gradeEvLoss(0.01)).toBe('optimal');
-    expect(gradeEvLoss(0.05)).toBe('good');
-    expect(gradeEvLoss(0.25)).toBe('mistake');
-    expect(gradeEvLoss(0.251)).toBe('blunder');
-    expect(gradeEvLoss(null)).toBe('ungraded');
+  it('grades against policy frequency while preserving EV estimates', () => {
+    expect(gradePolicyFrequency(0.4, 0.4)).toBe('perfect');
+    expect(gradePolicyFrequency(0.32, 0.4)).toBe('excellent');
+    expect(gradePolicyFrequency(0.2, 0.4)).toBe('good');
+    expect(gradePolicyFrequency(0.1, 0.4)).toBe('inaccuracy');
+    expect(gradePolicyFrequency(0.04, 0.4)).toBe('mistake');
+    expect(gradePolicyFrequency(0.01, 0.4)).toBe('blunder');
+    expect(gradePolicyFrequency(0, 0.4, false)).toBe('blunder');
     expect(gradePolicyChoice(node, 'fold')).toMatchObject({
       evLossBb: 0.30000000000000004,
-      grade: 'blunder',
+      chosenActionProbability: 0.2,
+      bestActionProbability: 0.8,
+      grade: 'inaccuracy',
       lowConfidence: false,
     });
     expect(gradePolicyChoice(node, 'raise')).toMatchObject({
       evLossBb: 0,
-      grade: 'optimal',
+      grade: 'perfect',
       lowConfidence: true,
     });
+    expect(gradePolicyChoice(node, 'missing')).toMatchObject({
+      chosenActionProbability: 0,
+      grade: 'blunder',
+      confidence: 'unavailable',
+    });
     expect(validatePolicyNode(node)).toEqual([]);
+  });
+
+  it('offers only the two highest-frequency actions without revealing rank by order', () => {
+    const choices = practiceActionChoices([
+      { id: 'fold', probability: 0.3 },
+      { id: 'call', probability: 0.1 },
+      { id: 'raise', probability: 0.6 },
+    ]);
+    expect(choices).toEqual([
+      { id: 'fold', probability: 0.3 },
+      { id: 'raise', probability: 0.6 },
+    ]);
   });
 
   it('accepts explicitly low-confidence EVs without invented uncertainty', () => {
@@ -242,6 +290,14 @@ describe('EV grading and settings', () => {
     );
     expect(nextHeroSeat('alternate', 0)).toBe('button-small-blind');
     expect(nextHeroSeat('alternate', 1)).toBe('big-blind');
+  });
+
+  it('rotates evenly through every selected postflop street', () => {
+    const streets = ['flop', 'river'] as const;
+    expect(postflopStreetForHand([...streets], 0)).toBe('flop');
+    expect(postflopStreetForHand([...streets], 1)).toBe('river');
+    expect(postflopStreetForHand([...streets], 2)).toBe('flop');
+    expect(postflopStreetForHand([], 1)).toBe('turn');
   });
 
   it('queues structural table changes but treats a decision goal as run metadata', () => {
@@ -282,7 +338,7 @@ describe('adaptive sampling', () => {
       chosenActionEvBb: 0,
       bestActionEvBb: loss,
       evLossBb: loss,
-      grade: gradeEvLoss(loss),
+      grade: loss === 0.5 ? 'mistake' : 'good',
       confidence: 'high',
       lowConfidence: false,
     };

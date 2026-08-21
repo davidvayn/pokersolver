@@ -31,7 +31,7 @@ function decision(index: number, kind: ActionKind): PracticeDecisionRecord {
     chosenActionEvBb: 0,
     bestActionEvBb: 0,
     evLossBb: 0,
-    grade: 'optimal',
+    grade: 'perfect',
     confidence: 'high',
     lowConfidence: false,
   };

@@ -45,7 +45,10 @@ const feedback: PracticeDecisionRecord = {
   chosenActionEvBb: 0.1,
   bestActionEvBb: 0.25,
   evLossBb: 0.15,
-  grade: 'mistake',
+  chosenActionProbability: 0.25,
+  bestActionProbability: 0.75,
+  offeredActionIds: ['check', 'bet-50'],
+  grade: 'inaccuracy',
   confidence: 'high',
   lowConfidence: false,
 };
@@ -84,8 +87,12 @@ describe('AnalystRail decision feedback', () => {
     expect(html).toContain('75%');
     expect(html).toContain('Estimated loss 0.150bb');
     expect(html).toContain('Estimated loss 0.000bb');
-    expect(html).toContain('Policy mix');
-    expect(html).toContain('Solver frequency');
+    expect(html).toContain('Full policy mix');
+    expect(html).toContain('Frozen frequency');
+    expect(html).toContain('Frequency grade');
+    expect(html).toContain('Inaccuracy');
+    expect(html).toContain('Your policy frequency');
+    expect(html).toContain('Top policy frequency');
     expect(html).toContain('Best EV action');
     expect(html).toContain('Best action by estimated EV');
     expect(html).toContain('Bet 50%');

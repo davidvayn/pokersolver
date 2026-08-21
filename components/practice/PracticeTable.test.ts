@@ -35,9 +35,18 @@ describe('PracticeTable decision controls', () => {
           kind: 'all-in',
           label: 'All-in 20bb',
           amountToBb: 20,
-          probability: 0.18,
+          probability: 0.08,
           evBb: -0.7,
           standardErrorBb: 0.625,
+          confidence: 'low',
+        },
+        {
+          id: 'call',
+          kind: 'call',
+          label: 'Call 0.5bb',
+          probability: 0.1,
+          evBb: -0.6,
+          standardErrorBb: 0.1,
           confidence: 'low',
         },
       ],
@@ -59,8 +68,9 @@ describe('PracticeTable decision controls', () => {
     );
 
     expect(html).toContain('Fold');
-    expect(html).toContain('All-in 20bb');
+    expect(html).toContain('Call 0.5bb');
+    expect(html).not.toContain('All-in 20bb');
     expect(html).not.toContain('82%');
-    expect(html).not.toContain('18%');
+    expect(html).not.toContain('10%');
   });
 });

@@ -1,25 +1,41 @@
 import type {
   ConfidenceLevel,
-  EvGrade,
   PolicyAction,
   PolicyNode,
+  PracticeGrade,
 } from '@/lib/practice-types';
 
 export interface GradeResult {
   chosenActionEvBb: number | null;
   bestActionEvBb: number | null;
   evLossBb: number | null;
-  grade: EvGrade;
+  chosenActionProbability: number;
+  bestActionProbability: number;
+  grade: PracticeGrade;
   confidence: ConfidenceLevel;
   lowConfidence: boolean;
 }
 
-export function gradeEvLoss(loss: number | null): EvGrade {
-  if (loss === null || !Number.isFinite(loss)) return 'ungraded';
-  const normalized = Math.max(0, loss);
-  if (normalized <= 0.01) return 'optimal';
-  if (normalized <= 0.05) return 'good';
-  if (normalized <= 0.25) return 'mistake';
+export function gradePolicyFrequency(
+  chosenProbability: number,
+  bestProbability: number,
+  found = true
+): PracticeGrade {
+  if (
+    !found ||
+    !Number.isFinite(chosenProbability) ||
+    !Number.isFinite(bestProbability) ||
+    chosenProbability <= 0.01 ||
+    bestProbability <= 0
+  ) {
+    return 'blunder';
+  }
+  if (chosenProbability >= bestProbability - 1e-9) return 'perfect';
+  const relativeFrequency = chosenProbability / bestProbability;
+  if (relativeFrequency + 1e-9 >= 0.8) return 'excellent';
+  if (relativeFrequency + 1e-9 >= 0.5) return 'good';
+  if (relativeFrequency + 1e-9 >= 0.25) return 'inaccuracy';
+  if (relativeFrequency + 1e-9 >= 0.1) return 'mistake';
   return 'blunder';
 }
 
@@ -28,7 +44,22 @@ export function gradePolicyChoice(
   chosenActionId: string
 ): GradeResult {
   const chosen = node.actions.find((action) => action.id === chosenActionId);
-  if (!chosen) throw new Error('Chosen action is absent from the policy node');
+  const bestProbability = Math.max(
+    0,
+    ...node.actions.map((action) => action.probability)
+  );
+  if (!chosen) {
+    return {
+      chosenActionEvBb: null,
+      bestActionEvBb: node.bestActionEvBb,
+      evLossBb: null,
+      chosenActionProbability: 0,
+      bestActionProbability: bestProbability,
+      grade: 'blunder',
+      confidence: 'unavailable',
+      lowConfidence: true,
+    };
+  }
   const finiteValues = node.actions.filter(
     (action): action is PolicyAction & { evBb: number } =>
       action.evBb !== null && Number.isFinite(action.evBb)
@@ -47,10 +78,25 @@ export function gradePolicyChoice(
     chosenActionEvBb: chosen.evBb,
     bestActionEvBb: best,
     evLossBb: loss,
-    grade: gradeEvLoss(loss),
+    chosenActionProbability: chosen.probability,
+    bestActionProbability: bestProbability,
+    grade: gradePolicyFrequency(chosen.probability, bestProbability),
     confidence,
     lowConfidence: confidence !== 'high',
   };
+}
+
+export function practiceActionChoices<T extends { id: string; probability: number }>(
+  actions: T[]
+): T[] {
+  if (actions.length <= 2) return [...actions];
+  const selected = new Set(
+    [...actions]
+      .sort((first, second) => second.probability - first.probability)
+      .slice(0, 2)
+      .map((action) => action.id)
+  );
+  return actions.filter((action) => selected.has(action.id));
 }
 
 export function validatePolicyNode(node: PolicyNode): string[] {
