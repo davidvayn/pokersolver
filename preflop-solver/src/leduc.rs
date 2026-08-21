@@ -266,6 +266,14 @@ pub struct LeducResult {
     pub information_sets: usize,
 }
 
+fn strategy_averaging_weight(iteration: u64, requested_iterations: u64) -> f64 {
+    if requested_iterations < 100 {
+        iteration.pow(3) as f64
+    } else {
+        iteration as f64
+    }
+}
+
 pub fn solve(iterations: u64) -> LeducResult {
     let deals = all_deals();
     let mut nodes = BTreeMap::<String, Node>::new();
@@ -276,7 +284,7 @@ pub fn solve(iterations: u64) -> LeducResult {
                 *deal,
                 1.0,
                 1.0,
-                iteration as f64,
+                strategy_averaging_weight(iteration, iterations),
                 &mut nodes,
             );
         }
@@ -506,6 +514,15 @@ mod tests {
             result.nash_conv,
             result.exploitability
         );
+    }
+
+    #[test]
+    fn uses_cubic_strategy_averaging_only_for_requested_runs_below_100() {
+        assert_eq!(strategy_averaging_weight(2, 99), 8.0);
+        assert_eq!(strategy_averaging_weight(99, 99), 970_299.0);
+        assert_eq!(strategy_averaging_weight(2, 100), 2.0);
+        let result = solve(2);
+        assert!((result.exploitability - 0.644_569_946_476_671_5).abs() < 1e-12);
     }
 
     #[test]
