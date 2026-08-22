@@ -12,8 +12,9 @@ decisions, tracking weaknesses, and running local postflop solves.
   loading.
 - **Stats**: IndexedDB-backed EV-loss, confidence, response-time, breakdown,
   trend, and costly-decision analysis for the new practice history.
-- **Postflop solver**: browser-worker CFR+ and full-width extensive-form
-  fictitious play (XFP) implementations compiled from Rust to WebAssembly.
+- **Postflop solver**: browser-worker CFR+ equilibrium approximation compiled
+  from Rust to WebAssembly, with exploitability reported for its one-street
+  all-in-equity abstraction.
 - **AI analysis**: optional provider-backed spot analysis using a key that stays
   in browser storage and is forwarded only for the current request.
 

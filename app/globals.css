@@ -376,6 +376,66 @@ textarea {
   box-shadow: none;
 }
 
+/* Fixed Card B sizes for compact board editors. Practice cards remain fluid. */
+.playing-card.playing-card-size-sm {
+  width: 20px;
+  height: 28px;
+  border-radius: 3px;
+}
+
+.playing-card.playing-card-size-md {
+  width: 28px;
+  height: 40px;
+  border-radius: 4px;
+}
+
+.playing-card.playing-card-size-lg {
+  width: 48px;
+  height: 66px;
+}
+
+.playing-card-size-sm .playing-card-corner-top {
+  left: 2px;
+  top: 2px;
+  gap: 1px;
+}
+
+.playing-card-size-sm .playing-card-corner-top strong {
+  font-size: 8px;
+}
+
+.playing-card-size-sm .playing-card-corner-top span {
+  margin-top: 0;
+  font-size: 6px;
+}
+
+.playing-card-size-sm .playing-card-center {
+  right: 2px;
+  bottom: 2px;
+  font-size: 10px;
+}
+
+.playing-card-size-md .playing-card-corner-top {
+  left: 3px;
+  top: 3px;
+  gap: 1px;
+}
+
+.playing-card-size-md .playing-card-corner-top strong {
+  font-size: 12px;
+}
+
+.playing-card-size-md .playing-card-corner-top span {
+  margin-top: 1px;
+  font-size: 8px;
+}
+
+.playing-card-size-md .playing-card-center {
+  right: 3px;
+  bottom: 3px;
+  font-size: 15px;
+}
+
 .practice-action-strip {
   position: absolute;
   left: 14px;

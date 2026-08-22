@@ -1,8 +1,13 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { HandMatrix, StrategySegment } from '@/components/hand-matrix/HandMatrix';
-import type { NodeStrategy, SolverResult } from '@/lib/solver/client';
+import type {
+  ActionStrategy,
+  ClassRow,
+  NodeStrategy,
+  SolverResult,
+} from '@/lib/solver/client';
 
 // Deterministic colors per action label, anchored to poker conventions.
 const BET_RAMP = ['#f59e0b', '#f97316', '#dc2626'];
@@ -41,15 +46,103 @@ function toStrategy(
   return out;
 }
 
+function formatProbability(fraction: number): string {
+  if (fraction <= 0) return '0%';
+  if (fraction >= 1) return '100%';
+
+  const percentage = fraction * 100;
+  if (percentage < 0.05) return '<0.1%';
+  if (percentage > 99.95) return '>99.9%';
+
+  const rounded = Math.round(percentage * 10) / 10;
+  return Number.isInteger(rounded)
+    ? `${rounded.toFixed(0)}%`
+    : `${rounded.toFixed(1)}%`;
+}
+
+function handDescription(row: ClassRow): string {
+  const actions = row.actions
+    .map((action) => `${action.action} ${formatProbability(action.freq)}`)
+    .join(', ');
+  const ev = row.actions[0]?.ev;
+  return `${actions}${ev === undefined ? '' : `, hand-class EV ${ev.toFixed(2)}bb`}`;
+}
+
+function HandMixReadout({
+  label,
+  actions,
+  colors,
+}: {
+  label: string | null;
+  actions: ActionStrategy[];
+  colors: Record<string, string>;
+}) {
+  const ev = actions[0]?.ev;
+
+  return (
+    <div
+      className="mb-3 flex min-h-5 max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-solver-hand-mix
+    >
+      {label ? (
+        <>
+          <span className="font-mono font-bold text-accent">{label}</span>
+          {actions.map((action) => (
+            <span
+              key={action.action}
+              className="flex items-center gap-1.5 whitespace-nowrap text-muted"
+            >
+              <span
+                className="h-2 w-2 shrink-0 rounded-[2px]"
+                style={{ background: colors[action.action] }}
+                aria-hidden="true"
+              />
+              <span>
+                {action.action}{' '}
+                <strong className="font-mono font-semibold tabular-nums text-fg">
+                  {formatProbability(action.freq)}
+                </strong>
+              </span>
+            </span>
+          ))}
+          {ev !== undefined && (
+            <span className="whitespace-nowrap text-muted">
+              EV{' '}
+              <strong className="font-mono font-semibold tabular-nums text-fg">
+                {ev.toFixed(2)}bb
+              </strong>
+            </span>
+          )}
+        </>
+      ) : (
+        <span className="text-muted">Select a hand to inspect its mix</span>
+      )}
+    </div>
+  );
+}
+
 export function StrategyView({ node }: { node: NodeStrategy }) {
+  const [selectedHand, setSelectedHand] = useState<string | null>(null);
   const colors = useMemo(() => colorForActions(node.actions), [node.actions]);
   const strategy = useMemo(() => toStrategy(node, colors), [node, colors]);
+  const rowsByClass = useMemo(
+    () => new Map(node.rows.map((row) => [row.class, row])),
+    [node.rows]
+  );
+  const selectedRow = selectedHand ? rowsByClass.get(selectedHand) : undefined;
   const annotation = useMemo(() => {
     const evByClass: Record<string, number> = {};
     for (const r of node.rows) evByClass[r.class] = r.actions[0]?.ev ?? 0;
     return (label: string) =>
       evByClass[label] !== undefined ? evByClass[label].toFixed(1) : undefined;
   }, [node.rows]);
+
+  useEffect(() => {
+    setSelectedHand(null);
+  }, [node]);
 
   if (!node.rows.length) return null;
 
@@ -69,11 +162,29 @@ export function StrategyView({ node }: { node: NodeStrategy }) {
           ))}
         </div>
       </div>
+      <HandMixReadout
+        label={selectedRow?.class ?? null}
+        actions={selectedRow?.actions ?? []}
+        colors={colors}
+      />
       <div className="w-full">
-        <HandMatrix mode="display" strategy={strategy} annotation={annotation} />
+        <HandMatrix
+          mode="display"
+          strategy={strategy}
+          annotation={annotation}
+          selectedLabel={selectedRow?.class}
+          cellDescription={(label) => {
+            const row = rowsByClass.get(label);
+            return row ? handDescription(row) : undefined;
+          }}
+          onCellClick={(label) =>
+            setSelectedHand((current) => (current === label ? null : label))
+          }
+        />
       </div>
       <p className="mt-2 text-[11px] text-muted">
-        Cells show mixed frequencies; small number is the hand class EV (bb).
+        Select a hand for exact action frequencies; the small number is its EV
+        (bb).
       </p>
     </div>
   );

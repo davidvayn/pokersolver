@@ -1,15 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Card, RANKS, SUITS, makeCard, cardToStr, cardRank, cardSuit } from '@/lib/cards';
+import {
+  CARD_SUIT_GLYPHS,
+  PokerCard,
+} from '@/components/cards/PokerCard';
+import { Card, RANKS, makeCard, cardToStr } from '@/lib/cards';
 
-const SUIT_SYMBOL = ['♣', '♦', '♥', '♠'];
-const SUIT_COLOR = [
-  'text-emerald-500',
-  'text-sky-400',
-  'text-rose-400',
-  'text-fg',
-];
+const SUIT_SYMBOL = CARD_SUIT_GLYPHS;
 
 export function PlayingCard({
   card,
@@ -22,32 +20,20 @@ export function PlayingCard({
   onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   dimmed?: boolean;
 }) {
-  const r = cardRank(card);
-  const s = cardSuit(card);
-  const dims =
-    size === 'lg'
-      ? 'h-16 w-12 text-xl'
-      : size === 'sm'
-        ? 'h-7 w-5 text-[11px]'
-        : 'h-10 w-7 text-sm';
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={!onClick}
       className={
-        `flex flex-col items-center justify-center rounded-md border border-border bg-white font-bold shadow-sm ${dims} ` +
+        'block rounded-md ' +
         (dimmed ? 'opacity-30 ' : '') +
         (onClick
           ? 'hover:ring-2 hover:ring-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent '
           : '')
       }
     >
-      <span className={SUIT_COLOR[s] === 'text-fg' ? 'text-gray-900' : SUIT_COLOR[s]}>
-        {RANKS[r]}
-      </span>
-      <span className={SUIT_COLOR[s] === 'text-fg' ? 'text-gray-900' : SUIT_COLOR[s]}>
-        {SUIT_SYMBOL[s]}
-      </span>
+      <PokerCard card={card} size={size} />
     </button>
   );
 }

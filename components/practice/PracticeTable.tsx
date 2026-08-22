@@ -7,7 +7,7 @@ import {
   RefreshCw,
   ShieldAlert,
 } from 'lucide-react';
-import { cardRank, cardSuit, RANKS, type Card } from '@/lib/cards';
+import { PokerCard } from '@/components/cards/PokerCard';
 import { totalPotBb } from '@/lib/practice-engine';
 import { practiceActionChoices } from '@/lib/practice-grading';
 import type {
@@ -40,42 +40,6 @@ interface PracticeTableProps {
   onContinue: () => void;
   onRetry: () => void;
   onOpenAnalyst?: () => void;
-}
-
-const SUIT_GLYPHS = ['♣', '♦', '♥', '♠'] as const;
-const SUIT_NAMES = ['clubs', 'diamonds', 'hearts', 'spades'] as const;
-
-function CardView({ card, hidden = false }: { card?: Card; hidden?: boolean }) {
-  if (hidden) {
-    return (
-      <span
-        className="playing-card playing-card-back"
-        aria-label="Face-down card"
-      >
-        <span className="playing-card-back-inner" aria-hidden="true">PL</span>
-      </span>
-    );
-  }
-  if (card === undefined) {
-    return <span className="playing-card playing-card-empty" aria-hidden="true" />;
-  }
-  const rank = RANKS[cardRank(card)];
-  const suitIndex = cardSuit(card);
-  const suit = SUIT_GLYPHS[suitIndex];
-  return (
-    <span
-      className={`playing-card playing-card-suit-${suitIndex}`}
-      aria-label={`${rank} of ${SUIT_NAMES[suitIndex]}`}
-    >
-      <span className="playing-card-corner playing-card-corner-top" aria-hidden="true">
-        <strong>{rank}</strong><span>{suit}</span>
-      </span>
-      <span className="playing-card-center" aria-hidden="true">{suit}</span>
-      <span className="playing-card-corner playing-card-corner-bottom" aria-hidden="true">
-        <strong>{rank}</strong><span>{suit}</span>
-      </span>
-    </span>
-  );
 }
 
 function SeatDisplay({
@@ -113,8 +77,8 @@ function SeatDisplay({
       </div>
       <div className="practice-seat-body">
         <div className="practice-card-hand">
-          <CardView card={cards[0]} hidden={opponent && !revealOpponent} />
-          <CardView card={cards[1]} hidden={opponent && !revealOpponent} />
+          <PokerCard card={cards[0]} hidden={opponent && !revealOpponent} />
+          <PokerCard card={cards[1]} hidden={opponent && !revealOpponent} />
         </div>
         <span className="practice-stack">
           {state.stacksBb[seat].toFixed(1)}bb
@@ -219,7 +183,7 @@ export function PracticeTable({
 
               <div className="practice-board" aria-label="Community cards">
                 {[0, 1, 2, 3, 4].map((index) => (
-                  <CardView key={index} card={state.board[index]} />
+                  <PokerCard key={index} card={state.board[index]} />
                 ))}
               </div>
 
@@ -254,20 +218,20 @@ export function PracticeTable({
               <div className="practice-seat practice-seat-ghost">
                 <div className="h-3 w-28 rounded bg-white/10" />
                 <div className="mt-3 flex gap-2">
-                  <CardView hidden />
-                  <CardView hidden />
+                  <PokerCard hidden />
+                  <PokerCard hidden />
                 </div>
               </div>
               <div className="practice-board">
                 {[0, 1, 2, 3, 4].map((index) => (
-                  <CardView key={index} />
+                  <PokerCard key={index} />
                 ))}
               </div>
               <div className="practice-seat practice-seat-ghost">
                 <div className="h-3 w-20 rounded bg-white/10" />
                 <div className="mt-3 flex gap-2">
-                  <CardView hidden />
-                  <CardView hidden />
+                  <PokerCard hidden />
+                  <PokerCard hidden />
                 </div>
               </div>
             </div>
