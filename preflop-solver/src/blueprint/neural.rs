@@ -3014,30 +3014,10 @@ fn cache_safe_turn_river_policy_rows(
 /// deviations, so retain negligible full support without materially changing
 /// the solved mix. Rows for card-blocked combos remain all-zero.
 fn stabilize_resolved_policy(
-    mut probabilities: Vec<f64>,
+    probabilities: Vec<f64>,
     action_count: usize,
 ) -> Result<Vec<f64>, String> {
-    const MINIMUM_ACTION_PROBABILITY: f64 = 1e-9;
-    if action_count == 0 || probabilities.len() != COMBO_COUNT * action_count {
-        return Err("resolved policy dimensions are incompatible".to_owned());
-    }
-    for row in probabilities.chunks_exact_mut(action_count) {
-        let sum = row.iter().sum::<f64>();
-        if sum <= 0.0 {
-            continue;
-        }
-        if !sum.is_finite() || row.iter().any(|probability| !probability.is_finite()) {
-            return Err("resolved policy contains non-finite probabilities".to_owned());
-        }
-        for probability in row.iter_mut() {
-            *probability = probability.max(MINIMUM_ACTION_PROBABILITY);
-        }
-        let stabilized_sum = row.iter().sum::<f64>();
-        for probability in row {
-            *probability /= stabilized_sum;
-        }
-    }
-    Ok(probabilities)
+    super::public_belief::stabilize_deployed_policy_probabilities(probabilities, action_count)
 }
 
 fn stabilize_public_belief_strategy(

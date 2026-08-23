@@ -49,7 +49,8 @@ const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const RESOLVER_ROOT_CHECKPOINT_SCHEMA: &str = "hu-resolver-root-leaf-checkpoint-v1";
 pub(super) const SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 0.05;
-pub(super) const RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 1e-7;
+pub(super) const RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 1e-12;
+pub(super) const MINIMUM_DEPLOYED_ACTION_PROBABILITY: f64 = 1e-9;
 const SAFE_RESOLVE_PROJECTION_BISECTIONS: usize = 8;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
 const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
@@ -6246,6 +6247,32 @@ pub struct PublicBeliefStrategy {
     pub action_values_bb: Option<Vec<f32>>,
 }
 
+pub(super) fn stabilize_deployed_policy_probabilities(
+    mut probabilities: Vec<f64>,
+    action_count: usize,
+) -> Result<Vec<f64>, String> {
+    if action_count == 0 || probabilities.len() != COMBO_COUNT * action_count {
+        return Err("resolved policy dimensions are incompatible".to_owned());
+    }
+    for row in probabilities.chunks_exact_mut(action_count) {
+        let sum = row.iter().sum::<f64>();
+        if sum <= 0.0 {
+            continue;
+        }
+        if !sum.is_finite() || row.iter().any(|probability| !probability.is_finite()) {
+            return Err("resolved policy contains non-finite probabilities".to_owned());
+        }
+        for probability in row.iter_mut() {
+            *probability = probability.max(MINIMUM_DEPLOYED_ACTION_PROBABILITY);
+        }
+        let stabilized_sum = row.iter().sum::<f64>();
+        for probability in row {
+            *probability /= stabilized_sum;
+        }
+    }
+    Ok(probabilities)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SafeRiverPolicy {
     pub strategies: Vec<PublicBeliefStrategy>,
@@ -6854,6 +6881,69 @@ impl RiverSolver {
         Some((maximum_excess, weighted_excess, signed_weighted_delta))
     }
 
+    fn runtime_stabilized_actor_strategies(
+        &self,
+        actor: usize,
+    ) -> Result<Vec<(Vec<String>, Vec<f64>)>, String> {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| node.actor == actor)
+            .map(|(history, node)| {
+                let quantized = node
+                    .average_strategy(&self.legal[actor])
+                    .into_iter()
+                    .map(|probability| f64::from(probability as f32))
+                    .collect();
+                Ok((
+                    history.clone(),
+                    stabilize_deployed_policy_probabilities(quantized, node.action_labels.len())?,
+                ))
+            })
+            .collect()
+    }
+
+    fn replace_actor_strategy_sums(
+        &mut self,
+        actor: usize,
+        strategies: &[(Vec<String>, Vec<f64>)],
+    ) -> Result<(), String> {
+        for (history, probabilities) in strategies {
+            let node = self.nodes.get_mut(history).ok_or_else(|| {
+                "runtime policy stabilization is missing a strategy node".to_owned()
+            })?;
+            if node.actor != actor || node.strategy_sum.len() != probabilities.len() {
+                return Err("runtime policy stabilization found an incompatible node".to_owned());
+            }
+            node.strategy_sum.clone_from(probabilities);
+        }
+        Ok(())
+    }
+
+    fn stabilize_actor_for_runtime(&mut self, actor: usize) -> Result<(), String> {
+        let deployed = self.runtime_stabilized_actor_strategies(actor)?;
+        self.replace_actor_strategy_sums(actor, &deployed)
+    }
+
+    fn safe_opponent_cfv_excess_after_runtime_stabilization(
+        &mut self,
+    ) -> Result<Option<(f64, f64, f64)>, String> {
+        let resolving_player = self
+            .safe_root
+            .as_ref()
+            .ok_or_else(|| "runtime safety check requires the opt-out gadget".to_owned())?
+            .resolving_player;
+        let original = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.actor == resolving_player)
+            .map(|(history, node)| (history.clone(), node.strategy_sum.clone()))
+            .collect::<Vec<_>>();
+        self.stabilize_actor_for_runtime(resolving_player)?;
+        let result = self.safe_opponent_cfv_excess();
+        self.replace_actor_strategy_sums(resolving_player, &original)?;
+        Ok(result)
+    }
+
     fn average_strategies(&self, actor_filter: Option<usize>) -> Vec<PublicBeliefStrategy> {
         self.nodes
             .iter()
@@ -6932,7 +7022,7 @@ impl RiverSolver {
             .map(|strategy| (strategy.public_history.clone(), strategy))
             .collect::<BTreeMap<_, _>>();
         let unprojected = self
-            .safe_opponent_cfv_excess()
+            .safe_opponent_cfv_excess_after_runtime_stabilization()?
             .ok_or_else(|| "safe river resolver projection has no CFV diagnostic".to_owned())?;
         {
             let safe = self.safe_root.as_mut().expect("safe river root checked");
@@ -6947,7 +7037,7 @@ impl RiverSolver {
 
         self.apply_resolving_player_strategy_blend(&blueprint, &resolved, resolving_player, 0.0)?;
         let blueprint_excess = self
-            .safe_opponent_cfv_excess()
+            .safe_opponent_cfv_excess_after_runtime_stabilization()?
             .ok_or_else(|| "safe river resolver blueprint has no CFV diagnostic".to_owned())?;
         self.safe_root
             .as_mut()
@@ -6973,9 +7063,11 @@ impl RiverSolver {
                     resolving_player,
                     candidate,
                 )?;
-                let excess = self.safe_opponent_cfv_excess().ok_or_else(|| {
-                    "safe river resolver projected policy has no CFV diagnostic".to_owned()
-                })?;
+                let excess = self
+                    .safe_opponent_cfv_excess_after_runtime_stabilization()?
+                    .ok_or_else(|| {
+                        "safe river resolver projected policy has no CFV diagnostic".to_owned()
+                    })?;
                 self.safe_root
                     .as_mut()
                     .expect("safe river root checked")
@@ -7002,7 +7094,7 @@ impl RiverSolver {
             .expect("safe river root checked")
             .deployed_resolved_policy_weight = best_weight;
         let final_excess = self
-            .safe_opponent_cfv_excess()
+            .safe_opponent_cfv_excess_after_runtime_stabilization()?
             .ok_or_else(|| "safe river resolver final policy has no CFV diagnostic".to_owned())?;
         self.safe_root
             .as_mut()
@@ -7659,6 +7751,7 @@ fn solve_river_safe_policy_with_method(
 
     let mut blueprint = RiverSolver::new(config.clone())?;
     blueprint.load_frozen_average_strategies(blueprint_strategies)?;
+    blueprint.stabilize_actor_for_runtime(resolving_player)?;
     let opponent_alternative_values_bb = blueprint.exact_best_response_conditional_values(opponent);
 
     let mut solver = RiverSolver::new(config)?;
@@ -7671,7 +7764,7 @@ fn solve_river_safe_policy_with_method(
     solver.train();
     solver.project_safe_strategy_to_blueprint(blueprint_strategies)?;
     let final_excess = solver
-        .safe_opponent_cfv_excess()
+        .safe_opponent_cfv_excess_after_runtime_stabilization()?
         .ok_or_else(|| "safe river resolver has no final CFV diagnostic".to_owned())?;
     let safe = solver
         .safe_root
