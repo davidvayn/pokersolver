@@ -47,14 +47,16 @@ describe('pinned practice resolver process', () => {
     }
   });
 
-  it('reserves CPU capacity across the two speculative branch workers', () => {
-    expect(practiceResolverPoolSize()).toBe(2);
-    const threads = Number(option(practiceResolverCommand().args, '--flop-resolver-threads'));
+  it('shares one loaded model across micro-batched speculative branches', () => {
+    expect(practiceResolverPoolSize()).toBe(1);
+    const threads = Number(
+      option(practiceResolverCommand().args, '--flop-resolver-threads')
+    );
     expect(threads).toBeGreaterThanOrEqual(1);
     expect(threads).toBeLessThanOrEqual(Math.min(8, cpus().length));
   });
 
-  it('dispatches simultaneous branch solves to separate workers', async () => {
+  it('can still dispatch simultaneous branch solves across an explicit pool', async () => {
     const releases: Array<() => void> = [];
     const calls: number[] = [0, 0];
     const workers = calls.map((_, index): PracticeResolverWorker => ({
@@ -96,7 +98,9 @@ describe('pinned practice resolver process', () => {
     await Promise.resolve();
     releases.splice(0).forEach((release) => release());
     await expect(Promise.all([callRoot, raiseRoot])).resolves.toEqual([0, 1]);
-    await expect(pool.query({ street: 'turn' }, 'hand-1|call')).resolves.toBe(0);
+    await expect(pool.query({ street: 'turn' }, 'hand-1|call')).resolves.toBe(
+      0
+    );
 
     expect(calls).toEqual([2, 1]);
   });

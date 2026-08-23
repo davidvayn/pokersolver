@@ -14,6 +14,8 @@ const MODEL_VERSION = 'hu-20bb-v102-consensus-continual-resolver-experimental';
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_STDERR_BYTES = 16_384;
 const MAX_RESOLVER_PROCESSES = 2;
+const MICRO_BATCH_DELAY_MS = 2;
+const MAX_BATCH_QUERIES = 2;
 
 const resolverManifest = (fullHandManifests as PolicyManifest[]).find(
   (manifest) => manifest.version === MODEL_VERSION
@@ -60,9 +62,7 @@ export function practiceResolverPoolSize(): number {
     1,
     Math.min(
       MAX_RESOLVER_PROCESSES,
-      Number.isInteger(configured) && configured > 0
-        ? configured
-        : MAX_RESOLVER_PROCESSES
+      Number.isInteger(configured) && configured > 0 ? configured : 1
     )
   );
 }
@@ -82,10 +82,7 @@ export function practiceResolverCommand(): {
   );
   const threadsPerProcess = Math.max(
     1,
-    Math.min(
-      8,
-      Number(process.env.PRACTICE_RESOLVER_THREADS) || cpus().length
-    )
+    Math.min(8, Number(process.env.PRACTICE_RESOLVER_THREADS) || cpus().length)
   );
   return {
     executable,
@@ -149,6 +146,12 @@ class PracticeSolverProcess implements PracticeResolverWorker {
   private stdout = '';
   private stderr = '';
   private pending = new Map<string, PendingRequest>();
+  private queued: Array<{
+    child: ChildProcessWithoutNullStreams;
+    requestId: string;
+    request: Record<string, unknown>;
+  }> = [];
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   private async start(): Promise<ChildProcessWithoutNullStreams> {
     if (this.child && !this.child.killed && this.child.exitCode === null) {
@@ -165,7 +168,9 @@ class PracticeSolverProcess implements PracticeResolverWorker {
       const failed = (error: Error) => {
         this.starting = null;
         reject(
-          new Error(`The pinned practice resolver could not start: ${error.message}`)
+          new Error(
+            `The pinned practice resolver could not start: ${error.message}`
+          )
         );
       };
       child.once('error', failed);
@@ -198,21 +203,21 @@ class PracticeSolverProcess implements PracticeResolverWorker {
           this.failAll('The pinned resolver returned malformed JSON');
           continue;
         }
-        const requestId =
-          response && typeof response === 'object'
-            ? (response as { requestId?: unknown }).requestId
-            : null;
-        if (typeof requestId !== 'string') {
-          this.failAll('The pinned resolver response omitted its request ID');
+        if (
+          response &&
+          typeof response === 'object' &&
+          (response as { schema?: unknown }).schema ===
+            'hu-practice-continual-resolver-batch-result-v1'
+        ) {
+          const results = (response as { results?: unknown }).results;
+          if (!Array.isArray(results)) {
+            this.failAll('The pinned resolver returned a malformed batch');
+            continue;
+          }
+          for (const result of results) this.dispatch(result);
           continue;
         }
-        const pending = this.pending.get(requestId);
-        if (!pending) continue;
-        clearTimeout(pending.timeout);
-        this.pending.delete(requestId);
-        const error = (response as { error?: unknown }).error;
-        if (typeof error === 'string') pending.reject(new Error(error));
-        else pending.resolve(response);
+        this.dispatch(response);
       }
     });
     child.stderr.on('data', (chunk: string) => {
@@ -231,7 +236,28 @@ class PracticeSolverProcess implements PracticeResolverWorker {
     });
   }
 
+  private dispatch(response: unknown): void {
+    const requestId =
+      response && typeof response === 'object'
+        ? (response as { requestId?: unknown }).requestId
+        : null;
+    if (typeof requestId !== 'string') {
+      this.failAll('The pinned resolver response omitted its request ID');
+      return;
+    }
+    const pending = this.pending.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.pending.delete(requestId);
+    const error = (response as { error?: unknown }).error;
+    if (typeof error === 'string') pending.reject(new Error(error));
+    else pending.resolve(response);
+  }
+
   private failAll(message: string): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    this.queued = [];
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error(message));
@@ -249,12 +275,39 @@ class PracticeSolverProcess implements PracticeResolverWorker {
         reject(new Error('The pinned practice resolver query timed out'));
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(requestId, { resolve, reject, timeout });
-      child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
-        if (!error) return;
-        clearTimeout(timeout);
+      this.queued.push({ child, requestId, request });
+      if (!this.flushTimer) {
+        this.flushTimer = setTimeout(() => this.flush(), MICRO_BATCH_DELAY_MS);
+      }
+    });
+  }
+
+  private flush(): void {
+    this.flushTimer = null;
+    const queued = this.queued.splice(0, MAX_BATCH_QUERIES);
+    if (this.queued.length > 0) {
+      this.flushTimer = setTimeout(() => this.flush(), 0);
+    }
+    if (queued.length === 0) return;
+    const child = queued[0].child;
+    const batch = {
+      schema: 'hu-practice-continual-resolver-batch-query-v1',
+      requestId: randomUUID(),
+      queries: queued.map(({ request }) => request),
+    };
+    child.stdin.write(`${JSON.stringify(batch)}\n`, (error) => {
+      if (!error) return;
+      for (const { requestId } of queued) {
+        const pending = this.pending.get(requestId);
+        if (!pending) continue;
+        clearTimeout(pending.timeout);
         this.pending.delete(requestId);
-        reject(new Error(`The pinned practice resolver is unavailable: ${error.message}`));
-      });
+        pending.reject(
+          new Error(
+            `The pinned practice resolver is unavailable: ${error.message}`
+          )
+        );
+      }
     });
   }
 

@@ -32,6 +32,32 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const safeFile = (file) =>
   typeof file === 'string' && /^[a-z0-9][a-z0-9.-]*\.json\.gz$/.test(file);
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+const binaryMagic = Buffer.from('PKRMODL2');
+
+async function verifyBinarySidecar(filePath, canonicalSha256) {
+  const binaryPath = `${filePath}.bin`;
+  let binary;
+  try {
+    binary = await readFile(binaryPath);
+  } catch {
+    throw new Error(`Missing compiled resolver artifact ${path.basename(binaryPath)}`);
+  }
+  if (
+    binary.length < 80 ||
+    !binary.subarray(0, 8).equals(binaryMagic) ||
+    binary.subarray(8, 40).toString('hex') !== canonicalSha256
+  ) {
+    throw new Error(`Invalid compiled resolver artifact ${path.basename(binaryPath)}`);
+  }
+  const payload = binary.subarray(80);
+  if (
+    binary.readBigUInt64LE(72) !== BigInt(payload.length) ||
+    binary.subarray(40, 72).toString('hex') !== digest(payload)
+  ) {
+    throw new Error(`Corrupt compiled resolver artifact ${path.basename(binaryPath)}`);
+  }
+  return binary.length;
+}
 
 const results = [];
 for (const manifest of candidates) {
@@ -49,7 +75,8 @@ for (const manifest of candidates) {
     if (!safeFile(file) || !/^[a-f0-9]{64}$/.test(expectedSha256 ?? '')) {
       throw new Error(`${manifest.version} has invalid ${kind} artifact metadata`);
     }
-    const compressed = await readFile(path.join(modelRoot, file));
+    const artifactPath = path.join(modelRoot, file);
+    const compressed = await readFile(artifactPath);
     const bytes = gunzipSync(compressed);
     const actualSha256 = digest(bytes);
     if (actualSha256 !== expectedSha256) {
@@ -58,7 +85,12 @@ for (const manifest of candidates) {
       );
     }
     decoded[kind] = JSON.parse(bytes.toString('utf8'));
-    identities[kind] = { file, decodedSha256: actualSha256, compressedBytes: compressed.length };
+    identities[kind] = {
+      file,
+      decodedSha256: actualSha256,
+      compressedBytes: compressed.length,
+      binaryBytes: await verifyBinarySidecar(artifactPath, actualSha256),
+    };
   }
 
   const actionValues = decoded.preflopActionValues;

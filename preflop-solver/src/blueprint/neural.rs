@@ -198,6 +198,14 @@ pub struct PracticePolicyQuery {
     pub actions: Vec<PracticeObservedAction>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePolicyBatchQuery {
+    pub schema: String,
+    pub request_id: String,
+    pub queries: Vec<PracticePolicyQuery>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PracticePolicyAction {
@@ -241,11 +249,36 @@ struct PracticePreflopActionValues {
     entries: BTreeMap<String, (Vec<String>, Vec<f64>, Vec<f64>)>,
 }
 
+/// Compile the four immutable website artifacts into adjacent binary caches.
+/// Runtime loaders automatically prefer these verified sidecars while all
+/// public identities continue to refer to the canonical decoded JSON.
+pub fn compile_practice_binary_artifacts(
+    network_path: &std::path::Path,
+    range_policy_path: &std::path::Path,
+    preflop_action_values_path: &std::path::Path,
+    flop_value_network_path: &std::path::Path,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let outputs = vec![
+        super::write_model_binary_cache::<TrainingNetworkBundle>(network_path)?,
+        super::write_model_binary_cache::<RangeConditionedPolicyNetwork>(range_policy_path)?,
+        super::write_model_binary_cache::<super::preflop::PreflopLeakAttribution>(
+            preflop_action_values_path,
+        )?,
+        super::write_model_binary_cache::<super::public_belief::PublicValueNetwork>(
+            flop_value_network_path,
+        )?,
+    ];
+    // Exercise the complete production loaders before accepting the caches.
+    FrozenPolicy::load_with_range(network_path, Some(range_policy_path))?;
+    PracticePreflopActionValues::read(preflop_action_values_path)?;
+    super::public_belief::PublicValueNetwork::read(flop_value_network_path)?;
+    Ok(outputs)
+}
+
 impl PracticePreflopActionValues {
     fn read(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = super::read_json_artifact(path)?;
-        let sha256 = format!("{:x}", Sha256::digest(&bytes));
-        let artifact: super::preflop::PreflopLeakAttribution = serde_json::from_slice(&bytes)?;
+        let (artifact, sha256): (super::preflop::PreflopLeakAttribution, String) =
+            super::read_model_artifact(path)?;
         let legacy = artifact.schema == "hu-preflop-local-leak-attribution-v1";
         let canonical = artifact.schema == "hu-preflop-canonical-range-action-values-v1";
         let valid_digest = |digest: &str| {
@@ -609,7 +642,7 @@ pub struct ExploitabilityCertificate {
     pub assumptions: Vec<&'static str>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct TrainingNetworkBundle {
     schema: String,
     input_size: usize,
@@ -754,9 +787,8 @@ impl TurnStrategyCache {
 
 impl FrozenPolicy {
     pub(super) fn load(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = super::read_json_artifact(path)?;
-        let bundle_sha256 = format!("{:x}", Sha256::digest(&bytes));
-        let bundle: TrainingNetworkBundle = serde_json::from_slice(&bytes)?;
+        let (bundle, bundle_sha256): (TrainingNetworkBundle, String) =
+            super::read_model_artifact(path)?;
         validate_training_bundle(&bundle)?;
         Ok(Self {
             bundle,
@@ -1052,7 +1084,18 @@ impl FrozenPolicy {
                         solve_one(&blueprint, public.actor)?
                     }
                 } else {
-                    super::public_belief::solve_flop_policy(solve_config)?
+                    // A two-iteration online solve starts from zero regrets and
+                    // can serve near-uniform or inverted frequencies even when
+                    // its action-value pass strongly prefers one action. Keep
+                    // the trained range-conditioned policy frozen and evaluate
+                    // every action against that identical profile instead.
+                    let blueprint = self.flop_blueprint_strategies(
+                        state.clone(),
+                        &public.board,
+                        public.ranges.clone(),
+                        config,
+                    )?;
+                    super::public_belief::evaluate_frozen_flop_policy(solve_config, &blueprint)?
                 };
                 let mut cache = self
                     .flop_strategy_cache
@@ -1915,6 +1958,18 @@ impl FrozenPolicy {
         &self.bundle_sha256
     }
 
+    fn range_policy_sha256(&self) -> Option<&str> {
+        self.range_policy
+            .as_ref()
+            .and_then(RangeConditionedPolicyNetwork::artifact_sha256)
+    }
+
+    fn flop_value_network_sha256(&self) -> Option<&str> {
+        self.flop_resolver
+            .as_ref()
+            .and_then(|resolver| resolver.value_network.artifact_sha256())
+    }
+
     fn enable_flop_resolver(&mut self, resolver: FlopResolverConfig) -> Result<(), Box<dyn Error>> {
         if self.range_policy.is_none() {
             return Err("flop resolving requires a range-conditioned policy".into());
@@ -2033,14 +2088,6 @@ impl PracticePolicyEngine {
         if config.model_version.trim().is_empty() {
             return Err("practice model version is required".into());
         }
-        let range_bytes = super::read_json_artifact(&config.range_policy_path)?;
-        let range_policy_sha256 = format!("{:x}", Sha256::digest(&range_bytes));
-        let value_network_sha256 = config
-            .flop_resolver
-            .as_ref()
-            .map(|resolver| super::read_json_artifact(&resolver.value_network_path))
-            .transpose()?
-            .map(|bytes| format!("{:x}", Sha256::digest(&bytes)));
         let mut policy =
             FrozenPolicy::load_with_range(&config.network_path, Some(&config.range_policy_path))?;
         let preflop_action_values = config
@@ -2060,6 +2107,11 @@ impl PracticePolicyEngine {
         if let Some(resolver) = config.flop_resolver {
             policy.enable_flop_resolver(resolver)?;
         }
+        let range_policy_sha256 = policy
+            .range_policy_sha256()
+            .ok_or("practice range-policy identity is unavailable")?
+            .to_owned();
+        let value_network_sha256 = policy.flop_value_network_sha256().map(str::to_owned);
         Ok(Self {
             game: config.game,
             model_version: config.model_version,
@@ -2844,19 +2896,19 @@ fn strategy_from_bundle(
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum StrategyTransform {
     RegretMatching,
     Softmax,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct DenseScorer {
     layers: Vec<DenseLayer>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct DenseLayer {
     input_size: usize,
     output_size: usize,
@@ -2865,7 +2917,7 @@ struct DenseLayer {
     biases: Vec<f32>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum DenseActivation {
     Linear,

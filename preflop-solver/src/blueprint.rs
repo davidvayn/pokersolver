@@ -9,13 +9,15 @@ use crate::cards::{all_combos, Combo};
 use crate::evaluator::evaluate;
 use crate::rng::SplitMix64;
 use flate2::read::GzDecoder;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod neural;
 pub mod preflop;
@@ -33,6 +35,69 @@ fn read_json_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut decoded = Vec::new();
     GzDecoder::new(bytes.as_slice()).read_to_end(&mut decoded)?;
     Ok(decoded)
+}
+
+const MODEL_BINARY_MAGIC: &[u8; 8] = b"PKRMODL2";
+const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
+
+fn model_binary_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.bin", path.display()))
+}
+
+/// Load a typed immutable model. A verified binary sidecar avoids gzip and
+/// JSON parsing while preserving the SHA-256 identity of the canonical JSON.
+fn read_model_artifact<T: DeserializeOwned>(path: &Path) -> Result<(T, String), Box<dyn Error>> {
+    let binary_path = model_binary_path(path);
+    if binary_path.is_file() {
+        let bytes = fs::read(&binary_path)?;
+        if bytes.len() < MODEL_BINARY_HEADER_BYTES
+            || &bytes[..MODEL_BINARY_MAGIC.len()] != MODEL_BINARY_MAGIC
+        {
+            return Err(format!("invalid model binary header: {}", binary_path.display()).into());
+        }
+        let canonical_digest = &bytes[8..40];
+        let expected_payload_digest = &bytes[40..72];
+        let payload_len = u64::from_le_bytes(bytes[72..80].try_into()?) as usize;
+        let payload = &bytes[80..];
+        if payload.len() != payload_len
+            || Sha256::digest(payload).as_slice() != expected_payload_digest
+        {
+            return Err(format!("corrupt model binary payload: {}", binary_path.display()).into());
+        }
+        let value = rmp_serde::from_slice(payload)?;
+        return Ok((
+            value,
+            canonical_digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        ));
+    }
+    let bytes = read_json_artifact(path)?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    Ok((serde_json::from_slice(&bytes)?, digest))
+}
+
+/// Compile an adjacent, versioned binary sidecar from canonical JSON. The
+/// sidecar carries both the canonical JSON identity and its own payload hash.
+fn write_model_binary_cache<T>(path: &Path) -> Result<PathBuf, Box<dyn Error>>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let json = read_json_artifact(path)?;
+    let value: T = serde_json::from_slice(&json)?;
+    let payload = rmp_serde::to_vec_named(&value)?;
+    let mut bytes = Vec::with_capacity(MODEL_BINARY_HEADER_BYTES + payload.len());
+    bytes.extend_from_slice(MODEL_BINARY_MAGIC);
+    bytes.extend_from_slice(&Sha256::digest(&json));
+    bytes.extend_from_slice(&Sha256::digest(&payload));
+    bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&payload);
+    let target = model_binary_path(path);
+    let temporary = target.with_extension("tmp");
+    fs::write(&temporary, bytes)?;
+    fs::rename(temporary, &target)?;
+    Ok(target)
 }
 
 const EPSILON: f64 = 1e-9;
@@ -2280,6 +2345,35 @@ fn rollout_average_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize)]
+    struct BinaryCacheFixture {
+        label: String,
+        values: Vec<f32>,
+    }
+
+    #[test]
+    fn model_binary_cache_preserves_canonical_identity_and_value() {
+        let path = std::env::temp_dir().join(format!(
+            "poker-model-cache-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let fixture = BinaryCacheFixture {
+            label: "frozen".to_owned(),
+            values: vec![0.125, 0.875],
+        };
+        let json = serde_json::to_vec(&fixture).expect("serialize fixture");
+        fs::write(&path, &json).expect("write canonical fixture");
+        let binary = write_model_binary_cache::<BinaryCacheFixture>(&path)
+            .expect("compile binary model cache");
+        let (loaded, sha256) =
+            read_model_artifact::<BinaryCacheFixture>(&path).expect("load binary model cache");
+        assert_eq!(loaded, fixture);
+        assert_eq!(sha256, format!("{:x}", Sha256::digest(&json)));
+        fs::remove_file(binary).expect("remove binary fixture");
+        fs::remove_file(path).expect("remove canonical fixture");
+    }
 
     fn action<'a>(state: &GameState, config: &BlueprintConfig, needle: &str) -> LegalAction {
         state

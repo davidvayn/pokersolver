@@ -113,6 +113,25 @@ describe('AnalystRail decision feedback', () => {
     expect(html).not.toContain('0.100bb EV ± 0.000bb');
   });
 
+  it('explains a low-confidence disagreement between policy and EV ordering', () => {
+    const mismatch = {
+      ...feedback,
+      confidence: 'low' as const,
+      lowConfidence: true,
+      policyActions: feedback.policyActions.map((action, index) => ({
+        ...action,
+        probability: index === 0 ? 0.75 : 0.25,
+        confidence: 'low' as const,
+        standardErrorBb: null,
+      })),
+    };
+    const html = renderFeedback(mismatch);
+    expect(html).toContain(
+      'frozen policy and approximate continuation-value oracle disagree'
+    );
+    expect(html).toContain('frequency grade as the strategy target');
+  });
+
   it('preserves small policy frequencies and renders true zero as zero', () => {
     const smallMix = {
       ...feedback,

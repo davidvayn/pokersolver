@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "neural-samples" => run_neural_samples(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
         "practice-policy-server" => run_practice_policy_server(&args[1..]),
+        "practice-artifacts-compile" => run_practice_artifacts_compile(&args[1..]),
         "neural-causal-attribution" => run_neural_causal_attribution(&args[1..]),
         "neural-causal-attribution-evaluate" => run_neural_causal_attribution_evaluate(&args[1..]),
         "range-policy-self-play-samples" => run_range_policy_self_play_samples(&args[1..]),
@@ -68,6 +69,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         unknown => Err(format!("unknown command: {unknown}").into()),
     }
+}
+
+fn run_practice_artifacts_compile(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let required = |flag: &str| {
+        value(args, flag)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("{flag} is required"))
+    };
+    let networks = required("--networks")?;
+    let range_policy = required("--range-policy")?;
+    let preflop_action_values = required("--preflop-action-values")?;
+    let flop_value_network = required("--flop-value-network")?;
+    for output in blueprint::neural::compile_practice_binary_artifacts(
+        &networks,
+        &range_policy,
+        &preflop_action_values,
+        &flop_value_network,
+    )? {
+        println!("{}", output.display());
+    }
+    Ok(())
 }
 
 fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -208,15 +230,83 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<blueprint::neural::PracticePolicyQuery>(&line) {
-            Ok(query) => {
-                let request_id = query.request_id.clone();
-                match engine.query(query) {
-                    Ok(result) => serde_json::to_value(result)?,
+        let response = match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(value)
+                if value.get("schema").and_then(serde_json::Value::as_str)
+                    == Some("hu-practice-continual-resolver-batch-query-v1") =>
+            {
+                match serde_json::from_value::<blueprint::neural::PracticePolicyBatchQuery>(value) {
+                    Ok(batch)
+                        if batch.schema == "hu-practice-continual-resolver-batch-query-v1"
+                            && !batch.request_id.trim().is_empty()
+                            && (1..=2).contains(&batch.queries.len()) =>
+                    {
+                        let request_id = batch.request_id;
+                        let results = std::thread::scope(|scope| {
+                            let engine = &engine;
+                            batch
+                                .queries
+                                .into_iter()
+                                .map(|query| {
+                                    let request_id = query.request_id.clone();
+                                    scope.spawn(move || match engine.query(query) {
+                                        Ok(result) => serde_json::to_value(result)
+                                            .expect("practice query results always serialize"),
+                                        Err(error) => serde_json::json!({
+                                            "schema": "hu-practice-continual-resolver-error-v1",
+                                            "requestId": request_id,
+                                            "error": error,
+                                        }),
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .map(|handle| {
+                                    handle.join().unwrap_or_else(|_| {
+                                        serde_json::json!({
+                                            "schema": "hu-practice-continual-resolver-error-v1",
+                                            "requestId": null,
+                                            "error": "practice resolver batch worker panicked",
+                                        })
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        serde_json::json!({
+                            "schema": "hu-practice-continual-resolver-batch-result-v1",
+                            "requestId": request_id,
+                            "results": results,
+                        })
+                    }
+                    Ok(batch) => serde_json::json!({
+                        "schema": "hu-practice-continual-resolver-error-v1",
+                        "requestId": batch.request_id,
+                        "error": "practice resolver batches require one or two queries",
+                    }),
                     Err(error) => serde_json::json!({
                         "schema": "hu-practice-continual-resolver-error-v1",
-                        "requestId": request_id,
-                        "error": error,
+                        "requestId": null,
+                        "error": format!("invalid practice query batch: {error}"),
+                    }),
+                }
+            }
+            Ok(value) => {
+                match serde_json::from_value::<blueprint::neural::PracticePolicyQuery>(value) {
+                    Ok(query) => {
+                        let request_id = query.request_id.clone();
+                        match engine.query(query) {
+                            Ok(result) => serde_json::to_value(result)?,
+                            Err(error) => serde_json::json!({
+                                "schema": "hu-practice-continual-resolver-error-v1",
+                                "requestId": request_id,
+                                "error": error,
+                            }),
+                        }
+                    }
+                    Err(error) => serde_json::json!({
+                        "schema": "hu-practice-continual-resolver-error-v1",
+                        "requestId": null,
+                        "error": format!("invalid practice query: {error}"),
                     }),
                 }
             }
@@ -2874,6 +2964,7 @@ Usage:
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
   preflop-solver neural-certificate [options]
+  preflop-solver practice-artifacts-compile --networks <json.gz> --range-policy <json.gz> --preflop-action-values <json.gz> --flop-value-network <json.gz>
   preflop-solver neural-causal-attribution [options]
   preflop-solver neural-causal-attribution-evaluate [options]
   preflop-solver range-policy-self-play-samples [options]

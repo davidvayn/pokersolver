@@ -617,9 +617,8 @@ pub struct PublicValueNetwork {
 
 impl PublicValueNetwork {
     pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = super::read_json_artifact(path)?;
-        let mut network: Self = serde_json::from_slice(&bytes)?;
-        network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
+        let (mut network, sha256): (Self, String) = super::read_model_artifact(path)?;
+        network.artifact_sha256 = Some(sha256);
         network.validate()?;
         Ok(network)
     }
@@ -629,6 +628,10 @@ impl PublicValueNetwork {
             && self.artifact_sha256.is_some()
             && other.artifact_sha256.is_some()
             && self.artifact_sha256 != other.artifact_sha256
+    }
+
+    pub(super) fn artifact_sha256(&self) -> Option<&str> {
+        self.artifact_sha256.as_deref()
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -1111,12 +1114,15 @@ fn range_policy_state_features(
 
 impl RangeConditionedPolicyNetwork {
     pub fn read(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let bytes = super::read_json_artifact(path)?;
-        let mut network: Self = serde_json::from_slice(&bytes)?;
-        network.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
+        let (mut network, sha256): (Self, String) = super::read_model_artifact(path)?;
+        network.artifact_sha256 = Some(sha256);
         network.validate()?;
         network.prevalidated = true;
         Ok(network)
+    }
+
+    pub(super) fn artifact_sha256(&self) -> Option<&str> {
+        self.artifact_sha256.as_deref()
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -5631,6 +5637,20 @@ pub(super) fn solve_flop_policy(
 ) -> Result<Vec<PublicBeliefStrategy>, String> {
     let mut solver = FlopSolver::new(config)?;
     solver.train();
+    Ok(solver.policy_strategies_with_action_values())
+}
+
+/// Evaluate action values against one already-frozen complete flop policy.
+///
+/// This deliberately performs no CFR updates. It keeps served frequencies and
+/// action values on the same average profile, avoiding the unstable regret
+/// initialization produced by extremely short online solves.
+pub(super) fn evaluate_frozen_flop_policy(
+    config: FlopResolveConfig,
+    strategies: &[PublicBeliefStrategy],
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.load_frozen_average_strategies(strategies)?;
     Ok(solver.policy_strategies_with_action_values())
 }
 

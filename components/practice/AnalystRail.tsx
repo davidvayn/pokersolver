@@ -105,6 +105,9 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
   const bestProbability =
     feedback.bestActionProbability ??
     Math.max(0, ...feedback.policyActions.map((action) => action.probability));
+  const policyValueDisagreement = bestActions.some(
+    (action) => action.probability < bestProbability - 1e-9
+  );
   const offered = new Set(
     feedback.offeredActionIds ?? feedback.policyActions.map((action) => action.id)
   );
@@ -237,6 +240,8 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
           <p>
             {feedback.confidence === 'unavailable'
               ? 'This model version does not contain a usable EV estimate. The frequency grade is still available.'
+              : policyValueDisagreement
+                ? 'The frozen policy and approximate continuation-value oracle disagree at this low-confidence node. Use the frequency grade as the strategy target; treat the EV ordering as diagnostic only.'
               : 'This action value has a wider sampling or low-reach uncertainty bound. Treat the EV-loss estimate as approximate; the frequency grade uses the frozen policy mix.'}
           </p>
         </div>

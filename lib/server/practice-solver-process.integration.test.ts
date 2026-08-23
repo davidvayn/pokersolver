@@ -155,6 +155,54 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
   );
 
   it(
+    'serves the frozen flop mix instead of a short-run uniform artifact',
+    async () => {
+      const result = (await practiceSolverProcess().query({
+        stateHash:
+          '5f89d2ac3b0ac2a6d970ef3ec079a8812b4530683e1ed58f243648c5977a3dff',
+        modelVersion: PRACTICE_RESOLVER_IDENTITY.modelVersion,
+        depthBb: 20,
+        privateCards: [7, 34],
+        board: [13, 5, 15],
+        street: 'flop',
+        actor: 1,
+        totalPotBb: 2,
+        stacksBb: [19, 19],
+        streetBetsBb: [0, 0],
+        totalCommittedBb: [1, 1],
+        lastFullRaiseBb: 1,
+        raiseReopened: true,
+        actions: [
+          {
+            actor: 0,
+            street: 'preflop',
+            kind: 'call',
+            amountToBb: null,
+          },
+          {
+            actor: 1,
+            street: 'preflop',
+            kind: 'check',
+            amountToBb: null,
+          },
+        ],
+      })) as ResolverResult;
+
+      assertNormalizedActions(result, 'unavailable');
+      expect(result.actions.map((action) => action.kind)).toEqual([
+        'check',
+        'bet',
+        'bet',
+        'all_in',
+      ]);
+      expect(result.actions[0].probability).toBeGreaterThan(0.95);
+      expect(result.actions[3].probability).toBeLessThan(0.001);
+      expect(new Set(result.actions.map((action) => action.probability)).size).toBe(4);
+    },
+    120_000
+  );
+
+  it(
     'replays a website trajectory and returns action EVs on every postflop street',
     async () => {
       let state = createHand({

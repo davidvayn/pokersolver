@@ -34,14 +34,13 @@ const nextConfig = {
     pagesBufferLength: 16,
   },
   // The continual-resolver API launches the pinned Rust binary and reads its
-  // immutable model bundle at runtime. Include both in standalone/server
-  // traces instead of relying on Next's static import analysis to discover
-  // child-process arguments.
+  // verified binary model caches at runtime. The build verifies each cache
+  // against canonical JSON before Next traces this smaller serving payload.
   outputFileTracingIncludes: {
     '/api/practice/resolve': [
       './preflop-solver/target/release/preflop-solver',
       ...resolverArtifactFiles.map(
-        (file) => `./preflop-solver/models/practice/${file}`
+        (file) => `./preflop-solver/models/practice/${file}.bin`
       ),
     ],
   },

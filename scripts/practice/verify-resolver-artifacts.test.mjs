@@ -13,7 +13,19 @@ const verifier = path.resolve(
 );
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture({ active = false, unsafe = false } = {}) {
+function binarySidecar(canonical, payload = Buffer.from('fixture')) {
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(payload.length));
+  return Buffer.concat([
+    Buffer.from('PKRMODL2'),
+    createHash('sha256').update(canonical).digest(),
+    createHash('sha256').update(payload).digest(),
+    length,
+    payload,
+  ]);
+}
+
+async function fixture({ active = false, unsafe = false, corruptBinary = false } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'resolver-artifact-verifier-'));
   const modelDir = path.join(root, 'models');
   const actionValues = {
@@ -40,6 +52,9 @@ async function fixture({ active = false, unsafe = false } = {}) {
   for (const [kind, bytes] of Object.entries(artifacts)) {
     const file = path.basename(files[kind]);
     await writeFile(path.join(modelDir, file), gzipSync(bytes));
+    const binary = binarySidecar(bytes);
+    if (corruptBinary && kind === 'rangePolicy') binary[binary.length - 1] ^= 0xff;
+    await writeFile(path.join(modelDir, `${file}.bin`), binary);
   }
   const manifest = [
     {
@@ -99,5 +114,16 @@ test('rejects low-precision or unsafe action values at the serving boundary', as
       rm(active.root, { recursive: true, force: true }),
       rm(unsafe.root, { recursive: true, force: true }),
     ]);
+  }
+});
+
+test('rejects a corrupt compiled resolver sidecar', async () => {
+  const files = await fixture({ corruptBinary: true });
+  try {
+    const result = verify(files);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Corrupt compiled resolver artifact/);
+  } finally {
+    await rm(files.root, { recursive: true, force: true });
   }
 });
