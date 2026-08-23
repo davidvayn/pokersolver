@@ -169,6 +169,10 @@ describe('database-free full-hand activation registry', () => {
           turnResolvedActor: 1,
           riverIterations: 2,
           riverResolvedActor: 1,
+          riverSafeResolving: false,
+          riverSafeMaxmargin: false,
+          riverSafeIterations: null,
+          riverSafeResolvedActor: null,
           deterministic: true,
         },
       },
@@ -191,6 +195,45 @@ describe('database-free full-hand activation registry', () => {
             ...resolverRuntime.artifactFiles,
             preflopActionValues: '../unverified.json.gz',
           },
+        },
+      })
+    ).toBe(false);
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        runtime: {
+          ...resolverRuntime,
+          resolver: {
+            ...resolverRuntime.resolver,
+            riverResolvedActor: null,
+            riverSafeResolving: true,
+            riverSafeMaxmargin: true,
+            riverSafeIterations: 16,
+            riverSafeResolvedActor: 0,
+          },
+        },
+      })
+    ).toBe(true);
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        runtime: {
+          ...resolverRuntime,
+          resolver: {
+            ...resolverRuntime.resolver,
+            riverSafeMaxmargin: true,
+          },
+        },
+      })
+    ).toBe(false);
+    const { riverSafeResolving: _missingSafeMode, ...incompleteSafety } =
+      resolverRuntime.resolver;
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        runtime: {
+          ...resolverRuntime,
+          resolver: incompleteSafety,
         },
       })
     ).toBe(false);

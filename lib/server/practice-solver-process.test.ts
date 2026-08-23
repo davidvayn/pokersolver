@@ -43,6 +43,22 @@ describe('pinned practice resolver process', () => {
     expect(args.includes('--flop-resolver-deploy-solved-policy')).toBe(
       resolver.flopDeploySolvedPolicy
     );
+    expect(args.includes('--river-resolver-safe')).toBe(
+      resolver.riverSafeResolving
+    );
+    expect(args.includes('--river-resolver-safe-maxmargin')).toBe(
+      resolver.riverSafeMaxmargin
+    );
+    expect(option(args, '--river-resolver-safe-iterations')).toBe(
+      resolver.riverSafeIterations === null
+        ? null
+        : String(resolver.riverSafeIterations)
+    );
+    expect(option(args, '--river-resolver-safe-actor')).toBe(
+      resolver.riverSafeResolvedActor === null
+        ? null
+        : String(resolver.riverSafeResolvedActor)
+    );
     const streets = [
       ['flop', resolver.flopIterations, resolver.flopResolvedActor],
       ['turn', resolver.turnIterations, resolver.turnResolvedActor],

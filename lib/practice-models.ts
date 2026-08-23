@@ -176,6 +176,20 @@ function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
       Number.isInteger(resolver.riverIterations) &&
       resolver.riverIterations >= 2 &&
       validResolvedActor(resolver.riverResolvedActor) &&
+      typeof resolver.riverSafeResolving === 'boolean' &&
+      typeof resolver.riverSafeMaxmargin === 'boolean' &&
+      (resolver.riverSafeIterations === null ||
+        (Number.isInteger(resolver.riverSafeIterations) &&
+          resolver.riverSafeIterations >= resolver.riverIterations)) &&
+      validResolvedActor(resolver.riverSafeResolvedActor) &&
+      (resolver.riverSafeResolving ||
+        (!resolver.riverSafeMaxmargin &&
+          resolver.riverSafeIterations === null &&
+          resolver.riverSafeResolvedActor === null)) &&
+      (!resolver.riverSafeMaxmargin || resolver.riverSafeResolving) &&
+      (resolver.riverSafeResolvedActor === null ||
+        resolver.riverResolvedActor === null ||
+        resolver.riverSafeResolvedActor === resolver.riverResolvedActor) &&
       resolver.deterministic === true
     );
   }

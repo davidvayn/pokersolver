@@ -49,6 +49,7 @@ const HAND_CLASS_COUNT: usize = 169;
 const RESOLVER_REACH_CANONICAL_SCALE: f64 = 1e10;
 const RESOLVER_ROOT_CHECKPOINT_SCHEMA: &str = "hu-resolver-root-leaf-checkpoint-v1";
 pub(super) const SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 0.05;
+pub(super) const RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 1e-7;
 const SAFE_RESOLVE_PROJECTION_BISECTIONS: usize = 8;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
 const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
@@ -3711,6 +3712,7 @@ struct SafeResolveRoot {
     node: RangeNode,
     unprojected_maximum_cfv_excess_bb: Option<f64>,
     unprojected_reach_weighted_cfv_excess_bb: Option<f64>,
+    unprojected_signed_reach_weighted_cfv_delta_bb: Option<f64>,
     deployed_resolved_policy_weight: f64,
     projection_best_response_evaluations: usize,
 }
@@ -3843,6 +3845,7 @@ impl FlopSolver {
             },
             unprojected_maximum_cfv_excess_bb: None,
             unprojected_reach_weighted_cfv_excess_bb: None,
+            unprojected_signed_reach_weighted_cfv_delta_bb: None,
             deployed_resolved_policy_weight: 1.0,
             projection_best_response_evaluations: 0,
         });
@@ -6243,6 +6246,19 @@ pub struct PublicBeliefStrategy {
     pub action_values_bb: Option<Vec<f32>>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct SafeRiverPolicy {
+    pub strategies: Vec<PublicBeliefStrategy>,
+    pub opponent_maximum_cfv_excess_bb: f64,
+    pub opponent_reach_weighted_cfv_excess_bb: f64,
+    pub opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub unprojected_opponent_maximum_cfv_excess_bb: f64,
+    pub unprojected_opponent_reach_weighted_cfv_excess_bb: f64,
+    pub unprojected_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub deployed_resolved_policy_weight: f64,
+    pub projection_best_response_evaluations: usize,
+}
+
 fn normalized_action_values_bb(
     actor: usize,
     action_count: usize,
@@ -6540,6 +6556,76 @@ struct RiverSolver {
     strength_ranks: Vec<usize>,
     strength_group_count: usize,
     nodes: BTreeMap<Vec<String>, RangeNode>,
+    safe_root: Option<SafeResolveRoot>,
+    safe_margin_selector: Option<MarginHandSelector>,
+    /// Authentic reached opponent range used only to judge aggregate
+    /// deployment. Maxmargin training still uses a uniform opponent root so
+    /// every private hand receives equal worst-case protection.
+    safe_opponent_evaluation_reach: Option<Vec<f64>>,
+}
+
+struct MarginHandSelector {
+    regrets: Vec<f64>,
+    last_regret_discount_round: u64,
+}
+
+impl MarginHandSelector {
+    fn new() -> Self {
+        Self {
+            regrets: vec![0.0; COMBO_COUNT],
+            last_regret_discount_round: 0,
+        }
+    }
+
+    fn strategy(&self, legal: &[bool], compatible_mass: &[f64]) -> Vec<f64> {
+        let positive_sum = self
+            .regrets
+            .iter()
+            .zip(legal)
+            .zip(compatible_mass)
+            .filter(|((_, legal), compatible)| **legal && **compatible > EPSILON)
+            .map(|((regret, _), _)| regret.max(0.0))
+            .sum::<f64>();
+        let legal_count = legal
+            .iter()
+            .zip(compatible_mass)
+            .filter(|(legal, compatible)| **legal && **compatible > EPSILON)
+            .count();
+        let mut strategy = vec![0.0; COMBO_COUNT];
+        if positive_sum > EPSILON {
+            for combo in 0..COMBO_COUNT {
+                if legal[combo] && compatible_mass[combo] > EPSILON {
+                    strategy[combo] = self.regrets[combo].max(0.0) / positive_sum;
+                }
+            }
+        } else if legal_count > 0 {
+            for combo in 0..COMBO_COUNT {
+                if legal[combo] && compatible_mass[combo] > EPSILON {
+                    strategy[combo] = 1.0 / legal_count as f64;
+                }
+            }
+        }
+        strategy
+    }
+
+    fn discount_regrets(&mut self, round: u64, parameters: &DcfrParameters) {
+        if round == 0 || self.last_regret_discount_round == round {
+            return;
+        }
+        let time = round as f64;
+        let positive_power = time.powf(parameters.positive_regret_exponent);
+        let negative_power = time.powf(parameters.negative_regret_exponent);
+        let positive_factor = positive_power / (positive_power + 1.0);
+        let negative_factor = negative_power / (negative_power + 1.0);
+        for regret in &mut self.regrets {
+            *regret *= if *regret >= 0.0 {
+                positive_factor
+            } else {
+                negative_factor
+            };
+        }
+        self.last_regret_discount_round = round;
+    }
 }
 
 impl RiverSolver {
@@ -6586,7 +6672,497 @@ impl RiverSolver {
             strength_ranks,
             strength_group_count,
             nodes: BTreeMap::new(),
+            safe_root: None,
+            safe_margin_selector: None,
+            safe_opponent_evaluation_reach: None,
         })
+    }
+
+    fn install_safe_root(
+        &mut self,
+        resolving_player: usize,
+        opponent_alternative_values_bb: Vec<f64>,
+    ) -> Result<(), String> {
+        if resolving_player > 1
+            || opponent_alternative_values_bb.len() != COMBO_COUNT
+            || opponent_alternative_values_bb.iter().any(|value| {
+                !value.is_finite() || value.abs() > self.config.game.effective_stack_bb + 1e-8
+            })
+        {
+            return Err("safe river resolving has invalid opponent alternative values".to_owned());
+        }
+        let opponent = 1 - resolving_player;
+        self.safe_root = Some(SafeResolveRoot {
+            resolving_player,
+            opponent_alternative_values_bb,
+            node: RangeNode {
+                actor: opponent,
+                action_labels: vec!["enter".to_owned(), "terminate".to_owned()],
+                regrets: vec![0.0; COMBO_COUNT * 2],
+                strategy_sum: vec![0.0; COMBO_COUNT * 2],
+                last_regret_discount_round: 0,
+                last_strategy_discount_round: 0,
+            },
+            unprojected_maximum_cfv_excess_bb: None,
+            unprojected_reach_weighted_cfv_excess_bb: None,
+            unprojected_signed_reach_weighted_cfv_delta_bb: None,
+            deployed_resolved_policy_weight: 1.0,
+            projection_best_response_evaluations: 0,
+        });
+        Ok(())
+    }
+
+    fn install_safe_maxmargin_root(
+        &mut self,
+        resolving_player: usize,
+        opponent_alternative_values_bb: Vec<f64>,
+    ) -> Result<(), String> {
+        self.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
+        self.safe_margin_selector = Some(MarginHandSelector::new());
+        Ok(())
+    }
+
+    fn load_frozen_average_strategies(
+        &mut self,
+        strategies: &[PublicBeliefStrategy],
+    ) -> Result<(), String> {
+        if strategies.is_empty() {
+            return Err("frozen river solution contains no strategies".to_owned());
+        }
+        for strategy in strategies {
+            if strategy.actor > 1 || strategy.action_labels.is_empty() {
+                return Err("frozen river strategy has an invalid actor or action set".to_owned());
+            }
+            let expected = COMBO_COUNT * strategy.action_labels.len();
+            if strategy.probabilities.len() != expected
+                || strategy
+                    .probabilities
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err("frozen river strategy has invalid probabilities".to_owned());
+            }
+            let node = RangeNode {
+                actor: strategy.actor,
+                action_labels: strategy.action_labels.clone(),
+                regrets: vec![0.0; expected],
+                strategy_sum: strategy
+                    .probabilities
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .collect(),
+                last_regret_discount_round: 0,
+                last_strategy_discount_round: 0,
+            };
+            if self
+                .nodes
+                .insert(strategy.public_history.clone(), node)
+                .is_some()
+            {
+                return Err("frozen river solution contains duplicate public histories".to_owned());
+            }
+        }
+        self.validate_frozen_strategy_tree(self.config.state.game_state())
+    }
+
+    fn validate_frozen_strategy_tree(&self, state: GameState) -> Result<(), String> {
+        if state.terminal.is_some() {
+            return Ok(());
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let node = self.nodes.get(&state.public_history).ok_or_else(|| {
+            "frozen river solution is missing a reachable public history".to_owned()
+        })?;
+        let labels = actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect::<Vec<_>>();
+        if node.actor != state.actor || node.action_labels != labels {
+            return Err("frozen river strategy does not match the configured game tree".to_owned());
+        }
+        let action_count = actions.len();
+        for combo in 0..COMBO_COUNT {
+            let offset = combo * action_count;
+            let sum = node.strategy_sum[offset..offset + action_count]
+                .iter()
+                .sum::<f64>();
+            if self.legal[state.actor][combo] && (sum - 1.0).abs() > 1e-4 {
+                return Err("frozen river strategy probabilities do not sum to one".to_owned());
+            }
+        }
+        for action in actions {
+            self.validate_frozen_strategy_tree(state.apply(&action, &self.config.game))?;
+        }
+        Ok(())
+    }
+
+    fn exact_best_response_conditional_values(&self, responder: usize) -> Vec<f64> {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let values = self.profile_walk(root, reaches.clone(), Some(responder));
+        let compatible =
+            compatible_masses_from_card_marginals(&self.combos, &reaches[1 - responder]);
+        (0..COMBO_COUNT)
+            .map(|combo| {
+                if compatible[combo] > 0.0 {
+                    values[responder][combo] / compatible[combo]
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    fn safe_opponent_cfv_excess(&self) -> Option<(f64, f64, f64)> {
+        let safe = self.safe_root.as_ref()?;
+        let opponent = 1 - safe.resolving_player;
+        let reaches = self.config.state.ranges.clone();
+        let response = self.profile_walk(
+            self.config.state.game_state(),
+            reaches.clone(),
+            Some(opponent),
+        );
+        let compatible =
+            compatible_masses_from_card_marginals(&self.combos, &reaches[safe.resolving_player]);
+        let opponent_evaluation_reach = self
+            .safe_opponent_evaluation_reach
+            .as_ref()
+            .unwrap_or(&reaches[opponent]);
+        let joint = opponent_evaluation_reach
+            .iter()
+            .zip(&compatible)
+            .map(|(reach, mass)| reach * mass)
+            .sum::<f64>();
+        if joint <= EPSILON {
+            return None;
+        }
+        let mut maximum_excess: f64 = 0.0;
+        let mut weighted_excess = 0.0;
+        let mut signed_weighted_delta = 0.0;
+        for combo in 0..COMBO_COUNT {
+            if compatible[combo] <= 0.0 {
+                continue;
+            }
+            let conditional_response = response[opponent][combo] / compatible[combo];
+            let delta = conditional_response - safe.opponent_alternative_values_bb[combo];
+            let excess = delta.max(0.0);
+            let probability = opponent_evaluation_reach[combo] * compatible[combo] / joint;
+            maximum_excess = maximum_excess.max(excess);
+            weighted_excess += probability * excess;
+            signed_weighted_delta += probability * delta;
+        }
+        Some((maximum_excess, weighted_excess, signed_weighted_delta))
+    }
+
+    fn average_strategies(&self, actor_filter: Option<usize>) -> Vec<PublicBeliefStrategy> {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| actor_filter.is_none_or(|actor| node.actor == actor))
+            .map(|(history, node)| PublicBeliefStrategy {
+                public_history: history.clone(),
+                actor: node.actor,
+                action_labels: node.action_labels.clone(),
+                probabilities: node
+                    .average_strategy(&self.legal[node.actor])
+                    .into_iter()
+                    .map(|value| value as f32)
+                    .collect(),
+                action_values_bb: None,
+            })
+            .collect()
+    }
+
+    fn apply_resolving_player_strategy_blend(
+        &mut self,
+        blueprint: &BTreeMap<Vec<String>, &PublicBeliefStrategy>,
+        resolved: &BTreeMap<Vec<String>, PublicBeliefStrategy>,
+        resolving_player: usize,
+        resolved_weight: f64,
+    ) -> Result<(), String> {
+        if !resolved_weight.is_finite() || !(0.0..=1.0).contains(&resolved_weight) {
+            return Err("safe river resolver projection has an invalid policy weight".to_owned());
+        }
+        for (history, node) in &mut self.nodes {
+            if node.actor != resolving_player {
+                continue;
+            }
+            let blueprint = blueprint.get(history).ok_or_else(|| {
+                "safe river resolver blueprint is missing a resolving-player node".to_owned()
+            })?;
+            let resolved = resolved.get(history).ok_or_else(|| {
+                "safe river resolver snapshot is missing a resolving-player node".to_owned()
+            })?;
+            if blueprint.actor != resolving_player
+                || resolved.actor != resolving_player
+                || blueprint.action_labels != node.action_labels
+                || resolved.action_labels != node.action_labels
+                || blueprint.probabilities.len() != node.strategy_sum.len()
+                || resolved.probabilities.len() != node.strategy_sum.len()
+            {
+                return Err(
+                    "safe river resolver projection found an incompatible policy node".to_owned(),
+                );
+            }
+            for index in 0..node.strategy_sum.len() {
+                node.strategy_sum[index] = (1.0 - resolved_weight)
+                    * f64::from(blueprint.probabilities[index])
+                    + resolved_weight * f64::from(resolved.probabilities[index]);
+            }
+        }
+        Ok(())
+    }
+
+    fn project_safe_strategy_to_blueprint(
+        &mut self,
+        blueprint_strategies: &[PublicBeliefStrategy],
+    ) -> Result<(), String> {
+        let resolving_player = self
+            .safe_root
+            .as_ref()
+            .ok_or_else(|| "safe river resolver projection requires the opt-out gadget".to_owned())?
+            .resolving_player;
+        let blueprint = blueprint_strategies
+            .iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let resolved = self
+            .average_strategies(Some(resolving_player))
+            .into_iter()
+            .map(|strategy| (strategy.public_history.clone(), strategy))
+            .collect::<BTreeMap<_, _>>();
+        let unprojected = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe river resolver projection has no CFV diagnostic".to_owned())?;
+        {
+            let safe = self.safe_root.as_mut().expect("safe river root checked");
+            safe.unprojected_maximum_cfv_excess_bb = Some(unprojected.0);
+            safe.unprojected_reach_weighted_cfv_excess_bb = Some(unprojected.1);
+            safe.unprojected_signed_reach_weighted_cfv_delta_bb = Some(unprojected.2);
+            safe.projection_best_response_evaluations = 1;
+        }
+        if unprojected.0 <= RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB && unprojected.2 <= 1e-10 {
+            return Ok(());
+        }
+
+        self.apply_resolving_player_strategy_blend(&blueprint, &resolved, resolving_player, 0.0)?;
+        let blueprint_excess = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe river resolver blueprint has no CFV diagnostic".to_owned())?;
+        self.safe_root
+            .as_mut()
+            .expect("safe river root checked")
+            .projection_best_response_evaluations += 1;
+        if blueprint_excess.0 > 1e-7 {
+            return Err(format!(
+                "safe river resolver frozen blueprint does not reproduce its opponent CFV bound ({:.6}bb)",
+                blueprint_excess.0
+            ));
+        }
+
+        let mut best_weight = 0.0;
+        let mut best_signed_delta = blueprint_excess.2;
+        if unprojected.0 > RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            let mut passing_weight = 0.0;
+            let mut failing_weight = 1.0;
+            for _ in 0..SAFE_RESOLVE_PROJECTION_BISECTIONS {
+                let candidate = (passing_weight + failing_weight) / 2.0;
+                self.apply_resolving_player_strategy_blend(
+                    &blueprint,
+                    &resolved,
+                    resolving_player,
+                    candidate,
+                )?;
+                let excess = self.safe_opponent_cfv_excess().ok_or_else(|| {
+                    "safe river resolver projected policy has no CFV diagnostic".to_owned()
+                })?;
+                self.safe_root
+                    .as_mut()
+                    .expect("safe river root checked")
+                    .projection_best_response_evaluations += 1;
+                if excess.0 <= RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+                    passing_weight = candidate;
+                    if excess.2 < best_signed_delta {
+                        best_weight = candidate;
+                        best_signed_delta = excess.2;
+                    }
+                } else {
+                    failing_weight = candidate;
+                }
+            }
+        }
+        self.apply_resolving_player_strategy_blend(
+            &blueprint,
+            &resolved,
+            resolving_player,
+            best_weight,
+        )?;
+        self.safe_root
+            .as_mut()
+            .expect("safe river root checked")
+            .deployed_resolved_policy_weight = best_weight;
+        let final_excess = self
+            .safe_opponent_cfv_excess()
+            .ok_or_else(|| "safe river resolver final policy has no CFV diagnostic".to_owned())?;
+        self.safe_root
+            .as_mut()
+            .expect("safe river root checked")
+            .projection_best_response_evaluations += 1;
+        if final_excess.0 > RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB {
+            return Err(format!(
+                "safe river resolver projection failed its exact CFV check ({:.6}bb)",
+                final_excess.0
+            ));
+        }
+        if final_excess.2 > blueprint_excess.2 + 1e-7 {
+            return Err(format!(
+                "safe river resolver projection increased exact reach-weighted opponent CFV ({:.6}bb versus anchor {:.6}bb)",
+                final_excess.2, blueprint_excess.2
+            ));
+        }
+        Ok(())
+    }
+
+    fn safe_walk(
+        &mut self,
+        traverser: usize,
+        round: u64,
+        accumulate_average: bool,
+    ) -> [Vec<f64>; 2] {
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let (resolving_player, opponent, gadget_strategy, alternatives) = {
+            let safe = self.safe_root.as_mut().expect("safe river root installed");
+            let opponent = 1 - safe.resolving_player;
+            if traverser == opponent {
+                safe.node.discount_regrets(round, &self.config.game.dcfr);
+            }
+            (
+                safe.resolving_player,
+                opponent,
+                safe.node.strategy(&self.legal[opponent]),
+                safe.opponent_alternative_values_bb.clone(),
+            )
+        };
+
+        if traverser == resolving_player {
+            let mut enter_reaches = reaches;
+            for combo in 0..COMBO_COUNT {
+                enter_reaches[opponent][combo] *= gadget_strategy[combo * 2];
+            }
+            return self.walk(root, enter_reaches, traverser, round, accumulate_average);
+        }
+
+        let follow = self.walk(root, reaches.clone(), traverser, round, accumulate_average);
+        let compatible_resolver =
+            compatible_masses_from_card_marginals(&self.combos, &reaches[resolving_player]);
+        let safe = self.safe_root.as_mut().expect("safe river root installed");
+        for combo in 0..COMBO_COUNT {
+            if !self.legal[opponent][combo] {
+                continue;
+            }
+            let offset = combo * 2;
+            let compatible_resolver_mass = compatible_resolver[combo];
+            let action_values = [
+                follow[opponent][combo],
+                alternatives[combo] * compatible_resolver_mass,
+            ];
+            let expected = gadget_strategy[offset] * action_values[0]
+                + gadget_strategy[offset + 1] * action_values[1];
+            for action in 0..2 {
+                safe.node.regrets[offset + action] += action_values[action] - expected;
+            }
+            if accumulate_average && round > self.config.averaging_delay {
+                for action in 0..2 {
+                    safe.node.strategy_sum[offset + action] +=
+                        reaches[opponent][combo] * gadget_strategy[offset + action];
+                }
+            }
+        }
+        if accumulate_average && round > self.config.averaging_delay {
+            safe.node
+                .finish_average_update(round, &self.config.game.dcfr);
+        }
+        follow
+    }
+
+    /// CFR form of the Maxmargin gadget from Brown and Sandholm (2017).
+    /// The opponent adversarially selects its root private hand, then chance
+    /// selects a compatible resolving-player hand from the public range. The
+    /// shifted payoff is the subgame value minus that hand's blueprint opt-out,
+    /// so minimizing this game maximizes the worst protected margin.
+    fn safe_maxmargin_walk(
+        &mut self,
+        traverser: usize,
+        round: u64,
+        accumulate_average: bool,
+    ) -> [Vec<f64>; 2] {
+        let (resolving_player, opponent, alternatives) = {
+            let safe = self.safe_root.as_ref().expect("safe river root installed");
+            (
+                safe.resolving_player,
+                1 - safe.resolving_player,
+                safe.opponent_alternative_values_bb.clone(),
+            )
+        };
+        let resolving_reach = self.config.state.ranges[resolving_player].clone();
+        let compatible_resolver =
+            compatible_masses_from_card_marginals(&self.combos, &resolving_reach);
+        let selector_strategy = {
+            let selector = self
+                .safe_margin_selector
+                .as_mut()
+                .expect("safe maxmargin selector installed");
+            if traverser == opponent {
+                selector.discount_regrets(round, &self.config.game.dcfr);
+            }
+            selector.strategy(&self.legal[opponent], &compatible_resolver)
+        };
+
+        // `walk` expects factorized reaches. Dividing the selected opponent
+        // hand by its compatible resolving-player mass reproduces the gadget's
+        // conditional chance distribution exactly.
+        let mut reaches = self.config.state.ranges.clone();
+        for combo in 0..COMBO_COUNT {
+            reaches[opponent][combo] = if compatible_resolver[combo] > EPSILON {
+                selector_strategy[combo] / compatible_resolver[combo]
+            } else {
+                0.0
+            };
+        }
+        let follow = self.walk(
+            self.config.state.game_state(),
+            reaches,
+            traverser,
+            round,
+            accumulate_average,
+        );
+        if traverser == opponent {
+            let shifted_values = (0..COMBO_COUNT)
+                .map(|combo| {
+                    if compatible_resolver[combo] > EPSILON {
+                        follow[opponent][combo] / compatible_resolver[combo] - alternatives[combo]
+                    } else {
+                        0.0
+                    }
+                })
+                .collect::<Vec<_>>();
+            let expected = selector_strategy
+                .iter()
+                .zip(&shifted_values)
+                .map(|(probability, value)| probability * value)
+                .sum::<f64>();
+            let selector = self
+                .safe_margin_selector
+                .as_mut()
+                .expect("safe maxmargin selector installed");
+            for combo in 0..COMBO_COUNT {
+                if self.legal[opponent][combo] && compatible_resolver[combo] > EPSILON {
+                    selector.regrets[combo] += shifted_values[combo] - expected;
+                }
+            }
+        }
+        follow
     }
 
     fn train(&mut self) {
@@ -6594,8 +7170,16 @@ impl RiverSolver {
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
             let round = offset + 1;
-            self.walk(root.clone(), reaches.clone(), 0, round, false);
-            self.walk(root.clone(), reaches.clone(), 1, round, true);
+            if self.safe_margin_selector.is_some() {
+                self.safe_maxmargin_walk(0, round, false);
+                self.safe_maxmargin_walk(1, round, true);
+            } else if self.safe_root.is_some() {
+                self.safe_walk(0, round, false);
+                self.safe_walk(1, round, true);
+            } else {
+                self.walk(root.clone(), reaches.clone(), 0, round, false);
+                self.walk(root.clone(), reaches.clone(), 1, round, true);
+            }
         }
     }
 
@@ -7022,6 +7606,105 @@ pub(super) fn solve_river_policy(
     Ok(solver.policy_strategies_with_action_values())
 }
 
+/// Resolve the exact river subgame for the acting player while preserving an
+/// exact per-private-hand opponent best-response value from the supplied
+/// blueprint. The finite solve is projected back toward that blueprint until
+/// every compatible opponent hand satisfies the hard CFV bound.
+pub(super) fn solve_river_safe_policy(
+    config: RiverSolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<SafeRiverPolicy, String> {
+    solve_river_safe_policy_with_method(config, blueprint_strategies, resolving_player, false)
+}
+
+pub(super) fn solve_river_safe_maxmargin_policy(
+    config: RiverSolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<SafeRiverPolicy, String> {
+    solve_river_safe_policy_with_method(config, blueprint_strategies, resolving_player, true)
+}
+
+fn solve_river_safe_policy_with_method(
+    mut config: RiverSolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+    maxmargin: bool,
+) -> Result<SafeRiverPolicy, String> {
+    if resolving_player > 1 || resolving_player != config.state.actor {
+        return Err("safe river resolving must target the acting player".to_owned());
+    }
+    config.state = config.state.validate_and_normalize(&config.game)?;
+    let opponent = 1 - resolving_player;
+    let authentic_opponent_reach = config.state.ranges[opponent].clone();
+    let compatible = all_combos()
+        .into_iter()
+        .filter(|combo| {
+            !combo
+                .cards()
+                .iter()
+                .any(|card| config.state.board.contains(card))
+        })
+        .map(|combo| combo.key())
+        .collect::<Vec<_>>();
+    if compatible.is_empty() {
+        return Err("safe river resolving has no board-compatible opponent hands".to_owned());
+    }
+    config.state.ranges[opponent].fill(0.0);
+    let uniform = 1.0 / compatible.len() as f64;
+    for combo in compatible {
+        config.state.ranges[opponent][combo] = uniform;
+    }
+
+    let mut blueprint = RiverSolver::new(config.clone())?;
+    blueprint.load_frozen_average_strategies(blueprint_strategies)?;
+    let opponent_alternative_values_bb = blueprint.exact_best_response_conditional_values(opponent);
+
+    let mut solver = RiverSolver::new(config)?;
+    solver.safe_opponent_evaluation_reach = Some(authentic_opponent_reach);
+    if maxmargin {
+        solver.install_safe_maxmargin_root(resolving_player, opponent_alternative_values_bb)?;
+    } else {
+        solver.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
+    }
+    solver.train();
+    solver.project_safe_strategy_to_blueprint(blueprint_strategies)?;
+    let final_excess = solver
+        .safe_opponent_cfv_excess()
+        .ok_or_else(|| "safe river resolver has no final CFV diagnostic".to_owned())?;
+    let safe = solver
+        .safe_root
+        .as_ref()
+        .expect("safe river root installed");
+    let unprojected_opponent_maximum_cfv_excess_bb = safe
+        .unprojected_maximum_cfv_excess_bb
+        .expect("safe river projection records the unprojected excess");
+    let unprojected_opponent_reach_weighted_cfv_excess_bb = safe
+        .unprojected_reach_weighted_cfv_excess_bb
+        .expect("safe river projection records the reach-weighted unprojected excess");
+    let unprojected_opponent_signed_reach_weighted_cfv_delta_bb = safe
+        .unprojected_signed_reach_weighted_cfv_delta_bb
+        .expect("safe river projection records the signed reach-weighted unprojected delta");
+    let deployed_resolved_policy_weight = safe.deployed_resolved_policy_weight;
+    let projection_best_response_evaluations = safe.projection_best_response_evaluations;
+    Ok(SafeRiverPolicy {
+        strategies: solver
+            .policy_strategies_with_action_values()
+            .into_iter()
+            .filter(|strategy| strategy.actor == resolving_player)
+            .collect(),
+        opponent_maximum_cfv_excess_bb: final_excess.0,
+        opponent_reach_weighted_cfv_excess_bb: final_excess.1,
+        opponent_signed_reach_weighted_cfv_delta_bb: final_excess.2,
+        unprojected_opponent_maximum_cfv_excess_bb,
+        unprojected_opponent_reach_weighted_cfv_excess_bb,
+        unprojected_opponent_signed_reach_weighted_cfv_delta_bb,
+        deployed_resolved_policy_weight,
+        projection_best_response_evaluations,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct TurnRiverSolveConfig {
     pub game: BlueprintConfig,
@@ -7225,6 +7908,7 @@ impl TurnRiverSolver {
             },
             unprojected_maximum_cfv_excess_bb: None,
             unprojected_reach_weighted_cfv_excess_bb: None,
+            unprojected_signed_reach_weighted_cfv_delta_bb: None,
             deployed_resolved_policy_weight: 1.0,
             projection_best_response_evaluations: 0,
         });
@@ -12991,6 +13675,80 @@ mod tests {
         assert!(policy
             .iter()
             .all(|strategy| strategy.action_values_bb.is_some()));
+
+        let safe_config = RiverSolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::uniform_river_start([0, 5, 10, 15, 20], 1, [1.0, 1.0]),
+            iterations: 6,
+            averaging_delay: 0,
+        };
+        let safe = solve_river_safe_policy(safe_config.clone(), &full.strategies, full.state.actor)
+            .unwrap();
+        assert!(!safe.strategies.is_empty());
+        assert!(safe
+            .strategies
+            .iter()
+            .all(|strategy| strategy.actor == full.state.actor));
+        assert!(safe
+            .strategies
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_some()));
+        assert!(safe.opponent_maximum_cfv_excess_bb <= RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB);
+        assert!(
+            safe.opponent_reach_weighted_cfv_excess_bb <= RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
+        );
+        assert!(safe.opponent_signed_reach_weighted_cfv_delta_bb <= 1e-7);
+        assert!((0.0..=1.0).contains(&safe.deployed_resolved_policy_weight));
+        assert!(safe.projection_best_response_evaluations >= 1);
+
+        let maxmargin = solve_river_safe_maxmargin_policy(
+            safe_config.clone(),
+            &full.strategies,
+            full.state.actor,
+        )
+        .unwrap();
+        let repeated = solve_river_safe_maxmargin_policy(
+            safe_config.clone(),
+            &full.strategies,
+            full.state.actor,
+        )
+        .unwrap();
+        assert_same_policy(&maxmargin.strategies, &repeated.strategies);
+        assert!(
+            maxmargin.opponent_maximum_cfv_excess_bb <= RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
+        );
+        assert!(
+            maxmargin.opponent_reach_weighted_cfv_excess_bb
+                <= RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
+        );
+        assert!(maxmargin.opponent_signed_reach_weighted_cfv_delta_bb <= 1e-7);
+        assert!((0.0..=1.0).contains(&maxmargin.deployed_resolved_policy_weight));
+        assert!(maxmargin.projection_best_response_evaluations >= 1);
+
+        let mut skewed_config = safe_config;
+        let opponent = 1 - full.state.actor;
+        for (combo, reach) in skewed_config.state.ranges[opponent].iter_mut().enumerate() {
+            if combo % 7 == 0 {
+                *reach *= 100.0;
+            }
+        }
+        let skewed =
+            solve_river_safe_maxmargin_policy(skewed_config, &full.strategies, full.state.actor)
+                .unwrap();
+        assert!(
+            (skewed.unprojected_opponent_maximum_cfv_excess_bb
+                - maxmargin.unprojected_opponent_maximum_cfv_excess_bb)
+                .abs()
+                < 1e-8,
+            "worst-hand safety training must remain range-uniform"
+        );
+        assert!(
+            (skewed.unprojected_opponent_signed_reach_weighted_cfv_delta_bb
+                - maxmargin.unprojected_opponent_signed_reach_weighted_cfv_delta_bb)
+                .abs()
+                > 1e-6,
+            "aggregate deployment scoring must retain the authentic reached range"
+        );
     }
 
     #[test]

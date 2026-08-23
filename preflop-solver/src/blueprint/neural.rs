@@ -83,6 +83,19 @@ impl ExploitabilityCertificateConfig {
 pub struct RiverResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
+    /// Protect every board-compatible opponent hand with an exact blueprint
+    /// best-response CFV opt-out and deploy only the acting player's policy.
+    pub safe_resolving: bool,
+    /// Use the adversarial root-hand selector from safe Maxmargin resolving
+    /// instead of the ordinary opt-out Resolve gadget.
+    pub safe_maxmargin: bool,
+    /// Optional iteration budget for the safety path. This lets one seat use
+    /// a longer safe solve without changing the accepted ordinary resolver on
+    /// the other seat.
+    pub safe_iterations: Option<u64>,
+    /// Optionally apply the safety gadget to only one seat while retaining the
+    /// ordinary exact river resolver for the other configured seat.
+    pub safe_resolved_actor: Option<usize>,
     /// Restrict resolved action replacement to one fixed seat. Player 0 is
     /// the BTN/SB and player 1 is the BB in the pinned heads-up game.
     pub resolved_actor: Option<usize>,
@@ -582,6 +595,16 @@ pub struct ExploitabilityCertificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub river_resolver_averaging_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_safe_resolving: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_safe_resolved_actor: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_safe_maxmargin: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_safe_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_safe_resolve_diagnostics: Option<RiverSafeResolveDiagnostics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub river_resolver_resolved_actor: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_iterations: Option<u64>,
@@ -648,6 +671,142 @@ pub struct ExploitabilityCertificate {
     pub assumptions: Vec<&'static str>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct RiverSafeResolveDiagnostics {
+    pub resolutions: u64,
+    pub unprojected_safe_resolutions: u64,
+    pub projected_resolutions: u64,
+    pub mean_deployed_resolved_policy_weight: f64,
+    pub minimum_deployed_resolved_policy_weight: f64,
+    pub maximum_deployed_resolved_policy_weight: f64,
+    pub maximum_final_opponent_cfv_excess_bb: f64,
+    pub mean_final_opponent_reach_weighted_cfv_excess_bb: f64,
+    pub aggregate_nonworsening_resolutions: u64,
+    pub mean_final_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub maximum_final_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub maximum_unprojected_opponent_cfv_excess_bb: f64,
+    pub mean_unprojected_opponent_reach_weighted_cfv_excess_bb: f64,
+    pub maximum_unprojected_opponent_reach_weighted_cfv_excess_bb: f64,
+    pub mean_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    pub best_response_evaluations: u64,
+}
+
+#[derive(Debug, Default)]
+struct RiverSafeResolveDiagnosticsAccumulator {
+    resolutions: u64,
+    unprojected_safe_resolutions: u64,
+    deployed_resolved_policy_weight_sum: f64,
+    minimum_deployed_resolved_policy_weight: f64,
+    maximum_deployed_resolved_policy_weight: f64,
+    maximum_final_opponent_cfv_excess_bb: f64,
+    final_opponent_reach_weighted_cfv_excess_bb_sum: f64,
+    aggregate_nonworsening_resolutions: u64,
+    final_opponent_signed_reach_weighted_cfv_delta_bb_sum: f64,
+    maximum_final_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    maximum_unprojected_opponent_cfv_excess_bb: f64,
+    unprojected_opponent_reach_weighted_cfv_excess_bb_sum: f64,
+    maximum_unprojected_opponent_reach_weighted_cfv_excess_bb: f64,
+    unprojected_opponent_signed_reach_weighted_cfv_delta_bb_sum: f64,
+    minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: f64,
+    best_response_evaluations: u64,
+}
+
+impl RiverSafeResolveDiagnosticsAccumulator {
+    fn record(&mut self, policy: &super::public_belief::SafeRiverPolicy) {
+        let weight = policy.deployed_resolved_policy_weight;
+        if self.resolutions == 0 {
+            self.minimum_deployed_resolved_policy_weight = weight;
+            self.maximum_deployed_resolved_policy_weight = weight;
+            self.maximum_final_opponent_signed_reach_weighted_cfv_delta_bb =
+                policy.opponent_signed_reach_weighted_cfv_delta_bb;
+            self.minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb =
+                policy.unprojected_opponent_signed_reach_weighted_cfv_delta_bb;
+            self.maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb =
+                policy.unprojected_opponent_signed_reach_weighted_cfv_delta_bb;
+        } else {
+            self.minimum_deployed_resolved_policy_weight =
+                self.minimum_deployed_resolved_policy_weight.min(weight);
+            self.maximum_deployed_resolved_policy_weight =
+                self.maximum_deployed_resolved_policy_weight.max(weight);
+            self.maximum_final_opponent_signed_reach_weighted_cfv_delta_bb = self
+                .maximum_final_opponent_signed_reach_weighted_cfv_delta_bb
+                .max(policy.opponent_signed_reach_weighted_cfv_delta_bb);
+            self.minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb = self
+                .minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb
+                .min(policy.unprojected_opponent_signed_reach_weighted_cfv_delta_bb);
+            self.maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb = self
+                .maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb
+                .max(policy.unprojected_opponent_signed_reach_weighted_cfv_delta_bb);
+        }
+        self.resolutions += 1;
+        self.unprojected_safe_resolutions += u64::from(
+            policy.unprojected_opponent_maximum_cfv_excess_bb
+                <= super::public_belief::RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB,
+        );
+        self.deployed_resolved_policy_weight_sum += weight;
+        self.maximum_final_opponent_cfv_excess_bb = self
+            .maximum_final_opponent_cfv_excess_bb
+            .max(policy.opponent_maximum_cfv_excess_bb);
+        self.final_opponent_reach_weighted_cfv_excess_bb_sum +=
+            policy.opponent_reach_weighted_cfv_excess_bb;
+        self.aggregate_nonworsening_resolutions +=
+            u64::from(policy.opponent_signed_reach_weighted_cfv_delta_bb <= 1e-7);
+        self.final_opponent_signed_reach_weighted_cfv_delta_bb_sum +=
+            policy.opponent_signed_reach_weighted_cfv_delta_bb;
+        self.maximum_unprojected_opponent_cfv_excess_bb = self
+            .maximum_unprojected_opponent_cfv_excess_bb
+            .max(policy.unprojected_opponent_maximum_cfv_excess_bb);
+        self.unprojected_opponent_reach_weighted_cfv_excess_bb_sum +=
+            policy.unprojected_opponent_reach_weighted_cfv_excess_bb;
+        self.maximum_unprojected_opponent_reach_weighted_cfv_excess_bb = self
+            .maximum_unprojected_opponent_reach_weighted_cfv_excess_bb
+            .max(policy.unprojected_opponent_reach_weighted_cfv_excess_bb);
+        self.unprojected_opponent_signed_reach_weighted_cfv_delta_bb_sum +=
+            policy.unprojected_opponent_signed_reach_weighted_cfv_delta_bb;
+        self.best_response_evaluations += policy.projection_best_response_evaluations as u64;
+    }
+
+    fn finish(&self) -> Option<RiverSafeResolveDiagnostics> {
+        (self.resolutions > 0).then(|| RiverSafeResolveDiagnostics {
+            resolutions: self.resolutions,
+            unprojected_safe_resolutions: self.unprojected_safe_resolutions,
+            projected_resolutions: self.resolutions - self.unprojected_safe_resolutions,
+            mean_deployed_resolved_policy_weight: self.deployed_resolved_policy_weight_sum
+                / self.resolutions as f64,
+            minimum_deployed_resolved_policy_weight: self.minimum_deployed_resolved_policy_weight,
+            maximum_deployed_resolved_policy_weight: self.maximum_deployed_resolved_policy_weight,
+            maximum_final_opponent_cfv_excess_bb: self.maximum_final_opponent_cfv_excess_bb,
+            mean_final_opponent_reach_weighted_cfv_excess_bb: self
+                .final_opponent_reach_weighted_cfv_excess_bb_sum
+                / self.resolutions as f64,
+            aggregate_nonworsening_resolutions: self.aggregate_nonworsening_resolutions,
+            mean_final_opponent_signed_reach_weighted_cfv_delta_bb: self
+                .final_opponent_signed_reach_weighted_cfv_delta_bb_sum
+                / self.resolutions as f64,
+            maximum_final_opponent_signed_reach_weighted_cfv_delta_bb: self
+                .maximum_final_opponent_signed_reach_weighted_cfv_delta_bb,
+            maximum_unprojected_opponent_cfv_excess_bb: self
+                .maximum_unprojected_opponent_cfv_excess_bb,
+            mean_unprojected_opponent_reach_weighted_cfv_excess_bb: self
+                .unprojected_opponent_reach_weighted_cfv_excess_bb_sum
+                / self.resolutions as f64,
+            maximum_unprojected_opponent_reach_weighted_cfv_excess_bb: self
+                .maximum_unprojected_opponent_reach_weighted_cfv_excess_bb,
+            mean_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: self
+                .unprojected_opponent_signed_reach_weighted_cfv_delta_bb_sum
+                / self.resolutions as f64,
+            minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: self
+                .minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb,
+            maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb: self
+                .maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb,
+            best_response_evaluations: self.best_response_evaluations,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct TrainingNetworkBundle {
     schema: String,
@@ -675,6 +834,7 @@ pub(super) struct FrozenPolicy {
     flop_strategy_cache: Mutex<FlopStrategyCache>,
     turn_strategy_cache: Mutex<TurnStrategyCache>,
     river_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
+    river_safe_resolve_diagnostics: Arc<Mutex<RiverSafeResolveDiagnosticsAccumulator>>,
     river_resolver: Option<RiverResolverConfig>,
     turn_resolver: Option<TurnResolverConfig>,
     flop_resolver: Option<FlopResolverRuntime>,
@@ -689,6 +849,21 @@ struct FlopResolverRuntime {
 
 fn resolver_serves_actor(resolved_actor: Option<usize>, actor: usize) -> bool {
     resolved_actor.is_none_or(|configured| configured == actor)
+}
+
+fn river_resolver_safely_serves_actor(resolver: RiverResolverConfig, actor: usize) -> bool {
+    resolver.safe_resolving
+        && resolver
+            .safe_resolved_actor
+            .is_none_or(|configured| configured == actor)
+}
+
+fn river_resolver_iterations_for_actor(resolver: RiverResolverConfig, actor: usize) -> u64 {
+    if river_resolver_safely_serves_actor(resolver, actor) {
+        resolver.safe_iterations.unwrap_or(resolver.iterations)
+    } else {
+        resolver.iterations
+    }
 }
 
 struct RangePolicyCachedNode {
@@ -805,6 +980,9 @@ impl FrozenPolicy {
             flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_safe_resolve_diagnostics: Arc::new(Mutex::new(
+                RiverSafeResolveDiagnosticsAccumulator::default(),
+            )),
             river_resolver: None,
             turn_resolver: None,
             flop_resolver: None,
@@ -835,10 +1013,18 @@ impl FrozenPolicy {
             flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_safe_resolve_diagnostics: self.river_safe_resolve_diagnostics.clone(),
             river_resolver: self.river_resolver,
             turn_resolver: self.turn_resolver,
             flop_resolver: self.flop_resolver.clone(),
         }
+    }
+
+    fn river_safe_resolve_diagnostics(&self) -> Option<RiverSafeResolveDiagnostics> {
+        self.river_safe_resolve_diagnostics
+            .lock()
+            .expect("river safe-resolve diagnostics")
+            .finish()
     }
 
     pub(super) fn strategy(
@@ -1319,24 +1505,74 @@ impl FrozenPolicy {
             let resolved = if let Some(resolved) = resolved {
                 resolved
             } else {
-                let strategies = super::public_belief::solve_river_policy(
-                    super::public_belief::RiverSolveConfig {
-                        game: config.clone(),
-                        state: public.clone(),
-                        iterations: resolver.iterations,
-                        averaging_delay: resolver.averaging_delay,
-                    },
-                )?;
+                let safe_for_actor = river_resolver_safely_serves_actor(resolver, public.actor);
+                let solve_config = super::public_belief::RiverSolveConfig {
+                    game: config.clone(),
+                    state: public.clone(),
+                    iterations: river_resolver_iterations_for_actor(resolver, public.actor),
+                    averaging_delay: resolver.averaging_delay,
+                };
+                let strategies = if safe_for_actor {
+                    let blueprint = self.river_blueprint_strategies(
+                        state.clone(),
+                        &public.board,
+                        public.ranges.clone(),
+                        config,
+                    )?;
+                    let safe = if resolver.safe_maxmargin {
+                        super::public_belief::solve_river_safe_maxmargin_policy(
+                            solve_config,
+                            &blueprint,
+                            public.actor,
+                        )?
+                    } else {
+                        super::public_belief::solve_river_safe_policy(
+                            solve_config,
+                            &blueprint,
+                            public.actor,
+                        )?
+                    };
+                    if safe.opponent_maximum_cfv_excess_bb
+                        > super::public_belief::RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
+                    {
+                        return Err(format!(
+                            "safe river resolver did not satisfy the strict opponent-CFV bound \
+                             (maximum {:.6}, reach-weighted {:.6}, unprojected {:.6}, \
+                             deployed weight {:.6}, best-response evaluations {}, actor {}, \
+                             board {:?}, invested {:?}, history {:?})",
+                            safe.opponent_maximum_cfv_excess_bb,
+                            safe.opponent_reach_weighted_cfv_excess_bb,
+                            safe.unprojected_opponent_maximum_cfv_excess_bb,
+                            safe.deployed_resolved_policy_weight,
+                            safe.projection_best_response_evaluations,
+                            public.actor,
+                            public.board,
+                            public.invested_bb,
+                            public.public_history,
+                        ));
+                    }
+                    self.river_safe_resolve_diagnostics
+                        .lock()
+                        .expect("river safe-resolve diagnostics")
+                        .record(&safe);
+                    safe.strategies
+                } else {
+                    super::public_belief::solve_river_policy(solve_config)?
+                };
                 let mut cache = self
                     .river_strategy_cache
                     .lock()
                     .expect("river strategy cache");
+                let requested_actor = public.actor;
+                let nested_actor_scope = resolver.safe_resolving;
                 cache_resolved_policy_rows(
                     &mut cache,
                     key,
                     Street::River,
                     &public.board,
-                    strategies,
+                    strategies.into_iter().filter(|strategy| {
+                        !nested_actor_scope || strategy.actor == requested_actor
+                    }),
                     16_384,
                 )?
             };
@@ -1501,6 +1737,101 @@ impl FrozenPolicy {
             return Err("safe turn resolving produced an empty blueprint subtree".to_owned());
         }
         Ok(output)
+    }
+
+    fn river_blueprint_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+    ) -> Result<Vec<super::public_belief::PublicBeliefStrategy>, String> {
+        if state.street != Street::River || board.len() != 5 {
+            return Err("safe river resolving requires a five-card river root".to_owned());
+        }
+        let mut output = Vec::new();
+        self.collect_river_blueprint_strategies(state, board, ranges, config, &mut output)?;
+        if output.is_empty() {
+            return Err("safe river resolving produced an empty blueprint subtree".to_owned());
+        }
+        Ok(output)
+    }
+
+    fn collect_river_blueprint_strategies(
+        &self,
+        state: GameState,
+        board: &[u8],
+        mut ranges: [Vec<f64>; 2],
+        config: &BlueprintConfig,
+        output: &mut Vec<super::public_belief::PublicBeliefStrategy>,
+    ) -> Result<(), String> {
+        if state.terminal.is_some() {
+            return Ok(());
+        }
+        if state.street != Street::River || board.len() != 5 {
+            return Err("safe river blueprint left the river subtree".to_owned());
+        }
+        normalize_ranges_for_board(&mut ranges, board)?;
+        let actions = state.legal_actions(config);
+        let public = PublicBeliefState::from_game_state(board.to_vec(), &state, ranges.clone());
+        let key =
+            range_policy_public_cache_key(Street::River, state.actor, board, &state.public_history);
+        let cached = self
+            .river_strategy_cache
+            .lock()
+            .expect("river strategy cache")
+            .get(&key)
+            .cloned();
+        let probabilities = if let Some(cached) = cached {
+            let labels = actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>();
+            if cached.actor != state.actor
+                || cached
+                    .action_labels
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    != labels
+                || cached.probabilities.len() != COMBO_COUNT * actions.len()
+            {
+                return Err("safe river anchor contains an incompatible resolved row".to_owned());
+            }
+            cached.probabilities.clone()
+        } else {
+            let range_policy = self
+                .range_policy
+                .as_ref()
+                .ok_or_else(|| "safe river resolving requires a range policy".to_owned())?;
+            let source = range_policy
+                .requires_source_policy()
+                .then(|| self.bundle_strategy_matrix(&state, board, &actions, config))
+                .transpose()?;
+            range_policy.strategy(&public, config, source.as_deref())?
+        };
+        output.push(super::public_belief::PublicBeliefStrategy {
+            public_history: state.public_history.clone(),
+            actor: state.actor,
+            action_labels: actions.iter().map(|action| action.label.clone()).collect(),
+            probabilities: probabilities.iter().map(|value| *value as f32).collect(),
+            action_values_bb: None,
+        });
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_ranges = ranges.clone();
+            for combo in 0..COMBO_COUNT {
+                child_ranges[state.actor][combo] *=
+                    probabilities[combo * actions.len() + action_index];
+            }
+            self.collect_river_blueprint_strategies(
+                state.apply(action, config),
+                board,
+                child_ranges,
+                config,
+                output,
+            )?;
+        }
+        Ok(())
     }
 
     /// Freeze the policy that the runtime would actually serve for a short
@@ -2058,6 +2389,17 @@ impl FrozenPolicy {
         if resolver.iterations < 2
             || resolver.averaging_delay >= resolver.iterations
             || resolver.resolved_actor.is_some_and(|actor| actor > 1)
+            || resolver.safe_resolved_actor.is_some_and(|actor| actor > 1)
+            || (resolver.safe_resolved_actor.is_some() && !resolver.safe_resolving)
+            || (resolver.safe_maxmargin && !resolver.safe_resolving)
+            || resolver.safe_iterations.is_some_and(|iterations| {
+                !resolver.safe_resolving || iterations < 2 || resolver.averaging_delay >= iterations
+            })
+            || resolver.safe_resolved_actor.is_some_and(|safe_actor| {
+                resolver
+                    .resolved_actor
+                    .is_some_and(|resolved_actor| resolved_actor != safe_actor)
+            })
         {
             return Err("river resolver configuration is invalid".to_owned());
         }
@@ -6478,6 +6820,29 @@ fn flop_resolver_policy_assumption(resolver: &FlopResolverConfig) -> &'static st
     }
 }
 
+fn river_resolver_policy_assumption(resolver: RiverResolverConfig) -> &'static str {
+    if resolver.safe_maxmargin {
+        return if resolver.safe_resolved_actor.is_some() && resolver.resolved_actor.is_none() {
+            "every reached river action is replaced by deterministic exact-range public-belief CFR; the configured safety seat uses nested safe Maxmargin resolving with an adversarial opponent-hand selector and exact CFV protection while the other seat uses ordinary resolving"
+        } else if resolver.resolved_actor.is_some() {
+            "only reached river actions for the configured fixed seat use nested exact-range safe Maxmargin resolving with an adversarial opponent-hand selector and exact CFV protection; the other seat retains the frozen policy"
+        } else {
+            "every reached river decision uses nested exact-range safe Maxmargin resolving for the acting player with an adversarial opponent-hand selector and exact CFV protection"
+        };
+    }
+    match (
+        resolver.safe_resolving,
+        resolver.safe_resolved_actor.is_some(),
+        resolver.resolved_actor.is_some(),
+    ) {
+        (true, true, false) => "every reached river action is replaced by deterministic exact-range public-belief CFR; the configured safety seat uses nested per-private-hand opponent CFV opt-outs while the other seat uses ordinary resolving",
+        (true, _, true) => "only reached river actions for the configured fixed seat use nested exact-range safe resolving with per-private-hand opponent CFV opt-outs; the other seat retains the frozen policy",
+        (true, false, false) => "every reached river decision uses nested exact-range safe resolving for the acting player with per-private-hand opponent CFV opt-outs",
+        (false, _, true) => "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy",
+        (false, _, false) => "every reached river action is replaced by deterministic exact-range public-belief CFR",
+    }
+}
+
 fn enable_certificate_resolvers(
     generator: &mut SampleGenerator,
     config: &ExploitabilityCertificateConfig,
@@ -6605,11 +6970,7 @@ pub fn certify_exploitability_upper_bound(
         "utilities are zero-sum and bounded to the effective stack in absolute value",
     ];
     if let Some(resolver) = config.river_resolver {
-        assumptions.push(if resolver.resolved_actor.is_some() {
-            "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy"
-        } else {
-            "every reached river action is replaced by deterministic exact-range public-belief CFR"
-        });
+        assumptions.push(river_resolver_policy_assumption(resolver));
     }
     if let Some(resolver) = config.turn_resolver {
         assumptions.push(if resolver.resolved_actor.is_some() {
@@ -6698,6 +7059,22 @@ pub fn certify_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_safe_resolving: config
+            .river_resolver
+            .map(|resolver| resolver.safe_resolving),
+        river_resolver_safe_resolved_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.safe_resolved_actor),
+        river_resolver_safe_maxmargin: config
+            .river_resolver
+            .map(|resolver| resolver.safe_maxmargin),
+        river_resolver_safe_iterations: config
+            .river_resolver
+            .and_then(|resolver| resolver.safe_iterations),
+        river_safe_resolve_diagnostics: generator
+            .networks
+            .as_ref()
+            .and_then(FrozenPolicy::river_safe_resolve_diagnostics),
         river_resolver_resolved_actor: config
             .river_resolver
             .and_then(|resolver| resolver.resolved_actor),
@@ -6932,11 +7309,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         "utilities are zero-sum and bounded to the effective stack in absolute value",
     ];
     if let Some(resolver) = config.river_resolver {
-        assumptions.push(if resolver.resolved_actor.is_some() {
-            "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy"
-        } else {
-            "every reached river action is replaced by deterministic exact-range public-belief CFR"
-        });
+        assumptions.push(river_resolver_policy_assumption(resolver));
     }
     if let Some(resolver) = config.turn_resolver {
         assumptions.push(if resolver.resolved_actor.is_some() {
@@ -7007,6 +7380,22 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_safe_resolving: config
+            .river_resolver
+            .map(|resolver| resolver.safe_resolving),
+        river_resolver_safe_resolved_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.safe_resolved_actor),
+        river_resolver_safe_maxmargin: config
+            .river_resolver
+            .map(|resolver| resolver.safe_maxmargin),
+        river_resolver_safe_iterations: config
+            .river_resolver
+            .and_then(|resolver| resolver.safe_iterations),
+        river_safe_resolve_diagnostics: generator
+            .networks
+            .as_ref()
+            .and_then(FrozenPolicy::river_safe_resolve_diagnostics),
         river_resolver_resolved_actor: config
             .river_resolver
             .and_then(|resolver| resolver.resolved_actor),
@@ -7278,11 +7667,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         "utilities are zero-sum and bounded to the effective stack in absolute value",
     ];
     if let Some(resolver) = config.river_resolver {
-        assumptions.push(if resolver.resolved_actor.is_some() {
-            "only reached river actions for the configured fixed seat are replaced by deterministic exact-range public-belief CFR; the other seat retains the frozen policy"
-        } else {
-            "every reached river action is replaced by deterministic exact-range public-belief CFR"
-        });
+        assumptions.push(river_resolver_policy_assumption(resolver));
     }
     if let Some(resolver) = config.turn_resolver {
         assumptions.push(if resolver.resolved_actor.is_some() {
@@ -7353,6 +7738,22 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_safe_resolving: config
+            .river_resolver
+            .map(|resolver| resolver.safe_resolving),
+        river_resolver_safe_resolved_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.safe_resolved_actor),
+        river_resolver_safe_maxmargin: config
+            .river_resolver
+            .map(|resolver| resolver.safe_maxmargin),
+        river_resolver_safe_iterations: config
+            .river_resolver
+            .and_then(|resolver| resolver.safe_iterations),
+        river_safe_resolve_diagnostics: generator
+            .networks
+            .as_ref()
+            .and_then(FrozenPolicy::river_safe_resolve_diagnostics),
         river_resolver_resolved_actor: config
             .river_resolver
             .and_then(|resolver| resolver.resolved_actor),
@@ -7474,6 +7875,114 @@ mod tests {
         let mut solved = frozen;
         solved.deploy_solved_policy = true;
         assert!(flop_resolver_policy_assumption(&solved).contains("replaced"));
+    }
+
+    #[test]
+    fn river_policy_assumption_distinguishes_unsafe_and_nested_safe_resolving() {
+        let unsafe_resolver = RiverResolverConfig {
+            iterations: 2,
+            averaging_delay: 0,
+            safe_resolving: false,
+            safe_maxmargin: false,
+            safe_iterations: None,
+            safe_resolved_actor: None,
+            resolved_actor: Some(1),
+        };
+        assert!(river_resolver_policy_assumption(unsafe_resolver).contains("replaced"));
+
+        let safe_resolver = RiverResolverConfig {
+            safe_resolving: true,
+            resolved_actor: None,
+            ..unsafe_resolver
+        };
+        let assumption = river_resolver_policy_assumption(safe_resolver);
+        assert!(assumption.contains("nested"));
+        assert!(assumption.contains("CFV opt-outs"));
+
+        let mixed_resolver = RiverResolverConfig {
+            safe_resolved_actor: Some(0),
+            ..safe_resolver
+        };
+        let assumption = river_resolver_policy_assumption(mixed_resolver);
+        assert!(assumption.contains("safety seat"));
+        assert!(river_resolver_safely_serves_actor(mixed_resolver, 0));
+        assert!(!river_resolver_safely_serves_actor(mixed_resolver, 1));
+
+        let maxmargin_resolver = RiverResolverConfig {
+            safe_maxmargin: true,
+            safe_iterations: Some(8),
+            ..mixed_resolver
+        };
+        assert!(river_resolver_policy_assumption(maxmargin_resolver).contains("Maxmargin"));
+        assert_eq!(
+            river_resolver_iterations_for_actor(maxmargin_resolver, 0),
+            8
+        );
+        assert_eq!(
+            river_resolver_iterations_for_actor(maxmargin_resolver, 1),
+            2
+        );
+    }
+
+    #[test]
+    fn river_safe_resolve_diagnostics_report_projection_pressure() {
+        let policy =
+            |unprojected_excess, weight, evaluations| super::public_belief::SafeRiverPolicy {
+                strategies: Vec::new(),
+                opponent_maximum_cfv_excess_bb: 0.049,
+                opponent_reach_weighted_cfv_excess_bb: 0.01,
+                opponent_signed_reach_weighted_cfv_delta_bb: -0.005,
+                unprojected_opponent_maximum_cfv_excess_bb: unprojected_excess,
+                unprojected_opponent_reach_weighted_cfv_excess_bb: unprojected_excess / 2.0,
+                unprojected_opponent_signed_reach_weighted_cfv_delta_bb: unprojected_excess - 0.10,
+                deployed_resolved_policy_weight: weight,
+                projection_best_response_evaluations: evaluations,
+            };
+        let mut diagnostics = RiverSafeResolveDiagnosticsAccumulator::default();
+        diagnostics.record(&policy(0.04, 1.0, 1));
+        diagnostics.record(&policy(0.20, 0.25, 11));
+        let report = diagnostics.finish().unwrap();
+        assert_eq!(report.resolutions, 2);
+        assert_eq!(report.unprojected_safe_resolutions, 0);
+        assert_eq!(report.projected_resolutions, 2);
+        assert_eq!(report.minimum_deployed_resolved_policy_weight, 0.25);
+        assert_eq!(report.maximum_deployed_resolved_policy_weight, 1.0);
+        assert_eq!(report.mean_deployed_resolved_policy_weight, 0.625);
+        assert_eq!(report.maximum_final_opponent_cfv_excess_bb, 0.049);
+        assert_eq!(
+            report.mean_final_opponent_reach_weighted_cfv_excess_bb,
+            0.01
+        );
+        assert_eq!(report.aggregate_nonworsening_resolutions, 2);
+        assert_eq!(
+            report.mean_final_opponent_signed_reach_weighted_cfv_delta_bb,
+            -0.005
+        );
+        assert_eq!(
+            report.maximum_final_opponent_signed_reach_weighted_cfv_delta_bb,
+            -0.005
+        );
+        assert_eq!(report.maximum_unprojected_opponent_cfv_excess_bb, 0.20);
+        assert!(
+            (report.mean_unprojected_opponent_reach_weighted_cfv_excess_bb - 0.06).abs() < 1e-12
+        );
+        assert_eq!(
+            report.maximum_unprojected_opponent_reach_weighted_cfv_excess_bb,
+            0.10
+        );
+        assert!(
+            (report.mean_unprojected_opponent_signed_reach_weighted_cfv_delta_bb - 0.02).abs()
+                < 1e-12
+        );
+        assert!(
+            (report.minimum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb + 0.06).abs()
+                < 1e-12
+        );
+        assert!(
+            (report.maximum_unprojected_opponent_signed_reach_weighted_cfv_delta_bb - 0.10).abs()
+                < 1e-12
+        );
+        assert_eq!(report.best_response_evaluations, 12);
     }
 
     #[test]
@@ -7611,6 +8120,113 @@ mod tests {
         assert_eq!(root.action_labels, ["check", "bet"]);
         assert_eq!(root.probabilities.len(), COMBO_COUNT * 2);
         assert!(!cache.contains_key(&root_key));
+    }
+
+    #[test]
+    fn safe_river_anchor_replays_every_cached_nested_policy_row() {
+        let scorer = || DenseScorer {
+            layers: vec![DenseLayer {
+                input_size: MODEL_INPUT_COUNT,
+                output_size: 1,
+                activation: DenseActivation::Linear,
+                weights: vec![0.0; MODEL_INPUT_COUNT],
+                biases: vec![0.0],
+            }],
+        };
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 4.0;
+        game.action_abstraction.turn_river_bet_pot_fractions = vec![1.0];
+        game.action_abstraction.postflop_raise_pot_fractions = vec![1.0];
+        let board = [0, 5, 10, 15, 20];
+        let root = GameState {
+            street: Street::River,
+            actor: 0,
+            invested: [1.0, 1.0],
+            street_invested: [0.0, 0.0],
+            last_full_raise: 1.0,
+            aggressions: 0,
+            checks: 0,
+            raise_reopened: true,
+            public_history: vec!["public_belief:river_start".to_owned()],
+            trajectory: Vec::new(),
+            terminal: None,
+        };
+        let mut ranges = [vec![1.0; COMBO_COUNT], vec![1.0; COMBO_COUNT]];
+        normalize_ranges_for_board(&mut ranges, &board).unwrap();
+        let strategies =
+            super::public_belief::solve_river_policy(super::public_belief::RiverSolveConfig {
+                game: game.clone(),
+                state: PublicBeliefState::from_game_state(board.to_vec(), &root, ranges.clone()),
+                iterations: 2,
+                averaging_delay: 0,
+            })
+            .unwrap();
+        let root_key =
+            range_policy_public_cache_key(Street::River, root.actor, &board, &root.public_history);
+        let mut river_cache = BTreeMap::new();
+        cache_resolved_policy_rows(
+            &mut river_cache,
+            root_key,
+            Street::River,
+            &board,
+            strategies,
+            65_536,
+        )
+        .unwrap();
+        let cached_row_count = river_cache.len();
+        let policy = FrozenPolicy {
+            bundle: TrainingNetworkBundle {
+                schema: TRAINING_NETWORK_SCHEMA.to_owned(),
+                input_size: MODEL_INPUT_COUNT,
+                strategy_transform: StrategyTransform::Softmax,
+                networks: vec![scorer(), scorer()],
+                postflop_networks: None,
+                sampling_baseline: None,
+                sampling_baseline_scale: None,
+            },
+            bundle_sha256: "test-only".to_owned(),
+            // The absence of a range policy makes any missed cache replay fail
+            // closed instead of silently rebuilding a stale neural anchor.
+            range_policy: None,
+            range_cache: Mutex::new(BTreeMap::new()),
+            preflop_range_cache: Mutex::new(BTreeMap::new()),
+            flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
+            turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
+            river_strategy_cache: Mutex::new(river_cache),
+            river_safe_resolve_diagnostics: Arc::new(Mutex::new(
+                RiverSafeResolveDiagnosticsAccumulator::default(),
+            )),
+            river_resolver: None,
+            turn_resolver: None,
+            flop_resolver: None,
+        };
+        let anchor = policy
+            .river_blueprint_strategies(root, &board, ranges, &game)
+            .unwrap();
+        assert_eq!(anchor.len(), cached_row_count);
+
+        let cache = policy
+            .river_strategy_cache
+            .lock()
+            .expect("river strategy cache");
+        for strategy in anchor {
+            let key = range_policy_public_cache_key(
+                Street::River,
+                strategy.actor,
+                &board,
+                &strategy.public_history,
+            );
+            let cached = cache.get(&key).expect("every nested row was replayed");
+            assert_eq!(strategy.actor, cached.actor);
+            assert_eq!(strategy.action_labels, cached.action_labels);
+            assert_eq!(strategy.probabilities.len(), cached.probabilities.len());
+            assert!(strategy
+                .probabilities
+                .iter()
+                .zip(&cached.probabilities)
+                .all(|(actual, expected)| (f64::from(*actual) - expected).abs()
+                    <= f32::EPSILON as f64));
+        }
     }
 
     #[test]
@@ -7766,9 +8382,16 @@ mod tests {
             flop_strategy_cache: Mutex::new(FlopStrategyCache::default()),
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
+            river_safe_resolve_diagnostics: Arc::new(Mutex::new(
+                RiverSafeResolveDiagnosticsAccumulator::default(),
+            )),
             river_resolver: Some(RiverResolverConfig {
                 iterations: 4,
                 averaging_delay: 0,
+                safe_resolving: false,
+                safe_maxmargin: false,
+                safe_iterations: None,
+                safe_resolved_actor: None,
                 resolved_actor: None,
             }),
             turn_resolver: None,
@@ -9023,6 +9646,10 @@ mod tests {
                 river_resolver: Some(RiverResolverConfig {
                     iterations: 2,
                     averaging_delay: 0,
+                    safe_resolving: false,
+                    safe_maxmargin: false,
+                    safe_iterations: None,
+                    safe_resolved_actor: None,
                     resolved_actor: Some(1),
                 }),
                 turn_resolver: Some(TurnResolverConfig {
@@ -9060,6 +9687,22 @@ mod tests {
         assert_eq!(resolved_certificate.turn_resolver_resolved_actor, Some(1));
         assert_eq!(resolved_certificate.river_resolver_iterations, Some(2));
         assert_eq!(resolved_certificate.river_resolver_averaging_delay, Some(0));
+        assert_eq!(
+            resolved_certificate.river_resolver_safe_resolving,
+            Some(false)
+        );
+        assert_eq!(
+            resolved_certificate.river_resolver_safe_resolved_actor,
+            None
+        );
+        assert_eq!(
+            resolved_certificate.river_resolver_safe_maxmargin,
+            Some(false)
+        );
+        assert_eq!(resolved_certificate.river_resolver_safe_iterations, None);
+        assert!(resolved_certificate
+            .river_safe_resolve_diagnostics
+            .is_none());
         assert_eq!(resolved_certificate.turn_resolver_iterations, Some(2));
         assert_eq!(resolved_certificate.turn_resolver_averaging_delay, Some(0));
         assert!(resolved_certificate

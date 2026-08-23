@@ -85,6 +85,10 @@
         "turnResolvedActor": 1,
         "riverIterations": 2,
         "riverResolvedActor": 1,
+        "riverSafeResolving": false,
+        "riverSafeMaxmargin": false,
+        "riverSafeIterations": null,
+        "riverSafeResolvedActor": null,
         "deterministic": true
       }
     },

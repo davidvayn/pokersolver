@@ -122,12 +122,38 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--river-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                safe_resolving: args
+                    .iter()
+                    .any(|argument| argument == "--river-resolver-safe"),
+                safe_maxmargin: args
+                    .iter()
+                    .any(|argument| argument == "--river-resolver-safe-maxmargin"),
+                safe_iterations: value(args, "--river-resolver-safe-iterations")
+                    .map(|iterations| iterations.parse::<u64>())
+                    .transpose()?,
+                safe_resolved_actor: value(args, "--river-resolver-safe-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
                 resolved_actor: value(args, "--river-resolver-actor")
                     .map(|actor| actor.parse::<usize>())
                     .transpose()?,
             })
         })
         .transpose()?;
+    if river_resolver.is_none()
+        && [
+            "--river-resolver-averaging-delay",
+            "--river-resolver-safe",
+            "--river-resolver-safe-maxmargin",
+            "--river-resolver-safe-iterations",
+            "--river-resolver-safe-actor",
+            "--river-resolver-actor",
+        ]
+        .iter()
+        .any(|name| args.iter().any(|argument| argument == name))
+    {
+        return Err("river resolver options require --river-resolver-iterations".into());
+    }
     let turn_resolver = value(args, "--turn-resolver-iterations")
         .map(|iterations| -> Result<_, Box<dyn Error>> {
             let iterations = iterations.parse::<u64>()?;
@@ -2303,6 +2329,18 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--river-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                safe_resolving: args
+                    .iter()
+                    .any(|argument| argument == "--river-resolver-safe"),
+                safe_maxmargin: args
+                    .iter()
+                    .any(|argument| argument == "--river-resolver-safe-maxmargin"),
+                safe_iterations: value(args, "--river-resolver-safe-iterations")
+                    .map(|iterations| iterations.parse::<u64>())
+                    .transpose()?,
+                safe_resolved_actor: value(args, "--river-resolver-safe-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
                 resolved_actor: value(args, "--river-resolver-actor")
                     .map(|actor| actor.parse::<usize>())
                     .transpose()?,
@@ -2310,9 +2348,16 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
         })
         .transpose()?;
     if river_resolver.is_none()
-        && ["--river-resolver-averaging-delay", "--river-resolver-actor"]
-            .iter()
-            .any(|name| args.iter().any(|argument| argument == name))
+        && [
+            "--river-resolver-averaging-delay",
+            "--river-resolver-safe",
+            "--river-resolver-safe-maxmargin",
+            "--river-resolver-safe-iterations",
+            "--river-resolver-safe-actor",
+            "--river-resolver-actor",
+        ]
+        .iter()
+        .any(|name| args.iter().any(|argument| argument == name))
     {
         return Err("river resolver options require --river-resolver-iterations".into());
     }
@@ -3102,6 +3147,15 @@ Neural certificate options:
                                   an exact-range public-belief CFR solve
   --river-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
+  --river-resolver-safe           Protect exact blueprint opponent CFVs and
+                                  deploy only the acting player's river policy
+  --river-resolver-safe-maxmargin Maximize the worst protected river margin
+                                  with an adversarial opponent-hand selector
+  --river-resolver-safe-iterations <N>
+                                  Optional longer budget for the safety seat
+  --river-resolver-safe-actor <0|1>
+                                  Apply safety to one seat; ordinarily resolve
+                                  the other configured seat
   --river-resolver-actor <0|1>    Resolve only BTN/SB (0) or BB (1) actions
   --turn-resolver-iterations <N>  Replace every reached turn action with a
                                   joint exact-range turn/river CFR solve

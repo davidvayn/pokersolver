@@ -188,6 +188,10 @@ export interface ContinualResolverRuntime {
     turnResolvedActor: 0 | 1 | null;
     riverIterations: number;
     riverResolvedActor: 0 | 1 | null;
+    riverSafeResolving: boolean;
+    riverSafeMaxmargin: boolean;
+    riverSafeIterations: number | null;
+    riverSafeResolvedActor: 0 | 1 | null;
     deterministic: true;
   };
 }

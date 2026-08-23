@@ -133,6 +133,22 @@ export function practiceResolverCommand(): {
       String(resolverRuntime.resolver.riverIterations),
       '--river-resolver-averaging-delay',
       '0',
+      ...(resolverRuntime.resolver.riverSafeResolving
+        ? ['--river-resolver-safe']
+        : []),
+      ...(resolverRuntime.resolver.riverSafeMaxmargin
+        ? ['--river-resolver-safe-maxmargin']
+        : []),
+      ...(resolverRuntime.resolver.riverSafeIterations === null
+        ? []
+        : [
+            '--river-resolver-safe-iterations',
+            String(resolverRuntime.resolver.riverSafeIterations),
+          ]),
+      ...resolvedActorArgs(
+        '--river-resolver-safe-actor',
+        resolverRuntime.resolver.riverSafeResolvedActor
+      ),
       ...resolvedActorArgs(
         '--river-resolver-actor',
         resolverRuntime.resolver.riverResolvedActor
