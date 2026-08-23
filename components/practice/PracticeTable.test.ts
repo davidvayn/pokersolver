@@ -2,7 +2,7 @@ import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { PracticeTable } from '@/components/practice/PracticeTable';
-import { createHand, seededRandom } from '@/lib/practice-engine';
+import { applyAction, createHand, seededRandom } from '@/lib/practice-engine';
 import type { PolicyNode } from '@/lib/practice-types';
 
 describe('PracticeTable decision controls', () => {
@@ -58,7 +58,6 @@ describe('PracticeTable decision controls', () => {
         node,
         status: 'decision',
         mode: 'push-fold',
-        modelLabel: 'Approximate GTO',
         revealOpponent: false,
         selectedActionId: null,
         onAction: vi.fn(),
@@ -72,5 +71,79 @@ describe('PracticeTable decision controls', () => {
     expect(html).not.toContain('All-in 20bb');
     expect(html).not.toContain('82%');
     expect(html).not.toContain('10%');
+  });
+
+  it('shows an explicit in-progress state without the model badge or Retry', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const state = createHand({
+      id: 'solving-copy-test',
+      modelVersion: 'hu-20bb-v102-consensus-continual-resolver-experimental',
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'button-small-blind',
+      random: seededRandom(19),
+    });
+
+    const html = renderToStaticMarkup(
+      React.createElement(PracticeTable, {
+        state,
+        node: null,
+        status: 'solving',
+        mode: 'full-hand',
+        revealOpponent: false,
+        selectedActionId: null,
+        onAction: vi.fn(),
+        onContinue: vi.fn(),
+        onRetry: vi.fn(),
+      })
+    );
+
+    expect(html).toContain('Currently solving');
+    expect(html).toContain('Almost done');
+    expect(html).not.toContain('Experimental self-play');
+    expect(html).not.toContain('hu-20bb-v102');
+    expect(html).not.toContain('Retry');
+  });
+
+  it('lays down the flop without showing the solving overlay during the preflop handoff', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const initial = createHand({
+      id: 'flop-handoff-test',
+      modelVersion: 'test-v1',
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'button-small-blind',
+      random: seededRandom(23),
+    });
+    const called = applyAction(initial, {
+      id: 'call',
+      kind: 'call',
+      label: 'Call 0.5bb',
+      amountBb: 0.5,
+    });
+    const flop = applyAction(called, {
+      id: 'check',
+      kind: 'check',
+      label: 'Check',
+      amountBb: 0,
+    });
+
+    const html = renderToStaticMarkup(
+      React.createElement(PracticeTable, {
+        state: flop,
+        node: null,
+        status: 'transitioning',
+        mode: 'full-hand',
+        revealOpponent: false,
+        selectedActionId: null,
+        onAction: vi.fn(),
+        onContinue: vi.fn(),
+        onRetry: vi.fn(),
+      })
+    );
+
+    expect(html.match(/aria-label="[2-9TJQKA] of /g)).toHaveLength(5);
+    expect(html).toContain('Flop dealt · preparing actions…');
+    expect(html).not.toContain('Currently solving');
   });
 });

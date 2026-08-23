@@ -13,6 +13,7 @@ import type {
 const MODEL_VERSION = 'hu-20bb-v102-consensus-continual-resolver-experimental';
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_STDERR_BYTES = 16_384;
+const MAX_RESOLVER_PROCESSES = 2;
 
 const resolverManifest = (fullHandManifests as PolicyManifest[]).find(
   (manifest) => manifest.version === MODEL_VERSION
@@ -53,6 +54,19 @@ function resolvedActorArgs(
   return resolvedActor === null ? [] : [flag, String(resolvedActor)];
 }
 
+export function practiceResolverPoolSize(): number {
+  const configured = Number(process.env.PRACTICE_RESOLVER_POOL_SIZE);
+  return Math.max(
+    1,
+    Math.min(
+      MAX_RESOLVER_PROCESSES,
+      Number.isInteger(configured) && configured > 0
+        ? configured
+        : MAX_RESOLVER_PROCESSES
+    )
+  );
+}
+
 export function practiceResolverCommand(): {
   executable: string;
   args: string[];
@@ -66,9 +80,12 @@ export function practiceResolverCommand(): {
     'PRACTICE_RESOLVER_BIN',
     path.join(root, 'preflop-solver', 'target', 'release', 'preflop-solver')
   );
-  const threads = Math.max(
+  const threadsPerProcess = Math.max(
     1,
-    Math.min(8, Number(process.env.PRACTICE_RESOLVER_THREADS) || cpus().length)
+    Math.min(
+      8,
+      Number(process.env.PRACTICE_RESOLVER_THREADS) || cpus().length
+    )
   );
   return {
     executable,
@@ -91,7 +108,7 @@ export function practiceResolverCommand(): {
       '--flop-resolver-value-network',
       path.join(modelRoot, resolverArtifactFiles.flopValueNetwork),
       '--flop-resolver-threads',
-      String(threads),
+      String(threadsPerProcess),
       ...resolvedActorArgs(
         '--flop-resolver-actor',
         resolverRuntime.resolver.flopResolvedActor
@@ -101,7 +118,7 @@ export function practiceResolverCommand(): {
       '--turn-resolver-averaging-delay',
       '0',
       '--turn-resolver-threads',
-      String(threads),
+      String(threadsPerProcess),
       ...resolvedActorArgs(
         '--turn-resolver-actor',
         resolverRuntime.resolver.turnResolvedActor
@@ -118,7 +135,15 @@ export function practiceResolverCommand(): {
   };
 }
 
-class PracticeSolverProcess {
+export interface PracticeResolverWorker {
+  query(
+    payload: Record<string, unknown>,
+    affinityKey?: string
+  ): Promise<unknown>;
+  stop(): Promise<void>;
+}
+
+class PracticeSolverProcess implements PracticeResolverWorker {
   private child: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<ChildProcessWithoutNullStreams> | null = null;
   private stdout = '';
@@ -243,19 +268,68 @@ class PracticeSolverProcess {
   }
 }
 
+export class PracticeSolverPool implements PracticeResolverWorker {
+  private readonly loads: number[];
+  private readonly affinities = new Map<string, number>();
+
+  constructor(private readonly workers: PracticeResolverWorker[]) {
+    if (workers.length === 0) {
+      throw new Error('The practice resolver pool needs at least one worker');
+    }
+    this.loads = workers.map(() => 0);
+  }
+
+  async query(
+    payload: Record<string, unknown>,
+    affinityKey?: string
+  ): Promise<unknown> {
+    let workerIndex = affinityKey
+      ? this.affinities.get(affinityKey)
+      : undefined;
+    if (workerIndex === undefined) {
+      workerIndex = 0;
+      for (let index = 1; index < this.workers.length; index++) {
+        if (this.loads[index] < this.loads[workerIndex]) workerIndex = index;
+      }
+      if (affinityKey) {
+        if (this.affinities.size >= 512) {
+          const oldest = this.affinities.keys().next().value;
+          if (oldest !== undefined) this.affinities.delete(oldest);
+        }
+        this.affinities.set(affinityKey, workerIndex);
+      }
+    }
+    this.loads[workerIndex] += 1;
+    try {
+      return await this.workers[workerIndex].query(payload);
+    } finally {
+      this.loads[workerIndex] -= 1;
+    }
+  }
+
+  async stop(): Promise<void> {
+    await Promise.all(this.workers.map((worker) => worker.stop()));
+  }
+}
+
 const globalResolver = globalThis as typeof globalThis & {
-  __practiceSolverProcess?: PracticeSolverProcess;
+  __practiceSolverPool?: PracticeSolverPool;
 };
 
-export function practiceSolverProcess(): PracticeSolverProcess {
-  globalResolver.__practiceSolverProcess ??= new PracticeSolverProcess();
-  return globalResolver.__practiceSolverProcess;
+export function practiceSolverProcess(): PracticeSolverPool {
+  globalResolver.__practiceSolverPool ??= new PracticeSolverPool(
+    Array.from(
+      { length: practiceResolverPoolSize() },
+      () => new PracticeSolverProcess()
+    )
+  );
+  return globalResolver.__practiceSolverPool;
 }
 
 /** Release the long-lived child process in integration tests and shutdown hooks. */
 export async function stopPracticeSolverProcess(): Promise<void> {
-  const resolver = globalResolver.__practiceSolverProcess;
+  const resolver = globalResolver.__practiceSolverPool;
   if (!resolver) return;
   await resolver.stop();
-  delete globalResolver.__practiceSolverProcess;
+  delete globalResolver.__practiceSolverPool;
 }

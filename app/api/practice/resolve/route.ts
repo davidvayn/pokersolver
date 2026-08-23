@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { modelForFullDepth } from '@/lib/practice-models';
 import type { HandState } from '@/lib/practice-types';
-import { resolverQueryPayload } from '@/lib/server/practice-resolver-request';
+import {
+  resolverAffinityKey,
+  resolverQueryPayload,
+} from '@/lib/server/practice-resolver-request';
 import {
   PRACTICE_RESOLVER_IDENTITY,
   practiceSolverProcess,
@@ -26,7 +29,10 @@ function isQueryState(value: unknown): value is HandState {
   if (!value || typeof value !== 'object') return false;
   const state = value as Partial<HandState>;
   return Boolean(
-    typeof state.modelVersion === 'string' &&
+    typeof state.id === 'string' &&
+      state.id.length > 0 &&
+      state.id.length <= 200 &&
+      typeof state.modelVersion === 'string' &&
       Number.isFinite(state.depthBb) &&
       ['preflop', 'flop', 'turn', 'river'].includes(state.street ?? '') &&
       state.toAct &&
@@ -94,7 +100,8 @@ export async function POST(request: Request) {
         input.stateHash,
         input.modelVersion,
         input.depthBb
-      )
+      ),
+      resolverAffinityKey(state)
     );
     const resolved = result as {
       schema?: unknown;

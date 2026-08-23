@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  BadgeCheck,
   BarChart3,
   CircleDollarSign,
   LoaderCircle,
@@ -20,6 +19,8 @@ import type {
 
 type TableStatus =
   | 'loading'
+  | 'transitioning'
+  | 'solving'
   | 'unavailable'
   | 'decision'
   | 'feedback'
@@ -31,7 +32,6 @@ interface PracticeTableProps {
   node: PolicyNode | null;
   status: TableStatus;
   mode: PracticeMode;
-  modelLabel: string;
   unavailableMessage?: string;
   errorMessage?: string;
   revealOpponent: boolean;
@@ -106,7 +106,6 @@ export function PracticeTable({
   node,
   status,
   mode,
-  modelLabel,
   unavailableMessage,
   errorMessage,
   revealOpponent,
@@ -129,15 +128,21 @@ export function PracticeTable({
   const liveMessage =
     status === 'loading'
       ? 'Loading practice spot'
-      : status === 'decision'
-        ? `Action on hero, ${state?.street ?? 'preflop'}`
-        : status === 'feedback'
-          ? 'Decision reviewed. Continue the hand when ready.'
-          : status === 'review'
-            ? 'Hand review complete. Continue when ready.'
-          : status === 'unavailable'
-            ? 'Practice model unavailable'
-            : errorMessage ?? 'Practice error';
+      : status === 'transitioning'
+        ? state?.street === 'preflop'
+          ? 'Completing the preflop action.'
+          : 'The flop is dealt. Preparing the first postflop decision.'
+        : status === 'solving'
+          ? 'Currently solving the postflop strategy. Almost done.'
+          : status === 'decision'
+            ? `Action on hero, ${state?.street ?? 'preflop'}`
+            : status === 'feedback'
+              ? 'Decision reviewed. Continue the hand when ready.'
+              : status === 'review'
+                ? 'Hand review complete. Continue when ready.'
+                : status === 'unavailable'
+                  ? 'Practice model unavailable'
+                  : errorMessage ?? 'Practice error';
 
   return (
     <section aria-labelledby="practice-table-title" className="min-w-0">
@@ -151,10 +156,6 @@ export function PracticeTable({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-xs">
-            <BadgeCheck className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
-            <span className="font-medium">{modelLabel}</span>
-          </div>
           {onOpenAnalyst && (
             <button
               type="button"
@@ -237,10 +238,13 @@ export function PracticeTable({
             </div>
           )}
 
-          {(status === 'loading' || status === 'unavailable' || status === 'error') && (
+          {(status === 'loading' ||
+            status === 'solving' ||
+            status === 'unavailable' ||
+            status === 'error') && (
             <div className="practice-table-overlay">
               <div className="max-w-md rounded-lg border border-white/15 bg-neutral-950/85 p-5 text-center text-white shadow-2xl backdrop-blur-sm">
-                {status === 'loading' ? (
+                {status === 'loading' || status === 'solving' ? (
                   <LoaderCircle className="mx-auto h-6 w-6 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 ) : status === 'unavailable' ? (
                   <ShieldAlert className="mx-auto h-6 w-6 text-amber-300" aria-hidden="true" />
@@ -250,18 +254,22 @@ export function PracticeTable({
                 <p className="mt-3 text-sm font-semibold">
                   {status === 'loading'
                     ? 'Preparing the table'
-                    : status === 'unavailable'
-                      ? 'Validated model not available'
-                      : 'The table is paused'}
+                    : status === 'solving'
+                      ? 'Currently solving'
+                      : status === 'unavailable'
+                        ? 'Validated model not available'
+                        : 'The table is paused'}
                 </p>
                 <p className="mt-1 text-xs leading-5 text-white/65">
                   {status === 'loading'
                     ? 'Dealing unique cards and pinning the model version.'
-                    : status === 'unavailable'
-                      ? unavailableMessage
-                      : errorMessage}
+                    : status === 'solving'
+                      ? 'Almost done — the postflop strategy started during preflop.'
+                      : status === 'unavailable'
+                        ? unavailableMessage
+                        : errorMessage}
                 </p>
-                {status !== 'loading' && (
+                {status !== 'loading' && status !== 'solving' && (
                   <button
                     type="button"
                     onClick={onRetry}
@@ -308,9 +316,15 @@ export function PracticeTable({
           <p className="py-3 text-center text-sm text-muted">
             {status === 'loading'
               ? 'Loading…'
-              : status === 'unavailable'
-                ? 'Choose an available mode in Settings.'
-                : 'Actions are paused.'}
+              : status === 'transitioning'
+                ? state?.street === 'preflop'
+                  ? 'Completing preflop…'
+                  : 'Flop dealt · preparing actions…'
+                : status === 'solving'
+                  ? 'Currently solving…'
+                  : status === 'unavailable'
+                    ? 'Choose an available mode in Settings.'
+                    : 'Actions are paused.'}
           </p>
         )}
       </div>

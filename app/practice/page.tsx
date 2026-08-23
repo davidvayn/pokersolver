@@ -35,6 +35,7 @@ import {
   savePracticeHand,
   subscribePracticeHistory,
 } from '@/lib/practice-history';
+import { PracticeContinuationCache } from '@/lib/practice-continuation';
 import {
   adaptationConfigForRuntime,
   buildOpponentModel,
@@ -66,6 +67,8 @@ import {
 
 type TableStatus =
   | 'loading'
+  | 'transitioning'
+  | 'solving'
   | 'unavailable'
   | 'decision'
   | 'feedback'
@@ -197,6 +200,28 @@ async function advancePolicyToHero(input: {
   };
 }
 
+interface PreparedContinuation {
+  state: HandState;
+  node: PolicyNode | null;
+  opponentPolicies: OpponentPolicyTrace[];
+}
+
+async function prepareFullHandContinuation(input: {
+  client: PracticePolicyClient;
+  pinned: PinnedPracticeModel;
+  state: HandState;
+  profile: OpponentModelSnapshot;
+  onProgress: (state: HandState) => void;
+}): Promise<PreparedContinuation> {
+  const opponentPolicies: OpponentPolicyTrace[] = [];
+  const advanced = await advancePolicyToHero({
+    ...input,
+    mode: 'full-hand',
+    onOpponentPolicy: (trace) => opponentPolicies.push(trace),
+  });
+  return { ...advanced, opponentPolicies };
+}
+
 async function advancePolicyToPostflopDecision(input: {
   client: PracticePolicyClient;
   pinned: PinnedPracticeModel;
@@ -285,6 +310,9 @@ export default function PracticePage() {
   const recentHandsRef = useRef<PracticeHandRecord[]>([]);
   const opponentModelRef = useRef<OpponentModelSnapshot | null>(null);
   const opponentQueriesRef = useRef<OpponentPolicyTrace[]>([]);
+  const continuationCacheRef = useRef(
+    new PracticeContinuationCache<PreparedContinuation, HandState>()
+  );
   const goalTargetRef = useRef<number | null>(null);
   const goalReachedRef = useRef(false);
   const mobileSheetRef = useRef<HTMLElement | null>(null);
@@ -293,9 +321,30 @@ export default function PracticePage() {
     policyClientRef.current = new PracticePolicyClient();
   }
 
+  const prepareContinuation = useCallback(
+    (
+      continuationState: HandState,
+      pinned: PinnedPracticeModel,
+      profile: OpponentModelSnapshot
+    ) =>
+      continuationCacheRef.current.prepare(
+        continuationState,
+        (onProgress) =>
+          prepareFullHandContinuation({
+            client: policyClientRef.current as PracticePolicyClient,
+            pinned,
+            state: continuationState,
+            profile,
+            onProgress,
+          })
+      ),
+    []
+  );
+
   const beginHand = useCallback(
     async (nextSettings: PracticeSettings, handNumber: number) => {
       const currentRequest = ++requestId.current;
+      continuationCacheRef.current.clear();
       setSelectedActionId(null);
       setFeedback(null);
       setErrorMessage('');
@@ -397,6 +446,17 @@ export default function PracticePage() {
           if (advanced.state.terminal) continue;
           setState(advanced.state);
           setActiveNode(advanced.node);
+          if (nextSettings.mode === 'full-hand' && advanced.node) {
+            const branches = practiceActionChoices(advanced.node.actions).sort(
+              (first, second) => second.probability - first.probability
+            );
+            for (const action of branches) {
+              const branch = applyAction(advanced.state, action);
+              if (branch.terminal) continue;
+              const prepared = prepareContinuation(branch, pinned, profile);
+              void prepared.promise.catch(() => undefined);
+            }
+          }
           setStatus('decision');
           decisionStartedAt.current = performance.now();
           return;
@@ -416,7 +476,7 @@ export default function PracticePage() {
         );
       }
     },
-    []
+    [prepareContinuation]
   );
 
   useEffect(() => {
@@ -649,6 +709,21 @@ export default function PracticePage() {
       };
       const handDecisions = [...currentHandDecisions, decision];
       const decisionCount = sessionDecisions.length + 1;
+
+      if (
+        settings.mode === 'full-hand' &&
+        !next.terminal &&
+        pinnedModelRef.current &&
+        opponentModelRef.current
+      ) {
+        const pinned = pinnedModelRef.current;
+        const profile = opponentModelRef.current;
+        const prepared = prepareContinuation(next, pinned, profile);
+        // Preparation is speculative until Continue is clicked. The cache
+        // evicts failures so the normal Retry path can request it again.
+        void prepared.promise.catch(() => undefined);
+      }
+
       setState(next);
       setFeedback(decision);
       setCurrentHandDecisions(handDecisions);
@@ -683,11 +758,47 @@ export default function PracticePage() {
       return;
     }
     const currentRequest = ++requestId.current;
-    setStatus('loading');
+    const followsPreflopDecision =
+      currentHandDecisions.at(-1)?.street === 'preflop';
+    setStatus(
+      settings.mode !== 'full-hand'
+        ? 'loading'
+        : followsPreflopDecision
+          ? 'transitioning'
+          : 'solving'
+    );
     setSelectedActionId(null);
     setFeedback(null);
     setErrorMessage('');
     try {
+      if (settings.mode === 'full-hand') {
+        const continuation = prepareContinuation(state, pinned, profile);
+        const unsubscribe = continuation.subscribe((progress) => {
+          if (currentRequest === requestId.current) setState(progress);
+        });
+        let prepared: PreparedContinuation;
+        try {
+          prepared = await continuation.promise;
+        } finally {
+          unsubscribe();
+        }
+        if (currentRequest !== requestId.current) return;
+        opponentQueriesRef.current.push(...prepared.opponentPolicies);
+        setState(prepared.state);
+        if (prepared.state.terminal) {
+          await finishAndSave(
+            prepared.state,
+            currentHandDecisions,
+            sessionDecisions.length
+          );
+          return;
+        }
+        setActiveNode(prepared.node);
+        setStatus('decision');
+        decisionStartedAt.current = performance.now();
+        return;
+      }
+
       const advanced = await advancePolicyToHero({
         client: policyClientRef.current as PracticePolicyClient,
         pinned,
@@ -763,9 +874,6 @@ export default function PracticePage() {
 
   const depths = fullHandDepths(manifests);
   const manifest = handManifest;
-  const modelLabel = manifest
-    ? `${manifest.label} · ${manifest.version}`
-    : 'No active model';
   const visibleFeedback =
     status === 'feedback' || status === 'review' ? feedback : null;
 
@@ -778,7 +886,7 @@ export default function PracticePage() {
             Practice table
           </div>
           <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted sm:block">
-            Play exact-card heads-up spots against a pinned baseline. The model label shows its validation level: Approximate GTO has passed every release gate, while Experimental self-play explicitly defers exploitability. Adaptive opponent responses never change your grading target.
+            Play exact-card heads-up spots against a pinned baseline. Full-hand continuations begin solving during feedback, and the table never guesses when a decision is unavailable. Adaptive opponent responses never change your grading target.
           </p>
         </div>
         <Link
@@ -826,7 +934,6 @@ export default function PracticePage() {
           node={spot?.node ?? activeNode}
           status={status}
           mode={settings.mode}
-          modelLabel={modelLabel}
           unavailableMessage={unavailableCopy(settings)}
           errorMessage={errorMessage}
           revealOpponent={status === 'review'}
