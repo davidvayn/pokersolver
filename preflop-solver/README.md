@@ -452,6 +452,20 @@ serialized and can be varied with the `--dcfr-alpha`, `--dcfr-beta`, and
 `--dcfr-gamma` research flags. One seeded deal updates one traverser, and the
 traverser alternates each iteration.
 
+External-sampling information sets are visited intermittently. Solver 0.2
+therefore advances one global cumulative regret-discount clock and lazily
+applies every skipped factor when a node is revisited. Average-strategy samples
+accumulate the mathematically equivalent final weight `iteration^gamma`
+directly. Checkpoint schema v3 records that clock; older checkpoints fail
+closed because their regret and average state used incompatible weighting.
+
+The long-run solver default remains gamma=2. Short continual-resolving searches
+may pin another measured exponent through `--dcfr-gamma`; exploitability
+certificates record the complete DCFR tuple. Flop search retains frozen policy
+frequencies unless `--flop-resolver-deploy-solved-policy` is explicit, and the
+practice runtime manifest pins both choices so serving cannot fall back to a
+different profile silently.
+
 ### Exact-card turn/river continuation labels
 
 Public-belief target schema v2 solves the complete turn and river continuation

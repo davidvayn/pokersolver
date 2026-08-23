@@ -39,6 +39,7 @@ fn read_json_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 
 const MODEL_BINARY_MAGIC: &[u8; 8] = b"PKRMODL2";
 const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
+const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 3;
 
 fn model_binary_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.bin", path.display()))
@@ -939,6 +940,8 @@ struct Node {
     average_visits: u64,
     #[serde(default)]
     last_discount_iteration: u64,
+    #[serde(default)]
+    last_regret_discount_cumulative_logs: [f64; 2],
 }
 
 impl Node {
@@ -955,6 +958,7 @@ impl Node {
             regret_updates: 0,
             average_visits: 0,
             last_discount_iteration: 0,
+            last_regret_discount_cumulative_logs: [0.0; 2],
         }
     }
 
@@ -971,16 +975,18 @@ impl Node {
         normalize_or_uniform(self.strategy_sum.clone())
     }
 
-    fn apply_dcfr_discount(&mut self, iteration: u64, parameters: &DcfrParameters) {
+    fn apply_dcfr_regret_discount(
+        &mut self,
+        iteration: u64,
+        discounts: &BlueprintDiscountAccumulator,
+    ) {
         if iteration == 0 || self.last_discount_iteration == iteration {
             return;
         }
-        let time = iteration as f64;
-        let positive_power = time.powf(parameters.positive_regret_exponent);
-        let negative_power = time.powf(parameters.negative_regret_exponent);
-        let positive_factor = positive_power / (positive_power + 1.0);
-        let negative_factor = negative_power / (negative_power + 1.0);
-        let strategy_factor = (time / (time + 1.0)).powf(parameters.strategy_exponent);
+        let positive_factor =
+            (discounts.cumulative_logs[0] - self.last_regret_discount_cumulative_logs[0]).exp();
+        let negative_factor =
+            (discounts.cumulative_logs[1] - self.last_regret_discount_cumulative_logs[1]).exp();
         for regret in &mut self.regrets {
             *regret *= if *regret >= 0.0 {
                 positive_factor
@@ -988,11 +994,47 @@ impl Node {
                 negative_factor
             };
         }
-        for value in &mut self.strategy_sum {
-            *value *= strategy_factor;
-        }
         self.last_discount_iteration = iteration;
+        self.last_regret_discount_cumulative_logs = discounts.cumulative_logs;
     }
+}
+
+struct BlueprintDiscountAccumulator {
+    parameters: DcfrParameters,
+    iteration: u64,
+    cumulative_logs: [f64; 2],
+}
+
+impl BlueprintDiscountAccumulator {
+    fn new(parameters: DcfrParameters) -> Self {
+        Self {
+            parameters,
+            iteration: 0,
+            cumulative_logs: [0.0; 2],
+        }
+    }
+
+    fn advance(&mut self, iteration: u64) {
+        assert_eq!(iteration, self.iteration + 1);
+        let time = iteration as f64;
+        let positive_power = time.powf(self.parameters.positive_regret_exponent);
+        let negative_power = time.powf(self.parameters.negative_regret_exponent);
+        let factors = [
+            positive_power / (positive_power + 1.0),
+            negative_power / (negative_power + 1.0),
+        ];
+        for (cumulative, factor) in self.cumulative_logs.iter_mut().zip(factors) {
+            *cumulative += factor.ln();
+        }
+        self.iteration = iteration;
+    }
+}
+
+/// DCFR's repeated strategy discount telescopes to a final iteration weight
+/// of `t^gamma`. Accumulating that weight directly is essential under external
+/// sampling because an information set is not necessarily visited every round.
+fn dcfr_strategy_averaging_weight(iteration: u64, parameters: &DcfrParameters) -> f64 {
+    (iteration as f64).powf(parameters.strategy_exponent)
 }
 
 fn normalize_or_uniform(mut weights: Vec<f64>) -> Vec<f64> {
@@ -1017,6 +1059,8 @@ struct BlueprintCheckpoint {
     config: BlueprintConfig,
     completed_iterations: u64,
     rng_state: u64,
+    #[serde(default)]
+    regret_discount_cumulative_logs: [f64; 2],
     terminal_evaluations: u64,
     public_histories: BTreeMap<u64, Vec<String>>,
     nodes: BTreeMap<u64, Node>,
@@ -1030,6 +1074,7 @@ struct BlueprintCheckpointRef<'a> {
     config: &'a BlueprintConfig,
     completed_iterations: u64,
     rng_state: u64,
+    regret_discount_cumulative_logs: [f64; 2],
     terminal_evaluations: u64,
     public_histories: &'a BTreeMap<u64, Vec<String>>,
     nodes: &'a BTreeMap<u64, Node>,
@@ -1179,6 +1224,7 @@ struct Trainer {
     config: BlueprintConfig,
     completed_iterations: u64,
     rng: SplitMix64,
+    discounts: BlueprintDiscountAccumulator,
     terminal_evaluations: u64,
     public_histories: BTreeMap<u64, Vec<String>>,
     nodes: BTreeMap<u64, Node>,
@@ -1188,6 +1234,7 @@ impl Trainer {
     fn fresh(config: BlueprintConfig) -> Self {
         Self {
             rng: SplitMix64::new(config.seed),
+            discounts: BlueprintDiscountAccumulator::new(config.dcfr.clone()),
             config,
             completed_iterations: 0,
             terminal_evaluations: 0,
@@ -1200,6 +1247,12 @@ impl Trainer {
         mut checkpoint: BlueprintCheckpoint,
         target: &BlueprintConfig,
     ) -> Result<Self, String> {
+        if checkpoint.schema_version != BLUEPRINT_CHECKPOINT_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported checkpoint schema {}; expected {} after the exact sampled-DCFR weighting upgrade",
+                checkpoint.schema_version, BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
+            ));
+        }
         let mut comparable = target.clone();
         comparable.iterations = checkpoint.config.iterations;
         comparable.max_information_sets = checkpoint.config.max_information_sets;
@@ -1213,8 +1266,12 @@ impl Trainer {
         if target.iterations < checkpoint.completed_iterations {
             return Err("target iterations precede checkpoint progress".to_owned());
         }
-        if checkpoint.schema_version != 2 {
-            return Err("unsupported checkpoint schema".to_owned());
+        if checkpoint
+            .regret_discount_cumulative_logs
+            .iter()
+            .any(|value| !value.is_finite())
+        {
+            return Err("checkpoint has invalid DCFR discount state".to_owned());
         }
         // Reapply the same chip quantization used during traversal. Decimal
         // JSON can otherwise round-trip values such as 29.333 to a neighboring
@@ -1233,6 +1290,7 @@ impl Trainer {
                 .regrets
                 .iter()
                 .chain(node.strategy_sum.iter())
+                .chain(node.last_regret_discount_cumulative_logs.iter())
                 .any(|value| !value.is_finite())
             {
                 return Err(format!("checkpoint node {key} has non-finite values"));
@@ -1250,6 +1308,11 @@ impl Trainer {
             config: target.clone(),
             completed_iterations: checkpoint.completed_iterations,
             rng: SplitMix64::from_state(checkpoint.rng_state),
+            discounts: BlueprintDiscountAccumulator {
+                parameters: target.dcfr.clone(),
+                iteration: checkpoint.completed_iterations,
+                cumulative_logs: checkpoint.regret_discount_cumulative_logs,
+            },
             terminal_evaluations: checkpoint.terminal_evaluations,
             public_histories: checkpoint.public_histories,
             nodes: checkpoint.nodes,
@@ -1258,12 +1321,13 @@ impl Trainer {
 
     fn write_checkpoint(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let checkpoint = BlueprintCheckpointRef {
-            schema_version: 2,
+            schema_version: BLUEPRINT_CHECKPOINT_SCHEMA_VERSION,
             model: MODEL,
             approximate: true,
             config: &self.config,
             completed_iterations: self.completed_iterations,
             rng_state: self.rng.state(),
+            regret_discount_cumulative_logs: self.discounts.cumulative_logs,
             terminal_evaluations: self.terminal_evaluations,
             public_histories: &self.public_histories,
             nodes: &self.nodes,
@@ -1273,6 +1337,7 @@ impl Trainer {
 
     fn train(&mut self, control: &RunControl) -> Result<(), Box<dyn Error>> {
         while self.completed_iterations < self.config.iterations {
+            self.discounts.advance(self.completed_iterations + 1);
             let traverser = self.completed_iterations as usize % 2;
             let deal = Deal::sample(&mut self.rng);
             self.external_sampling(GameState::initial(&self.config), &deal, traverser);
@@ -1333,7 +1398,7 @@ impl Trainer {
                     .collect::<Vec<_>>(),
                 "one abstraction key produced incompatible action sets"
             );
-            node.apply_dcfr_discount(self.completed_iterations + 1, &self.config.dcfr);
+            node.apply_dcfr_regret_discount(self.completed_iterations + 1, &self.discounts);
             node.current_strategy()
         };
 
@@ -1364,8 +1429,12 @@ impl Trainer {
             // nodes during the other player's traversal.
             if self.completed_iterations >= self.config.averaging_delay {
                 let node = self.nodes.get_mut(&key).expect("node inserted");
+                let averaging_weight = dcfr_strategy_averaging_weight(
+                    self.completed_iterations + 1,
+                    &self.config.dcfr,
+                );
                 for (sum, probability) in node.strategy_sum.iter_mut().zip(&strategy) {
-                    *sum += probability;
+                    *sum += averaging_weight * probability;
                 }
                 node.average_visits += 1;
             }
@@ -1499,6 +1568,7 @@ impl Trainer {
         let root_local_deviation = evaluate_root_local_deviation(&self.config, &self.nodes);
         let mut provenance = vec![
             "External-sampling Discounted CFR with alternating traverser updates; traverser actions are enumerated and opponent/chance actions are sampled deterministically from the seeded current strategy.".to_owned(),
+            "Sampled information sets lazily receive every skipped global DCFR regret discount, and each average-strategy visit is weighted by the exact global iteration^gamma contribution.".to_owned(),
             "Exact private cards and boards are sampled without replacement; information sets use lossy coarse rollout-derived strength/potential and public buckets plus an abstract no-limit action grid.".to_owned(),
             "All-in showdowns before the river use deterministic conditional-expectation runout evaluation to reduce chance variance; sample counts and exact-turn behavior are recorded in config.showdown_evaluation.".to_owned(),
             "Rake-free, equal-stack, heads-up cash model with no ante; button posts the small blind, acts first preflop, and acts last postflop.".to_owned(),
@@ -2605,7 +2675,7 @@ mod tests {
     }
 
     #[test]
-    fn dcfr_discounting_uses_separate_regret_and_strategy_factors() {
+    fn dcfr_discounting_is_applied_only_to_regrets() {
         let mut node = Node {
             descriptor: NodeDescriptor {
                 actor: Position::ButtonSmallBlind,
@@ -2623,12 +2693,62 @@ mod tests {
             regret_updates: 1,
             average_visits: 1,
             last_discount_iteration: 0,
+            last_regret_discount_cumulative_logs: [0.0; 2],
         };
-        node.apply_dcfr_discount(1, &DcfrParameters::default());
+        let mut discounts = BlueprintDiscountAccumulator::new(DcfrParameters::default());
+        discounts.advance(1);
+        node.apply_dcfr_regret_discount(1, &discounts);
         assert_eq!(node.regrets, vec![2.0, -2.0]);
-        assert_eq!(node.strategy_sum, vec![1.0, 1.0]);
-        node.apply_dcfr_discount(1, &DcfrParameters::default());
+        assert_eq!(node.strategy_sum, vec![4.0, 4.0]);
+        node.apply_dcfr_regret_discount(1, &discounts);
         assert_eq!(node.regrets, vec![2.0, -2.0]);
+    }
+
+    #[test]
+    fn lazy_full_game_dcfr_regret_discount_matches_eager_updates() {
+        let parameters = DcfrParameters::default();
+        let mut lazy_discounts = BlueprintDiscountAccumulator::new(parameters.clone());
+        let mut eager_discounts = BlueprintDiscountAccumulator::new(parameters);
+        let descriptor = NodeDescriptor {
+            actor: Position::ButtonSmallBlind,
+            street: Street::Preflop,
+            hand_bucket_trajectory: vec!["preflop:AA".to_owned()],
+            public_bucket_trajectory: Vec::new(),
+            public_history_id: 1,
+            pot_bb: 1.5,
+            to_call_bb: 0.5,
+            effective_stack_remaining_bb: 99.5,
+        };
+        let mut lazy = Node {
+            descriptor: descriptor.clone(),
+            action_labels: vec!["fold".to_owned(), "call".to_owned()],
+            regrets: vec![3.0, -2.0],
+            strategy_sum: vec![4.0, 1.0],
+            regret_updates: 0,
+            average_visits: 0,
+            last_discount_iteration: 0,
+            last_regret_discount_cumulative_logs: [0.0; 2],
+        };
+        let mut eager = lazy.clone();
+        for iteration in 1..=12 {
+            lazy_discounts.advance(iteration);
+            eager_discounts.advance(iteration);
+            eager.apply_dcfr_regret_discount(iteration, &eager_discounts);
+        }
+        lazy.apply_dcfr_regret_discount(12, &lazy_discounts);
+        for (actual, expected) in lazy.regrets.iter().zip(&eager.regrets) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert_eq!(lazy.strategy_sum, [4.0, 1.0]);
+        assert_eq!(eager.strategy_sum, [4.0, 1.0]);
+    }
+
+    #[test]
+    fn dcfr_strategy_average_uses_exact_iteration_to_gamma_weight() {
+        let mut parameters = DcfrParameters::default();
+        assert_eq!(dcfr_strategy_averaging_weight(2, &parameters), 4.0);
+        parameters.strategy_exponent = 3.0;
+        assert_eq!(dcfr_strategy_averaging_weight(2, &parameters), 8.0);
     }
 
     #[test]
@@ -2693,6 +2813,18 @@ mod tests {
             },
         )
         .expect("write partial checkpoint");
+        let checkpoint_json: serde_json::Value =
+            serde_json::from_reader(BufReader::new(fs::File::open(&path).unwrap())).unwrap();
+        assert_eq!(
+            checkpoint_json["schema_version"],
+            BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            checkpoint_json["regret_discount_cumulative_logs"]
+                .as_array()
+                .map(Vec::len),
+            Some(2)
+        );
 
         let resumed = solve_controlled(
             tiny_config(),

@@ -40,6 +40,18 @@ pub enum PreflopSolverVariant {
     MccfrPlus,
 }
 
+fn strategy_averaging_weight(
+    variant: PreflopSolverVariant,
+    iteration: u64,
+    dcfr: &DcfrParameters,
+) -> f64 {
+    let iteration = iteration as f64;
+    match variant {
+        PreflopSolverVariant::Dcfr => iteration.powf(dcfr.strategy_exponent),
+        PreflopSolverVariant::MccfrPlus => iteration,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PreflopSolveOptions {
     pub iterations: u64,
@@ -874,7 +886,7 @@ struct SolverNode {
     regret_updates: u64,
     average_visits: u64,
     last_discount_iteration: u64,
-    last_discount_cumulative_logs: [f64; 3],
+    last_discount_cumulative_logs: [f64; 2],
 }
 
 impl SolverNode {
@@ -889,7 +901,7 @@ impl SolverNode {
             regret_updates: 0,
             average_visits: 0,
             last_discount_iteration: 0,
-            last_discount_cumulative_logs: [0.0; 3],
+            last_discount_cumulative_logs: [0.0; 2],
         }
     }
 
@@ -901,14 +913,13 @@ impl SolverNode {
         normalize_or_uniform(self.strategy_sum.clone())
     }
 
-    fn apply_dcfr_discount(&mut self, iteration: u64, discounts: &DiscountAccumulator) {
+    fn apply_dcfr_regret_discount(&mut self, iteration: u64, discounts: &DiscountAccumulator) {
         if iteration == 0 || self.last_discount_iteration == iteration {
             return;
         }
         let factors = [
             (discounts.cumulative_logs[0] - self.last_discount_cumulative_logs[0]).exp(),
             (discounts.cumulative_logs[1] - self.last_discount_cumulative_logs[1]).exp(),
-            (discounts.cumulative_logs[2] - self.last_discount_cumulative_logs[2]).exp(),
         ];
         for regret in &mut self.regrets {
             *regret *= if *regret >= 0.0 {
@@ -916,9 +927,6 @@ impl SolverNode {
             } else {
                 factors[1]
             };
-        }
-        for probability in &mut self.strategy_sum {
-            *probability *= factors[2];
         }
         self.last_discount_iteration = iteration;
         self.last_discount_cumulative_logs = discounts.cumulative_logs;
@@ -928,7 +936,7 @@ impl SolverNode {
 struct DiscountAccumulator {
     parameters: DcfrParameters,
     iteration: u64,
-    cumulative_logs: [f64; 3],
+    cumulative_logs: [f64; 2],
 }
 
 impl DiscountAccumulator {
@@ -936,7 +944,7 @@ impl DiscountAccumulator {
         Self {
             parameters,
             iteration: 0,
-            cumulative_logs: [0.0; 3],
+            cumulative_logs: [0.0; 2],
         }
     }
 
@@ -948,7 +956,6 @@ impl DiscountAccumulator {
         let factors = [
             positive_power / (positive_power + 1.0),
             negative_power / (negative_power + 1.0),
-            (time / (time + 1.0)).powf(self.parameters.strategy_exponent),
         ];
         for (cumulative, factor) in self.cumulative_logs.iter_mut().zip(factors) {
             *cumulative += factor.ln();
@@ -1064,7 +1071,7 @@ impl<'a> PreflopDcfrSolver<'a> {
                     .collect::<Vec<_>>()
             );
             if self.variant == PreflopSolverVariant::Dcfr {
-                node.apply_dcfr_discount(self.iterations + 1, &self.discounts);
+                node.apply_dcfr_regret_discount(self.iterations + 1, &self.discounts);
             }
             node.current_strategy()
         };
@@ -1098,11 +1105,15 @@ impl<'a> PreflopDcfrSolver<'a> {
             node_value
         } else {
             let node = self.nodes.get_mut(&key).expect("preflop node inserted");
-            let averaging_weight = if self.variant == PreflopSolverVariant::MccfrPlus {
-                (self.iterations + 1) as f64
-            } else {
-                1.0
-            };
+            // Accumulating the final DCFR weight directly is equivalent to
+            // discounting the whole strategy sum after every iteration, but
+            // remains exact when external sampling visits this information set
+            // only intermittently. Iteration t therefore contributes t^gamma.
+            let averaging_weight = strategy_averaging_weight(
+                self.variant,
+                self.iterations + 1,
+                &self.discounts.parameters,
+            );
             for (sum, probability) in node.strategy_sum.iter_mut().zip(&strategy) {
                 // The opponent's earlier actions were drawn from the exploratory
                 // behavior policy. Correct their sampled reach back to the target
@@ -5055,7 +5066,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_dcfr_discount_matches_every_iteration_discounting() {
+    fn lazy_dcfr_regret_discount_matches_every_iteration_discounting() {
         let parameters = DcfrParameters::default();
         let mut lazy_discounts = DiscountAccumulator::new(parameters.clone());
         let mut eager_discounts = DiscountAccumulator::new(parameters);
@@ -5069,23 +5080,38 @@ mod tests {
             regret_updates: 0,
             average_visits: 0,
             last_discount_iteration: 0,
-            last_discount_cumulative_logs: [0.0; 3],
+            last_discount_cumulative_logs: [0.0; 2],
         };
         let mut eager = lazy.clone();
         for iteration in 1..=12 {
             lazy_discounts.advance(iteration);
             eager_discounts.advance(iteration);
-            eager.apply_dcfr_discount(iteration, &eager_discounts);
+            eager.apply_dcfr_regret_discount(iteration, &eager_discounts);
         }
-        lazy.apply_dcfr_discount(12, &lazy_discounts);
-        for (actual, expected) in lazy
-            .regrets
-            .iter()
-            .chain(&lazy.strategy_sum)
-            .zip(eager.regrets.iter().chain(&eager.strategy_sum))
-        {
+        lazy.apply_dcfr_regret_discount(12, &lazy_discounts);
+        for (actual, expected) in lazy.regrets.iter().zip(&eager.regrets) {
             assert!((actual - expected).abs() < 1e-12);
         }
+        assert_eq!(lazy.strategy_sum, [4.0, 1.0]);
+        assert_eq!(eager.strategy_sum, [4.0, 1.0]);
+    }
+
+    #[test]
+    fn dcfr_sampled_average_uses_exact_iteration_to_gamma_weight() {
+        let mut parameters = DcfrParameters::default();
+        assert_eq!(
+            strategy_averaging_weight(PreflopSolverVariant::Dcfr, 2, &parameters),
+            4.0
+        );
+        parameters.strategy_exponent = 3.0;
+        assert_eq!(
+            strategy_averaging_weight(PreflopSolverVariant::Dcfr, 2, &parameters),
+            8.0
+        );
+        assert_eq!(
+            strategy_averaging_weight(PreflopSolverVariant::MccfrPlus, 2, &parameters),
+            2.0
+        );
     }
 
     #[test]

@@ -195,9 +195,15 @@ jq -e \
     $validation.rawProbabilitySumsValid == true and
     $validation.quantizedProbabilitySumsValid == true and
     $validation.independentSeedCount == 2 and
+    $models[0].runtime.dcfr == {
+      "positiveRegretExponent": 1.5,
+      "negativeRegretExponent": 0,
+      "strategyExponent": 0
+    } and
     $models[0].runtime.resolver == {
       "flopIterations": 2,
       "flopResolvedActor": 1,
+      "flopDeploySolvedPolicy": true,
       "turnIterations": 2,
       "turnResolvedActor": 1,
       "riverIterations": 2,

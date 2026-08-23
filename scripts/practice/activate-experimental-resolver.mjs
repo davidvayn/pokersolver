@@ -27,16 +27,22 @@ if (manifest.active === true || manifest.validation?.status === 'accepted') {
 
 const validation = manifest.validation ?? {};
 const resolver = manifest.runtime?.resolver;
+const dcfr = manifest.runtime?.dcfr;
 const validResolvedActor = (actor) =>
   actor === null || actor === 0 || actor === 1;
+const validExponent = (value) => Number.isFinite(value) && value >= 0;
 const gates = {
   experimentalLabel: manifest.label === 'Experimental self-play',
   fullHandSubtype: manifest.subtype === 'full-hand',
   continualResolver: manifest.runtime?.kind === 'rust-continual-resolver-v1',
   resolverConfiguration:
+    validExponent(dcfr?.positiveRegretExponent) &&
+    validExponent(dcfr?.negativeRegretExponent) &&
+    validExponent(dcfr?.strategyExponent) &&
     Number.isInteger(resolver?.flopIterations) &&
     resolver.flopIterations >= 2 &&
     validResolvedActor(resolver.flopResolvedActor) &&
+    typeof resolver.flopDeploySolvedPolicy === 'boolean' &&
     Number.isInteger(resolver.turnIterations) &&
     resolver.turnIterations >= 2 &&
     validResolvedActor(resolver.turnResolvedActor) &&

@@ -180,9 +180,15 @@ describe('practice policy client', () => {
         rangeFeatureSchema: 'rank-suit-invariant-combo-policy-query-v2',
         actionFeatureSchema: 'hu-cash-legal-action-v1',
         actionAbstraction,
+        dcfr: {
+          positiveRegretExponent: 1.5,
+          negativeRegretExponent: 0,
+          strategyExponent: 0,
+        },
         resolver: {
           flopIterations: 2,
           flopResolvedActor: 1,
+          flopDeploySolvedPolicy: true,
           turnIterations: 2,
           turnResolvedActor: 1,
           riverIterations: 2,

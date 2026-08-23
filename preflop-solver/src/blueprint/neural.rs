@@ -120,6 +120,9 @@ pub struct FlopResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
     pub regret_matching_plus: bool,
+    /// Deploy the trained flop CFR average instead of retaining the frozen
+    /// range-policy frequencies and using the subgame only for action EVs.
+    pub deploy_solved_policy: bool,
     pub threads: usize,
     pub value_network_path: PathBuf,
     pub auxiliary_value_network_paths: Vec<PathBuf>,
@@ -558,6 +561,7 @@ pub struct ExploitabilityCertificate {
     pub schema: &'static str,
     pub method: &'static str,
     pub depth_bb: f64,
+    pub dcfr: DcfrParameters,
     pub deals: u64,
     pub seed: u64,
     pub network_sha256: String,
@@ -603,6 +607,8 @@ pub struct ExploitabilityCertificate {
     pub flop_resolver_averaging_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_regret_matching_plus: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_deploy_solved_policy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_resolved_policy_weight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1083,6 +1089,8 @@ impl FrozenPolicy {
                     } else {
                         solve_one(&blueprint, public.actor)?
                     }
+                } else if resolver.config.deploy_solved_policy {
+                    super::public_belief::solve_flop_policy(solve_config)?
                 } else {
                     // A two-iteration online solve starts from zero regrets and
                     // can serve near-uniform or inverted frequencies even when
@@ -1984,6 +1992,7 @@ impl FrozenPolicy {
             || (resolver.resolved_actor.is_some() && resolver.safe_bilateral)
             || (!resolver.safe_resolving
                 && (resolver.safe_anchor_iterations > 0 || resolver.safe_bilateral))
+            || (resolver.safe_resolving && resolver.deploy_solved_policy)
         {
             return Err("flop resolver configuration is invalid".into());
         }
@@ -6455,6 +6464,20 @@ fn flop_resolver_auxiliary_value_network_sha256s(
         .map_err(Into::into)
 }
 
+fn flop_resolver_policy_assumption(resolver: &FlopResolverConfig) -> &'static str {
+    if resolver.safe_resolving || resolver.deploy_solved_policy {
+        if resolver.resolved_actor.is_some() {
+            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
+        } else {
+            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
+        }
+    } else if resolver.resolved_actor.is_some() {
+        "reached flop states for the configured fixed seat retain frozen range-policy action frequencies; deterministic exact-range depth-limited CFR supplies action EVs only"
+    } else {
+        "reached flop states retain frozen range-policy action frequencies; deterministic exact-range depth-limited CFR supplies action EVs only"
+    }
+}
+
 fn enable_certificate_resolvers(
     generator: &mut SampleGenerator,
     config: &ExploitabilityCertificateConfig,
@@ -6614,11 +6637,7 @@ pub fn certify_exploitability_upper_bound(
         }
     }
     if let Some(resolver) = &config.flop_resolver {
-        assumptions.push(if resolver.resolved_actor.is_some() {
-            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
-        } else {
-            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
-        });
+        assumptions.push(flop_resolver_policy_assumption(resolver));
         if config.flop_resolver.as_ref().is_some_and(|resolver| {
             resolver.continuation_selection
                 == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
@@ -6664,6 +6683,7 @@ pub fn certify_exploitability_upper_bound(
             "complete_deal_clairvoyant_best_response_with_hoeffding_ucb"
         },
         depth_bb: depth,
+        dcfr: config.game.dcfr.clone(),
         deals: config.deals,
         seed: config.seed,
         network_sha256,
@@ -6716,6 +6736,10 @@ pub fn certify_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_deploy_solved_policy: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.deploy_solved_policy),
         flop_resolver_resolved_policy_weight: config
             .flop_resolver
             .as_ref()
@@ -6922,11 +6946,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         });
     }
     if let Some(resolver) = &config.flop_resolver {
-        assumptions.push(if resolver.resolved_actor.is_some() {
-            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
-        } else {
-            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
-        });
+        assumptions.push(flop_resolver_policy_assumption(resolver));
         if config.flop_resolver.as_ref().is_some_and(|resolver| {
             resolver.continuation_selection
                 == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
@@ -6972,6 +6992,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             "future_public_runout_relaxation_with_hidden_opponent_sample_average_best_response_and_empirical_bernstein_ucb"
         },
         depth_bb: depth,
+        dcfr: config.game.dcfr.clone(),
         deals: config.deals,
         seed: config.seed,
         network_sha256,
@@ -7024,6 +7045,10 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_deploy_solved_policy: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.deploy_solved_policy),
         flop_resolver_resolved_policy_weight: config
             .flop_resolver
             .as_ref()
@@ -7267,11 +7292,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         });
     }
     if let Some(resolver) = &config.flop_resolver {
-        assumptions.push(if resolver.resolved_actor.is_some() {
-            "only reached flop actions for the configured fixed seat are replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network; the other seat retains the frozen policy"
-        } else {
-            "every reached flop action is replaced by deterministic exact-range depth-limited public-belief CFR using a frozen turn value network"
-        });
+        assumptions.push(flop_resolver_policy_assumption(resolver));
         if config.flop_resolver.as_ref().is_some_and(|resolver| {
             resolver.continuation_selection
                 == super::public_belief::FlopContinuationSelection::OpponentPublicChoice
@@ -7317,6 +7338,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             "nested_public_chance_and_hidden_hand_sample_game_best_response_with_empirical_bernstein_ucb"
         },
         depth_bb: depth,
+        dcfr: config.game.dcfr.clone(),
         deals: config.deals,
         seed: config.seed,
         network_sha256,
@@ -7369,6 +7391,10 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.regret_matching_plus),
+        flop_resolver_deploy_solved_policy: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.deploy_solved_policy),
         flop_resolver_resolved_policy_weight: config
             .flop_resolver
             .as_ref()
@@ -7424,6 +7450,30 @@ mod tests {
         assert!(!resolver_serves_actor(Some(0), 1));
         assert!(!resolver_serves_actor(Some(1), 0));
         assert!(resolver_serves_actor(Some(1), 1));
+    }
+
+    #[test]
+    fn flop_policy_assumption_distinguishes_frozen_and_solved_deployment() {
+        let frozen = FlopResolverConfig {
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+            deploy_solved_policy: false,
+            threads: 1,
+            value_network_path: PathBuf::from("turn-value.json.gz"),
+            auxiliary_value_network_paths: Vec::new(),
+            continuation_selection: super::public_belief::FlopContinuationSelection::Mean,
+            safe_resolving: false,
+            safe_anchor_iterations: 0,
+            safe_bilateral: false,
+            resolved_policy_weight: 1.0,
+            resolved_actor: Some(1),
+        };
+        assert!(flop_resolver_policy_assumption(&frozen).contains("retain frozen"));
+
+        let mut solved = frozen;
+        solved.deploy_solved_policy = true;
+        assert!(flop_resolver_policy_assumption(&solved).contains("replaced"));
     }
 
     #[test]
@@ -8808,6 +8858,7 @@ mod tests {
                 iterations: 2,
                 averaging_delay: 0,
                 regret_matching_plus: false,
+                deploy_solved_policy: false,
                 threads: 1,
                 value_network_path: value_path.clone(),
                 auxiliary_value_network_paths: Vec::new(),

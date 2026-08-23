@@ -140,8 +140,11 @@ function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
         ]
       : [];
     const resolver = runtime.resolver;
+    const dcfr = runtime.dcfr;
     const validResolvedActor = (actor: unknown) =>
       actor === null || actor === 0 || actor === 1;
+    const validExponent = (value: unknown) =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0;
     return (
       runtime.endpoint === '/api/practice/resolve' &&
       Object.keys(artifactFiles ?? {}).length === 4 &&
@@ -160,9 +163,13 @@ function validFullHandRuntime(runtime: PolicyManifest['runtime']): boolean {
         'rank-suit-invariant-combo-policy-query-v2' &&
       runtime.actionFeatureSchema === 'hu-cash-legal-action-v1' &&
       validActionAbstraction(runtime.actionAbstraction) &&
+      validExponent(dcfr?.positiveRegretExponent) &&
+      validExponent(dcfr?.negativeRegretExponent) &&
+      validExponent(dcfr?.strategyExponent) &&
       Number.isInteger(resolver?.flopIterations) &&
       resolver.flopIterations >= 2 &&
       validResolvedActor(resolver.flopResolvedActor) &&
+      typeof resolver.flopDeploySolvedPolicy === 'boolean' &&
       Number.isInteger(resolver.turnIterations) &&
       resolver.turnIterations >= 2 &&
       validResolvedActor(resolver.turnResolvedActor) &&

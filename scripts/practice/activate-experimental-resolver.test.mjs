@@ -91,9 +91,15 @@ async function fixture(coverage = 0.96) {
       rangePolicySha256: sha256(artifacts.rangePolicy),
       valueNetworkSha256: sha256(artifacts.flopValueNetwork),
       preflopActionValuesSha256: sha256(artifacts.preflopActionValues),
+      dcfr: {
+        positiveRegretExponent: 1.5,
+        negativeRegretExponent: 0,
+        strategyExponent: 0,
+      },
       resolver: {
         flopIterations: 2,
         flopResolvedActor: 1,
+        flopDeploySolvedPolicy: true,
         turnIterations: 2,
         turnResolvedActor: 1,
         riverIterations: 2,

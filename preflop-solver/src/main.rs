@@ -101,6 +101,7 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
+    apply_dcfr_args(&mut game, args)?;
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
         .ok_or("--networks is required for practice serving")?;
@@ -174,6 +175,9 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                 regret_matching_plus: args
                     .iter()
                     .any(|argument| argument == "--flop-resolver-regret-matching-plus"),
+                deploy_solved_policy: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-deploy-solved-policy"),
                 threads: parse_or(args, "--flop-resolver-threads", 1usize)?,
                 value_network_path: value(args, "--flop-resolver-value-network")
                     .map(PathBuf::from)
@@ -2283,6 +2287,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
+    apply_dcfr_args(&mut game, args)?;
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
         .ok_or("--networks is required for neural certification")?;
@@ -2378,6 +2383,9 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                 regret_matching_plus: args
                     .iter()
                     .any(|argument| argument == "--flop-resolver-regret-matching-plus"),
+                deploy_solved_policy: args
+                    .iter()
+                    .any(|argument| argument == "--flop-resolver-deploy-solved-policy"),
                 threads: parse_or(args, "--flop-resolver-threads", 1usize)?,
                 value_network_path: value(args, "--flop-resolver-value-network")
                     .map(PathBuf::from)
@@ -2419,6 +2427,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
         && [
             "--flop-resolver-averaging-delay",
             "--flop-resolver-regret-matching-plus",
+            "--flop-resolver-deploy-solved-policy",
             "--flop-resolver-threads",
             "--flop-resolver-value-network",
             "--flop-resolver-auxiliary-value-network",
@@ -3113,8 +3122,8 @@ Neural certificate options:
                                   Blend resolved turn actions toward the
                                   frozen policy. Default: 1
   --turn-resolver-actor <0|1>     Resolve only BTN/SB (0) or BB (1) actions
-  --flop-resolver-iterations <N>  Replace every reached flop action with a
-                                  depth-limited exact-range CFR solve
+  --flop-resolver-iterations <N>  Run a depth-limited exact-range flop CFR
+                                  evaluation at every reached flop state
   --flop-resolver-value-network <path>
                                   Required frozen turn CFV network
   --flop-resolver-auxiliary-value-network <path>
@@ -3133,6 +3142,9 @@ Neural certificate options:
                                   Default: resolver iterations / 10
   --flop-resolver-regret-matching-plus
                                   Use regret-matching+ in flop search
+  --flop-resolver-deploy-solved-policy
+                                  Deploy the CFR average instead of retaining
+                                  frozen range-policy action frequencies
   --flop-resolver-threads <N>     Leaf-evaluation threads; default: 1
   --flop-resolver-policy-weight <0..1>
                                   Blend resolved actions with the frozen
@@ -3190,6 +3202,9 @@ Full-game learned-response options:
   --output <path>                 Optional full resolver/evaluation JSON
 
 Neural exploitability-certificate options:
+  --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)
+  --dcfr-beta <number>            Negative-regret exponent (default: 0)
+  --dcfr-gamma <number>           Exact average-strategy exponent (default: 2)
   --opponent-samples-per-deal <N> Hide opponent cards and use N common
                                   conditional particles per future-board game
   --opponent-samples-per-runout <N>

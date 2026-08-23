@@ -155,7 +155,7 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
   );
 
   it(
-    'serves the frozen flop mix instead of a short-run uniform artifact',
+    'serves the pinned solved flop mix instead of the frozen blueprint',
     async () => {
       const result = (await practiceSolverProcess().query({
         stateHash:
@@ -195,9 +195,14 @@ describe.skipIf(!runIntegration)('pinned Rust practice resolver integration', ()
         'bet',
         'all_in',
       ]);
-      expect(result.actions[0].probability).toBeGreaterThan(0.95);
-      expect(result.actions[3].probability).toBeLessThan(0.001);
-      expect(new Set(result.actions.map((action) => action.probability)).size).toBe(4);
+      expect(result.actions.map((action) => action.probability)).toEqual([
+        0.125, 0.125, 0.125, 0.625,
+      ]);
+      expect(new Set(result.actions.map((action) => action.probability)).size).toBe(2);
+      expect(
+        Math.max(...result.actions.map((action) => action.evBb ?? 0)) -
+          Math.min(...result.actions.map((action) => action.evBb ?? 0))
+      ).toBeGreaterThan(0.5);
     },
     120_000
   );

@@ -98,6 +98,12 @@ export function practiceResolverCommand(): {
       path.join(modelRoot, resolverArtifactFiles.rangePolicy),
       '--preflop-action-values',
       path.join(modelRoot, resolverArtifactFiles.preflopActionValues),
+      '--dcfr-alpha',
+      String(resolverRuntime.dcfr.positiveRegretExponent),
+      '--dcfr-beta',
+      String(resolverRuntime.dcfr.negativeRegretExponent),
+      '--dcfr-gamma',
+      String(resolverRuntime.dcfr.strategyExponent),
       '--flop-resolver-iterations',
       String(resolverRuntime.resolver.flopIterations),
       '--flop-resolver-averaging-delay',
@@ -106,6 +112,9 @@ export function practiceResolverCommand(): {
       path.join(modelRoot, resolverArtifactFiles.flopValueNetwork),
       '--flop-resolver-threads',
       String(threadsPerProcess),
+      ...(resolverRuntime.resolver.flopDeploySolvedPolicy
+        ? ['--flop-resolver-deploy-solved-policy']
+        : []),
       ...resolvedActorArgs(
         '--flop-resolver-actor',
         resolverRuntime.resolver.flopResolvedActor

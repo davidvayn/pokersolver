@@ -19,7 +19,7 @@ function option(args: string[], flag: string): string | null {
 }
 
 describe('pinned practice resolver process', () => {
-  it('passes the manifest iteration counts and per-street actor routing to Rust', () => {
+  it('passes the complete manifest solver profile to Rust', () => {
     const manifest = (fullHandManifests as PolicyManifest[]).find(
       (candidate) =>
         candidate.version === PRACTICE_RESOLVER_IDENTITY.modelVersion
@@ -31,6 +31,18 @@ describe('pinned practice resolver process', () => {
 
     const { args } = practiceResolverCommand();
     const resolver = manifest.runtime.resolver;
+    expect(option(args, '--dcfr-alpha')).toBe(
+      String(manifest.runtime.dcfr.positiveRegretExponent)
+    );
+    expect(option(args, '--dcfr-beta')).toBe(
+      String(manifest.runtime.dcfr.negativeRegretExponent)
+    );
+    expect(option(args, '--dcfr-gamma')).toBe(
+      String(manifest.runtime.dcfr.strategyExponent)
+    );
+    expect(args.includes('--flop-resolver-deploy-solved-policy')).toBe(
+      resolver.flopDeploySolvedPolicy
+    );
     const streets = [
       ['flop', resolver.flopIterations, resolver.flopResolvedActor],
       ['turn', resolver.turnIterations, resolver.turnResolvedActor],

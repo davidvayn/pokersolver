@@ -72,9 +72,15 @@
         "postflopRaiseCap": 1,
         "includeAllIn": true
       },
+      "dcfr": {
+        "positiveRegretExponent": 1.5,
+        "negativeRegretExponent": 0,
+        "strategyExponent": 0
+      },
       "resolver": {
         "flopIterations": 2,
         "flopResolvedActor": 1,
+        "flopDeploySolvedPolicy": true,
         "turnIterations": 2,
         "turnResolvedActor": 1,
         "riverIterations": 2,

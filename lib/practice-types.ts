@@ -175,9 +175,15 @@ export interface ContinualResolverRuntime {
   rangeFeatureSchema: 'rank-suit-invariant-combo-policy-query-v2';
   actionFeatureSchema: 'hu-cash-legal-action-v1';
   actionAbstraction: ActionAbstraction;
+  dcfr: {
+    positiveRegretExponent: number;
+    negativeRegretExponent: number;
+    strategyExponent: number;
+  };
   resolver: {
     flopIterations: number;
     flopResolvedActor: 0 | 1 | null;
+    flopDeploySolvedPolicy: boolean;
     turnIterations: number;
     turnResolvedActor: 0 | 1 | null;
     riverIterations: number;

@@ -156,9 +156,15 @@ describe('database-free full-hand activation registry', () => {
             : (() => {
                 throw new Error('test source must use a neural runtime');
               })(),
+        dcfr: {
+          positiveRegretExponent: 1.5,
+          negativeRegretExponent: 0,
+          strategyExponent: 0,
+        },
         resolver: {
           flopIterations: 2,
           flopResolvedActor: 1,
+          flopDeploySolvedPolicy: true,
           turnIterations: 2,
           turnResolvedActor: 1,
           riverIterations: 2,
@@ -185,6 +191,24 @@ describe('database-free full-hand activation registry', () => {
             ...resolverRuntime.artifactFiles,
             preflopActionValues: '../unverified.json.gz',
           },
+        },
+      })
+    ).toBe(false);
+    const { dcfr: _missingDcfr, ...incompleteDcfrRuntime } = resolverRuntime;
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        runtime: incompleteDcfrRuntime,
+      })
+    ).toBe(false);
+    const { flopDeploySolvedPolicy: _missingDeployment, ...incompleteSolver } =
+      resolverRuntime.resolver;
+    expect(
+      isExperimentalFullHandManifest({
+        ...experimental,
+        runtime: {
+          ...resolverRuntime,
+          resolver: incompleteSolver,
         },
       })
     ).toBe(false);

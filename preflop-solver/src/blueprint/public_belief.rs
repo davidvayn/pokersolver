@@ -4051,10 +4051,6 @@ impl FlopSolver {
             if traverser == opponent {
                 safe.node.discount_regrets(round, &self.config.game.dcfr);
             }
-            if accumulate_average {
-                safe.node
-                    .discount_strategy_sum(round, &self.config.game.dcfr);
-            }
             (
                 safe.resolving_player,
                 opponent,
@@ -4099,6 +4095,10 @@ impl FlopSolver {
                         reaches[opponent][combo] * gadget_strategy[offset + action];
                 }
             }
+        }
+        if accumulate_average && round > self.config.averaging_delay {
+            safe.node
+                .finish_average_update(round, &self.config.game.dcfr);
         }
         follow
     }
@@ -4217,9 +4217,6 @@ impl FlopSolver {
             if actor == traverser {
                 node.discount_regrets(round, &self.config.game.dcfr);
             }
-            if accumulate_average {
-                node.discount_strategy_sum(round, &self.config.game.dcfr);
-            }
             node.strategy(&self.legal[actor])
         };
         let action_count = actions.len();
@@ -4270,6 +4267,7 @@ impl FlopSolver {
                         reaches[actor][combo] * strategy[offset + action];
                 }
             }
+            node.finish_average_update(round, &self.config.game.dcfr);
         }
         values
     }
@@ -4306,7 +4304,6 @@ impl FlopSolver {
             let node = self.nodes.get_mut(&key).expect("frozen flop response node");
             if actor == responder {
                 node.discount_regrets(round, &self.config.game.dcfr);
-                node.discount_strategy_sum(round, &self.config.game.dcfr);
                 node.strategy(&self.legal[actor])
             } else {
                 node.average_strategy(&self.legal[actor])
@@ -4356,6 +4353,9 @@ impl FlopSolver {
                             reaches[actor][combo] * strategy[offset + action];
                     }
                 }
+            }
+            if round > self.config.averaging_delay {
+                node.finish_average_update(round, &self.config.game.dcfr);
             }
         }
         values
@@ -6392,7 +6392,13 @@ impl RangeNode {
         self.last_regret_discount_round = round;
     }
 
-    fn discount_strategy_sum(&mut self, round: u64, parameters: &DcfrParameters) {
+    /// Apply DCFR's strategy discount after adding this round's contribution.
+    ///
+    /// This ordering makes the final relative weight of iteration `t` equal
+    /// to `t.powf(gamma)`, as defined by DCFR. Applying the factor before the
+    /// addition shifts every weight forward by one iteration, which is most
+    /// material in the short continual-resolving runs used online.
+    fn finish_average_update(&mut self, round: u64, parameters: &DcfrParameters) {
         if round == 0 || self.last_strategy_discount_round == round {
             return;
         }
@@ -6623,9 +6629,6 @@ impl RiverSolver {
             if actor == traverser {
                 node.discount_regrets(round, &self.config.game.dcfr);
             }
-            if accumulate_average {
-                node.discount_strategy_sum(round, &self.config.game.dcfr);
-            }
             node.strategy(&self.legal[actor])
         };
         let action_count = actions.len();
@@ -6676,6 +6679,7 @@ impl RiverSolver {
                         reaches[actor][combo] * strategy[offset + action];
                 }
             }
+            node.finish_average_update(round, &self.config.game.dcfr);
         }
         values
     }
@@ -7517,10 +7521,6 @@ impl TurnRiverSolver {
             if traverser == opponent {
                 safe.node.discount_regrets(round, &self.config.game.dcfr);
             }
-            if accumulate_average {
-                safe.node
-                    .discount_strategy_sum(round, &self.config.game.dcfr);
-            }
             (
                 safe.resolving_player,
                 opponent,
@@ -7581,6 +7581,10 @@ impl TurnRiverSolver {
                         reaches[opponent][combo] * gadget_strategy[offset + action];
                 }
             }
+        }
+        if accumulate_average && round > self.config.averaging_delay {
+            safe.node
+                .finish_average_update(round, &self.config.game.dcfr);
         }
         follow
     }
@@ -7714,9 +7718,6 @@ impl TurnRiverSolver {
                 if actor == traverser {
                     node.discount_regrets(round, &self.config.game.dcfr);
                 }
-                if accumulate_average {
-                    node.discount_strategy_sum(round, &self.config.game.dcfr);
-                }
                 node.strategy(&legal)
             }
         };
@@ -7774,6 +7775,7 @@ impl TurnRiverSolver {
                         reaches[actor][combo] * strategy[offset + action];
                 }
             }
+            node.finish_average_update(round, &self.config.game.dcfr);
         }
         values
     }
@@ -12037,6 +12039,34 @@ mod tests {
         game.action_abstraction.turn_river_bet_pot_fractions = vec![1.0];
         game.action_abstraction.postflop_raise_pot_fractions = vec![1.0];
         game
+    }
+
+    #[test]
+    fn dcfr_average_updates_give_iteration_t_weight_t_to_gamma() {
+        let mut node = RangeNode {
+            actor: 0,
+            action_labels: vec!["first".to_owned(), "second".to_owned()],
+            regrets: vec![0.0; COMBO_COUNT * 2],
+            strategy_sum: vec![0.0; COMBO_COUNT * 2],
+            last_regret_discount_round: 0,
+            last_strategy_discount_round: 0,
+        };
+        let mut parameters = DcfrParameters::default();
+
+        node.strategy_sum[0] += 1.0;
+        node.finish_average_update(1, &parameters);
+        node.strategy_sum[1] += 1.0;
+        node.finish_average_update(2, &parameters);
+        assert!((node.strategy_sum[1] / node.strategy_sum[0] - 4.0).abs() < 1e-12);
+
+        node.strategy_sum.fill(0.0);
+        node.last_strategy_discount_round = 0;
+        parameters.strategy_exponent = 3.0;
+        node.strategy_sum[0] += 1.0;
+        node.finish_average_update(1, &parameters);
+        node.strategy_sum[1] += 1.0;
+        node.finish_average_update(2, &parameters);
+        assert!((node.strategy_sum[1] / node.strategy_sum[0] - 8.0).abs() < 1e-12);
     }
 
     fn assert_same_policy(measured: &[PublicBeliefStrategy], expected: &[PublicBeliefStrategy]) {
