@@ -13,6 +13,18 @@ const activator = path.resolve(
 );
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
+function binarySidecar(canonical, payload = Buffer.from('fixture')) {
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(payload.length));
+  return Buffer.concat([
+    Buffer.from('PKRMODL2'),
+    createHash('sha256').update(canonical).digest(),
+    createHash('sha256').update(payload).digest(),
+    length,
+    payload,
+  ]);
+}
+
 async function fixture(coverage = 0.96) {
   const root = await mkdtemp(path.join(tmpdir(), 'experimental-activator-'));
   const modelDir = path.join(root, 'models');
@@ -44,6 +56,10 @@ async function fixture(coverage = 0.96) {
     const compressed = gzipSync(artifacts[kind]);
     projectedStorageBytes += compressed.length;
     await writeFile(path.join(modelDir, file), compressed);
+    await writeFile(
+      path.join(modelDir, `${file}.bin`),
+      binarySidecar(artifacts[kind])
+    );
   }
   const manifestPath = path.join(root, 'manifest.json');
   const manifest = {
