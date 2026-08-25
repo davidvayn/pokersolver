@@ -216,6 +216,10 @@ textarea {
   transition: filter 180ms ease;
 }
 
+.practice-seat-folding .practice-card-hand {
+  animation: practice-fold-hand 360ms ease-in both;
+}
+
 .practice-seat-active .practice-card-hand {
   filter: drop-shadow(0 0 7px rgb(var(--accent) / 0.9));
 }
@@ -253,6 +257,16 @@ textarea {
   display: flex;
   transform: translate(-50%, -50%);
   gap: 6px;
+}
+
+.practice-board-card {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.practice-board-card-dealt {
+  animation: practice-board-card-deal 320ms ease-out both;
+  animation-delay: calc(var(--practice-deal-order, 0) * 40ms);
 }
 
 .practice-pot {
@@ -436,30 +450,267 @@ textarea {
   font-size: 15px;
 }
 
-.practice-action-strip {
+.practice-action-event {
+  --practice-action-event-rgb: var(--accent);
+  --practice-action-event-enter-y: 14px;
   position: absolute;
-  left: 14px;
-  top: 50%;
-  z-index: 3;
+  left: calc(50% + clamp(108px, 15vw, 158px));
+  z-index: 8;
   display: flex;
-  width: min(150px, 20%);
-  transform: translateY(-50%);
+  min-width: 160px;
+  max-width: 220px;
+  align-items: center;
+  gap: 9px;
+  overflow: visible;
+  border: 1px solid rgb(var(--practice-action-event-rgb) / 0.72);
+  border-radius: 8px;
+  background: rgb(3 12 14 / 0.9);
+  padding: 8px 10px;
+  color: white;
+  box-shadow:
+    0 0 0 3px rgb(var(--practice-action-event-rgb) / 0.12),
+    0 12px 28px rgb(0 0 0 / 0.34);
+  backdrop-filter: blur(10px);
+  animation: practice-action-event-enter 300ms ease-out both;
+}
+
+.practice-action-event-opponent,
+.practice-action-event-center {
+  top: 27%;
+  --practice-action-event-enter-y: -14px;
+}
+
+.practice-action-event-hero {
+  bottom: 24%;
+}
+
+.practice-action-event-fold {
+  --practice-action-event-rgb: var(--fold);
+}
+
+.practice-action-event-check {
+  --practice-action-event-rgb: var(--check);
+}
+
+.practice-action-event-call {
+  --practice-action-event-rgb: var(--call);
+}
+
+.practice-action-event-bet,
+.practice-action-event-raise {
+  --practice-action-event-rgb: var(--raise);
+}
+
+.practice-action-event-all-in {
+  --practice-action-event-rgb: var(--allin);
+}
+
+.practice-action-event-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9999px;
+  background: rgb(var(--practice-action-event-rgb) / 0.22);
+  color: rgb(var(--practice-action-event-rgb));
+}
+
+.practice-action-event-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.25;
+}
+
+.practice-action-event-copy {
+  display: flex;
+  min-width: 0;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+}
+
+.practice-action-event-copy small {
+  color: rgb(255 255 255 / 0.58);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.practice-action-event-copy strong {
   overflow: hidden;
-  color: rgb(255 255 255 / 0.82);
-  font-size: 10px;
+  font-size: 15px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.practice-action-strip li {
-  max-width: 100%;
-  overflow: hidden;
+.practice-action-chip-flight {
+  --practice-chip-x: -126px;
+  --practice-chip-y: -58px;
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: -1;
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+  animation: practice-chip-to-pot 380ms 70ms ease-in both;
+}
+
+.practice-action-event-opponent .practice-action-chip-flight,
+.practice-action-event-center .practice-action-chip-flight {
+  --practice-chip-y: 82px;
+}
+
+.practice-action-chip-flight i {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgb(255 255 255 / 0.78);
   border-radius: 9999px;
-  background: rgb(4 10 12 / 0.42);
-  padding: 3px 7px;
+  background: rgb(var(--practice-action-event-rgb));
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.4);
+}
+
+.practice-action-chip-flight i:nth-child(2) {
+  transform: translateY(-5px);
+}
+
+.practice-action-chip-flight i:nth-child(3) {
+  transform: translateY(2px);
+}
+
+.practice-action-strip {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  z-index: 3;
+  width: min(240px, 27%);
+  transform: translateY(-50%);
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.13);
+  border-radius: 8px;
+  background: rgb(3 12 14 / 0.68);
+  padding: 9px;
+  color: white;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
+  backdrop-filter: blur(9px);
+}
+
+.practice-action-strip-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  color: rgb(255 255 255 / 0.6);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.practice-action-strip-heading svg {
+  width: 13px;
+  height: 13px;
+}
+
+.practice-action-strip ol {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.practice-action-strip li {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-left: 2px solid rgb(255 255 255 / 0.16);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.04);
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.practice-action-log-actor {
+  flex: 0 0 auto;
+  color: rgb(255 255 255 / 0.54);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.practice-action-strip li strong {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.practice-action-strip .practice-action-log-latest {
+  border-left-color: rgb(var(--accent));
+  background: rgb(var(--accent) / 0.15);
+  animation: practice-action-log-enter 240ms ease-out both;
+}
+
+@keyframes practice-board-card-deal {
+  0% {
+    opacity: 0;
+    transform: translate(24px, -44px) rotate(5deg) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0) scale(1);
+  }
+}
+
+@keyframes practice-action-event-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(var(--practice-action-event-enter-y)) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes practice-chip-to-pot {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--practice-chip-x), var(--practice-chip-y)) scale(0.8);
+  }
+}
+
+@keyframes practice-fold-hand {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0);
+  }
+  100% {
+    opacity: 0.3;
+    transform: translate(24px, -12px) rotate(8deg) scale(0.9);
+  }
+}
+
+@keyframes practice-action-log-enter {
+  0% {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .practice-table-overlay {
@@ -613,6 +864,60 @@ textarea {
   }
 
   .practice-action-strip {
+    left: 10px;
+    top: 108px;
+    display: block;
+    width: 132px;
+    transform: none;
+    padding: 6px;
+  }
+
+  .practice-action-strip-heading {
+    margin-bottom: 4px;
+    font-size: 9px;
+  }
+
+  .practice-action-strip ol {
+    gap: 3px;
+  }
+
+  .practice-action-strip li {
+    padding: 4px 5px;
+    font-size: 10px;
+  }
+
+  .practice-action-strip li:nth-last-child(n + 4) {
+    display: none;
+  }
+
+  .practice-action-log-actor {
+    font-size: 8px;
+  }
+
+  .practice-action-event,
+  .practice-action-event-opponent,
+  .practice-action-event-hero,
+  .practice-action-event-center {
+    left: auto;
+    right: 10px;
+    top: 108px;
+    bottom: auto;
+    width: calc(100% - 162px);
+    min-width: 0;
+    max-width: 158px;
+    padding: 6px 7px;
+  }
+
+  .practice-action-event-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .practice-action-event-copy strong {
+    font-size: 12px;
+  }
+
+  .practice-action-chip-flight {
     display: none;
   }
 

@@ -1,8 +1,13 @@
+import type { CSSProperties } from 'react';
 import {
   AlertTriangle,
   BarChart3,
+  Check,
   CircleDollarSign,
+  Coins,
+  History,
   LoaderCircle,
+  LogOut,
   RefreshCw,
   ShieldAlert,
 } from 'lucide-react';
@@ -13,6 +18,7 @@ import type {
   HandState,
   LegalAction,
   PolicyNode,
+  PublicAction,
   PracticeMode,
   Seat,
 } from '@/lib/practice-types';
@@ -47,18 +53,20 @@ function SeatDisplay({
   state,
   opponent,
   revealOpponent,
+  folding,
 }: {
   seat: Seat;
   state: HandState;
   opponent: boolean;
   revealOpponent: boolean;
+  folding: boolean;
 }) {
   const cards = state.holeCards[seat];
   const active = state.toAct === seat;
   const label = seat === 'button-small-blind' ? 'BTN / SB' : 'Big blind';
   return (
     <div
-      className={`practice-seat ${active ? 'practice-seat-active' : ''}`}
+      className={`practice-seat ${active ? 'practice-seat-active' : ''} ${folding ? 'practice-seat-folding' : ''}`}
       aria-label={`${opponent ? 'Opponent' : 'Hero'}, ${label}, ${state.stacksBb[seat].toFixed(1)} big blinds`}
     >
       <div className="practice-seat-meta">
@@ -85,6 +93,30 @@ function SeatDisplay({
         </span>
       </div>
     </div>
+  );
+}
+
+function ActionEventIcon({ action }: { action: PublicAction | null }) {
+  if (!action) {
+    return <CircleDollarSign aria-hidden="true" />;
+  }
+  switch (action.kind) {
+    case 'fold':
+      return <LogOut aria-hidden="true" />;
+    case 'check':
+      return <Check aria-hidden="true" />;
+    case 'call':
+      return <CircleDollarSign aria-hidden="true" />;
+    case 'bet':
+    case 'raise':
+    case 'all-in':
+      return <Coins aria-hidden="true" />;
+  }
+}
+
+function isWagerAction(action: PublicAction | null): boolean {
+  return Boolean(
+    action && ['call', 'bet', 'raise', 'all-in'].includes(action.kind)
   );
 }
 
@@ -125,6 +157,29 @@ export function PracticeTable({
       ? state.result?.potBb ?? 0
       : totalPotBb(state)
     : 1.5;
+  const latestAction = state?.actionHistory.at(-1) ?? null;
+  const latestActor = latestAction
+    ? latestAction.actor === state?.hero
+      ? 'You'
+      : 'Opponent'
+    : null;
+  const showBlindsEvent = Boolean(
+    state &&
+      state.actionHistory.length === 0 &&
+      !['loading', 'unavailable', 'error'].includes(status)
+  );
+  const showActionEvent = Boolean(latestAction || showBlindsEvent);
+  const eventKind = latestAction?.kind ?? 'blinds';
+  const eventPosition = latestAction
+    ? latestAction.actor === state?.hero
+      ? 'hero'
+      : 'opponent'
+    : 'center';
+  const actionAnnouncement = latestAction
+    ? `${latestActor} ${latestAction.label}.`
+    : showBlindsEvent
+      ? 'Blinds posted.'
+      : '';
   const liveMessage =
     status === 'loading'
       ? 'Loading practice spot'
@@ -135,11 +190,11 @@ export function PracticeTable({
         : status === 'solving'
           ? 'Currently solving the postflop strategy. Almost done.'
           : status === 'decision'
-            ? `Action on hero, ${state?.street ?? 'preflop'}`
+            ? `${actionAnnouncement} Action on hero, ${state?.street ?? 'preflop'}`
             : status === 'feedback'
-              ? 'Decision reviewed. Continue the hand when ready.'
+              ? `${actionAnnouncement} Decision reviewed. Continue the hand when ready.`
               : status === 'review'
-                ? 'Hand review complete. Continue when ready.'
+                ? `${actionAnnouncement} Hand review complete. Continue when ready.`
                 : status === 'unavailable'
                   ? 'Practice model unavailable'
                   : errorMessage ?? 'Practice error';
@@ -179,12 +234,21 @@ export function PracticeTable({
                   state={state}
                   opponent
                   revealOpponent={revealOpponent}
+                  folding={latestAction?.kind === 'fold' && latestAction.actor === opponent}
                 />
               </div>
 
               <div className="practice-board" aria-label="Community cards">
                 {[0, 1, 2, 3, 4].map((index) => (
-                  <PokerCard key={index} card={state.board[index]} />
+                  <span
+                    key={`${index}-${state.board[index] ?? 'empty'}`}
+                    className={`practice-board-card ${state.board[index] !== undefined ? 'practice-board-card-dealt' : ''}`}
+                    style={{
+                      '--practice-deal-order': index,
+                    } as CSSProperties}
+                  >
+                    <PokerCard card={state.board[index]} />
+                  </span>
                 ))}
               </div>
 
@@ -199,20 +263,58 @@ export function PracticeTable({
                   state={state}
                   opponent={false}
                   revealOpponent
+                  folding={latestAction?.kind === 'fold' && latestAction.actor === state.hero}
                 />
               </div>
 
-              <ol className="practice-action-strip" aria-label="Action history">
-                {state.actionHistory.slice(-4).map((action) => (
-                  <li key={action.id}>
-                    <span className="text-white/55">
-                      {action.actor === state.hero ? 'You' : 'Villain'}
-                    </span>{' '}
-                    {action.label}
-                  </li>
-                ))}
-                {state.actionHistory.length === 0 && <li>Blinds posted</li>}
-              </ol>
+              {showActionEvent && (
+                <div
+                  key={latestAction?.id ?? `${state.id}-blinds-${status}`}
+                  className={`practice-action-event practice-action-event-${eventKind} practice-action-event-${eventPosition} ${isWagerAction(latestAction) ? 'practice-action-event-wager' : ''}`}
+                  aria-hidden="true"
+                >
+                  <span className="practice-action-event-icon">
+                    <ActionEventIcon action={latestAction} />
+                  </span>
+                  <span className="practice-action-event-copy">
+                    <small>{latestActor ?? 'Table'}</small>
+                    <strong>{latestAction?.label ?? 'Blinds posted'}</strong>
+                  </span>
+                  {isWagerAction(latestAction) && (
+                    <span className="practice-action-chip-flight">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div className="practice-action-strip">
+                <div className="practice-action-strip-heading" aria-hidden="true">
+                  <History />
+                  Table log
+                </div>
+                <ol aria-label="Action history">
+                  {state.actionHistory.slice(-6).map((action, index, actions) => (
+                    <li
+                      key={action.id}
+                      className={index === actions.length - 1 ? 'practice-action-log-latest' : ''}
+                    >
+                      <span className="practice-action-log-actor">
+                        {action.actor === state.hero ? 'You' : 'Opponent'}
+                      </span>
+                      <strong>{action.label}</strong>
+                    </li>
+                  ))}
+                  {state.actionHistory.length === 0 && (
+                    <li className="practice-action-log-latest">
+                      <span className="practice-action-log-actor">Table</span>
+                      <strong>Blinds posted</strong>
+                    </li>
+                  )}
+                </ol>
+              </div>
             </>
           ) : (
             <div className="practice-empty-table" aria-hidden="true">
@@ -225,7 +327,9 @@ export function PracticeTable({
               </div>
               <div className="practice-board">
                 {[0, 1, 2, 3, 4].map((index) => (
-                  <PokerCard key={index} />
+                  <span className="practice-board-card" key={index}>
+                    <PokerCard />
+                  </span>
                 ))}
               </div>
               <div className="practice-seat practice-seat-ghost">
@@ -305,13 +409,25 @@ export function PracticeTable({
             ))}
           </div>
         ) : status === 'feedback' || status === 'review' ? (
-          <button
-            type="button"
-            onClick={onContinue}
-            className="min-h-12 w-full rounded-md bg-accent px-5 text-sm font-semibold text-accent-fg shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:w-auto sm:min-w-48"
-          >
-            {status === 'feedback' ? 'Continue hand' : 'Next hand'}
-          </button>
+          <div className="flex w-full gap-2 sm:w-auto">
+            {onOpenAnalyst && (
+              <button
+                type="button"
+                onClick={onOpenAnalyst}
+                className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-w-44 xl:hidden"
+              >
+                <BarChart3 className="h-4 w-4 text-accent" aria-hidden="true" />
+                {status === 'feedback' ? 'Review decision' : 'Review hand'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onContinue}
+              className="min-h-12 flex-1 rounded-md bg-accent px-4 text-sm font-semibold text-accent-fg shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:min-w-48"
+            >
+              {status === 'feedback' ? 'Continue hand' : 'Next hand'}
+            </button>
+          </div>
         ) : (
           <p className="py-3 text-center text-sm text-muted">
             {status === 'loading'

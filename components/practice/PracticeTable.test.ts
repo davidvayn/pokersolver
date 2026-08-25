@@ -143,7 +143,91 @@ describe('PracticeTable decision controls', () => {
     );
 
     expect(html.match(/aria-label="[2-9TJQKA] of /g)).toHaveLength(5);
+    expect(html.match(/practice-board-card-dealt/g)).toHaveLength(3);
     expect(html).toContain('Flop dealt · preparing actions…');
     expect(html).not.toContain('Currently solving');
+  });
+
+  it('renders the latest table action as a prominent event and keeps it in the larger log', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const initial = createHand({
+      id: 'table-action-event-test',
+      modelVersion: 'test-v1',
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'button-small-blind',
+      random: seededRandom(31),
+    });
+    const called = applyAction(initial, {
+      id: 'call',
+      kind: 'call',
+      label: 'Call 0.5bb',
+      amountToBb: 1,
+    });
+
+    const html = renderToStaticMarkup(
+      React.createElement(PracticeTable, {
+        state: called,
+        node: null,
+        status: 'feedback',
+        mode: 'full-hand',
+        revealOpponent: false,
+        selectedActionId: 'call',
+        onAction: vi.fn(),
+        onContinue: vi.fn(),
+        onRetry: vi.fn(),
+        onOpenAnalyst: vi.fn(),
+      })
+    );
+
+    expect(html).toContain('practice-action-event-call');
+    expect(html).toContain('practice-action-event-hero');
+    expect(html).toContain('practice-action-chip-flight');
+    expect(html).toContain('Table log');
+    expect(html).toContain('practice-action-log-latest');
+    expect(html).toContain('Review decision');
+    expect(html.match(/Call 0.5bb/g)).toHaveLength(3);
+  });
+
+  it('marks a folding seat and renders a dedicated fold event', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const initial = createHand({
+      id: 'table-fold-event-test',
+      modelVersion: 'test-v1',
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'big-blind',
+      random: seededRandom(37),
+    });
+    const opened = applyAction(initial, {
+      id: 'raise-2.5',
+      kind: 'raise',
+      label: 'Raise to 2.5bb',
+      amountToBb: 2.5,
+    });
+    const folded = applyAction(opened, {
+      id: 'fold',
+      kind: 'fold',
+      label: 'Fold',
+    });
+
+    const html = renderToStaticMarkup(
+      React.createElement(PracticeTable, {
+        state: folded,
+        node: null,
+        status: 'review',
+        mode: 'full-hand',
+        revealOpponent: true,
+        selectedActionId: 'fold',
+        onAction: vi.fn(),
+        onContinue: vi.fn(),
+        onRetry: vi.fn(),
+      })
+    );
+
+    expect(html).toContain('practice-action-event-fold');
+    expect(html).toContain('practice-action-event-hero');
+    expect(html).toContain('practice-seat-folding');
+    expect(html).toContain('You Fold. Hand review complete. Continue when ready.');
   });
 });

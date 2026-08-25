@@ -626,7 +626,6 @@ export default function PracticePage() {
     setCompletedHands((current) => current + 1);
     setStatus('review');
     setRailTab('feedback');
-    setMobileRailOpen(true);
     if (
       goalTargetRef.current !== null &&
       decisionCount >= goalTargetRef.current
@@ -729,7 +728,6 @@ export default function PracticePage() {
       setCurrentHandDecisions(handDecisions);
       setSessionDecisions((current) => [...current, decision]);
       setRailTab('feedback');
-      setMobileRailOpen(true);
       if (
         goalTargetRef.current !== null &&
         decisionCount >= goalTargetRef.current
