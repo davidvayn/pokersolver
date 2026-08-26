@@ -981,6 +981,7 @@ scale mismatch, not policy evidence. The fixed-DCFR matched pair produced:
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 100 | 1.3178 / 1.2712 | 13.93% / 14.45% | 21.49% / 22.07% | 13.72% | 36.61% | 21.30% |
 | 400 | **0.6980 / 0.7782** | **13.86% / 12.91%** | **21.11% / 20.53%** | **10.99%** | **30.23%** | **50.89%** |
+| 800 | **0.6496 / 0.7022** | **12.93% / 12.60%** | **19.34% / 17.45%** | **7.05%** | **24.91%** | **66.27%** |
 
 At 400 rounds the two seeds created 6.60M and 6.39M information sets in 46.8
 and 45.6 seconds while running concurrently, with 2.94GB and 2.48GB peak RSS.
@@ -998,13 +999,31 @@ at 100 rounds it slightly worsened mean root gain and increased aggregate
 cross-seed delta from 3.25 to 8.71 points, so the option was removed rather
 than added to the cloud surface.
 
-The public-chance candidate has now earned a larger sequential scaling pilot,
-but not an unchecked production run. Checkpoint/resume is byte-deterministic,
-the cloud runner pins the traversal in its fingerprint and parent validation,
-and default scalar commands remain unchanged. The next decision is whether an
-800-round pair continues the measured policy/stability slope within the table
-growth projection; only then should paid compute extend the same fixed-DCFR
-lineage.
+The sequential 800-round decision completed in 88.1 and 80.4 seconds. Its
+12.48M/11.88M tables peaked at 4.76GB/5.00GB RSS without swapping. Against 400
+rounds, pair-mean root gain improves another 8.4%, max per-action MAE falls 3.94
+points, median TV falls 5.31 points, p95 TV falls 7.85 points, primary agreement
+rises 15.38 points, and both authentic coverage measures improve. It therefore
+passes the predeclared condition for a staged cloud scaling pilot. It does not
+pass release gates: root gain remains 0.65--0.70bb, MAE 7.05%, median/p95 TV
+24.91%/43.85%, primary agreement 66.27%, and continuation unknown 17.45--19.34%.
+
+One HS-DCFR screen initially exported no average policy because the range
+accumulator incorrectly treated positive terminal-relative weights below
+`1e-9` as zero. Removing that cutoff restores the scalar trainer's semantics;
+a regression test preserves positive `1e-30` contributions. The corrected
+400-round HS pair with a 3,200-round horizon is still rejected on evidence:
+pair-mean root gain is 0.755bb versus fixed's 0.738bb, aggregate cross-seed
+delta is 9.61% versus 4.51%, median TV is 37.24% versus 30.23%, and primary
+agreement is 43.79% versus 50.89%. Fixed DCFR remains the sole selected
+public-chance schedule.
+
+Checkpoint/resume is byte-deterministic, the cloud runner pins the traversal
+in its fingerprint and parent validation, and default scalar commands remain
+unchanged. The next efficient step is a 1,600-round fixed-DCFR cloud stage with
+a hard table cap, followed by a resume to 3,200 only if its paired policy and
+coverage slope remains positive. Neither stage authorizes serving or an
+Approximate GTO label.
 
 ## Final verification
 

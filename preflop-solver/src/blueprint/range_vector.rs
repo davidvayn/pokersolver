@@ -244,7 +244,7 @@ pub fn aggregate_information_set_updates(
         }
         if let Some(averaging_weight) = averaging_weight {
             let realization_weight = actor_realization_reach[combo] * averaging_weight;
-            if realization_weight > EPSILON {
+            if realization_weight > 0.0 {
                 for (action, delta) in update.strategy_deltas.iter_mut().enumerate() {
                     *delta += realization_weight * action_probabilities[action][combo];
                 }
@@ -303,7 +303,7 @@ pub fn aggregate_average_strategy_updates(
         if (probability_sum - 1.0).abs() > 1e-9 {
             return Err("keyed exact-combo action probabilities must sum to one".to_owned());
         }
-        if reach <= EPSILON || averaging_weight <= EPSILON {
+        if reach == 0.0 || averaging_weight == 0.0 {
             continue;
         }
         let update = updates
@@ -970,6 +970,11 @@ mod tests {
         let update = &updates[&11];
         assert_eq!(update.average_contributions, 2);
         assert_eq!(update.strategy_deltas, vec![0.5, 1.5]);
+
+        let tiny = aggregate_average_strategy_updates(&keys, &realization, &probabilities, 1e-30)
+            .expect("positive HS-DCFR weights remain representable");
+        assert_eq!(tiny[&11].average_contributions, 2);
+        assert!(tiny[&11].strategy_deltas.iter().all(|delta| *delta > 0.0));
     }
 
     #[test]

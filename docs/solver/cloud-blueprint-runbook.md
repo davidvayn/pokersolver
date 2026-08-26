@@ -8,8 +8,8 @@ does not merge regret tables from different random seeds.
 > scalar commands below are reproducible, but the local 600k terminal pair
 > misses known root policy gates and should not be repeated. The new opt-in
 > compatible-range trainer is policy-changing and beats the scalar matched-CPU
-> pilots on both seeds, but its 400-round pair remains immature. Complete the
-> documented 800-round local decision before spending on a larger cloud stage.
+> pilots on both seeds. Its 800-round local pair preserves improvement and
+> authorizes the staged 1,600-round cloud pilot below, not serving or promotion.
 
 The August 25 public-chance vector vertical slice does not lift this hold. Its
 exact frozen-update implementation is deterministic and 27--33% faster in
@@ -44,6 +44,13 @@ coverage improvement over the approximate matched-CPU scalar 45k pair, but
 cross-seed MAE (10.99%), median TV (30.23%), p95 TV (51.70%), and primary
 agreement (50.89%) still fail. These are scaling-pilot results, not promotion
 evidence.
+
+The required 800-round local pair then reached 12.48M/11.88M sets with no swap.
+Root gain improved to 0.650/0.702bb, max per-action MAE to 7.05%, median/p95 TV
+to 24.91%/43.85%, primary agreement to 66.27%, and continuation unknown to
+17.45--19.34%. Every major stability measure moved in the right direction, so
+a capped 1,600-round fixed-DCFR cloud stage is now justified. The remaining
+distance to the gates is still material.
 
 ## Capacity choice
 
@@ -159,11 +166,11 @@ cargo build --release
 cd ..
 ```
 
-Before any paid public-chance stage, run the 800-round pair sequentially on the
-local host. Fixed DCFR is intentional: a 600k HS terminal-relative horizon has
-zero representable average-policy mass this early and cannot be judged at 800
-rounds. The projected table is roughly 12--14M sets per seed, so keep the two
-workers sequential on a 16GB machine:
+The required 800-round pair was run sequentially on the local host. Fixed DCFR
+is intentional: after correcting preservation of tiny positive HS average
+weights, a matched HS-DCFR pair still worsened root quality and cross-seed
+stability. The measured table was roughly 12M sets per seed, so the two workers
+were kept sequential on the 16GB machine. Reproduce its preflight with:
 
 ```bash
 python3 preflop-solver/neural/cloud_blueprint_run.py \
@@ -180,17 +187,39 @@ python3 preflop-solver/neural/cloud_blueprint_run.py \
   --minimum-free-disk-gb 40 --dry-run
 ```
 
-Remove `--dry-run` only after confirming the projected memory and disk checks.
+The completed direct pilot used the same solver configuration without durable
+checkpoint writes. Remove `--dry-run` only when intentionally reproducing it
+through the cloud runner.
 The 700-byte pilot estimate is specific to the measured public-chance path
 (roughly 445 bytes per live set at the larger 400-round seed) and retains
 about 57% per-set headroom before the runner's additional 20% multiplier. Do
 not reuse it for the scalar complete-export commands below, which retain the
 conservative 2,300-byte default.
-This is a preflop-export policy screen, not a serving artifact. Promote it to a
-paid scaling experiment only if both seeds improve root local deviation and at
-least two of per-action MAE, TV, primary agreement, and authentic continuation
-coverage without a new poker-domain pathology. A later cloud stage must enable
-the default complete postflop export.
+This is a preflop-export policy screen, not a serving artifact. Both seeds
+improved root local deviation plus MAE, TV, primary agreement, and authentic
+continuation coverage, so the next authorized paid experiment is the capped
+1,600-round stage below. It starts a durable lineage from zero and still omits
+the expensive complete postflop export:
+
+```bash
+python3 preflop-solver/neural/cloud_blueprint_run.py \
+  --binary "$PWD/preflop-solver/target/release/preflop-solver" \
+  --output-dir "$PWD/preflop-solver/neural/runs/public-chance-20bb-i1600" \
+  --public-chance-sampling \
+  --depth 20 --iterations 1600 --seeds 26001,26002 \
+  --max-concurrent 2 --max-information-sets 25000000 \
+  --averaging-delay 0 --checkpoint-every 800 \
+  --held-out-deals 5000 --root-deviation-samples 256 \
+  --action-value-deals 5000 --dcfr-alpha 1.5 --dcfr-beta 0 \
+  --dcfr-gamma 2 --no-export-postflop-strategies \
+  --bytes-per-information-set 700 \
+  --minimum-free-disk-gb 100 --dry-run
+```
+
+Use a 128GB host for two concurrent workers. Resume to 3,200 fixed-DCFR rounds
+only if the 1,600 pair improves both root values and at least two stability or
+coverage families. Do not enable complete postflop export until a policy stage
+is selected; do not serve any public-chance artifact before the release gates.
 
 Dry-run the exact paired command and resource guard:
 
