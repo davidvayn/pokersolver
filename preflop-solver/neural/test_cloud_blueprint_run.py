@@ -85,6 +85,7 @@ def arguments(root: Path) -> argparse.Namespace:
         dcfr_gamma=2.0,
         hs_dcfr_30_horizon=0,
         compact_serving_grid=False,
+        public_chance_sampling=False,
         export_postflop_strategies=True,
         bytes_per_information_set=2_300,
         minimum_free_disk_gb=20.0,
@@ -160,6 +161,9 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args.hs_dcfr_30_horizon = 600_000
             self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
             args.hs_dcfr_30_horizon = 0
+            args.public_chance_sampling = True
+            self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
+            args.public_chance_sampling = False
             args.evaluation_only = True
             self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
             args.evaluation_only = False
@@ -183,6 +187,11 @@ class CloudBlueprintRunTests(unittest.TestCase):
             scheduled = build_command(args, seed_run(root / "scheduled"))
             schedule_index = scheduled.index("--hs-dcfr-30-horizon")
             self.assertEqual(scheduled[schedule_index + 1], "600000")
+            args.public_chance_sampling = True
+            self.assertIn(
+                "--public-chance-sampling",
+                build_command(args, seed_run(root / "public-chance")),
+            )
 
     def test_extension_pins_parent_checkpoint_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -393,6 +402,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args = arguments(Path(directory))
             summary = {
                 "schema": "hu-blueprint-run-summary-v1",
+                "traversal": "external_sampling",
                 "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
                 "solverVersion": "0.1.0",
                 "artifactId": "hu-blueprint-20bb-i400000-s26001-fixture",
@@ -473,6 +483,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args = arguments(Path(directory))
             summary = {
                 "schema": "hu-blueprint-run-summary-v1",
+                "traversal": "external_sampling",
                 "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
                 "solverVersion": "0.1.0",
                 "artifactId": "hu-blueprint-20bb-i400000-s26001-fixture",

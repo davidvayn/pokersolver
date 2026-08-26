@@ -4,11 +4,12 @@ This runbook launches the corrected trajectory-recall external-sampling DCFR
 trainer. It does not launch the older neural `long_run.py` experiment and it
 does not merge regret tables from different random seeds.
 
-> **Launch status: hold.** The infrastructure and commands below are
-> reproducible, but the local 600k terminal pair misses known root policy gates.
-> Do not spend cloud compute merely to reproduce that failure. Lift the hold
-> only after a policy-changing trainer improvement, or with explicit approval
-> for a diagnostic-only full postflop export/evaluation run.
+> **Production launch status: hold; public-chance scaling pilot pending.** The
+> scalar commands below are reproducible, but the local 600k terminal pair
+> misses known root policy gates and should not be repeated. The new opt-in
+> compatible-range trainer is policy-changing and beats the scalar matched-CPU
+> pilots on both seeds, but its 400-round pair remains immature. Complete the
+> documented 800-round local decision before spending on a larger cloud stage.
 
 The August 25 public-chance vector vertical slice does not lift this hold. Its
 exact frozen-update implementation is deterministic and 27--33% faster in
@@ -28,9 +29,21 @@ policy and authentic-coverage diagnostics across both seeds. Do not pass
 future candidate must carry compatible reach vectors directly rather than add
 more finite deal lanes, and it must win matched-wall paired gates first.
 
-The exact terminal/range-propagation kernel for that future candidate is now
-implemented and reference-tested, but public-node regret traversal is not yet
-wired. Its presence does not change this launch hold.
+The compatible-range candidate now traverses the full abstract game. It
+samples one public board per alternating round, updates every compatible exact
+private hand, and importance-samples one shared opponent action so opponent
+nodes do not fan out by private bucket. The cloud runner accepts
+`--public-chance-sampling`, pins it in the run fingerprint and resume checks,
+and leaves all scalar defaults unchanged. Deterministic MessagePack checkpoint
+resume matches uninterrupted public-chance training exactly.
+
+At 400 fixed-DCFR rounds, seeds 26001/26002 reached 6.60M/6.39M information
+sets, 0.698/0.778bb root local deviation, and 12.9--13.9% held-out unknown
+coverage in about 46 seconds per concurrent worker. That is a large policy and
+coverage improvement over the approximate matched-CPU scalar 45k pair, but
+cross-seed MAE (10.99%), median TV (30.23%), p95 TV (51.70%), and primary
+agreement (50.89%) still fail. These are scaling-pilot results, not promotion
+evidence.
 
 ## Capacity choice
 
@@ -145,6 +158,39 @@ cargo test --release
 cargo build --release
 cd ..
 ```
+
+Before any paid public-chance stage, run the 800-round pair sequentially on the
+local host. Fixed DCFR is intentional: a 600k HS terminal-relative horizon has
+zero representable average-policy mass this early and cannot be judged at 800
+rounds. The projected table is roughly 12--14M sets per seed, so keep the two
+workers sequential on a 16GB machine:
+
+```bash
+python3 preflop-solver/neural/cloud_blueprint_run.py \
+  --binary "$PWD/preflop-solver/target/release/preflop-solver" \
+  --output-dir "$PWD/preflop-solver/neural/runs/public-chance-20bb-i800" \
+  --public-chance-sampling \
+  --depth 20 --iterations 800 --seeds 26001,26002 \
+  --max-concurrent 1 --max-information-sets 15000000 \
+  --averaging-delay 0 --checkpoint-every 400 \
+  --held-out-deals 2000 --root-deviation-samples 128 \
+  --action-value-deals 2000 --dcfr-alpha 1.5 --dcfr-beta 0 \
+  --dcfr-gamma 2 --no-export-postflop-strategies \
+  --bytes-per-information-set 700 \
+  --minimum-free-disk-gb 40 --dry-run
+```
+
+Remove `--dry-run` only after confirming the projected memory and disk checks.
+The 700-byte pilot estimate is specific to the measured public-chance path
+(roughly 445 bytes per live set at the larger 400-round seed) and retains
+about 57% per-set headroom before the runner's additional 20% multiplier. Do
+not reuse it for the scalar complete-export commands below, which retain the
+conservative 2,300-byte default.
+This is a preflop-export policy screen, not a serving artifact. Promote it to a
+paid scaling experiment only if both seeds improve root local deviation and at
+least two of per-action MAE, TV, primary agreement, and authentic continuation
+coverage without a new poker-domain pathology. A later cloud stage must enable
+the default complete postflop export.
 
 Dry-run the exact paired command and resource guard:
 

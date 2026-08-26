@@ -411,6 +411,11 @@ def validate_summary(
         "schema": "hu-blueprint-run-summary-v1",
         "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
         "seed": seed,
+        "traversal": (
+            "public_chance_sampling"
+            if args.public_chance_sampling
+            else "external_sampling"
+        ),
         "averagingDelay": args.averaging_delay,
         "dcfr": {
             "positive_regret_exponent": args.dcfr_alpha,
@@ -599,6 +604,7 @@ def run_fingerprint(
         "dcfrSchedule": schedule_name,
         "dcfrScheduleHorizon": schedule_horizon,
         "compactServingGrid": args.compact_serving_grid,
+        "publicChanceSampling": args.public_chance_sampling,
         "exportPostflopStrategies": args.export_postflop_strategies,
         "evaluationOnly": args.evaluation_only,
         "parentRunFingerprint": parent_run_fingerprint,
@@ -653,6 +659,8 @@ def build_command(args: argparse.Namespace, run: SeedRun) -> list[str]:
         command.extend(["--resume", str(resume_source)])
     if args.compact_serving_grid:
         command.append("--compact-serving-grid")
+    if args.public_chance_sampling:
+        command.append("--public-chance-sampling")
     _, schedule_horizon, schedule_flag = selected_dcfr_schedule(args)
     if schedule_flag is not None:
         command.extend([schedule_flag, str(schedule_horizon)])
@@ -700,6 +708,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bytes-per-information-set", type=int, default=2_300)
     parser.add_argument("--minimum-free-disk-gb", type=float, default=20.0)
     parser.add_argument("--compact-serving-grid", action="store_true")
+    parser.add_argument(
+        "--public-chance-sampling",
+        action="store_true",
+        help=(
+            "research-only compatible-range traversal; use only after matched "
+            "local pilots justify paid compute"
+        ),
+    )
     parser.add_argument(
         "--export-postflop-strategies",
         dest="export_postflop_strategies",
@@ -894,6 +910,10 @@ def load_parent_stage(
             isinstance(command, list) and "--compact-serving-grid" in command
         ) != bool(args.compact_serving_grid):
             raise SystemExit("resume source changes the serving action grid")
+        if bool(
+            isinstance(command, list) and "--public-chance-sampling" in command
+        ) != bool(args.public_chance_sampling):
+            raise SystemExit("resume source changes the blueprint traversal")
         record = parent_seeds[str(seed)]
         if not isinstance(record, dict) or record.get("status") != "complete":
             raise SystemExit(f"resume source seed {seed} is not complete")

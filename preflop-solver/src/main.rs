@@ -1,4 +1,6 @@
-use preflop_solver::blueprint::{self, BlueprintConfig, DcfrSchedule, RecallMode, RunControl};
+use preflop_solver::blueprint::{
+    self, BlueprintConfig, BlueprintTraversal, DcfrSchedule, RecallMode, RunControl,
+};
 use preflop_solver::kuhn;
 use preflop_solver::push_fold::{self, PushFoldConfig};
 use sha2::{Digest, Sha256};
@@ -2877,6 +2879,12 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
         "--opponent-hand-batch-size",
         config.opponent_hand_batch_size,
     )?;
+    if args
+        .iter()
+        .any(|argument| argument == "--public-chance-sampling")
+    {
+        config.traversal = BlueprintTraversal::PublicChanceSampling;
+    }
     config.evaluation_controls.held_out_deals = parse_or(
         args,
         "--held-out-deals",
@@ -3147,6 +3155,13 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
                     artifact.config.opponent_hand_batch_size.into(),
                 );
         }
+        summary_value
+            .as_object_mut()
+            .expect("blueprint summary object")
+            .insert(
+                "traversal".to_owned(),
+                serde_json::to_value(artifact.config.traversal)?,
+            );
         blueprint::write_json_atomic(&summary, &summary_value)?;
     }
     eprintln!(
@@ -3331,6 +3346,7 @@ Blueprint options:
   --action-value-deals <integer>  Default: 10000 independent policy deals
   --traverser-hand-batch-size <n> Default: 1; research pilot, maximum 990
   --opponent-hand-batch-size <n>  Default: 1; research pilot, maximum 990
+  --public-chance-sampling        Research: update all board-compatible hands
   --action-value-seed <integer>   Fixed per-action evaluation seed
   --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)
   --dcfr-beta <number>            Negative-regret exponent (default: 0)

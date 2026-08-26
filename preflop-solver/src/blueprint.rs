@@ -222,6 +222,10 @@ pub struct BlueprintConfig {
         skip_serializing_if = "is_default_hand_batch_size"
     )]
     pub opponent_hand_batch_size: usize,
+    /// Research traversal for policy-changing pilots. The default preserves
+    /// the established scalar external-sampling stream and artifact identity.
+    #[serde(default, skip_serializing_if = "is_default_blueprint_traversal")]
+    pub traversal: BlueprintTraversal,
     pub export_postflop_strategies: bool,
     pub recall_mode: RecallMode,
     pub dcfr: DcfrParameters,
@@ -245,6 +249,18 @@ const fn default_opponent_hand_batch_size() -> usize {
 
 fn is_default_hand_batch_size(size: &usize) -> bool {
     *size == 1
+}
+
+fn is_default_blueprint_traversal(traversal: &BlueprintTraversal) -> bool {
+    *traversal == BlueprintTraversal::ExternalSampling
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlueprintTraversal {
+    #[default]
+    ExternalSampling,
+    PublicChanceSampling,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -349,6 +365,7 @@ impl Default for BlueprintConfig {
             averaging_delay: 1_000,
             traverser_hand_batch_size: 1,
             opponent_hand_batch_size: 1,
+            traversal: BlueprintTraversal::ExternalSampling,
             export_postflop_strategies: false,
             recall_mode: RecallMode::Trajectory,
             dcfr: DcfrParameters::default(),
@@ -384,6 +401,13 @@ impl BlueprintConfig {
         }
         if !(1..=990).contains(&self.opponent_hand_batch_size) {
             return Err("opponent hand batch size must be between 1 and 990".to_owned());
+        }
+        if self.traversal == BlueprintTraversal::PublicChanceSampling
+            && (self.traverser_hand_batch_size != 1 || self.opponent_hand_batch_size != 1)
+        {
+            return Err(
+                "public-chance sampling cannot be combined with finite hand batches".to_owned(),
+            );
         }
         if self.evaluation_controls.held_out_deals == 0 {
             return Err("held-out deals must be positive".to_owned());
@@ -1688,41 +1712,49 @@ impl Trainer {
             self.discounts.advance(self.completed_iterations + 1);
             let traverser = self.completed_iterations as usize % 2;
             let template = Deal::sample(&mut self.rng);
-            let batched = self.config.traverser_hand_batch_size > 1
-                || self.config.opponent_hand_batch_size > 1;
-            let mut batch_rng = SplitMix64::new(batch_iteration_seed(
-                self.config.seed,
-                self.completed_iterations + 1,
-            ));
-            let deals = sample_joint_hand_batch(
-                &template,
-                traverser,
-                self.config.traverser_hand_batch_size,
-                self.config.opponent_hand_batch_size,
-                if batched {
-                    &mut batch_rng
-                } else {
-                    &mut self.rng
-                },
-            );
-            let sample_weight = 1.0 / deals.len() as f64;
-            if deals.len() == 1 {
-                self.external_sampling(
-                    GameState::initial(&self.config),
-                    &deals[0],
-                    traverser,
-                    sample_weight,
-                );
-            } else {
-                self.external_sampling_batch(
-                    GameState::initial(&self.config),
-                    &deals,
-                    traverser,
-                    sample_weight,
-                    &mut batch_rng,
-                );
+            match self.config.traversal {
+                BlueprintTraversal::ExternalSampling => {
+                    let batched = self.config.traverser_hand_batch_size > 1
+                        || self.config.opponent_hand_batch_size > 1;
+                    let mut batch_rng = SplitMix64::new(batch_iteration_seed(
+                        self.config.seed,
+                        self.completed_iterations + 1,
+                    ));
+                    let deals = sample_joint_hand_batch(
+                        &template,
+                        traverser,
+                        self.config.traverser_hand_batch_size,
+                        self.config.opponent_hand_batch_size,
+                        if batched {
+                            &mut batch_rng
+                        } else {
+                            &mut self.rng
+                        },
+                    );
+                    let sample_weight = 1.0 / deals.len() as f64;
+                    if deals.len() == 1 {
+                        self.external_sampling(
+                            GameState::initial(&self.config),
+                            &deals[0],
+                            traverser,
+                            sample_weight,
+                        );
+                    } else {
+                        self.external_sampling_batch(
+                            GameState::initial(&self.config),
+                            &deals,
+                            traverser,
+                            sample_weight,
+                            &mut batch_rng,
+                        );
+                    }
+                    self.sampled_deals += deals.len() as u64;
+                }
+                BlueprintTraversal::PublicChanceSampling => {
+                    self.public_chance_iteration(template.board, traverser)
+                        .map_err(|error| format!("public-chance traversal failed: {error}"))?;
+                }
             }
-            self.sampled_deals += deals.len() as u64;
             self.completed_iterations += 1;
             if self.nodes.len() >= self.config.max_information_sets {
                 break;
@@ -1794,6 +1826,267 @@ impl Trainer {
         );
         node.apply_dcfr_regret_discount(self.completed_iterations + 1, &self.discounts);
         (key, node.current_strategy())
+    }
+
+    fn current_range_strategies_at(
+        &mut self,
+        state: &GameState,
+        cache: &mut range_vector::PublicInformationSetCache,
+        active_combos: &[bool],
+        actions: &[LegalAction],
+    ) -> Result<(Vec<Option<u64>>, Vec<Vec<f64>>), String> {
+        let mapping = cache.map(state, &self.config, active_combos)?;
+        for (key, (mut descriptor, public_history)) in mapping.descriptors {
+            if !self.nodes.contains_key(&key)
+                && self.nodes.len() >= self.config.max_information_sets
+            {
+                return Err("public-chance traversal reached the information-set guard".to_owned());
+            }
+            self.intern_descriptor_buckets(&mut descriptor);
+            match self.public_histories.get(&descriptor.public_history_id) {
+                Some(existing) if existing != &public_history => {
+                    return Err("public-history hash collision in public-range lookup".to_owned());
+                }
+                Some(_) => {}
+                None => {
+                    self.public_histories
+                        .insert(descriptor.public_history_id, public_history);
+                }
+            }
+            let string_interner = &mut self.string_interner;
+            let node = self
+                .nodes
+                .entry(key)
+                .or_insert_with(|| Node::new(descriptor.clone(), actions, string_interner));
+            if node.descriptor != descriptor
+                || !node
+                    .action_labels
+                    .iter()
+                    .map(AsRef::as_ref)
+                    .eq(actions.iter().map(|action| action.label.as_str()))
+            {
+                return Err(
+                    "one public-range abstraction key produced incompatible node data".to_owned(),
+                );
+            }
+            node.apply_dcfr_regret_discount(self.completed_iterations + 1, &self.discounts);
+        }
+
+        let uniform = 1.0 / actions.len() as f64;
+        let mut action_probabilities =
+            vec![vec![uniform; range_vector::EXACT_COMBO_COUNT]; actions.len()];
+        let mut strategies = BTreeMap::<u64, Vec<f64>>::new();
+        for key in mapping.keys.iter().flatten() {
+            if !strategies.contains_key(key) {
+                let strategy = self
+                    .nodes
+                    .get(key)
+                    .ok_or_else(|| "public-range node was not inserted".to_owned())?
+                    .current_strategy();
+                strategies.insert(*key, strategy);
+            }
+        }
+        for (combo, key) in mapping.keys.iter().enumerate() {
+            let Some(key) = key else {
+                continue;
+            };
+            let strategy = &strategies[key];
+            for (action, probability) in strategy.iter().enumerate() {
+                action_probabilities[action][combo] = *probability;
+            }
+        }
+        Ok((mapping.keys, action_probabilities))
+    }
+
+    fn apply_range_information_set_updates(
+        &mut self,
+        updates: BTreeMap<u64, range_vector::RangeInformationSetUpdate>,
+        apply_regrets: bool,
+        apply_average: bool,
+    ) -> Result<(), String> {
+        for (key, update) in updates {
+            let node = self
+                .nodes
+                .get_mut(&key)
+                .ok_or_else(|| "public-range update references a missing node".to_owned())?;
+            if node.regrets.len() != update.regret_deltas_bb.len()
+                || node.strategy_sum.len() != update.strategy_deltas.len()
+            {
+                return Err("public-range update action count differs from its node".to_owned());
+            }
+            if apply_regrets {
+                for (regret, delta) in node.regrets.iter_mut().zip(update.regret_deltas_bb) {
+                    *regret += delta;
+                }
+                node.regret_updates += update.regret_contributions;
+            }
+            if apply_average {
+                for (sum, delta) in node.strategy_sum.iter_mut().zip(update.strategy_deltas) {
+                    *sum += delta;
+                }
+                node.average_visits += update.average_contributions;
+            }
+        }
+        Ok(())
+    }
+
+    fn public_chance_iteration(&mut self, board: [u8; 5], traverser: usize) -> Result<(), String> {
+        let combos = all_combos();
+        debug_assert_eq!(combos.len(), range_vector::EXACT_COMBO_COUNT);
+        let active = combos
+            .iter()
+            .map(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+            .collect::<Vec<_>>();
+        let active_count = active.iter().filter(|active| **active).count();
+        if active_count != 1_081 {
+            return Err(format!(
+                "sampled board has {active_count} compatible exact combos; expected 1081"
+            ));
+        }
+        // For any board-compatible hero combo exactly C(45, 2) opponent
+        // combos remain. This normalization makes each terminal CFV an
+        // expected bb value rather than an unscaled sum over opponent hands.
+        let realization_weight = 1.0 / 990.0;
+        let private_chance_weight = 1.0 / active_count as f64;
+        let ranges = std::array::from_fn(|_| {
+            active
+                .iter()
+                .map(|active| if *active { realization_weight } else { 0.0 })
+                .collect::<Vec<_>>()
+        });
+        let private_chance = active
+            .iter()
+            .map(|active| if *active { private_chance_weight } else { 0.0 })
+            .collect::<Vec<_>>();
+        let mut action_rng = SplitMix64::new(batch_iteration_seed(
+            self.config.seed ^ 0x7063_732d_726e_6701,
+            self.completed_iterations + 1,
+        ));
+        let mut information_set_cache = range_vector::PublicInformationSetCache::new(board)?;
+        self.public_chance_external_sampling(
+            GameState::initial(&self.config),
+            board,
+            &ranges,
+            &private_chance,
+            traverser,
+            &mut action_rng,
+            &mut information_set_cache,
+        )?;
+        self.sampled_deals += active_count as u64;
+        Ok(())
+    }
+
+    fn public_chance_external_sampling(
+        &mut self,
+        state: GameState,
+        board: [u8; 5],
+        ranges: &[Vec<f64>; 2],
+        private_chance: &[f64],
+        traverser: usize,
+        rng: &mut SplitMix64,
+        information_set_cache: &mut range_vector::PublicInformationSetCache,
+    ) -> Result<Vec<f64>, String> {
+        if let Some(terminal) = &state.terminal {
+            self.terminal_evaluations += 1;
+            let terminal = match terminal {
+                Terminal::Fold { winner } => {
+                    range_vector::RangeTerminalKind::Fold { winner: *winner }
+                }
+                Terminal::Showdown => range_vector::RangeTerminalKind::Showdown,
+            };
+            let evaluation =
+                range_vector::evaluate_terminal_ranges(board, state.invested, ranges, terminal)?;
+            return Ok(evaluation.counterfactual_values_bb[traverser].clone());
+        }
+
+        let actions = state.legal_actions(&self.config);
+        if actions.is_empty() {
+            return Err("non-terminal public state has no legal actions".to_owned());
+        }
+        let actor = state.actor;
+        let active = if actor == traverser {
+            private_chance
+                .iter()
+                .map(|weight| *weight > EPSILON)
+                .collect::<Vec<_>>()
+        } else {
+            ranges[actor]
+                .iter()
+                .map(|reach| *reach > EPSILON)
+                .collect::<Vec<_>>()
+        };
+        let (keys, probabilities) =
+            self.current_range_strategies_at(&state, information_set_cache, &active, &actions)?;
+
+        if actor == traverser {
+            let mut action_values = Vec::with_capacity(actions.len());
+            for action in &actions {
+                action_values.push(self.public_chance_external_sampling(
+                    state.apply(action, &self.config),
+                    board,
+                    ranges,
+                    private_chance,
+                    traverser,
+                    rng,
+                    information_set_cache,
+                )?);
+            }
+            let mut expected = std::array::from_fn(|_| vec![0.0; range_vector::EXACT_COMBO_COUNT]);
+            for combo in 0..range_vector::EXACT_COMBO_COUNT {
+                for action in 0..actions.len() {
+                    expected[traverser][combo] +=
+                        probabilities[action][combo] * action_values[action][combo];
+                }
+            }
+            let evaluation = range_vector::RangeActionEvaluation {
+                actor_action_values_bb: action_values,
+                expected_counterfactual_values_bb: expected,
+            };
+            let updates = range_vector::aggregate_information_set_updates(
+                actor,
+                &keys,
+                private_chance,
+                &ranges[actor],
+                &probabilities,
+                &evaluation,
+                None,
+            )?;
+            self.apply_range_information_set_updates(updates, true, false)?;
+            return Ok(evaluation.expected_counterfactual_values_bb[traverser].clone());
+        }
+
+        if self.completed_iterations >= self.config.averaging_delay {
+            let updates = range_vector::aggregate_average_strategy_updates(
+                &keys,
+                &ranges[actor],
+                &probabilities,
+                self.strategy_averaging_weight(self.completed_iterations + 1),
+            )?;
+            self.apply_range_information_set_updates(updates, false, true)?;
+        }
+
+        // Sample one shared public action from the reached range mixture.
+        // Multiplying each exact combo by sigma_i(a) / q(a) makes the returned
+        // traverser CFV unbiased while avoiding one recursive branch per
+        // opponent information set.
+        let proposal = range_vector::opponent_action_proposal(&ranges[actor], &probabilities)?;
+        let selected = sample_index(&proposal, rng);
+        let child_ranges = range_vector::importance_sample_opponent_range(
+            ranges,
+            actor,
+            &probabilities,
+            selected,
+            proposal[selected],
+        )?;
+        self.public_chance_external_sampling(
+            state.apply(&actions[selected], &self.config),
+            board,
+            &child_ranges,
+            private_chance,
+            traverser,
+            rng,
+            information_set_cache,
+        )
     }
 
     /// Traverse a compatible active-player hand population as one public
@@ -2034,6 +2327,16 @@ impl Trainer {
                     self.config.opponent_hand_batch_size.into(),
                 );
         }
+        if self.config.traversal != BlueprintTraversal::ExternalSampling {
+            training_config
+                .as_object_mut()
+                .expect("training config object")
+                .insert(
+                    "traversal".to_owned(),
+                    serde_json::to_value(self.config.traversal)
+                        .expect("serializable blueprint traversal"),
+                );
+        }
         let training_hash_input =
             serde_json::to_vec(&training_config).expect("serializable training configuration");
         let training_config_hash = stable_hash(&training_hash_input);
@@ -2149,11 +2452,19 @@ impl Trainer {
             self.config.evaluation_controls.held_out_seed,
         );
         let root_local_deviation = evaluate_root_local_deviation(&self.config, &self.nodes);
+        let traversal_provenance = match self.config.traversal {
+            BlueprintTraversal::ExternalSampling => "External-sampling Discounted CFR with alternating traverser updates; traverser actions are enumerated and opponent/chance actions are sampled deterministically from the seeded current strategy.".to_owned(),
+            BlueprintTraversal::PublicChanceSampling => "Research public-chance external-sampling Discounted CFR with alternating traverser updates. Each round samples one complete public board, updates all 1,081 board-compatible exact private combos, enumerates traverser actions, and samples one shared opponent action from a reach-weighted proposal with exact per-combo importance correction.".to_owned(),
+        };
+        let showdown_provenance = match self.config.traversal {
+            BlueprintTraversal::ExternalSampling => "All-in showdowns before the river use deterministic conditional-expectation runout evaluation to reduce chance variance; sample counts and exact-turn behavior are recorded in config.showdown_evaluation.".to_owned(),
+            BlueprintTraversal::PublicChanceSampling => "All terminal showdowns use the exact five-card public board sampled for that public-chance round; exact compatible-hand settlement preserves card removal and zero-sum utilities.".to_owned(),
+        };
         let mut provenance = vec![
-            "External-sampling Discounted CFR with alternating traverser updates; traverser actions are enumerated and opponent/chance actions are sampled deterministically from the seeded current strategy.".to_owned(),
+            traversal_provenance,
             "Sampled information sets lazily receive every skipped global DCFR regret discount, and average-strategy visits follow the configured fixed or scheduled DCFR weighting recurrence.".to_owned(),
             "Exact private cards and boards are sampled without replacement; information sets use lossy coarse rollout-derived strength/potential and public buckets plus an abstract no-limit action grid.".to_owned(),
-            "All-in showdowns before the river use deterministic conditional-expectation runout evaluation to reduce chance variance; sample counts and exact-turn behavior are recorded in config.showdown_evaluation.".to_owned(),
+            showdown_provenance,
             "Rake-free, equal-stack, heads-up cash model with no ante; button posts the small blind, acts first preflop, and acts last postflop.".to_owned(),
             "Reported regret is a training diagnostic, not exploitability or a Nash-distance certificate.".to_owned(),
             "Root local-deviation evaluation forces one button action at a time against the fixed average continuation/opponent policy. It is a one-step local best response with sampling error and is not exploitability or a full best response.".to_owned(),
@@ -2449,8 +2760,21 @@ fn information_set(
 ) -> (u64, NodeDescriptor, Vec<String>) {
     let hand_bucket_trajectory =
         hand_bucket_trajectory(deal, state.actor, state.street, &config.hand_abstraction);
-    let mut hand_bucket_trajectory = hand_bucket_trajectory;
-    let mut public_bucket_trajectory = public_bucket_trajectory(deal, state.street);
+    let public_bucket_trajectory = public_bucket_trajectory(deal, state.street);
+    information_set_from_bucket_trajectories(
+        state,
+        config,
+        hand_bucket_trajectory,
+        public_bucket_trajectory,
+    )
+}
+
+fn information_set_from_bucket_trajectories(
+    state: &GameState,
+    config: &BlueprintConfig,
+    mut hand_bucket_trajectory: Vec<Arc<str>>,
+    mut public_bucket_trajectory: Vec<Arc<str>>,
+) -> (u64, NodeDescriptor, Vec<String>) {
     if config.recall_mode == RecallMode::CurrentStreet && state.street != Street::Preflop {
         hand_bucket_trajectory = hand_bucket_trajectory.last().cloned().into_iter().collect();
         public_bucket_trajectory = public_bucket_trajectory
@@ -3821,9 +4145,52 @@ mod tests {
     fn publishable_defaults_use_trajectory_recall() {
         let config = BlueprintConfig::default();
         assert_eq!(config.recall_mode, RecallMode::Trajectory);
+        assert_eq!(config.traversal, BlueprintTraversal::ExternalSampling);
         assert_eq!(config.dcfr, DcfrParameters::default());
         assert_eq!(config.dcfr_schedule, DcfrSchedule::Fixed);
         assert_eq!(config.dcfr_schedule_horizon, 0);
+        assert!(
+            serde_json::to_value(config)
+                .expect("serializable default config")
+                .get("traversal")
+                .is_none(),
+            "the default scalar config must preserve its canonical artifact identity"
+        );
+    }
+
+    #[test]
+    fn public_chance_checkpoint_resume_matches_uninterrupted_training() {
+        let path = std::env::temp_dir().join(format!(
+            "blueprint-public-chance-checkpoint-{}-{}.msgpack.gz",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let mut target = tiny_config();
+        target.traversal = BlueprintTraversal::PublicChanceSampling;
+        target.max_information_sets = 500_000;
+        let mut partial = target.clone();
+        partial.iterations = 1;
+        solve_controlled(
+            partial,
+            RunControl {
+                checkpoint_path: Some(path.to_string_lossy().into_owned()),
+                checkpoint_every: 1,
+                resume_path: None,
+            },
+        )
+        .expect("write public-chance partial checkpoint");
+        let resumed = solve_controlled(
+            target.clone(),
+            RunControl {
+                checkpoint_path: None,
+                checkpoint_every: 0,
+                resume_path: Some(path.to_string_lossy().into_owned()),
+            },
+        )
+        .expect("resume public-chance checkpoint");
+        let uninterrupted = solve(target).expect("uninterrupted public-chance solve");
+        assert_eq!(resumed, uninterrupted);
+        fs::remove_file(path).expect("remove public-chance checkpoint");
     }
 
     #[test]

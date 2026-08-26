@@ -950,22 +950,61 @@ eligible policy candidate must carry both players' compatible reach vectors at
 public nodes and integrate terminal values contiguously; adding more finite
 deal lanes is not justified.
 
-That next candidate now has a policy-independent vertical slice. A new exact
-range kernel retains all 1,326 combos for both players, rejects board-blocked
-reach, computes compatible-opponent mass, and returns per-combo counterfactual
-values plus zero-sum profile values. Showdown uses one score distribution per
-range and subtracts only card-conflicting hands, avoiding a dense joint-deal
-table while matching a full pairwise reference. Action helpers split exact
-actor reaches by policy and recombine child CFVs with the correct asymmetric
-CFR semantics: strategy-weight actor values, but sum opponent values whose
-child reaches already contain that strategy.
+## Public-chance compatible-range trainer
 
-This slice is not a trainer and does not lift the cloud hold. It removes two
-correctness/performance risks before shared abstract-node regret updates are
-wired: terminal settlement no longer requires finite joint-deal lanes, and
-range propagation has executable reach-conservation tests. The remaining
-implementation is public-node strategy lookup/bucketing, alternating regret
-updates, sampled street transitions, and a matched-wall paired pilot.
+The exact range kernel is now wired through the full abstract game as an
+opt-in policy trainer. Each alternating round samples one complete public
+board, maps all 1,081 board-compatible exact private combos to the existing
+trajectory-recall information sets, enumerates the traverser's actions, and
+samples one opponent public action from a reach-weighted proposal. Exact
+per-combo `sigma(a) / q(a)` correction keeps every traverser CFV unbiased
+without recursively branching once per opponent hand or bucket. Regret uses
+private-card chance reach while average strategy separately uses the player's
+own realization reach. Terminal folds and showdowns retain exact card removal,
+chip accounting, and zero-sum settlement.
+
+The first implementation sampled one action independently per opponent
+information set. Even a two-round minimal-grid pilot exceeded 200,000 nodes
+and stopped at the guard. The shared importance-sampled proposal reduced the
+same pilot to 40,989 nodes, 0.58 seconds, and 28MB peak RSS. A board-local
+private/public bucket cache then removed repeated feature computation across
+public action histories. On the identical ten-round accepted-grid seed it
+reduced wall time from 5.25 seconds to 1.67 seconds and retired instructions
+from 85.5B to 19.7B. The complete canonical artifact remained byte identical.
+
+Fixed DCFR is required for these short screens. Applying the selected 600k
+HS-DCFR terminal-relative horizon to a 100-round pilot correctly underflows
+the very early average weights, leaving no frozen average policy; that is a
+scale mismatch, not policy evidence. The fixed-DCFR matched pair produced:
+
+| Rounds | Root gain seed 26001 / 26002 (bb) | Held-out unknown | Root continuation unknown | Max per-action MAE | Median TV | Primary agreement |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 1.3178 / 1.2712 | 13.93% / 14.45% | 21.49% / 22.07% | 13.72% | 36.61% | 21.30% |
+| 400 | **0.6980 / 0.7782** | **13.86% / 12.91%** | **21.11% / 20.53%** | **10.99%** | **30.23%** | **50.89%** |
+
+At 400 rounds the two seeds created 6.60M and 6.39M information sets in 46.8
+and 45.6 seconds while running concurrently, with 2.94GB and 2.48GB peak RSS.
+The pair materially beats the earlier approximate matched-CPU scalar 45k
+screen on both root local deviation (`0.74bb` pair mean versus `2.89bb`) and
+authentic unknown coverage (about `13--14%` versus `24--25%`). Progress from
+100 to 400 rounds is also coherent: pair-mean root gain falls 43%, median TV
+falls 6.4 points, and primary agreement rises 29.6 points.
+
+The candidate is not releasable at 400 rounds. It still misses the 0.10bb root
+local-deviation target, 5% per-action MAE, 20% median / 35% p95 TV, 85% primary
+agreement, and 5% continuation-unknown targets. A max-per-hand opponent
+proposal was tested because it bounds importance ratios by the action count;
+at 100 rounds it slightly worsened mean root gain and increased aggregate
+cross-seed delta from 3.25 to 8.71 points, so the option was removed rather
+than added to the cloud surface.
+
+The public-chance candidate has now earned a larger sequential scaling pilot,
+but not an unchecked production run. Checkpoint/resume is byte-deterministic,
+the cloud runner pins the traversal in its fingerprint and parent validation,
+and default scalar commands remain unchanged. The next decision is whether an
+800-round pair continues the measured policy/stability slope within the table
+growth projection; only then should paid compute extend the same fixed-DCFR
+lineage.
 
 ## Final verification
 
@@ -975,7 +1014,7 @@ pilot selection and cloud-runner hardening:
 - `npm test`: 114 passed, 4 skipped;
 - `npm run build`: production build completed, including pinned resolver
   artifact verification;
-- Rust release tests: 175 library tests and 3 CLI integration tests passed;
+- Rust release tests: 180 library tests and 3 CLI integration tests passed;
 - full neural unittest discovery: 245 passed (the existing NumPy zero-variance
   warnings remain non-fatal);
 - policy, practice, resolver-integration, artifact-comparator, and cloud-runner
