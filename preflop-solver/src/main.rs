@@ -1,4 +1,4 @@
-use preflop_solver::blueprint::{self, BlueprintConfig, RecallMode, RunControl};
+use preflop_solver::blueprint::{self, BlueprintConfig, DcfrSchedule, RecallMode, RunControl};
 use preflop_solver::kuhn;
 use preflop_solver::push_fold::{self, PushFoldConfig};
 use sha2::{Digest, Sha256};
@@ -122,6 +122,14 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--river-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                policy_prior_iterations: parse_or(
+                    args,
+                    "--river-resolver-policy-prior-iterations",
+                    0u64,
+                )?,
+                policy_prior_actor: value(args, "--river-resolver-policy-prior-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
                 safe_resolving: args
                     .iter()
                     .any(|argument| argument == "--river-resolver-safe"),
@@ -143,6 +151,8 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
     if river_resolver.is_none()
         && [
             "--river-resolver-averaging-delay",
+            "--river-resolver-policy-prior-iterations",
+            "--river-resolver-policy-prior-actor",
             "--river-resolver-safe",
             "--river-resolver-safe-maxmargin",
             "--river-resolver-safe-iterations",
@@ -164,6 +174,14 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--turn-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                policy_prior_iterations: parse_or(
+                    args,
+                    "--turn-resolver-policy-prior-iterations",
+                    0u64,
+                )?,
+                policy_prior_actor: value(args, "--turn-resolver-policy-prior-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
                 river_refinement_iterations: parse_or(
                     args,
                     "--turn-resolver-river-refinement-iterations",
@@ -188,6 +206,24 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
             })
         })
         .transpose()?;
+    if turn_resolver.is_none()
+        && [
+            "--turn-resolver-averaging-delay",
+            "--turn-resolver-policy-prior-iterations",
+            "--turn-resolver-policy-prior-actor",
+            "--turn-resolver-river-refinement-iterations",
+            "--turn-resolver-regret-matching-plus",
+            "--turn-resolver-threads",
+            "--turn-resolver-safe",
+            "--turn-resolver-safe-anchor-iterations",
+            "--turn-resolver-policy-weight",
+            "--turn-resolver-actor",
+        ]
+        .iter()
+        .any(|name| args.iter().any(|argument| argument == name))
+    {
+        return Err("turn resolver options require --turn-resolver-iterations".into());
+    }
     let flop_resolver = value(args, "--flop-resolver-iterations")
         .map(|iterations| -> Result<_, Box<dyn Error>> {
             let iterations = iterations.parse::<u64>()?;
@@ -197,6 +233,11 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
                     args,
                     "--flop-resolver-averaging-delay",
                     iterations / 10,
+                )?,
+                policy_prior_iterations: parse_or(
+                    args,
+                    "--flop-resolver-policy-prior-iterations",
+                    0u64,
                 )?,
                 regret_matching_plus: args
                     .iter()
@@ -721,10 +762,35 @@ fn run_flop_pbs_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .unwrap_or(1),
         )?,
     };
+    let prior_path = value(args, "--policy-prior").map(PathBuf::from);
+    let public_chance_vector_mvp = args
+        .iter()
+        .any(|argument| argument == "--public-chance-vector-mvp");
+    if prior_path.is_some() && value(args, "--evaluation-value-network").is_some() {
+        return Err("flop policy-prior pilots do not support cross-evaluation".into());
+    }
+    if public_chance_vector_mvp
+        && (prior_path.is_some() || value(args, "--evaluation-value-network").is_some())
+    {
+        return Err(
+            "the public-chance vector MVP does not support policy priors or cross-evaluation"
+                .into(),
+        );
+    }
     let solution = if let Some(path) = value(args, "--evaluation-value-network") {
         let evaluation_network =
             blueprint::public_belief::PublicValueNetwork::read(Path::new(&path))?;
         blueprint::public_belief::solve_flop_cross_evaluated(resolve_config, evaluation_network)?
+    } else if let Some(path) = prior_path {
+        let prior: blueprint::public_belief::FlopSolution =
+            serde_json::from_slice(&fs::read(path)?)?;
+        blueprint::public_belief::solve_flop_with_prior(
+            resolve_config,
+            &prior.strategies,
+            parse_or(args, "--policy-prior-iterations", 2u64)?,
+        )?
+    } else if public_chance_vector_mvp {
+        blueprint::public_belief::solve_flop_public_chance_vector_mvp(resolve_config)?
     } else {
         blueprint::public_belief::solve_flop(resolve_config)?
     };
@@ -1216,6 +1282,7 @@ fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     game.iterations = 2;
     game.averaging_delay = 0;
+    apply_dcfr_args(&mut game, args)?;
     if args
         .iter()
         .any(|argument| argument == "--compact-serving-grid")
@@ -1228,17 +1295,27 @@ fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     let pot_bb = parse_or(args, "--pot-bb", 4.0f64)?;
     let iterations = parse_or(args, "--iterations", 2_000u64)?;
     let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
-    let solution =
-        blueprint::public_belief::solve_river(blueprint::public_belief::RiverSolveConfig {
-            game,
-            state: blueprint::public_belief::PublicBeliefState::uniform_river_start(
-                board,
-                parse_or(args, "--actor", 1usize)?,
-                [pot_bb / 2.0, pot_bb / 2.0],
-            ),
-            iterations,
-            averaging_delay,
-        })?;
+    let config = blueprint::public_belief::RiverSolveConfig {
+        game,
+        state: blueprint::public_belief::PublicBeliefState::uniform_river_start(
+            board,
+            parse_or(args, "--actor", 1usize)?,
+            [pot_bb / 2.0, pot_bb / 2.0],
+        ),
+        iterations,
+        averaging_delay,
+    };
+    let solution = if let Some(path) = value(args, "--policy-prior").map(PathBuf::from) {
+        let prior: blueprint::public_belief::RiverSolution =
+            serde_json::from_slice(&fs::read(path)?)?;
+        blueprint::public_belief::solve_river_with_prior(
+            config,
+            &prior.strategies,
+            parse_or(args, "--policy-prior-iterations", 2u64)?,
+        )?
+    } else {
+        blueprint::public_belief::solve_river(config)?
+    };
     let output = serde_json::to_string_pretty(&solution)?;
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
         if let Some(parent) = path.parent() {
@@ -1325,8 +1402,22 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     let export_strategies = args
         .iter()
         .any(|argument| argument == "--export-strategies");
+    let prior_path = value(args, "--policy-prior").map(PathBuf::from);
+    if prior_path.is_some() && !export_strategies {
+        return Err("turn-river policy-prior pilots require --export-strategies".into());
+    }
     let (output, metrics) = if export_strategies {
-        let solution = blueprint::public_belief::solve_turn_river(config)?;
+        let solution = if let Some(path) = prior_path {
+            let prior: blueprint::public_belief::TurnRiverSolution =
+                serde_json::from_slice(&fs::read(path)?)?;
+            blueprint::public_belief::solve_turn_river_with_prior(
+                config,
+                &prior.strategies,
+                parse_or(args, "--policy-prior-iterations", 2u64)?,
+            )?
+        } else {
+            blueprint::public_belief::solve_turn_river(config)?
+        };
         (
             serde_json::to_string_pretty(&solution)?,
             serde_json::to_string_pretty(&solution.metrics)?,
@@ -2329,6 +2420,14 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--river-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                policy_prior_iterations: parse_or(
+                    args,
+                    "--river-resolver-policy-prior-iterations",
+                    0u64,
+                )?,
+                policy_prior_actor: value(args, "--river-resolver-policy-prior-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
                 safe_resolving: args
                     .iter()
                     .any(|argument| argument == "--river-resolver-safe"),
@@ -2350,6 +2449,8 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     if river_resolver.is_none()
         && [
             "--river-resolver-averaging-delay",
+            "--river-resolver-policy-prior-iterations",
+            "--river-resolver-policy-prior-actor",
             "--river-resolver-safe",
             "--river-resolver-safe-maxmargin",
             "--river-resolver-safe-iterations",
@@ -2373,6 +2474,14 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     "--turn-resolver-averaging-delay",
                     iterations / 10,
                 )?,
+                policy_prior_iterations: parse_or(
+                    args,
+                    "--turn-resolver-policy-prior-iterations",
+                    0u64,
+                )?,
+                policy_prior_actor: value(args, "--turn-resolver-policy-prior-actor")
+                    .map(|actor| actor.parse::<usize>())
+                    .transpose()?,
                 river_refinement_iterations: parse_or(
                     args,
                     "--turn-resolver-river-refinement-iterations",
@@ -2400,6 +2509,8 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     if turn_resolver.is_none()
         && [
             "--turn-resolver-averaging-delay",
+            "--turn-resolver-policy-prior-iterations",
+            "--turn-resolver-policy-prior-actor",
             "--turn-resolver-river-refinement-iterations",
             "--turn-resolver-regret-matching-plus",
             "--turn-resolver-threads",
@@ -2424,6 +2535,11 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
                     args,
                     "--flop-resolver-averaging-delay",
                     iterations / 10,
+                )?,
+                policy_prior_iterations: parse_or(
+                    args,
+                    "--flop-resolver-policy-prior-iterations",
+                    0u64,
                 )?,
                 regret_matching_plus: args
                     .iter()
@@ -2471,6 +2587,7 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     if flop_resolver.is_none()
         && [
             "--flop-resolver-averaging-delay",
+            "--flop-resolver-policy-prior-iterations",
             "--flop-resolver-regret-matching-plus",
             "--flop-resolver-deploy-solved-policy",
             "--flop-resolver-threads",
@@ -2750,6 +2867,16 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
         parse_or(args, "--max-information-sets", config.max_information_sets)?;
     config.seed = parse_or(args, "--seed", config.seed)?;
     config.averaging_delay = parse_or(args, "--averaging-delay", config.averaging_delay)?;
+    config.traverser_hand_batch_size = parse_or(
+        args,
+        "--traverser-hand-batch-size",
+        config.traverser_hand_batch_size,
+    )?;
+    config.opponent_hand_batch_size = parse_or(
+        args,
+        "--opponent-hand-batch-size",
+        config.opponent_hand_batch_size,
+    )?;
     config.evaluation_controls.held_out_deals = parse_or(
         args,
         "--held-out-deals",
@@ -2785,6 +2912,10 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
     config.dcfr.negative_regret_exponent =
         parse_or(args, "--dcfr-beta", config.dcfr.negative_regret_exponent)?;
     config.dcfr.strategy_exponent = parse_or(args, "--dcfr-gamma", config.dcfr.strategy_exponent)?;
+    if let Some(horizon) = value(args, "--hs-dcfr-30-horizon") {
+        config.dcfr_schedule = DcfrSchedule::Hs30;
+        config.dcfr_schedule_horizon = horizon.parse::<u64>()?;
+    }
     config.hand_abstraction.distribution_samples = parse_or(
         args,
         "--distribution-samples",
@@ -2897,7 +3028,127 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
             fs::create_dir_all(parent)?;
         }
     }
-    fs::write(&output, serde_json::to_string_pretty(&artifact)?)?;
+    blueprint::write_json_atomic(&output, &artifact)?;
+    if let Some(summary) = value(args, "--summary").map(PathBuf::from) {
+        let root_strategies = artifact
+            .strategies
+            .iter()
+            .filter(|info_set| {
+                info_set.actor == blueprint::Position::ButtonSmallBlind
+                    && info_set.street == blueprint::Street::Preflop
+                    && info_set.public_history.len() == 1
+                    && info_set.public_history[0].starts_with("blinds:")
+            })
+            .map(|info_set| {
+                let hand = info_set
+                    .hand_bucket_trajectory
+                    .last()
+                    .and_then(|bucket| bucket.strip_prefix("preflop:"))
+                    .expect("root strategy has a preflop hand bucket");
+                serde_json::json!({
+                    "hand": hand,
+                    "regretUpdates": info_set.regret_updates,
+                    "averageVisits": info_set.average_visits,
+                    "trainedAverage": info_set.trained_average,
+                    "actions": info_set.actions,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut summary_value = serde_json::json!({
+            "schema": "hu-blueprint-run-summary-v1",
+            "artifactId": artifact.artifact_id,
+            "configHash": artifact.config_hash,
+            "trainingConfigHash": artifact.training_config_hash,
+            "solverVersion": artifact.solver_version,
+            "model": artifact.model,
+            "depthBb": artifact.config.effective_stack_bb,
+            "seed": artifact.config.seed,
+            "averagingDelay": artifact.config.averaging_delay,
+            "traverserHandBatchSize": artifact.config.traverser_hand_batch_size,
+            "dcfr": artifact.config.dcfr,
+            "dcfrSchedule": artifact.config.dcfr_schedule,
+            "dcfrScheduleHorizon": artifact.config.dcfr_schedule_horizon,
+            "requestedIterations": artifact.metrics.requested_iterations,
+            "trainingIterations": artifact.metrics.training_iterations,
+            "stoppedEarly": artifact.metrics.stopped_early,
+            "stopReason": artifact.metrics.stop_reason,
+            "informationSets": artifact.metrics.information_sets,
+            "preflopInformationSets": artifact.metrics.preflop_information_sets,
+            "postflopInformationSets": artifact.metrics.postflop_information_sets,
+            "trainedInformationSets": artifact.metrics.trained_information_sets,
+            "exportedInformationSets": artifact.metrics.exported_information_sets,
+            "heldOutDeals": artifact.metrics.held_out.deals,
+            "heldOutUnknownInformationSetFraction": artifact
+                .metrics
+                .held_out
+                .unknown_information_set_fraction,
+            "heldOutUntrainedInformationSetFraction": artifact
+                .metrics
+                .held_out
+                .untrained_information_set_fraction,
+            "heldOutButtonMeanNetBb": artifact.metrics.held_out.button_mean_net_bb,
+            "heldOutButtonNetStandardErrorBb": artifact
+                .metrics
+                .held_out
+                .button_net_standard_error_bb,
+            "rootLocalDeviationGainBb": artifact
+                .metrics
+                .root_local_deviation
+                .aggregate_local_deviation_gain_bb,
+            "rootLocalDeviationSamplesPerClass": artifact
+                .metrics
+                .root_local_deviation
+                .samples_per_class,
+            "rootLocalDeviationStandardErrorBb": artifact
+                .metrics
+                .root_local_deviation
+                .aggregate_local_deviation_gain_standard_error_bb,
+            "rootLocalDeviation99PctLowerBoundBb": artifact
+                .metrics
+                .root_local_deviation
+                .aggregate_local_deviation_gain_99pct_lower_bound_bb,
+            "rootTrainedComboFraction": artifact
+                .metrics
+                .root_local_deviation
+                .trained_root_combo_fraction,
+            "rootContinuationUnknownInformationSetFraction": artifact
+                .metrics
+                .root_local_deviation
+                .continuation_coverage
+                .unknown_information_set_fraction,
+            "rootContinuationUntrainedInformationSetFraction": artifact
+                .metrics
+                .root_local_deviation
+                .continuation_coverage
+                .untrained_information_set_fraction,
+            "actionValueEvaluatedInformationSets": artifact
+                .metrics
+                .action_value_evaluation
+                .evaluated_information_sets,
+            "actionValueDeals": artifact.metrics.action_value_evaluation.deals,
+            "actionValueExportedInformationSetCoverage": artifact
+                .metrics
+                .action_value_evaluation
+                .exported_information_set_coverage,
+            "actionValueStandardErrorCoverage": artifact
+                .metrics
+                .action_value_evaluation
+                .reach_weighted_standard_error_coverage,
+            "rootStrategies": root_strategies,
+            "validationStatus": artifact.validation.status,
+            "validationReasons": artifact.validation.reasons,
+        });
+        if artifact.config.opponent_hand_batch_size > 1 {
+            summary_value
+                .as_object_mut()
+                .expect("blueprint summary object")
+                .insert(
+                    "opponentHandBatchSize".to_owned(),
+                    artifact.config.opponent_hand_batch_size.into(),
+                );
+        }
+        blueprint::write_json_atomic(&summary, &summary_value)?;
+    }
     eprintln!(
         "wrote {} ({} infosets, approximate model; no exploitability claim)",
         output.display(),
@@ -3064,6 +3315,9 @@ Solve options:
   --seed <integer>                Default: 1
   --output <path>                 Default: push-fold-artifact.json
 
+Flop public-belief pilot option:
+  --public-chance-vector-mvp      Freeze both traverser updates per DCFR round
+
 Blueprint options:
   --effective-stack-bb <number>   Default: 100
   --iterations <integer>          Default: 100000
@@ -3075,10 +3329,14 @@ Blueprint options:
   --root-deviation-samples <int>  Default: 256 deals per hand class
   --root-deviation-seed <integer> Fixed local-deviation seed
   --action-value-deals <integer>  Default: 10000 independent policy deals
+  --traverser-hand-batch-size <n> Default: 1; research pilot, maximum 990
+  --opponent-hand-batch-size <n>  Default: 1; research pilot, maximum 990
   --action-value-seed <integer>   Fixed per-action evaluation seed
   --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)
   --dcfr-beta <number>            Negative-regret exponent (default: 0)
   --dcfr-gamma <number>           Average-strategy exponent (default: 2)
+  --hs-dcfr-30-horizon <N>        Experimental AAAI-2026 alpha/beta/gamma
+                                  schedule pinned to an N-iteration horizon
   --distribution-samples <int>    Default: 128 per visible-card bucket
   --equity-bins <int>             Default: 10
   --potential-bins <int>          Default: 3
@@ -3101,6 +3359,7 @@ Blueprint options:
   --checkpoint <path>             Optional resumable checkpoint
   --checkpoint-every <integer>    Default: 0 (final only)
   --resume <path>                 Resume compatible checkpoint
+  --summary <path>                Write compact completion/coverage sidecar
   --export-postflop-strategies    Include trained postflop profile (large)
   --current-street-recall         Opt into imperfect recall (not publishable)
   --output <path>                 Default: blueprint-artifact.json
@@ -3147,6 +3406,11 @@ Neural certificate options:
                                   an exact-range public-belief CFR solve
   --river-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
+  --river-resolver-policy-prior-iterations <N>
+                                  Experimental frozen-policy pseudo-iterations;
+                                  requires ordinary solve and zero delay
+  --river-resolver-policy-prior-actor <0|1>
+                                  Apply the prior only to BTN/SB (0) or BB (1)
   --river-resolver-safe           Protect exact blueprint opponent CFVs and
                                   deploy only the acting player's river policy
   --river-resolver-safe-maxmargin Maximize the worst protected river margin
@@ -3161,6 +3425,11 @@ Neural certificate options:
                                   joint exact-range turn/river CFR solve
   --turn-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
+  --turn-resolver-policy-prior-iterations <N>
+                                  Experimental frozen-policy pseudo-iterations;
+                                  requires ordinary solve and zero delay
+  --turn-resolver-policy-prior-actor <0|1>
+                                  Apply the prior only to BTN/SB (0) or BB (1)
   --turn-resolver-river-refinement-iterations <N>
                                   Default: 0 frozen-turn refinement updates
   --turn-resolver-regret-matching-plus
@@ -3194,6 +3463,9 @@ Neural certificate options:
                                   then deploy one atomic complete flop policy
   --flop-resolver-averaging-delay <N>
                                   Default: resolver iterations / 10
+  --flop-resolver-policy-prior-iterations <N>
+                                  Experimental frozen-policy pseudo-iterations;
+                                  requires solved deployment and zero delay
   --flop-resolver-regret-matching-plus
                                   Use regret-matching+ in flop search
   --flop-resolver-deploy-solved-policy
@@ -3308,6 +3580,7 @@ Complete turn/river label options:
     [--dataset <targets.json> --state-index 0]
     [--iterations 500] [--averaging-delay 50] [--export-strategies]
     [--river-refinement-iterations 0]
+    [--policy-prior <solution.json> --policy-prior-iterations 2]
     [--regret-matching-plus] [--dcfr-alpha 1.5] [--dcfr-beta 0]
     [--dcfr-gamma 2] [--output <json>]
   turn-pbs-upgrade-targets --dataset <legacy-v1.json>

@@ -1,12 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { gzipSync } from 'node:zlib';
 
 import {
   ArtifactComparisonError,
   compareBlueprintArtifacts,
+  parseBlueprintArtifactBytes,
 } from './compare-blueprint-artifacts.mjs';
 
 const ranks = '23456789TJQKA';
+
+test('artifact parser accepts canonical JSON and cloud gzip artifacts', () => {
+  const payload = { schema_version: 1, artifact_id: 'fixture' };
+  const bytes = Buffer.from(JSON.stringify(payload));
+
+  assert.deepEqual(parseBlueprintArtifactBytes('seed.json', bytes), payload);
+  assert.deepEqual(
+    parseBlueprintArtifactBytes('seed.json.gz', gzipSync(bytes)),
+    payload
+  );
+});
 
 function handLabels() {
   const labels = [];
@@ -27,9 +40,7 @@ function fixtureProbabilities(label) {
   const suitedBonus = label.endsWith('s') ? 2 : 0;
   const rawStrength = high + low + pairBonus + suitedBonus;
   const premium = ['AA', 'AKs', 'KK', 'QQ'].includes(label);
-  const continueFrequency = premium
-    ? 0.995
-    : 0.02 + (0.97 * rawStrength) / 39;
+  const continueFrequency = premium ? 0.995 : 0.02 + (0.97 * rawStrength) / 39;
   const shoveFrequency = 0.005;
   return [
     1 - continueFrequency,
@@ -38,11 +49,11 @@ function fixtureProbabilities(label) {
   ];
 }
 
-function actionDistribution(label, probabilities) {
+function actionDistribution(label, probabilities, effectiveStackBb = 100) {
   const [fold, limp, shove] =
     typeof probabilities === 'function'
       ? probabilities(label)
-      : probabilities ?? fixtureProbabilities(label);
+      : (probabilities ?? fixtureProbabilities(label));
   return [
     { action: 'fold', probability: fold },
     { action: 'limp', probability: limp },
@@ -50,7 +61,7 @@ function actionDistribution(label, probabilities) {
       ? []
       : [
           {
-            action: 'raise_all_in_to_100.000bb',
+            action: `raise_all_in_to_${effectiveStackBb.toFixed(3)}bb`,
             probability: shove,
           },
         ]),
@@ -58,6 +69,7 @@ function actionDistribution(label, probabilities) {
 }
 
 function artifact(seed, probabilities = undefined, config = {}) {
+  const effectiveStackBb = config.effective_stack_bb ?? 100;
   return {
     schema_version: 1,
     artifact_id: `fixture-${seed}`,
@@ -99,12 +111,14 @@ function artifact(seed, probabilities = undefined, config = {}) {
           exact_combo_count:
             label.length === 2 ? 6 : label.endsWith('s') ? 4 : 12,
           root_policy_trained: true,
-          action_values: actionDistribution(label, probabilities).map(
-            (action) => ({
-              action: action.action,
-              samples: 512,
-            })
-          ),
+          action_values: actionDistribution(
+            label,
+            probabilities,
+            effectiveStackBb
+          ).map((action) => ({
+            action: action.action,
+            samples: 512,
+          })),
         })),
         aggregate_chosen_average_ev_bb: 0.2,
         aggregate_best_action_ev_bb: 0.24,
@@ -127,7 +141,7 @@ function artifact(seed, probabilities = undefined, config = {}) {
       average_visits: 500,
       regret_updates: 600,
       trained_average: true,
-      actions: actionDistribution(label, probabilities),
+      actions: actionDistribution(label, probabilities, effectiveStackBb),
     })),
   };
 }
@@ -156,22 +170,51 @@ test('identical root strategies pass and expose weighted metrics', () => {
   );
   assert.ok(
     Math.abs(
-      report.artifacts[0].poker_domain_sanity
-        .aggregate_open_shove_frequency - 0.005
+      report.artifacts[0].poker_domain_sanity.aggregate_open_shove_frequency -
+        0.005
     ) < 1e-12
   );
   assert.ok(
-    report.artifacts[0].poker_domain_sanity
-      .hand_strength_continue_rank_order.spearman_correlation >= 0.65
+    report.artifacts[0].poker_domain_sanity.hand_strength_continue_rank_order
+      .spearman_correlation >= 0.65
   );
-  assert.equal(
-    report.comparisons[0].per_hand_total_variation.median,
-    0
-  );
+  assert.equal(report.comparisons[0].per_hand_total_variation.median, 0);
   assert.equal(
     report.comparisons[0].primary_action_agreement.hand_class_fraction,
     1
   );
+});
+
+test('20bb artifacts are labelled by depth and do not run the 100bb shove gate', () => {
+  const twentyBbProbabilities = (label) => {
+    const [fold, limp] = fixtureProbabilities(label);
+    return [fold, limp - 0.025, 0.03];
+  };
+  const report = compareBlueprintArtifacts([
+    {
+      file: '20bb-seed-1.json',
+      artifact: artifact(1, twentyBbProbabilities, {
+        effective_stack_bb: 20,
+      }),
+    },
+    {
+      file: '20bb-seed-2.json',
+      artifact: artifact(2, twentyBbProbabilities, {
+        effective_stack_bb: 20,
+      }),
+    },
+  ]);
+  const gates = Object.fromEntries(
+    report.acceptance_gates.map((entry) => [entry.name, entry])
+  );
+
+  assert.equal(
+    report.artifacts[0].poker_domain_sanity.applicable_to,
+    'unopened heads-up button/small-blind at 20bb'
+  );
+  assert.equal(gates.poker_domain_sanity_depth_supported.passed, true);
+  assert.equal(gates.maximum_aggregate_open_shove_frequency.applicable, false);
+  assert.equal(gates.maximum_aggregate_open_shove_frequency.passed, true);
 });
 
 test('unstable strategies fail stability gates', () => {
@@ -182,14 +225,12 @@ test('unstable strategies fail stability gates', () => {
 
   assert.equal(report.passed, false);
   assert.ok(
-    Math.abs(
-      report.comparisons[0].combo_weighted_per_action_mae.fold - 0.8
-    ) < 1e-12
+    Math.abs(report.comparisons[0].combo_weighted_per_action_mae.fold - 0.8) <
+      1e-12
   );
   assert.ok(
-    Math.abs(
-      report.comparisons[0].per_hand_total_variation.median - 0.8
-    ) < 1e-12
+    Math.abs(report.comparisons[0].per_hand_total_variation.median - 0.8) <
+      1e-12
   );
   assert.equal(
     report.comparisons[0].primary_action_agreement.hand_class_fraction,
@@ -240,10 +281,7 @@ test('domain gates reject stable but strategically pathological roots', () => {
   );
 
   assert.equal(report.comparisons[0].per_hand_total_variation.max, 0);
-  assert.equal(
-    gates.maximum_aggregate_open_shove_frequency.passed,
-    false
-  );
+  assert.equal(gates.maximum_aggregate_open_shove_frequency.passed, false);
   assert.equal(gates.maximum_premium_hand_fold_frequency.passed, false);
   assert.equal(gates.maximum_trash_hand_open_shove_frequency.passed, false);
   assert.equal(gates.minimum_hand_strength_continue_spearman.passed, false);
@@ -271,6 +309,26 @@ test('legacy artifacts remain comparable but cannot pass without a local-deviati
     null
   );
   assert.equal(report.passed, false);
+});
+
+test('missing root training diagnostics remain unknown instead of looking untrained', () => {
+  const first = artifact(1);
+  const second = artifact(2);
+  for (const strategy of [...first.strategies, ...second.strategies]) {
+    delete strategy.average_visits;
+    delete strategy.regret_updates;
+    delete strategy.trained_average;
+  }
+
+  const report = compareBlueprintArtifacts([
+    { file: 'seed-1.json', artifact: first },
+    { file: 'seed-2.json', artifact: second },
+  ]);
+  const root = report.artifacts[0].coverage_and_held_out_metrics.root;
+
+  assert.equal(root.trained_average_hand_classes, null);
+  assert.equal(root.average_visits.min, null);
+  assert.equal(root.regret_updates.min, null);
 });
 
 test('local-deviation gates fail closed on insufficient or exploitable audits', () => {

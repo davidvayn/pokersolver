@@ -3517,6 +3517,8 @@ pub struct FlopSolution {
     #[serde(default)]
     pub averaging_delay: u64,
     #[serde(default)]
+    pub policy_prior_iterations: u64,
+    #[serde(default)]
     pub regret_matching_plus: bool,
     #[serde(default)]
     pub dcfr: DcfrParameters,
@@ -3704,6 +3706,24 @@ struct FlopSolver {
     all_in_equities: OnceLock<Arc<Vec<f32>>>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
     safe_root: Option<SafeResolveRoot>,
+    training_round_offset: u64,
+}
+
+/// One frozen-policy CFR round is accumulated out of place so neither
+/// traverser can observe the other traverser's update. Keeping the deltas in
+/// the public-history map also gives deterministic application order.
+struct FrozenRangeNodeDelta {
+    regrets: Vec<f64>,
+    strategy_sum: Vec<f64>,
+}
+
+impl FrozenRangeNodeDelta {
+    fn new(value_count: usize) -> Self {
+        Self {
+            regrets: vec![0.0; value_count],
+            strategy_sum: vec![0.0; value_count],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -3816,6 +3836,7 @@ impl FlopSolver {
             all_in_equities: OnceLock::new(),
             maximum_leaf_zero_sum_residual: Cell::new(0.0),
             safe_root: None,
+            training_round_offset: 0,
         })
     }
 
@@ -4111,7 +4132,7 @@ impl FlopSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
-            let round = offset + 1;
+            let round = self.training_round_offset + offset + 1;
             if self.safe_root.is_some() {
                 self.safe_walk(0, round, false);
                 self.safe_walk(1, round, true);
@@ -4120,6 +4141,200 @@ impl FlopSolver {
                 self.walk(root.clone(), reaches.clone(), 1, round, true);
             }
         }
+    }
+
+    /// Materialize the complete public flop betting tree before taking a
+    /// frozen iteration snapshot. The private state remains vectorized inside
+    /// each node; no private cards are added to the public-history key.
+    fn prepare_public_tree(&mut self, state: GameState) {
+        if (state.street == Street::Turn && state.terminal.is_none()) || state.terminal.is_some() {
+            return;
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let key = state.public_history.clone();
+        let actor = state.actor;
+        let node = self
+            .nodes
+            .entry(key)
+            .or_insert_with(|| RangeNode::new(actor, &actions));
+        debug_assert_eq!(node.actor, actor);
+        debug_assert_eq!(
+            node.action_labels,
+            actions
+                .iter()
+                .map(|action| action.label.clone())
+                .collect::<Vec<_>>()
+        );
+        for action in actions {
+            self.prepare_public_tree(state.apply(&action, &self.config.game));
+        }
+    }
+
+    /// Traverse an immutable iteration policy while retaining exact private
+    /// combo masks and separate counterfactual reaches for both players.
+    fn frozen_walk(
+        &self,
+        state: GameState,
+        reaches: [Vec<f64>; 2],
+        traverser: Option<usize>,
+        accumulate_average: bool,
+        deltas: &mut BTreeMap<Vec<String>, FrozenRangeNodeDelta>,
+    ) -> [Vec<f64>; 2] {
+        if state.street == Street::Turn && state.terminal.is_none() {
+            return self.turn_leaf_values(&state, &reaches, traverser);
+        }
+        if state.terminal.is_some() {
+            return self.terminal_values(&state, &reaches);
+        }
+        let actions = state.legal_actions(&self.config.game);
+        let key = state.public_history.clone();
+        let actor = state.actor;
+        let node = self
+            .nodes
+            .get(&key)
+            .expect("frozen public tree contains every reachable flop node");
+        let strategy = node.strategy(&self.legal[actor]);
+        let action_count = actions.len();
+        let mut children = Vec::with_capacity(action_count);
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut child_reaches = reaches.clone();
+            for combo in 0..COMBO_COUNT {
+                child_reaches[actor][combo] *= strategy[combo * action_count + action_index];
+            }
+            children.push(self.frozen_walk(
+                state.apply(action, &self.config.game),
+                child_reaches,
+                traverser,
+                accumulate_average,
+                deltas,
+            ));
+        }
+        let opponent = 1 - actor;
+        let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        for combo in 0..COMBO_COUNT {
+            for action in 0..action_count {
+                values[actor][combo] +=
+                    strategy[combo * action_count + action] * children[action][actor][combo];
+                values[opponent][combo] += children[action][opponent][combo];
+            }
+        }
+        let update_actor = traverser.is_none_or(|traverser| actor == traverser);
+        if update_actor || accumulate_average {
+            let delta = deltas
+                .entry(key)
+                .or_insert_with(|| FrozenRangeNodeDelta::new(node.regrets.len()));
+            for combo in 0..COMBO_COUNT {
+                if !self.legal[actor][combo] {
+                    continue;
+                }
+                let offset = combo * action_count;
+                if update_actor {
+                    for action in 0..action_count {
+                        delta.regrets[offset + action] +=
+                            children[action][actor][combo] - values[actor][combo];
+                    }
+                }
+                if accumulate_average {
+                    for action in 0..action_count {
+                        delta.strategy_sum[offset + action] +=
+                            reaches[actor][combo] * strategy[offset + action];
+                    }
+                }
+            }
+        }
+        values
+    }
+
+    fn apply_frozen_deltas(
+        &mut self,
+        round: u64,
+        deltas: BTreeMap<Vec<String>, FrozenRangeNodeDelta>,
+    ) {
+        for (key, delta) in deltas {
+            let node = self
+                .nodes
+                .get_mut(&key)
+                .expect("frozen delta belongs to a prepared public node");
+            for (regret, update) in node.regrets.iter_mut().zip(delta.regrets) {
+                *regret += update;
+                if self.config.regret_matching_plus {
+                    *regret = regret.max(0.0);
+                }
+            }
+            if round > self.config.averaging_delay {
+                for (weight, update) in node.strategy_sum.iter_mut().zip(delta.strategy_sum) {
+                    *weight += update;
+                }
+                node.finish_average_update(round, &self.config.game.dcfr);
+            }
+        }
+    }
+
+    fn frozen_pair_iteration(
+        &mut self,
+        round: u64,
+        traverser_order: [usize; 2],
+    ) -> Result<(), String> {
+        if self.safe_root.is_some() {
+            return Err(
+                "the public-chance vector MVP does not yet support the safe-resolving gadget"
+                    .to_owned(),
+            );
+        }
+        if traverser_order[0] > 1
+            || traverser_order[1] > 1
+            || traverser_order[0] == traverser_order[1]
+        {
+            return Err("a frozen pair must contain each traverser exactly once".to_owned());
+        }
+        for node in self.nodes.values_mut() {
+            node.discount_regrets(round, &self.config.game.dcfr);
+        }
+        let root = self.config.state.game_state();
+        let reaches = self.config.state.ranges.clone();
+        let mut deltas = BTreeMap::new();
+        for traverser in traverser_order {
+            self.frozen_walk(
+                root.clone(),
+                reaches.clone(),
+                Some(traverser),
+                traverser == 1 && round > self.config.averaging_delay,
+                &mut deltas,
+            );
+        }
+        self.apply_frozen_deltas(round, deltas);
+        Ok(())
+    }
+
+    /// With a mean continuation oracle, leaf values do not depend on the
+    /// traverser identity. One vector traversal therefore produces the exact
+    /// same paired regret deltas as two independent frozen traversals.
+    fn frozen_all_player_iteration(&mut self, round: u64) {
+        for node in self.nodes.values_mut() {
+            node.discount_regrets(round, &self.config.game.dcfr);
+        }
+        let mut deltas = BTreeMap::new();
+        self.frozen_walk(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            None,
+            round > self.config.averaging_delay,
+            &mut deltas,
+        );
+        self.apply_frozen_deltas(round, deltas);
+    }
+
+    fn train_frozen_public_chance_pairs(&mut self) -> Result<(), String> {
+        self.prepare_public_tree(self.config.state.game_state());
+        for offset in 0..self.config.iterations {
+            let round = self.training_round_offset + offset + 1;
+            if self.config.continuation_selection == FlopContinuationSelection::Mean {
+                self.frozen_all_player_iteration(round);
+            } else {
+                self.frozen_pair_iteration(round, [0, 1])?;
+            }
+        }
+        Ok(())
     }
 
     fn load_frozen_average_strategies(
@@ -4163,6 +4378,60 @@ impl FlopSolver {
             }
         }
         self.validate_frozen_strategy_tree(self.config.state.game_state())
+    }
+
+    fn install_empirical_policy_prior(
+        &mut self,
+        strategies: &[PublicBeliefStrategy],
+        pseudo_iterations: u64,
+    ) -> Result<(), String> {
+        if pseudo_iterations == 0 || self.config.averaging_delay != 0 {
+            return Err(
+                "flop policy priors require positive pseudo-iterations and zero averaging delay"
+                    .to_owned(),
+            );
+        }
+        self.load_frozen_average_strategies(strategies)?;
+        let mut prior_reaches = BTreeMap::new();
+        let mut ignored = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            None,
+            &mut prior_reaches,
+            &mut ignored,
+        );
+        let mut response_values: [BTreeMap<Vec<String>, Vec<Vec<f64>>>; 2] =
+            std::array::from_fn(|_| BTreeMap::new());
+        for responder in 0..2 {
+            let mut response_reaches = BTreeMap::new();
+            self.collect_average_profile_diagnostics(
+                self.config.state.game_state(),
+                self.config.state.ranges.clone(),
+                Some(responder),
+                &mut response_reaches,
+                &mut response_values[responder],
+            );
+        }
+        for (history, node) in &mut self.nodes {
+            let probabilities = node.average_strategy(&self.legal[node.actor]);
+            let reaches = prior_reaches
+                .get(history)
+                .ok_or_else(|| "flop policy prior is missing node reaches".to_owned())?;
+            let values = response_values[node.actor]
+                .get(history)
+                .ok_or_else(|| "flop policy prior is missing response action values".to_owned())?;
+            node.install_empirical_policy_prior(
+                &probabilities,
+                &reaches[node.actor],
+                values,
+                pseudo_iterations,
+                &self.config.game.dcfr,
+                self.config.regret_matching_plus,
+            )?;
+        }
+        self.training_round_offset = pseudo_iterations;
+        Ok(())
     }
 
     fn validate_frozen_strategy_tree(&self, state: GameState) -> Result<(), String> {
@@ -4389,6 +4658,7 @@ impl FlopSolver {
         self.collect_average_profile_diagnostics(
             self.config.state.game_state(),
             self.config.state.ranges.clone(),
+            None,
             &mut reaches,
             &mut action_values,
         );
@@ -4416,6 +4686,7 @@ impl FlopSolver {
         &self,
         state: GameState,
         reaches: [Vec<f64>; 2],
+        best_responder: Option<usize>,
         reach_output: &mut BTreeMap<Vec<String>, [Vec<f64>; 2]>,
         action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
     ) -> [Vec<f64>; 2] {
@@ -4443,6 +4714,7 @@ impl FlopSolver {
             children.push(self.collect_average_profile_diagnostics(
                 state.apply(action, &self.config.game),
                 child_reaches,
+                best_responder,
                 reach_output,
                 action_value_output,
             ));
@@ -4454,10 +4726,20 @@ impl FlopSolver {
         let opponent = 1 - actor;
         let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         for combo in 0..COMBO_COUNT {
-            for action in 0..actions.len() {
-                values[actor][combo] +=
-                    strategy[combo * actions.len() + action] * children[action][actor][combo];
-                values[opponent][combo] += children[action][opponent][combo];
+            if best_responder == Some(actor) {
+                values[actor][combo] = children
+                    .iter()
+                    .map(|child| child[actor][combo])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                for child in &children {
+                    values[opponent][combo] += child[opponent][combo];
+                }
+            } else {
+                for action in 0..actions.len() {
+                    values[actor][combo] +=
+                        strategy[combo * actions.len() + action] * children[action][actor][combo];
+                    values[opponent][combo] += children[action][opponent][combo];
+                }
             }
         }
         values
@@ -4482,6 +4764,7 @@ impl FlopSolver {
         self.collect_average_profile_diagnostics(
             self.config.state.game_state(),
             root_reaches,
+            None,
             &mut reaches,
             &mut action_values,
         );
@@ -5079,6 +5362,7 @@ impl FlopSolver {
         self.collect_average_profile_diagnostics(
             self.config.state.game_state(),
             reaches.clone(),
+            None,
             &mut diagnostic_reaches,
             &mut diagnostic_action_values,
         );
@@ -5290,6 +5574,7 @@ impl FlopSolver {
             state: self.config.state,
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
+            policy_prior_iterations: self.training_round_offset,
             regret_matching_plus: self.config.regret_matching_plus,
             dcfr: self.config.game.dcfr.clone(),
             threads: self.config.threads,
@@ -5630,6 +5915,46 @@ pub fn solve_flop(config: FlopResolveConfig) -> Result<FlopSolution, String> {
     Ok(solver.finish())
 }
 
+/// Minimum public-chance vector training slice. Both player updates are
+/// computed against the same frozen iteration policy and are applied only
+/// after both exact-combo traversals finish. This intentionally stops at the
+/// existing turn value boundary; promotion to the full-game trainer requires
+/// the paired pilot gates to improve first.
+pub fn solve_flop_public_chance_vector_mvp(
+    config: FlopResolveConfig,
+) -> Result<FlopSolution, String> {
+    let single_vector_traversal = config.continuation_selection == FlopContinuationSelection::Mean;
+    let mut solver = FlopSolver::new(config)?;
+    solver.train_frozen_public_chance_pairs()?;
+    let mut solution = solver.finish();
+    solution.schema = "hu-public-chance-flop-vector-mvp-v1".to_owned();
+    let update_method = if single_vector_traversal {
+        "same_frozen_policy_all_player_vector_dcfr_deterministic_delta_application"
+    } else {
+        "same_frozen_policy_paired_dcfr_deterministic_delta_application"
+    };
+    solution.method = solution
+        .method
+        .replace("paired_alternating_dcfr", update_method);
+    solution.validation.status = "research_only".to_owned();
+    solution.validation.reasons.push(
+        "public-chance vector MVP covers one fixed flop and is not a promotable full-game policy"
+            .to_owned(),
+    );
+    Ok(solution)
+}
+
+pub fn solve_flop_with_prior(
+    config: FlopResolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<FlopSolution, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.finish())
+}
+
 /// Train the identical frozen average flop policy without running the
 /// post-solve exploitability, unresolved-control, and action-EV passes. Online
 /// continual resolving only consumes action probabilities. Standalone
@@ -5644,6 +5969,36 @@ pub(super) fn solve_flop_policy(
     Ok(solver.policy_strategies_with_action_values())
 }
 
+pub(super) fn solve_flop_policy_probabilities(
+    config: FlopResolveConfig,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.train();
+    Ok(solver.average_strategies(None))
+}
+
+pub(super) fn solve_flop_policy_with_prior(
+    config: FlopResolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.policy_strategies_with_action_values())
+}
+
+pub(super) fn solve_flop_policy_probabilities_with_prior(
+    config: FlopResolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.average_strategies(None))
+}
+
 /// Evaluate action values against one already-frozen complete flop policy.
 ///
 /// This deliberately performs no CFR updates. It keeps served frequencies and
@@ -5656,6 +6011,15 @@ pub(super) fn evaluate_frozen_flop_policy(
     let mut solver = FlopSolver::new(config)?;
     solver.load_frozen_average_strategies(strategies)?;
     Ok(solver.policy_strategies_with_action_values())
+}
+
+pub(super) fn evaluate_frozen_flop_policy_probabilities(
+    config: FlopResolveConfig,
+    strategies: &[PublicBeliefStrategy],
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = FlopSolver::new(config)?;
+    solver.load_frozen_average_strategies(strategies)?;
+    Ok(solver.average_strategies(None))
 }
 
 #[derive(Clone, Debug)]
@@ -6341,6 +6705,8 @@ pub struct RiverSolution {
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub averaging_delay: u64,
+    #[serde(default)]
+    pub policy_prior_iterations: u64,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub opponent_compatible_mass: [Vec<f32>; 2],
     pub strategies: Vec<PublicBeliefStrategy>,
@@ -6452,6 +6818,97 @@ impl RangeNode {
         }
         self.last_strategy_discount_round = round;
     }
+
+    /// Seed an experimental ReBeL-style policy prior before a short DCFR
+    /// search. The prior contributes both regret and reach-weighted average
+    /// policy mass; seeding only one of those states is not a coherent CFR
+    /// warm start.
+    ///
+    /// `action_values` are counterfactual (not conditional) action values from
+    /// a best-response continuation against the frozen prior. We use their
+    /// one-step regret direction and replay DCFR's discount recurrence for the
+    /// requested number of pseudo-iterations. This is deliberately opt-in:
+    /// the strategy-based warm-start theorem uses a softer substitute-value
+    /// construction, while ReBeL reports this exact-response approximation as
+    /// an empirical implementation choice.
+    fn install_empirical_policy_prior(
+        &mut self,
+        probabilities: &[f64],
+        own_reach: &[f64],
+        action_values: &[Vec<f64>],
+        pseudo_iterations: u64,
+        parameters: &DcfrParameters,
+        regret_matching_plus: bool,
+    ) -> Result<(), String> {
+        let action_count = self.action_labels.len();
+        if pseudo_iterations == 0
+            || probabilities.len() != COMBO_COUNT * action_count
+            || own_reach.len() != COMBO_COUNT
+            || action_values.len() != action_count
+            || action_values
+                .iter()
+                .any(|values| values.len() != COMBO_COUNT)
+        {
+            return Err("policy-prior dimensions are incompatible".to_owned());
+        }
+        let average_mass = dcfr_pseudo_average_mass(pseudo_iterations, parameters);
+        for combo in 0..COMBO_COUNT {
+            let offset = combo * action_count;
+            let row = &probabilities[offset..offset + action_count];
+            let row_sum = row.iter().sum::<f64>();
+            if row_sum <= EPSILON {
+                continue;
+            }
+            if !row_sum.is_finite() || row.iter().any(|value| !value.is_finite() || *value < 0.0) {
+                return Err("policy prior contains invalid probabilities".to_owned());
+            }
+            let expected = row
+                .iter()
+                .enumerate()
+                .map(|(action, probability)| probability / row_sum * action_values[action][combo])
+                .sum::<f64>();
+            for action in 0..action_count {
+                let probability = row[action] / row_sum;
+                let instantaneous = action_values[action][combo] - expected;
+                let regret_mass =
+                    dcfr_pseudo_regret_mass(pseudo_iterations, parameters, instantaneous >= 0.0);
+                self.regrets[offset + action] = instantaneous * regret_mass;
+                if regret_matching_plus {
+                    self.regrets[offset + action] = self.regrets[offset + action].max(0.0);
+                }
+                self.strategy_sum[offset + action] = own_reach[combo] * probability * average_mass;
+            }
+        }
+        self.last_regret_discount_round = pseudo_iterations;
+        self.last_strategy_discount_round = pseudo_iterations;
+        Ok(())
+    }
+}
+
+fn dcfr_pseudo_regret_mass(
+    pseudo_iterations: u64,
+    parameters: &DcfrParameters,
+    positive: bool,
+) -> f64 {
+    let exponent = if positive {
+        parameters.positive_regret_exponent
+    } else {
+        parameters.negative_regret_exponent
+    };
+    let mut mass = 0.0;
+    for round in 1..=pseudo_iterations {
+        let power = (round as f64).powf(exponent);
+        mass *= power / (power + 1.0);
+        mass += 1.0;
+    }
+    mass
+}
+
+fn dcfr_pseudo_average_mass(pseudo_iterations: u64, parameters: &DcfrParameters) -> f64 {
+    let denominator = (pseudo_iterations + 1) as f64;
+    (1..=pseudo_iterations)
+        .map(|round| (round as f64 / denominator).powf(parameters.strategy_exponent))
+        .sum()
 }
 
 fn compatible_masses_from_card_marginals(combos: &[Combo], range: &[f64]) -> Vec<f64> {
@@ -6589,6 +7046,7 @@ struct RiverSolver {
     /// deployment. Maxmargin training still uses a uniform opponent root so
     /// every private hand receives equal worst-case protection.
     safe_opponent_evaluation_reach: Option<Vec<f64>>,
+    training_round_offset: u64,
 }
 
 struct MarginHandSelector {
@@ -6702,6 +7160,7 @@ impl RiverSolver {
             safe_root: None,
             safe_margin_selector: None,
             safe_opponent_evaluation_reach: None,
+            training_round_offset: 0,
         })
     }
 
@@ -6790,6 +7249,60 @@ impl RiverSolver {
             }
         }
         self.validate_frozen_strategy_tree(self.config.state.game_state())
+    }
+
+    fn install_empirical_policy_prior(
+        &mut self,
+        strategies: &[PublicBeliefStrategy],
+        pseudo_iterations: u64,
+    ) -> Result<(), String> {
+        if pseudo_iterations == 0 || self.config.averaging_delay != 0 {
+            return Err(
+                "river policy priors require positive pseudo-iterations and zero averaging delay"
+                    .to_owned(),
+            );
+        }
+        self.load_frozen_average_strategies(strategies)?;
+        let mut prior_reaches = BTreeMap::new();
+        let mut ignored = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            None,
+            &mut prior_reaches,
+            &mut ignored,
+        );
+        let mut response_values: [BTreeMap<Vec<String>, Vec<Vec<f64>>>; 2] =
+            std::array::from_fn(|_| BTreeMap::new());
+        for responder in 0..2 {
+            let mut response_reaches = BTreeMap::new();
+            self.collect_average_profile_diagnostics(
+                self.config.state.game_state(),
+                self.config.state.ranges.clone(),
+                Some(responder),
+                &mut response_reaches,
+                &mut response_values[responder],
+            );
+        }
+        for (history, node) in &mut self.nodes {
+            let probabilities = node.average_strategy(&self.legal[node.actor]);
+            let reaches = prior_reaches
+                .get(history)
+                .ok_or_else(|| "river policy prior is missing node reaches".to_owned())?;
+            let values = response_values[node.actor]
+                .get(history)
+                .ok_or_else(|| "river policy prior is missing response action values".to_owned())?;
+            node.install_empirical_policy_prior(
+                &probabilities,
+                &reaches[node.actor],
+                values,
+                pseudo_iterations,
+                &self.config.game.dcfr,
+                false,
+            )?;
+        }
+        self.training_round_offset = pseudo_iterations;
+        Ok(())
     }
 
     fn validate_frozen_strategy_tree(&self, state: GameState) -> Result<(), String> {
@@ -7261,7 +7774,7 @@ impl RiverSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
-            let round = offset + 1;
+            let round = self.training_round_offset + offset + 1;
             if self.safe_margin_selector.is_some() {
                 self.safe_maxmargin_walk(0, round, false);
                 self.safe_maxmargin_walk(1, round, true);
@@ -7474,6 +7987,7 @@ impl RiverSolver {
         &self,
         state: GameState,
         reaches: [Vec<f64>; 2],
+        best_responder: Option<usize>,
         reach_output: &mut BTreeMap<Vec<String>, [Vec<f64>; 2]>,
         action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
     ) -> [Vec<f64>; 2] {
@@ -7495,6 +8009,7 @@ impl RiverSolver {
             children.push(self.collect_average_profile_diagnostics(
                 state.apply(action, &self.config.game),
                 child_reaches,
+                best_responder,
                 reach_output,
                 action_value_output,
             ));
@@ -7506,10 +8021,20 @@ impl RiverSolver {
         let opponent = 1 - actor;
         let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         for combo in 0..COMBO_COUNT {
-            for action in 0..actions.len() {
-                values[actor][combo] +=
-                    strategy[combo * actions.len() + action] * children[action][actor][combo];
-                values[opponent][combo] += children[action][opponent][combo];
+            if best_responder == Some(actor) {
+                values[actor][combo] = children
+                    .iter()
+                    .map(|child| child[actor][combo])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                for child in &children {
+                    values[opponent][combo] += child[opponent][combo];
+                }
+            } else {
+                for action in 0..actions.len() {
+                    values[actor][combo] +=
+                        strategy[combo * actions.len() + action] * children[action][actor][combo];
+                    values[opponent][combo] += children[action][opponent][combo];
+                }
             }
         }
         values
@@ -7521,6 +8046,7 @@ impl RiverSolver {
         self.collect_average_profile_diagnostics(
             self.config.state.game_state(),
             self.config.state.ranges.clone(),
+            None,
             &mut reaches,
             &mut action_values,
         );
@@ -7667,6 +8193,7 @@ impl RiverSolver {
             state: self.config.state,
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
+            policy_prior_iterations: self.training_round_offset,
             counterfactual_values_bb,
             opponent_compatible_mass: compatible_mass,
             strategies,
@@ -7690,12 +8217,53 @@ pub fn solve_river(config: RiverSolveConfig) -> Result<RiverSolution, String> {
     Ok(solver.finish())
 }
 
+pub fn solve_river_with_prior(
+    config: RiverSolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<RiverSolution, String> {
+    let mut solver = RiverSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.finish())
+}
+
 pub(super) fn solve_river_policy(
     config: RiverSolveConfig,
 ) -> Result<Vec<PublicBeliefStrategy>, String> {
     let mut solver = RiverSolver::new(config)?;
     solver.train();
     Ok(solver.policy_strategies_with_action_values())
+}
+
+pub(super) fn solve_river_policy_probabilities(
+    config: RiverSolveConfig,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = RiverSolver::new(config)?;
+    solver.train();
+    Ok(solver.average_strategies(None))
+}
+
+pub(super) fn solve_river_policy_with_prior(
+    config: RiverSolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = RiverSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.policy_strategies_with_action_values())
+}
+
+pub(super) fn solve_river_policy_probabilities_with_prior(
+    config: RiverSolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = RiverSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.average_strategies(None))
 }
 
 /// Resolve the exact river subgame for the acting player while preserving an
@@ -7835,6 +8403,8 @@ pub struct TurnRiverSolution {
     pub state: PublicBeliefState,
     pub iterations: u64,
     pub averaging_delay: u64,
+    #[serde(default)]
+    pub policy_prior_iterations: u64,
     pub river_refinement_iterations: u64,
     pub counterfactual_values_bb: [Vec<f32>; 2],
     pub opponent_compatible_mass: [Vec<f32>; 2],
@@ -7883,6 +8453,7 @@ struct TurnRiverSolver {
     river_data: Vec<Option<RiverBoardData>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
     safe_root: Option<SafeResolveRoot>,
+    training_round_offset: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7971,6 +8542,7 @@ impl TurnRiverSolver {
             river_data,
             nodes: BTreeMap::new(),
             safe_root: None,
+            training_round_offset: 0,
         })
     }
 
@@ -8053,6 +8625,71 @@ impl TurnRiverSolver {
             }
         }
         self.validate_frozen_strategy_tree(self.config.state.game_state(), None)
+    }
+
+    fn install_empirical_policy_prior(
+        &mut self,
+        strategies: &[PublicBeliefStrategy],
+        pseudo_iterations: u64,
+    ) -> Result<(), String> {
+        if pseudo_iterations == 0
+            || self.config.averaging_delay != 0
+            || self.config.river_refinement_iterations != 0
+        {
+            return Err(
+                "turn-river policy priors require positive pseudo-iterations, zero averaging delay, and no frozen-policy refinement"
+                    .to_owned(),
+            );
+        }
+        self.load_frozen_average_strategies(strategies)?;
+        let mut prior_reaches = BTreeMap::new();
+        let mut ignored = BTreeMap::new();
+        self.collect_average_profile_diagnostics(
+            self.config.state.game_state(),
+            self.config.state.ranges.clone(),
+            None,
+            None,
+            &mut prior_reaches,
+            &mut ignored,
+        );
+        let mut response_values: [BTreeMap<Vec<String>, Vec<Vec<f64>>>; 2] =
+            std::array::from_fn(|_| BTreeMap::new());
+        for responder in 0..2 {
+            let mut response_reaches = BTreeMap::new();
+            self.collect_average_profile_diagnostics(
+                self.config.state.game_state(),
+                self.config.state.ranges.clone(),
+                None,
+                Some(responder),
+                &mut response_reaches,
+                &mut response_values[responder],
+            );
+        }
+        let turn_legal = &self.legal;
+        let river_data = &self.river_data;
+        for (history, node) in &mut self.nodes {
+            let river = Self::river_from_key(history);
+            let legal = river
+                .and_then(|card| river_data[card as usize].as_ref())
+                .map_or(&turn_legal[node.actor], |data| &data.legal[node.actor]);
+            let probabilities = node.average_strategy(legal);
+            let reaches = prior_reaches
+                .get(history)
+                .ok_or_else(|| "turn-river policy prior is missing node reaches".to_owned())?;
+            let values = response_values[node.actor].get(history).ok_or_else(|| {
+                "turn-river policy prior is missing response action values".to_owned()
+            })?;
+            node.install_empirical_policy_prior(
+                &probabilities,
+                &reaches[node.actor],
+                values,
+                pseudo_iterations,
+                &self.config.game.dcfr,
+                self.config.regret_matching_plus,
+            )?;
+        }
+        self.training_round_offset = pseudo_iterations;
+        Ok(())
     }
 
     fn validate_frozen_strategy_tree(
@@ -8370,7 +9007,7 @@ impl TurnRiverSolver {
         let root = self.config.state.game_state();
         let reaches = self.config.state.ranges.clone();
         for offset in 0..self.config.iterations {
-            let round = offset + 1;
+            let round = self.training_round_offset + offset + 1;
             if self.safe_root.is_some() {
                 self.safe_walk(0, round, false);
                 self.safe_walk(1, round, true);
@@ -8396,7 +9033,7 @@ impl TurnRiverSolver {
             }
         }
         for offset in 0..self.config.river_refinement_iterations {
-            let round = self.config.iterations + offset + 1;
+            let round = self.training_round_offset + self.config.iterations + offset + 1;
             self.walk(
                 root.clone(),
                 reaches.clone(),
@@ -8784,6 +9421,7 @@ impl TurnRiverSolver {
         state: GameState,
         reaches: [Vec<f64>; 2],
         river: Option<u8>,
+        best_responder: Option<usize>,
         reach_output: &mut BTreeMap<Vec<String>, [Vec<f64>; 2]>,
         action_value_output: &mut BTreeMap<Vec<String>, Vec<Vec<f64>>>,
     ) -> [Vec<f64>; 2] {
@@ -8803,6 +9441,7 @@ impl TurnRiverSolver {
                     state.clone(),
                     masked,
                     Some(*card),
+                    best_responder,
                     reach_output,
                     action_value_output,
                 );
@@ -8827,6 +9466,7 @@ impl TurnRiverSolver {
                 state.apply(action, &self.config.game),
                 child_reaches,
                 river,
+                best_responder,
                 reach_output,
                 action_value_output,
             ));
@@ -8838,10 +9478,20 @@ impl TurnRiverSolver {
         let opponent = 1 - actor;
         let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         for combo in 0..COMBO_COUNT {
-            for action in 0..actions.len() {
-                values[actor][combo] +=
-                    strategy[combo * actions.len() + action] * children[action][actor][combo];
-                values[opponent][combo] += children[action][opponent][combo];
+            if best_responder == Some(actor) {
+                values[actor][combo] = children
+                    .iter()
+                    .map(|child| child[actor][combo])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                for child in &children {
+                    values[opponent][combo] += child[opponent][combo];
+                }
+            } else {
+                for action in 0..actions.len() {
+                    values[actor][combo] +=
+                        strategy[combo * actions.len() + action] * children[action][actor][combo];
+                    values[opponent][combo] += children[action][opponent][combo];
+                }
             }
         }
         values
@@ -8873,6 +9523,7 @@ impl TurnRiverSolver {
         self.collect_average_profile_diagnostics(
             self.config.state.game_state(),
             self.config.state.ranges.clone(),
+            None,
             None,
             &mut reaches,
             &mut action_values,
@@ -9153,6 +9804,7 @@ impl TurnRiverSolver {
             self.config.state.game_state(),
             reaches.clone(),
             None,
+            None,
             &mut diagnostic_reaches,
             &mut diagnostic_action_values,
         );
@@ -9267,6 +9919,7 @@ impl TurnRiverSolver {
             state: self.config.state,
             iterations: self.config.iterations,
             averaging_delay: self.config.averaging_delay,
+            policy_prior_iterations: self.training_round_offset,
             river_refinement_iterations: self.config.river_refinement_iterations,
             counterfactual_values_bb,
             opponent_compatible_mass: compatible_mass,
@@ -9291,12 +9944,53 @@ pub fn solve_turn_river(config: TurnRiverSolveConfig) -> Result<TurnRiverSolutio
     Ok(solver.finish())
 }
 
+pub fn solve_turn_river_with_prior(
+    config: TurnRiverSolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<TurnRiverSolution, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.finish())
+}
+
 pub(super) fn solve_turn_river_policy(
     config: TurnRiverSolveConfig,
 ) -> Result<Vec<PublicBeliefStrategy>, String> {
     let mut solver = TurnRiverSolver::new(config)?;
     solver.train();
     Ok(solver.policy_strategies_with_action_values())
+}
+
+pub(super) fn solve_turn_river_policy_probabilities(
+    config: TurnRiverSolveConfig,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.train();
+    Ok(solver.policy_strategies())
+}
+
+pub(super) fn solve_turn_river_policy_with_prior(
+    config: TurnRiverSolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.policy_strategies_with_action_values())
+}
+
+pub(super) fn solve_turn_river_policy_probabilities_with_prior(
+    config: TurnRiverSolveConfig,
+    prior: &[PublicBeliefStrategy],
+    pseudo_iterations: u64,
+) -> Result<Vec<PublicBeliefStrategy>, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.install_empirical_policy_prior(prior, pseudo_iterations)?;
+    solver.train();
+    Ok(solver.policy_strategies())
 }
 
 /// Resolve the complete turn/river subgame for the acting player while
@@ -12531,7 +13225,7 @@ fn normalize_masked(range: &[f64], board: &[u8]) -> Vec<f64> {
     normalized
 }
 
-fn combo_conflicts() -> Arc<Vec<Vec<usize>>> {
+pub(super) fn combo_conflicts() -> Arc<Vec<Vec<usize>>> {
     static CONFLICTS: OnceLock<Arc<Vec<Vec<usize>>>> = OnceLock::new();
     CONFLICTS
         .get_or_init(|| {
@@ -12844,6 +13538,28 @@ mod tests {
         node.strategy_sum[1] += 1.0;
         node.finish_average_update(2, &parameters);
         assert!((node.strategy_sum[1] / node.strategy_sum[0] - 8.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn empirical_prior_replays_dcfr_pseudo_iteration_masses() {
+        let mut parameters = DcfrParameters::default();
+        parameters.strategy_exponent = 0.0;
+        assert!((dcfr_pseudo_average_mass(4, &parameters) - 4.0).abs() < 1e-12);
+
+        let mut reference_positive = 0.0;
+        let mut reference_negative = 0.0;
+        for round in 1..=4 {
+            let positive_power = (round as f64).powf(parameters.positive_regret_exponent);
+            let negative_power = (round as f64).powf(parameters.negative_regret_exponent);
+            reference_positive *= positive_power / (positive_power + 1.0);
+            reference_negative *= negative_power / (negative_power + 1.0);
+            reference_positive += 1.0;
+            reference_negative += 1.0;
+        }
+        assert!((dcfr_pseudo_regret_mass(4, &parameters, true) - reference_positive).abs() < 1e-12);
+        assert!(
+            (dcfr_pseudo_regret_mass(4, &parameters, false) - reference_negative).abs() < 1e-12
+        );
     }
 
     fn assert_same_policy(measured: &[PublicBeliefStrategy], expected: &[PublicBeliefStrategy]) {
@@ -13763,11 +14479,46 @@ mod tests {
         };
         let full = solve_river(config.clone()).unwrap();
         assert_eq!(full, solve_river(config.clone()).unwrap());
-        let policy = solve_river_policy(config).unwrap();
+        let policy = solve_river_policy(config.clone()).unwrap();
+        let probabilities = solve_river_policy_probabilities(config).unwrap();
         assert_same_policy(&policy, &full.strategies);
+        assert_same_policy(&probabilities, &policy);
         assert!(policy
             .iter()
             .all(|strategy| strategy.action_values_bb.is_some()));
+        assert!(probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
+        let prior_policy = solve_river_policy_with_prior(
+            RiverSolveConfig {
+                game: tiny_game(),
+                state: PublicBeliefState::uniform_river_start([0, 5, 10, 15, 20], 1, [1.0, 1.0]),
+                iterations: 2,
+                averaging_delay: 0,
+            },
+            &full.strategies,
+            2,
+        )
+        .unwrap();
+        let prior_probabilities = solve_river_policy_probabilities_with_prior(
+            RiverSolveConfig {
+                game: tiny_game(),
+                state: PublicBeliefState::uniform_river_start([0, 5, 10, 15, 20], 1, [1.0, 1.0]),
+                iterations: 2,
+                averaging_delay: 0,
+            },
+            &full.strategies,
+            2,
+        )
+        .unwrap();
+        assert_same_policy(&prior_probabilities, &prior_policy);
+        assert!(prior_probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
+        assert!(prior_policy.iter().all(|strategy| {
+            strategy.action_values_bb.is_some()
+                && strategy.probabilities.iter().all(|value| value.is_finite())
+        }));
 
         let safe_config = RiverSolveConfig {
             game: tiny_game(),
@@ -13859,12 +14610,32 @@ mod tests {
         let solution = solve_turn_river(config.clone()).unwrap();
         let values = solve_turn_river_continuation_values(config.clone()).unwrap();
         let policy = solve_turn_river_policy(config.clone()).unwrap();
+        let probabilities = solve_turn_river_policy_probabilities(config.clone()).unwrap();
+        let prior_policy =
+            solve_turn_river_policy_with_prior(config.clone(), &solution.strategies, 2).unwrap();
+        let prior_probabilities = solve_turn_river_policy_probabilities_with_prior(
+            config.clone(),
+            &solution.strategies,
+            2,
+        )
+        .unwrap();
         let safe = solve_turn_river_safe_policy(config, &solution.strategies, solution.state.actor)
             .unwrap();
         assert_same_policy(&policy, &solution.strategies);
+        assert_same_policy(&probabilities, &policy);
         assert!(policy
             .iter()
             .all(|strategy| strategy.action_values_bb.is_some()));
+        assert!(probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
+        assert!(prior_policy
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_some()));
+        assert_same_policy(&prior_probabilities, &prior_policy);
+        assert!(prior_probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
         assert!(!safe.strategies.is_empty());
         assert!(safe
             .strategies
@@ -14372,11 +15143,36 @@ mod tests {
         };
         let continuation = solve_flop_continuation_values(config.clone()).unwrap();
         let solution = solve_flop(config.clone()).unwrap();
-        let policy = solve_flop_policy(config).unwrap();
+        let policy = solve_flop_policy(config.clone()).unwrap();
+        let probabilities = solve_flop_policy_probabilities(config.clone()).unwrap();
+        let frozen = evaluate_frozen_flop_policy(config.clone(), &solution.strategies).unwrap();
+        let frozen_probabilities =
+            evaluate_frozen_flop_policy_probabilities(config.clone(), &solution.strategies)
+                .unwrap();
+        let prior_policy =
+            solve_flop_policy_with_prior(config.clone(), &solution.strategies, 2).unwrap();
+        let prior_probabilities =
+            solve_flop_policy_probabilities_with_prior(config.clone(), &solution.strategies, 2)
+                .unwrap();
         assert_same_policy(&policy, &solution.strategies);
+        assert_same_policy(&probabilities, &policy);
+        assert_same_policy(&frozen_probabilities, &frozen);
         assert!(policy
             .iter()
             .all(|strategy| strategy.action_values_bb.is_some()));
+        assert!(probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
+        assert!(frozen_probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
+        assert!(prior_policy
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_some()));
+        assert_same_policy(&prior_probabilities, &prior_policy);
+        assert!(prior_probabilities
+            .iter()
+            .all(|strategy| strategy.action_values_bb.is_none()));
         assert_eq!(
             continuation.counterfactual_values_bb,
             solution.counterfactual_values_bb
@@ -14401,6 +15197,97 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("all-in")));
+    }
+
+    #[test]
+    fn frozen_public_chance_pair_matches_independent_snapshot_updates() {
+        let board = [0, 5, 10];
+        let first = Combo::new(47, 51);
+        let second = Combo::new(4, 9);
+        let mut sparse = vec![0.0; COMBO_COUNT];
+        sparse[first.key()] = 0.5;
+        sparse[second.key()] = 0.5;
+        let config = FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], [sparse.clone(), sparse]),
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+            value_network: zero_value_network(),
+            auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
+            threads: 1,
+        };
+        let mut base = FlopSolver::new(config.clone()).unwrap();
+        base.prepare_public_tree(base.config.state.game_state());
+        base.frozen_pair_iteration(1, [0, 1]).unwrap();
+
+        // Build the round-two reference by letting each traverser update an
+        // independent clone of the same discounted policy snapshot.
+        let mut snapshot = base.clone();
+        for node in snapshot.nodes.values_mut() {
+            node.discount_regrets(2, &snapshot.config.game.dcfr);
+        }
+        let root = snapshot.config.state.game_state();
+        let reaches = snapshot.config.state.ranges.clone();
+        let mut player_zero = snapshot.clone();
+        player_zero.walk(root.clone(), reaches.clone(), 0, 2, false);
+        let mut player_one = snapshot.clone();
+        player_one.walk(root, reaches, 1, 2, true);
+
+        let mut paired = base.clone();
+        paired.frozen_pair_iteration(2, [0, 1]).unwrap();
+        for (history, measured) in &paired.nodes {
+            let expected_regrets = if measured.actor == 0 {
+                &player_zero.nodes[history].regrets
+            } else {
+                &player_one.nodes[history].regrets
+            };
+            for (left, right) in measured.regrets.iter().zip(expected_regrets) {
+                assert!((left - right).abs() < 1e-10, "{left} != {right}");
+            }
+            for (left, right) in measured
+                .strategy_sum
+                .iter()
+                .zip(&player_one.nodes[history].strategy_sum)
+            {
+                assert!((left - right).abs() < 1e-10, "{left} != {right}");
+            }
+        }
+
+        // Traverser scheduling cannot alter a frozen pair's result.
+        let mut reversed = base;
+        reversed.frozen_pair_iteration(2, [1, 0]).unwrap();
+        for (history, measured) in &paired.nodes {
+            let other = &reversed.nodes[history];
+            assert_eq!(measured.regrets, other.regrets);
+            assert_eq!(measured.strategy_sum, other.strategy_sum);
+        }
+
+        // A single all-player vector traversal is algebraically identical to
+        // the two frozen traverser passes for the mean continuation oracle.
+        let mut all_player = snapshot;
+        all_player.frozen_all_player_iteration(2);
+        for (history, measured) in &paired.nodes {
+            let other = &all_player.nodes[history];
+            assert_eq!(measured.regrets, other.regrets);
+            assert_eq!(measured.strategy_sum, other.strategy_sum);
+        }
+
+        let solution = solve_flop_public_chance_vector_mvp(config).unwrap();
+        assert_eq!(solution.schema, "hu-public-chance-flop-vector-mvp-v1");
+        assert!(solution
+            .method
+            .contains("same_frozen_policy_all_player_vector_dcfr"));
+        assert_eq!(solution.validation.status, "research_only");
+        assert!(solution.metrics.exact_all_in_terminal_evaluations > 0);
+        assert!(solution.metrics.zero_sum_residual_after_projection_bb < 1e-8);
+        assert!(solution.strategies.iter().all(|node| {
+            node.action_values_bb.as_ref().is_some_and(|values| {
+                values.len() == COMBO_COUNT * node.action_labels.len()
+                    && values.iter().all(|value| value.is_finite())
+            })
+        }));
     }
 
     #[test]

@@ -51,13 +51,24 @@ pub fn evaluate(cards: &[u8]) -> u32 {
     }
 
     let mut quad = -1i32;
-    let mut trips = Vec::new();
-    let mut pairs = Vec::new();
+    // Seven cards can contain at most two trip ranks or three pair ranks.
+    // Keep these tiny collections on the stack: this evaluator is called
+    // millions of times while building postflop information-set buckets.
+    let mut trips = [0u32; 2];
+    let mut trip_count = 0usize;
+    let mut pairs = [0u32; 3];
+    let mut pair_count = 0usize;
     for rank in (0..13u32).rev() {
         match rank_count[rank as usize] {
             4 => quad = rank as i32,
-            3 => trips.push(rank),
-            2 => pairs.push(rank),
+            3 => {
+                trips[trip_count] = rank;
+                trip_count += 1;
+            }
+            2 => {
+                pairs[pair_count] = rank;
+                pair_count += 1;
+            }
             _ => {}
         }
     }
@@ -66,25 +77,25 @@ pub fn evaluate(cards: &[u8]) -> u32 {
         let kicker = highest_except(rank_mask, &[quad as u32]);
         return score(FOUR_KIND, ((quad as u32) << 4) | kicker);
     }
-    if !trips.is_empty() && (trips.len() >= 2 || !pairs.is_empty()) {
-        let pair = if trips.len() >= 2 { trips[1] } else { pairs[0] };
+    if trip_count > 0 && (trip_count >= 2 || pair_count > 0) {
+        let pair = if trip_count >= 2 { trips[1] } else { pairs[0] };
         return score(FULL_HOUSE, (trips[0] << 4) | pair);
     }
     let straight = straight_high(rank_mask);
     if straight >= 0 {
         return score(STRAIGHT, straight as u32);
     }
-    if !trips.is_empty() {
+    if trip_count > 0 {
         return score(
             THREE_KIND,
             (trips[0] << 16) | top_n_except(rank_mask, 2, trips[0]),
         );
     }
-    if pairs.len() >= 2 {
+    if pair_count >= 2 {
         let kicker = highest_except(rank_mask, &[pairs[0], pairs[1]]);
         return score(TWO_PAIR, (pairs[0] << 8) | (pairs[1] << 4) | kicker);
     }
-    if pairs.len() == 1 {
+    if pair_count == 1 {
         return score(
             ONE_PAIR,
             (pairs[0] << 16) | top_n_except(rank_mask, 3, pairs[0]),
@@ -157,5 +168,14 @@ mod tests {
         let wheel = evaluate(&[48, 0, 5, 10, 15]);
         let six_high = evaluate(&[0, 5, 10, 15, 16]);
         assert!(six_high > wheel);
+    }
+
+    #[test]
+    fn seven_card_rank_buffers_cover_two_trips_and_three_pairs() {
+        let two_trips = evaluate(&[48, 49, 50, 44, 45, 46, 40]);
+        assert_eq!(two_trips, score(FULL_HOUSE, (12 << 4) | 11));
+
+        let three_pairs = evaluate(&[48, 49, 44, 45, 40, 41, 36]);
+        assert_eq!(three_pairs, score(TWO_PAIR, (12 << 8) | (11 << 4) | 10));
     }
 }

@@ -5,11 +5,13 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 
 const ANALYZER = 'hu-blueprint-root-stability-v1';
 const PROBABILITY_TOLERANCE = 1e-6;
 const EXPECTED_HAND_CLASSES = 169;
 const EXPECTED_COMBOS = 1326;
+const SUPPORTED_EFFECTIVE_STACKS_BB = Object.freeze([20, 50, 100]);
 
 const IGNORED_CONFIG_KEYS = new Set([
   'seed',
@@ -29,11 +31,11 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   maximum_held_out_unknown_information_set_fraction: 0.05,
   maximum_held_out_untrained_information_set_fraction: 0.025,
   maximum_aggregate_action_frequency_delta: 0.03,
-  maximum_per_action_mae: 0.08,
+  maximum_per_action_mae: 0.05,
   maximum_hand_total_variation_median: 0.2,
   maximum_hand_total_variation_p95: 0.35,
   maximum_hand_total_variation_max: 0.65,
-  minimum_primary_action_agreement: 0.7,
+  minimum_primary_action_agreement: 0.85,
   maximum_held_out_button_ev_z_score: 2.576,
   maximum_aggregate_open_shove_frequency: 0.01,
   maximum_premium_hand_fold_frequency: 0.02,
@@ -46,6 +48,11 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   maximum_aggregate_root_local_deviation_gain_bb: 0.1,
   maximum_aggregate_root_local_deviation_99pct_lower_bound_bb: 0.05,
 });
+
+export function parseBlueprintArtifactBytes(file, bytes) {
+  const payload = file.endsWith('.gz') ? gunzipSync(bytes) : bytes;
+  return JSON.parse(payload.toString('utf8'));
+}
 
 export class ArtifactComparisonError extends Error {
   constructor(code, message, details = undefined) {
@@ -101,13 +108,11 @@ function valueDifferences(left, right, prefix = '') {
   ) {
     return [{ path: prefix || '<root>', left, right }];
   }
-  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+  const keys = [
+    ...new Set([...Object.keys(left), ...Object.keys(right)]),
+  ].sort();
   return keys.flatMap((key) =>
-    valueDifferences(
-      left[key],
-      right[key],
-      prefix ? `${prefix}.${key}` : key
-    )
+    valueDifferences(left[key], right[key], prefix ? `${prefix}.${key}` : key)
   );
 }
 
@@ -174,9 +179,11 @@ function chenStructuralScore(label) {
 function tiedRanks(values) {
   const sorted = values
     .map((value, index) => ({ value, index }))
-    .sort((left, right) => left.value - right.value || left.index - right.index);
+    .sort(
+      (left, right) => left.value - right.value || left.index - right.index
+    );
   const ranks = Array(values.length);
-  for (let start = 0; start < sorted.length; ) {
+  for (let start = 0; start < sorted.length;) {
     let end = start;
     while (
       end + 1 < sorted.length &&
@@ -195,10 +202,8 @@ function tiedRanks(values) {
 
 function pearsonCorrelation(left, right) {
   if (left.length !== right.length || left.length < 2) return null;
-  const leftMean =
-    left.reduce((sum, value) => sum + value, 0) / left.length;
-  const rightMean =
-    right.reduce((sum, value) => sum + value, 0) / right.length;
+  const leftMean = left.reduce((sum, value) => sum + value, 0) / left.length;
+  const rightMean = right.reduce((sum, value) => sum + value, 0) / right.length;
   let covariance = 0;
   let leftVariance = 0;
   let rightVariance = 0;
@@ -217,7 +222,7 @@ function spearmanCorrelation(left, right) {
   return pearsonCorrelation(tiedRanks(left), tiedRanks(right));
 }
 
-function domainSanitySummary(root) {
+function domainSanitySummary(root, effectiveStackBb) {
   const shoveActions = root.actions.filter((action) =>
     /(?:all_in|shove)/i.test(action)
   );
@@ -245,8 +250,7 @@ function domainSanitySummary(root) {
     );
   const aggregateOpenShove =
     handRows.reduce(
-      (sum, hand) =>
-        sum + hand.combo_weight * hand.open_shove_frequency,
+      (sum, hand) => sum + hand.combo_weight * hand.open_shove_frequency,
       0
     ) / EXPECTED_COMBOS;
   const premiumFoldFrequencies = Object.fromEntries(
@@ -262,9 +266,7 @@ function domainSanitySummary(root) {
         null,
     ])
   );
-  const strengthScores = handRows.map(
-    (hand) => hand.structural_strength_score
-  );
+  const strengthScores = handRows.map((hand) => hand.structural_strength_score);
   const continueFrequencies = handRows.map((hand) => hand.continue_frequency);
   const quartileSize = Math.ceil(EXPECTED_HAND_CLASSES * 0.25);
   const meanContinue = (hands) =>
@@ -273,12 +275,15 @@ function domainSanitySummary(root) {
         hands.length
       : null;
   const topQuartileContinue = meanContinue(handRows.slice(0, quartileSize));
-  const bottomQuartileContinue = meanContinue(
-    handRows.slice(-quartileSize)
-  );
+  const bottomQuartileContinue = meanContinue(handRows.slice(-quartileSize));
 
   return {
-    applicable_to: 'unopened heads-up button/small-blind at 100bb',
+    effective_stack_bb: finiteNumber(effectiveStackBb)
+      ? effectiveStackBb
+      : null,
+    applicable_to: finiteNumber(effectiveStackBb)
+      ? `unopened heads-up button/small-blind at ${effectiveStackBb}bb`
+      : 'unopened heads-up button/small-blind at unknown depth',
     action_detection: {
       fold_action_present: hasFoldAction,
       open_shove_actions: shoveActions,
@@ -320,9 +325,7 @@ function quantile(sortedValues, probability) {
   const upper = Math.ceil(position);
   if (lower === upper) return sortedValues[lower];
   const fraction = position - lower;
-  return (
-    sortedValues[lower] * (1 - fraction) + sortedValues[upper] * fraction
-  );
+  return sortedValues[lower] * (1 - fraction) + sortedValues[upper] * fraction;
 }
 
 function distributionSummary(values) {
@@ -335,6 +338,18 @@ function distributionSummary(values) {
     max: sorted.at(-1) ?? null,
     mean: sorted.length > 0 ? total / sorted.length : null,
   };
+}
+
+function optionalDistributionSummary(values) {
+  return values.every(finiteNumber)
+    ? distributionSummary(values)
+    : {
+        min: null,
+        median: null,
+        p95: null,
+        max: null,
+        mean: null,
+      };
 }
 
 function primaryAction(probabilities, actions) {
@@ -449,7 +464,10 @@ function extractRoot(file, artifact) {
       primary_action: primaryAction(probabilities, entryActions),
       average_visits: entry.average_visits,
       regret_updates: entry.regret_updates,
-      trained_average: entry.trained_average === true,
+      trained_average:
+        typeof entry.trained_average === 'boolean'
+          ? entry.trained_average
+          : null,
     });
   }
 
@@ -486,8 +504,7 @@ function extractRoot(file, artifact) {
     actions.map((action) => [
       action,
       [...hands.values()].reduce(
-        (sum, hand) =>
-          sum + hand.combo_weight * hand.probabilities[action],
+        (sum, hand) => sum + hand.combo_weight * hand.probabilities[action],
         0
       ) / comboCount,
     ])
@@ -499,14 +516,16 @@ function extractRoot(file, artifact) {
     summary: {
       hand_classes: hands.size,
       weighted_combos: comboCount,
-      trained_average_hand_classes: [...hands.values()].filter(
-        (hand) => hand.trained_average
-      ).length,
+      trained_average_hand_classes: [...hands.values()].every(
+        (hand) => typeof hand.trained_average === 'boolean'
+      )
+        ? [...hands.values()].filter((hand) => hand.trained_average).length
+        : null,
       maximum_probability_sum_error: maximumProbabilitySumError,
-      average_visits: distributionSummary(
+      average_visits: optionalDistributionSummary(
         [...hands.values()].map((hand) => hand.average_visits)
       ),
-      regret_updates: distributionSummary(
+      regret_updates: optionalDistributionSummary(
         [...hands.values()].map((hand) => hand.regret_updates)
       ),
       combo_weighted_aggregate_frequencies: aggregateFrequencies,
@@ -692,9 +711,7 @@ function rootLocalDeviationSummary(artifact) {
     )
       ? audit.aggregate_chosen_average_ev_bb
       : null,
-    aggregate_best_action_ev_bb: finiteNumber(
-      audit.aggregate_best_action_ev_bb
-    )
+    aggregate_best_action_ev_bb: finiteNumber(audit.aggregate_best_action_ev_bb)
       ? audit.aggregate_best_action_ev_bb
       : null,
     aggregate_local_deviation_gain_bb: finiteNumber(
@@ -716,7 +733,9 @@ function rootLocalDeviationSummary(artifact) {
 }
 
 function pairComparison(left, right) {
-  if (stableStringify(left.root.actions) !== stableStringify(right.root.actions)) {
+  if (
+    stableStringify(left.root.actions) !== stableStringify(right.root.actions)
+  ) {
     throw new ArtifactComparisonError(
       'INCOMPATIBLE_ACTIONS',
       `${left.file} and ${right.file} have different root action sets`,
@@ -903,9 +922,7 @@ function buildGates(artifacts, comparisons, thresholds) {
     )
   );
   const maximumTvMedian = maximumFinite(
-    comparisons.map(
-      (comparison) => comparison.per_hand_total_variation.median
-    )
+    comparisons.map((comparison) => comparison.per_hand_total_variation.median)
   );
   const maximumTvP95 = maximumFinite(
     comparisons.map((comparison) => comparison.per_hand_total_variation.p95)
@@ -921,15 +938,23 @@ function buildGates(artifacts, comparisons, thresholds) {
   );
   const maximumHeldOutEvZScore = maximumFinite(
     comparisons.map(
-      (comparison) =>
-        comparison.held_out_button_ev_consistency.absolute_z_score
+      (comparison) => comparison.held_out_button_ev_consistency.absolute_z_score
     )
   );
   const uniqueSeeds = new Set(
     artifacts.map(({ artifact }) => artifact.config?.seed)
   ).size;
-  const domainSanityApplicable = artifacts.every(
-    ({ artifact }) => artifact.config?.effective_stack_bb === 100
+  const observedEffectiveStacks = [
+    ...new Set(
+      artifacts.map(({ artifact }) => artifact.config?.effective_stack_bb)
+    ),
+  ];
+  const domainSanityDepthSupported = observedEffectiveStacks.every(
+    (depth) =>
+      finiteNumber(depth) && SUPPORTED_EFFECTIVE_STACKS_BB.includes(depth)
+  );
+  const aggregateOpenShoveGateApplicable = observedEffectiveStacks.every(
+    (depth) => depth === 100
   );
   const requiredDomainActionsPresent = artifacts.every(
     ({ domainSanity }) =>
@@ -943,14 +968,12 @@ function buildGates(artifacts, comparisons, thresholds) {
   );
   const maximumPremiumFold = maximumFinite(
     artifacts.map(
-      ({ domainSanity }) =>
-        domainSanity.maximum_premium_hand_fold_frequency
+      ({ domainSanity }) => domainSanity.maximum_premium_hand_fold_frequency
     )
   );
   const maximumTrashShove = maximumFinite(
     artifacts.map(
-      ({ domainSanity }) =>
-        domainSanity.maximum_trash_hand_open_shove_frequency
+      ({ domainSanity }) => domainSanity.maximum_trash_hand_open_shove_frequency
     )
   );
   const minimumStrengthContinueSpearman = minimumFinite(
@@ -1194,8 +1217,7 @@ function buildGates(artifacts, comparisons, thresholds) {
       thresholds.minimum_primary_action_agreement,
       minimumPrimaryAgreement,
       finiteNumber(minimumPrimaryAgreement) &&
-        minimumPrimaryAgreement >=
-          thresholds.minimum_primary_action_agreement,
+        minimumPrimaryAgreement >= thresholds.minimum_primary_action_agreement,
       'all_pairs'
     ),
     gate(
@@ -1204,16 +1226,15 @@ function buildGates(artifacts, comparisons, thresholds) {
       thresholds.maximum_held_out_button_ev_z_score,
       maximumHeldOutEvZScore,
       finiteNumber(maximumHeldOutEvZScore) &&
-        maximumHeldOutEvZScore <=
-          thresholds.maximum_held_out_button_ev_z_score,
+        maximumHeldOutEvZScore <= thresholds.maximum_held_out_button_ev_z_score,
       'all_pairs'
     ),
     gate(
-      'poker_domain_sanity_is_100bb',
-      '==',
-      true,
-      domainSanityApplicable,
-      domainSanityApplicable,
+      'poker_domain_sanity_depth_supported',
+      'in',
+      SUPPORTED_EFFECTIVE_STACKS_BB,
+      observedEffectiveStacks,
+      domainSanityDepthSupported,
       'all_artifacts'
     ),
     gate(
@@ -1224,24 +1245,28 @@ function buildGates(artifacts, comparisons, thresholds) {
       requiredDomainActionsPresent,
       'all_artifacts'
     ),
-    gate(
-      'maximum_aggregate_open_shove_frequency',
-      '<=',
-      thresholds.maximum_aggregate_open_shove_frequency,
-      maximumAggregateOpenShove,
-      finiteNumber(maximumAggregateOpenShove) &&
-        maximumAggregateOpenShove <=
-          thresholds.maximum_aggregate_open_shove_frequency,
-      'all_artifacts'
-    ),
+    {
+      ...gate(
+        'maximum_aggregate_open_shove_frequency',
+        '<=',
+        thresholds.maximum_aggregate_open_shove_frequency,
+        maximumAggregateOpenShove,
+        !aggregateOpenShoveGateApplicable ||
+          (finiteNumber(maximumAggregateOpenShove) &&
+            maximumAggregateOpenShove <=
+              thresholds.maximum_aggregate_open_shove_frequency),
+        'all_artifacts'
+      ),
+      applicable: aggregateOpenShoveGateApplicable,
+      applicability: '100bb only',
+    },
     gate(
       'maximum_premium_hand_fold_frequency',
       '<=',
       thresholds.maximum_premium_hand_fold_frequency,
       maximumPremiumFold,
       finiteNumber(maximumPremiumFold) &&
-        maximumPremiumFold <=
-          thresholds.maximum_premium_hand_fold_frequency,
+        maximumPremiumFold <= thresholds.maximum_premium_hand_fold_frequency,
       'all_artifacts'
     ),
     gate(
@@ -1250,8 +1275,7 @@ function buildGates(artifacts, comparisons, thresholds) {
       thresholds.maximum_trash_hand_open_shove_frequency,
       maximumTrashShove,
       finiteNumber(maximumTrashShove) &&
-        maximumTrashShove <=
-          thresholds.maximum_trash_hand_open_shove_frequency,
+        maximumTrashShove <= thresholds.maximum_trash_hand_open_shove_frequency,
       'all_artifacts'
     ),
     gate(
@@ -1296,7 +1320,10 @@ export function compareBlueprintArtifacts(
     return {
       ...input,
       root,
-      domainSanity: domainSanitySummary(root),
+      domainSanity: domainSanitySummary(
+        root,
+        input.artifact.config?.effective_stack_bb
+      ),
       rootLocalDeviation: rootLocalDeviationSummary(input.artifact),
     };
   });
@@ -1330,18 +1357,24 @@ export function compareBlueprintArtifacts(
       'Frequencies and action MAE are weighted by the 1,326 physical starting-hand combinations; hand total variation treats each of the 169 classes equally.',
       'Held-out button EV consistency uses the absolute difference divided by the combined standard error.',
       'The one-step root local-deviation audit tests profitable unilateral root-action changes against fixed continuation policies; it is a necessary local check, not full-game exploitability.',
-      'Poker-domain gates catch coarse 100bb heads-up root pathologies; they are necessary sanity checks, not evidence of GTO play.',
+      'Poker-domain gates catch coarse heads-up root pathologies at supported 20/50/100bb depths; the aggregate open-shove cap is 100bb-only and non-applicable gates are identified explicitly.',
       'The monotonicity check correlates a tie-aware Chen-style structural score with one minus fold frequency because legitimate strong-hand limps make raise frequency an unsuitable strength target.',
     ],
     compatibility,
     thresholds: { ...thresholds },
     threshold_rationale: {
+      maximum_aggregate_action_frequency_delta:
+        'The aggregate frequency of any root action may differ by at most three percentage points across independent seeds.',
+      maximum_per_action_mae:
+        'The combo-weighted hand-class MAE of any root action may differ by at most five percentage points across independent seeds.',
+      minimum_primary_action_agreement:
+        'At least 85 percent of the 169 hand classes must share the same highest-probability root action across independent seeds.',
       maximum_aggregate_open_shove_frequency:
-        'At 100bb an unopened all-in should be exceptional; one percent still allows residual sampling noise and isolated mixes while rejecting a material shove range.',
+        'At 100bb an unopened all-in should be exceptional; one percent still allows residual sampling noise and isolated mixes while rejecting a material shove range. This gate is explicitly non-applicable at 20bb and 50bb because no depth-specific threshold has been validated.',
       maximum_premium_hand_fold_frequency:
         'AA, KK, QQ, and AKs should almost never fold unopened; two percent allows sampling noise while catching strategically inverted roots.',
       maximum_trash_hand_open_shove_frequency:
-        '72o and 32o may mix small opens or limps, but a 100bb shove above two percent is treated as pathological.',
+        '72o and 32o may mix small opens or limps, but an all-in above two percent is treated as a coarse pathology at supported depths.',
       minimum_hand_strength_continue_spearman:
         'A 0.65 rank correlation requires a clear strength signal without demanding strict hand-by-hand monotonicity from a mixed strategy.',
       minimum_strength_quartile_continue_gap:
@@ -1398,7 +1431,7 @@ async function runCli(argv) {
   const options = parseArguments(argv);
   if (options.help) {
     process.stdout.write(
-      'Usage: node scripts/compare-blueprint-artifacts.mjs [--require-pass] <artifact-a.json> <artifact-b.json> [artifact-c.json ...]\n'
+      'Usage: node scripts/compare-blueprint-artifacts.mjs [--require-pass] <artifact-a.json[.gz]> <artifact-b.json[.gz]> [artifact-c.json[.gz] ...]\n'
     );
     return 0;
   }
@@ -1410,12 +1443,13 @@ async function runCli(argv) {
   }
 
   const inputs = await Promise.all(
-    [...options.files]
-      .sort()
-      .map(async (file) => ({
-        file: path.relative(process.cwd(), path.resolve(file)).split(path.sep).join('/'),
-        artifact: JSON.parse(await readFile(file, 'utf8')),
-      }))
+    [...options.files].sort().map(async (file) => ({
+      file: path
+        .relative(process.cwd(), path.resolve(file))
+        .split(path.sep)
+        .join('/'),
+      artifact: parseBlueprintArtifactBytes(file, await readFile(file)),
+    }))
   );
   const report = compareBlueprintArtifacts(inputs);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

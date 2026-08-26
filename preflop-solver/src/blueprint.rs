@@ -9,6 +9,8 @@ use crate::cards::{all_combos, Combo};
 use crate::evaluator::evaluate;
 use crate::rng::SplitMix64;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,10 +20,12 @@ use std::error::Error;
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub mod neural;
 pub mod preflop;
 pub mod public_belief;
+pub mod range_vector;
 pub mod response;
 
 /// Read an immutable JSON artifact, accepting either plain JSON or a gzip
@@ -39,7 +43,8 @@ fn read_json_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 
 const MODEL_BINARY_MAGIC: &[u8; 8] = b"PKRMODL2";
 const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
-const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 3;
+const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 4;
+const MAX_HS_DCFR_HORIZON: u64 = 10_000_000;
 
 fn model_binary_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.bin", path.display()))
@@ -204,13 +209,51 @@ pub struct BlueprintConfig {
     pub max_information_sets: usize,
     pub seed: u64,
     pub averaging_delay: u64,
+    /// Number of compatible active-traverser hole-card combinations trained
+    /// against one sampled public board and opponent hand. One preserves the
+    /// legacy external-sampling stream exactly.
+    #[serde(default = "default_traverser_hand_batch_size")]
+    pub traverser_hand_batch_size: usize,
+    /// Number of compatible opponent hands sampled for every active-traverser
+    /// hand in the contiguous research traversal. One preserves the scalar
+    /// trainer and all established artifact identities.
+    #[serde(
+        default = "default_opponent_hand_batch_size",
+        skip_serializing_if = "is_default_hand_batch_size"
+    )]
+    pub opponent_hand_batch_size: usize,
     pub export_postflop_strategies: bool,
     pub recall_mode: RecallMode,
     pub dcfr: DcfrParameters,
+    #[serde(default)]
+    pub dcfr_schedule: DcfrSchedule,
+    #[serde(default)]
+    pub dcfr_schedule_horizon: u64,
     pub evaluation_controls: EvaluationControls,
     pub hand_abstraction: HandAbstraction,
     pub showdown_evaluation: ShowdownEvaluation,
     pub action_abstraction: ActionAbstraction,
+}
+
+const fn default_traverser_hand_batch_size() -> usize {
+    1
+}
+
+const fn default_opponent_hand_batch_size() -> usize {
+    1
+}
+
+fn is_default_hand_batch_size(size: &usize) -> bool {
+    *size == 1
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DcfrSchedule {
+    #[default]
+    Fixed,
+    /// HS-DCFR(30) from Zhang, McAleer, and Sandholm (AAAI 2026).
+    Hs30,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -304,9 +347,13 @@ impl Default for BlueprintConfig {
             max_information_sets: 5_000_000,
             seed: 1,
             averaging_delay: 1_000,
+            traverser_hand_batch_size: 1,
+            opponent_hand_batch_size: 1,
             export_postflop_strategies: false,
             recall_mode: RecallMode::Trajectory,
             dcfr: DcfrParameters::default(),
+            dcfr_schedule: DcfrSchedule::Fixed,
+            dcfr_schedule_horizon: 0,
             evaluation_controls: EvaluationControls::default(),
             hand_abstraction: HandAbstraction::default(),
             showdown_evaluation: ShowdownEvaluation::default(),
@@ -332,6 +379,12 @@ impl BlueprintConfig {
         if self.averaging_delay >= self.iterations {
             return Err("averaging delay must be smaller than iterations".to_owned());
         }
+        if !(1..=990).contains(&self.traverser_hand_batch_size) {
+            return Err("traverser hand batch size must be between 1 and 990".to_owned());
+        }
+        if !(1..=990).contains(&self.opponent_hand_batch_size) {
+            return Err("opponent hand batch size must be between 1 and 990".to_owned());
+        }
         if self.evaluation_controls.held_out_deals == 0 {
             return Err("held-out deals must be positive".to_owned());
         }
@@ -349,6 +402,27 @@ impl BlueprintConfig {
             || self.dcfr.strategy_exponent < 0.0
         {
             return Err("DCFR exponents must be finite and non-negative".to_owned());
+        }
+        match self.dcfr_schedule {
+            DcfrSchedule::Fixed if self.dcfr_schedule_horizon != 0 => {
+                return Err("fixed DCFR cannot declare a schedule horizon".to_owned());
+            }
+            DcfrSchedule::Hs30
+                if self.dcfr != DcfrParameters::default()
+                    || self.dcfr_schedule_horizon < self.iterations
+                    || self.dcfr_schedule_horizon < 2 =>
+            {
+                return Err(
+                    "HS-DCFR requires default base parameters and a horizon at least as large as the requested iterations"
+                        .to_owned(),
+                );
+            }
+            DcfrSchedule::Hs30 if self.dcfr_schedule_horizon > MAX_HS_DCFR_HORIZON => {
+                return Err(format!(
+                    "HS-DCFR horizon may not exceed {MAX_HS_DCFR_HORIZON} iterations"
+                ));
+            }
+            _ => {}
         }
         if self.hand_abstraction.distribution_samples == 0
             || self.hand_abstraction.equity_bins == 0
@@ -424,7 +498,8 @@ pub struct RunControl {
 struct Deal {
     holes: [[u8; 2]; 2],
     board: [u8; 5],
-    hand_bucket_cache: RefCell<BTreeMap<(usize, usize), String>>,
+    hand_bucket_cache: RefCell<BTreeMap<(usize, usize), Arc<str>>>,
+    public_bucket_cache: RefCell<BTreeMap<usize, Arc<str>>>,
     showdown_equity_cache: RefCell<BTreeMap<usize, f64>>,
 }
 
@@ -449,6 +524,7 @@ impl Deal {
             holes,
             board,
             hand_bucket_cache: RefCell::new(BTreeMap::new()),
+            public_bucket_cache: RefCell::new(BTreeMap::new()),
             showdown_equity_cache: RefCell::new(BTreeMap::new()),
         }
     }
@@ -458,17 +534,134 @@ impl Deal {
         Self::from_sampled_cards(holes, board)
     }
 
-    fn hand_bucket(&self, player: usize, street: Street, abstraction: &HandAbstraction) -> String {
+    fn hand_bucket(
+        &self,
+        player: usize,
+        street: Street,
+        abstraction: &HandAbstraction,
+    ) -> Arc<str> {
         let key = (player, street.board_len());
         if let Some(bucket) = self.hand_bucket_cache.borrow().get(&key) {
             return bucket.clone();
         }
-        let bucket = postflop_hand_bucket(self, player, street, abstraction);
+        let bucket: Arc<str> = match street {
+            Street::Preflop => format!(
+                "preflop:{}",
+                Combo::new(self.holes[player][0], self.holes[player][1]).label()
+            )
+            .into(),
+            _ => postflop_hand_bucket(self, player, street, abstraction).into(),
+        };
         self.hand_bucket_cache
             .borrow_mut()
             .insert(key, bucket.clone());
         bucket
     }
+
+    fn public_bucket(&self, street: Street) -> Arc<str> {
+        let board_len = street.board_len();
+        if let Some(bucket) = self.public_bucket_cache.borrow().get(&board_len) {
+            return bucket.clone();
+        }
+        let bucket: Arc<str> = public_board_bucket(&self.board[..board_len]).into();
+        self.public_bucket_cache
+            .borrow_mut()
+            .insert(board_len, bucket.clone());
+        bucket
+    }
+}
+
+fn sample_traverser_hand_batch(
+    template: &Deal,
+    traverser: usize,
+    requested: usize,
+    rng: &mut SplitMix64,
+) -> Vec<Deal> {
+    if requested == 1 {
+        // Preserve the established seeded stream and exact artifact identity
+        // for the default scalar trainer.
+        return vec![template.clone()];
+    }
+    let opponent = 1 - traverser;
+    let blocked = template
+        .board
+        .iter()
+        .copied()
+        .chain(template.holes[opponent]);
+    let mut blocked_cards = [false; 52];
+    for card in blocked {
+        blocked_cards[card as usize] = true;
+    }
+    let mut candidates = all_combos()
+        .into_iter()
+        .filter(|combo| {
+            combo
+                .cards()
+                .iter()
+                .all(|card| !blocked_cards[*card as usize])
+        })
+        .collect::<Vec<_>>();
+    debug_assert_eq!(candidates.len(), 990);
+    let selected = requested.min(candidates.len());
+    for index in 0..selected {
+        let swap = index + rng.index(candidates.len() - index);
+        candidates.swap(index, swap);
+    }
+    candidates
+        .into_iter()
+        .take(selected)
+        .map(|combo| {
+            let mut holes = template.holes;
+            holes[traverser] = combo.cards();
+            Deal::from_sampled_cards(holes, template.board)
+        })
+        .collect()
+}
+
+fn sample_joint_hand_batch(
+    template: &Deal,
+    traverser: usize,
+    traverser_requested: usize,
+    opponent_requested: usize,
+    rng: &mut SplitMix64,
+) -> Vec<Deal> {
+    if opponent_requested == 1 {
+        return sample_traverser_hand_batch(template, traverser, traverser_requested, rng);
+    }
+    let opponent = 1 - traverser;
+    let traverser_deals =
+        sample_traverser_hand_batch(template, traverser, traverser_requested, rng);
+    let mut deals = Vec::with_capacity(traverser_deals.len() * opponent_requested);
+    for traverser_deal in traverser_deals {
+        let traverser_cards = traverser_deal.holes[traverser];
+        let mut candidates = all_combos()
+            .into_iter()
+            .filter(|combo| {
+                combo.cards().iter().all(|card| {
+                    !traverser_deal.board.contains(card) && !traverser_cards.contains(card)
+                })
+            })
+            .collect::<Vec<_>>();
+        debug_assert_eq!(candidates.len(), 990);
+        let selected = opponent_requested.min(candidates.len());
+        for index in 0..selected {
+            let swap = index + rng.index(candidates.len() - index);
+            candidates.swap(index, swap);
+        }
+        for combo in candidates.into_iter().take(selected) {
+            let mut holes = traverser_deal.holes;
+            holes[opponent] = combo.cards();
+            deals.push(Deal::from_sampled_cards(holes, traverser_deal.board));
+        }
+    }
+    deals
+}
+
+fn batch_iteration_seed(base_seed: u64, iteration: u64) -> u64 {
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&base_seed.to_le_bytes());
+    bytes[8..].copy_from_slice(&iteration.to_le_bytes());
+    stable_hash(&bytes)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -914,8 +1107,8 @@ pub struct InfoSetDescriptor {
 struct NodeDescriptor {
     actor: Position,
     street: Street,
-    hand_bucket_trajectory: Vec<String>,
-    public_bucket_trajectory: Vec<String>,
+    hand_bucket_trajectory: Box<[Arc<str>]>,
+    public_bucket_trajectory: Box<[Arc<str>]>,
     public_history_id: u64,
     pot_bb: f64,
     to_call_bb: f64,
@@ -933,9 +1126,9 @@ impl NodeDescriptor {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Node {
     descriptor: NodeDescriptor,
-    action_labels: Vec<String>,
-    regrets: Vec<f64>,
-    strategy_sum: Vec<f64>,
+    action_labels: Box<[Arc<str>]>,
+    regrets: Box<[f64]>,
+    strategy_sum: Box<[f64]>,
     regret_updates: u64,
     average_visits: u64,
     #[serde(default)]
@@ -945,14 +1138,27 @@ struct Node {
 }
 
 impl Node {
-    fn new(descriptor: NodeDescriptor, actions: &[LegalAction]) -> Self {
+    fn new(
+        descriptor: NodeDescriptor,
+        actions: &[LegalAction],
+        string_interner: &mut BTreeMap<String, Arc<str>>,
+    ) -> Self {
         let action_labels = actions
             .iter()
-            .map(|action| action.label.clone())
-            .collect::<Vec<_>>();
+            .map(|action| {
+                if let Some(canonical) = string_interner.get(action.label.as_str()) {
+                    canonical.clone()
+                } else {
+                    let label: Arc<str> = action.label.as_str().into();
+                    string_interner.insert(action.label.clone(), label.clone());
+                    label
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
-            regrets: vec![0.0; action_labels.len()],
-            strategy_sum: vec![0.0; action_labels.len()],
+            regrets: vec![0.0; action_labels.len()].into_boxed_slice(),
+            strategy_sum: vec![0.0; action_labels.len()].into_boxed_slice(),
             action_labels,
             descriptor,
             regret_updates: 0,
@@ -972,7 +1178,20 @@ impl Node {
     }
 
     fn average_strategy(&self) -> Vec<f64> {
-        normalize_or_uniform(self.strategy_sum.clone())
+        let mut strategy = self.strategy_sum.to_vec();
+        let maximum = strategy.iter().copied().fold(0.0f64, f64::max);
+        if maximum > 0.0 {
+            for probability in &mut strategy {
+                *probability /= maximum;
+            }
+            let total = strategy.iter().sum::<f64>();
+            for probability in &mut strategy {
+                *probability /= total;
+            }
+            strategy
+        } else {
+            normalize_or_uniform(strategy)
+        }
     }
 
     fn apply_dcfr_regret_discount(
@@ -1001,24 +1220,43 @@ impl Node {
 
 struct BlueprintDiscountAccumulator {
     parameters: DcfrParameters,
+    schedule: DcfrSchedule,
+    schedule_horizon: u64,
     iteration: u64,
     cumulative_logs: [f64; 2],
 }
 
 impl BlueprintDiscountAccumulator {
-    fn new(parameters: DcfrParameters) -> Self {
+    fn new(parameters: DcfrParameters, schedule: DcfrSchedule, schedule_horizon: u64) -> Self {
         Self {
             parameters,
+            schedule,
+            schedule_horizon,
             iteration: 0,
             cumulative_logs: [0.0; 2],
+        }
+    }
+
+    fn parameters_at(&self, iteration: u64) -> DcfrParameters {
+        match self.schedule {
+            DcfrSchedule::Fixed => self.parameters.clone(),
+            DcfrSchedule::Hs30 => {
+                let progress = iteration as f64 / self.schedule_horizon as f64;
+                DcfrParameters {
+                    positive_regret_exponent: 1.0 + 3.0 * progress,
+                    negative_regret_exponent: -1.0 - 2.0 * progress,
+                    strategy_exponent: 30.0 - 5.0 * progress,
+                }
+            }
         }
     }
 
     fn advance(&mut self, iteration: u64) {
         assert_eq!(iteration, self.iteration + 1);
         let time = iteration as f64;
-        let positive_power = time.powf(self.parameters.positive_regret_exponent);
-        let negative_power = time.powf(self.parameters.negative_regret_exponent);
+        let parameters = self.parameters_at(iteration);
+        let positive_power = time.powf(parameters.positive_regret_exponent);
+        let negative_power = time.powf(parameters.negative_regret_exponent);
         let factors = [
             positive_power / (positive_power + 1.0),
             negative_power / (negative_power + 1.0),
@@ -1035,6 +1273,17 @@ impl BlueprintDiscountAccumulator {
 /// sampling because an information set is not necessarily visited every round.
 fn dcfr_strategy_averaging_weight(iteration: u64, parameters: &DcfrParameters) -> f64 {
     (iteration as f64).powf(parameters.strategy_exponent)
+}
+
+fn hs_dcfr_strategy_averaging_weights(horizon: u64) -> Vec<f64> {
+    let mut weights = vec![0.0; horizon as usize + 1];
+    weights[horizon as usize] = 1.0;
+    for iteration in (1..horizon).rev() {
+        let gamma = 30.0 - 5.0 * iteration as f64 / horizon as f64;
+        let discount = (iteration as f64 / (iteration + 1) as f64).powf(gamma);
+        weights[iteration as usize] = weights[iteration as usize + 1] * discount;
+    }
+    weights
 }
 
 fn normalize_or_uniform(mut weights: Vec<f64>) -> Vec<f64> {
@@ -1061,6 +1310,8 @@ struct BlueprintCheckpoint {
     rng_state: u64,
     #[serde(default)]
     regret_discount_cumulative_logs: [f64; 2],
+    #[serde(default)]
+    sampled_deals: u64,
     terminal_evaluations: u64,
     public_histories: BTreeMap<u64, Vec<String>>,
     nodes: BTreeMap<u64, Node>,
@@ -1075,6 +1326,7 @@ struct BlueprintCheckpointRef<'a> {
     completed_iterations: u64,
     rng_state: u64,
     regret_discount_cumulative_logs: [f64; 2],
+    sampled_deals: u64,
     terminal_evaluations: u64,
     public_histories: &'a BTreeMap<u64, Vec<String>>,
     nodes: &'a BTreeMap<u64, Node>,
@@ -1097,6 +1349,12 @@ pub struct ExportedInfoSet {
     pub pot_bb: f64,
     pub to_call_bb: f64,
     pub effective_stack_remaining_bb: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regret_updates: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub average_visits: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trained_average: Option<bool>,
     pub actions: Vec<StrategyAction>,
     pub action_values: Vec<ActionValueEstimate>,
     pub best_action: Option<String>,
@@ -1220,24 +1478,66 @@ pub struct BlueprintValidation {
     pub reasons: Vec<String>,
 }
 
+fn rebuild_string_interner(nodes: &mut BTreeMap<u64, Node>) -> BTreeMap<String, Arc<str>> {
+    let mut interner = BTreeMap::<String, Arc<str>>::new();
+    for node in nodes.values_mut() {
+        for bucket in node
+            .descriptor
+            .hand_bucket_trajectory
+            .iter_mut()
+            .chain(&mut node.descriptor.public_bucket_trajectory)
+        {
+            if let Some(canonical) = interner.get(bucket.as_ref()) {
+                *bucket = canonical.clone();
+            } else {
+                interner.insert(bucket.to_string(), bucket.clone());
+            }
+        }
+        for label in &mut node.action_labels {
+            if let Some(canonical) = interner.get(label.as_ref()) {
+                *label = canonical.clone();
+            } else {
+                interner.insert(label.to_string(), label.clone());
+            }
+        }
+    }
+    interner
+}
+
 struct Trainer {
     config: BlueprintConfig,
     completed_iterations: u64,
     rng: SplitMix64,
     discounts: BlueprintDiscountAccumulator,
+    strategy_averaging_weights: Option<Vec<f64>>,
+    sampled_deals: u64,
     terminal_evaluations: u64,
+    string_interner: BTreeMap<String, Arc<str>>,
     public_histories: BTreeMap<u64, Vec<String>>,
     nodes: BTreeMap<u64, Node>,
 }
 
 impl Trainer {
     fn fresh(config: BlueprintConfig) -> Self {
+        let strategy_averaging_weights = match config.dcfr_schedule {
+            DcfrSchedule::Fixed => None,
+            DcfrSchedule::Hs30 => Some(hs_dcfr_strategy_averaging_weights(
+                config.dcfr_schedule_horizon,
+            )),
+        };
         Self {
             rng: SplitMix64::new(config.seed),
-            discounts: BlueprintDiscountAccumulator::new(config.dcfr.clone()),
+            discounts: BlueprintDiscountAccumulator::new(
+                config.dcfr.clone(),
+                config.dcfr_schedule,
+                config.dcfr_schedule_horizon,
+            ),
+            strategy_averaging_weights,
             config,
             completed_iterations: 0,
+            sampled_deals: 0,
             terminal_evaluations: 0,
+            string_interner: BTreeMap::new(),
             public_histories: BTreeMap::new(),
             nodes: BTreeMap::new(),
         }
@@ -1249,7 +1549,7 @@ impl Trainer {
     ) -> Result<Self, String> {
         if checkpoint.schema_version != BLUEPRINT_CHECKPOINT_SCHEMA_VERSION {
             return Err(format!(
-                "unsupported checkpoint schema {}; expected {} after the exact sampled-DCFR weighting upgrade",
+                "unsupported checkpoint schema {}; expected {} for this solver binary",
                 checkpoint.schema_version, BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
             ));
         }
@@ -1304,16 +1604,35 @@ impl Trainer {
                 ));
             }
         }
+        let sampled_deals = if checkpoint.sampled_deals == 0 {
+            checkpoint
+                .completed_iterations
+                .saturating_mul(target.traverser_hand_batch_size as u64)
+                .saturating_mul(target.opponent_hand_batch_size as u64)
+        } else {
+            checkpoint.sampled_deals
+        };
+        let string_interner = rebuild_string_interner(&mut checkpoint.nodes);
         Ok(Self {
             config: target.clone(),
             completed_iterations: checkpoint.completed_iterations,
             rng: SplitMix64::from_state(checkpoint.rng_state),
             discounts: BlueprintDiscountAccumulator {
                 parameters: target.dcfr.clone(),
+                schedule: target.dcfr_schedule,
+                schedule_horizon: target.dcfr_schedule_horizon,
                 iteration: checkpoint.completed_iterations,
                 cumulative_logs: checkpoint.regret_discount_cumulative_logs,
             },
+            strategy_averaging_weights: match target.dcfr_schedule {
+                DcfrSchedule::Fixed => None,
+                DcfrSchedule::Hs30 => Some(hs_dcfr_strategy_averaging_weights(
+                    target.dcfr_schedule_horizon,
+                )),
+            },
+            sampled_deals,
             terminal_evaluations: checkpoint.terminal_evaluations,
+            string_interner,
             public_histories: checkpoint.public_histories,
             nodes: checkpoint.nodes,
         })
@@ -1328,19 +1647,82 @@ impl Trainer {
             completed_iterations: self.completed_iterations,
             rng_state: self.rng.state(),
             regret_discount_cumulative_logs: self.discounts.cumulative_logs,
+            sampled_deals: self.sampled_deals,
             terminal_evaluations: self.terminal_evaluations,
             public_histories: &self.public_histories,
             nodes: &self.nodes,
         };
-        write_json_atomic(path, &checkpoint)
+        if is_message_pack_checkpoint(path) {
+            write_message_pack_atomic(path, &checkpoint)
+        } else {
+            write_json_atomic(path, &checkpoint)
+        }
+    }
+
+    fn strategy_averaging_weight(&self, iteration: u64) -> f64 {
+        self.strategy_averaging_weights.as_ref().map_or_else(
+            || dcfr_strategy_averaging_weight(iteration, &self.config.dcfr),
+            |weights| weights[iteration as usize],
+        )
+    }
+
+    fn intern_descriptor_buckets(&mut self, descriptor: &mut NodeDescriptor) {
+        for bucket in descriptor
+            .hand_bucket_trajectory
+            .iter_mut()
+            .chain(&mut descriptor.public_bucket_trajectory)
+        {
+            if let Some(canonical) = self.string_interner.get(bucket.as_ref()) {
+                *bucket = canonical.clone();
+            } else {
+                self.string_interner
+                    .insert(bucket.to_string(), bucket.clone());
+            }
+        }
     }
 
     fn train(&mut self, control: &RunControl) -> Result<(), Box<dyn Error>> {
+        let starting_iteration = self.completed_iterations;
+        let mut last_checkpoint_iteration = None;
         while self.completed_iterations < self.config.iterations {
             self.discounts.advance(self.completed_iterations + 1);
             let traverser = self.completed_iterations as usize % 2;
-            let deal = Deal::sample(&mut self.rng);
-            self.external_sampling(GameState::initial(&self.config), &deal, traverser);
+            let template = Deal::sample(&mut self.rng);
+            let batched = self.config.traverser_hand_batch_size > 1
+                || self.config.opponent_hand_batch_size > 1;
+            let mut batch_rng = SplitMix64::new(batch_iteration_seed(
+                self.config.seed,
+                self.completed_iterations + 1,
+            ));
+            let deals = sample_joint_hand_batch(
+                &template,
+                traverser,
+                self.config.traverser_hand_batch_size,
+                self.config.opponent_hand_batch_size,
+                if batched {
+                    &mut batch_rng
+                } else {
+                    &mut self.rng
+                },
+            );
+            let sample_weight = 1.0 / deals.len() as f64;
+            if deals.len() == 1 {
+                self.external_sampling(
+                    GameState::initial(&self.config),
+                    &deals[0],
+                    traverser,
+                    sample_weight,
+                );
+            } else {
+                self.external_sampling_batch(
+                    GameState::initial(&self.config),
+                    &deals,
+                    traverser,
+                    sample_weight,
+                    &mut batch_rng,
+                );
+            }
+            self.sampled_deals += deals.len() as u64;
             self.completed_iterations += 1;
             if self.nodes.len() >= self.config.max_information_sets {
                 break;
@@ -1352,25 +1734,38 @@ impl Trainer {
             {
                 if let Some(path) = &control.checkpoint_path {
                     self.write_checkpoint(Path::new(path))?;
+                    eprintln!(
+                        "blueprint checkpoint: iteration={} information_sets={} path={path}",
+                        self.completed_iterations,
+                        self.nodes.len()
+                    );
+                    last_checkpoint_iteration = Some(self.completed_iterations);
                 }
             }
         }
-        if let Some(path) = &control.checkpoint_path {
-            self.write_checkpoint(Path::new(path))?;
+        if self.completed_iterations > starting_iteration
+            && last_checkpoint_iteration != Some(self.completed_iterations)
+        {
+            if let Some(path) = &control.checkpoint_path {
+                self.write_checkpoint(Path::new(path))?;
+                eprintln!(
+                    "blueprint checkpoint: iteration={} information_sets={} path={path}",
+                    self.completed_iterations,
+                    self.nodes.len()
+                );
+            }
         }
         Ok(())
     }
 
-    fn external_sampling(&mut self, state: GameState, deal: &Deal, traverser: usize) -> f64 {
-        if state.terminal.is_some() {
-            self.terminal_evaluations += 1;
-            let utility = state.utility_p0(deal, &self.config);
-            return if traverser == 0 { utility } else { -utility };
-        }
-
-        let actions = state.legal_actions(&self.config);
-        debug_assert!(!actions.is_empty());
-        let (key, descriptor, public_history) = information_set(&state, deal, &self.config);
+    fn current_strategy_at(
+        &mut self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+    ) -> (u64, Vec<f64>) {
+        let (key, mut descriptor, public_history) = information_set(state, deal, &self.config);
+        self.intern_descriptor_buckets(&mut descriptor);
         match self.public_histories.get(&descriptor.public_history_id) {
             Some(existing) => assert_eq!(
                 existing, &public_history,
@@ -1381,26 +1776,183 @@ impl Trainer {
                     .insert(descriptor.public_history_id, public_history);
             }
         }
-        let strategy = {
-            let node = self
-                .nodes
-                .entry(key)
-                .or_insert_with(|| Node::new(descriptor.clone(), &actions));
-            assert_eq!(
-                node.descriptor, descriptor,
-                "information-set hash collision detected"
-            );
-            assert_eq!(
-                node.action_labels,
-                actions
-                    .iter()
-                    .map(|action| action.label.clone())
-                    .collect::<Vec<_>>(),
-                "one abstraction key produced incompatible action sets"
-            );
-            node.apply_dcfr_regret_discount(self.completed_iterations + 1, &self.discounts);
-            node.current_strategy()
-        };
+        let string_interner = &mut self.string_interner;
+        let node = self
+            .nodes
+            .entry(key)
+            .or_insert_with(|| Node::new(descriptor.clone(), actions, string_interner));
+        assert_eq!(
+            node.descriptor, descriptor,
+            "information-set hash collision detected"
+        );
+        assert!(
+            node.action_labels
+                .iter()
+                .map(AsRef::as_ref)
+                .eq(actions.iter().map(|action| action.label.as_str())),
+            "one abstraction key produced incompatible action sets"
+        );
+        node.apply_dcfr_regret_discount(self.completed_iterations + 1, &self.discounts);
+        (key, node.current_strategy())
+    }
+
+    /// Traverse a compatible active-player hand population as one public
+    /// tree. Every hand remains an independent external-sampling lane, but
+    /// lanes selecting the same opponent action share one contiguous recursive
+    /// call. Traverser actions remain fully enumerated for every private hand.
+    fn external_sampling_batch(
+        &mut self,
+        state: GameState,
+        deals: &[Deal],
+        traverser: usize,
+        sample_weight: f64,
+        rng: &mut SplitMix64,
+    ) -> Vec<f64> {
+        debug_assert!(deals.len() > 1);
+        debug_assert!(deals.iter().all(|deal| deal.board == deals[0].board));
+        let deal_refs = deals.iter().collect::<Vec<_>>();
+        self.external_sampling_batch_refs(state, &deal_refs, traverser, sample_weight, rng)
+    }
+
+    fn external_sampling_batch_refs(
+        &mut self,
+        state: GameState,
+        deals: &[&Deal],
+        traverser: usize,
+        sample_weight: f64,
+        rng: &mut SplitMix64,
+    ) -> Vec<f64> {
+        debug_assert!(!deals.is_empty());
+        if state.terminal.is_some() {
+            self.terminal_evaluations += deals.len() as u64;
+            return deals
+                .iter()
+                .map(|deal| {
+                    let utility = state.utility_p0(deal, &self.config);
+                    if traverser == 0 {
+                        utility
+                    } else {
+                        -utility
+                    }
+                })
+                .collect();
+        }
+
+        let actions = state.legal_actions(&self.config);
+        debug_assert!(!actions.is_empty());
+        if state.actor != traverser {
+            // Policy lookup varies with the sampled opponent hand. Lanes that
+            // select the same public action still share one recursive call.
+            let accumulate_average = self.completed_iterations >= self.config.averaging_delay;
+            let averaging_weight = accumulate_average
+                .then(|| self.strategy_averaging_weight(self.completed_iterations + 1));
+            let mut average_deltas = BTreeMap::<u64, (Vec<f64>, u64)>::new();
+            let mut grouped_deals = vec![Vec::<&Deal>::new(); actions.len()];
+            let mut grouped_positions = vec![Vec::<usize>::new(); actions.len()];
+            for (position, deal) in deals.iter().enumerate() {
+                let (key, strategy) = self.current_strategy_at(&state, deal, &actions);
+                if let Some(averaging_weight) = averaging_weight {
+                    let delta = average_deltas
+                        .entry(key)
+                        .or_insert_with(|| (vec![0.0; actions.len()], 0));
+                    for (sum, probability) in delta.0.iter_mut().zip(&strategy) {
+                        *sum += sample_weight * averaging_weight * probability;
+                    }
+                    delta.1 += 1;
+                }
+                let selected = sample_index(&strategy, rng);
+                grouped_deals[selected].push(*deal);
+                grouped_positions[selected].push(position);
+            }
+            for (key, (deltas, visits)) in average_deltas {
+                let node = self.nodes.get_mut(&key).expect("batch node inserted");
+                for (sum, delta) in node.strategy_sum.iter_mut().zip(deltas) {
+                    *sum += delta;
+                }
+                node.average_visits += visits;
+            }
+            let mut values = vec![0.0; deals.len()];
+            for action in 0..actions.len() {
+                if grouped_deals[action].is_empty() {
+                    continue;
+                }
+                let child = self.external_sampling_batch_refs(
+                    state.apply(&actions[action], &self.config),
+                    &grouped_deals[action],
+                    traverser,
+                    sample_weight,
+                    rng,
+                );
+                for (position, value) in grouped_positions[action].iter().zip(child) {
+                    values[*position] = value;
+                }
+            }
+            return values;
+        }
+
+        let mut keys = Vec::with_capacity(deals.len());
+        let mut strategies = Vec::with_capacity(deals.len());
+        for deal in deals {
+            let (key, strategy) = self.current_strategy_at(&state, deal, &actions);
+            keys.push(key);
+            strategies.push(strategy);
+        }
+        let children = actions
+            .iter()
+            .map(|action| {
+                self.external_sampling_batch_refs(
+                    state.apply(action, &self.config),
+                    deals,
+                    traverser,
+                    sample_weight,
+                    rng,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut values = vec![0.0; deals.len()];
+        let mut regret_deltas = BTreeMap::<u64, (Vec<f64>, u64)>::new();
+        for deal_index in 0..deals.len() {
+            let strategy = &strategies[deal_index];
+            let node_value = strategy
+                .iter()
+                .enumerate()
+                .map(|(action, probability)| probability * children[action][deal_index])
+                .sum::<f64>();
+            values[deal_index] = node_value;
+            let delta = regret_deltas
+                .entry(keys[deal_index])
+                .or_insert_with(|| (vec![0.0; actions.len()], 0));
+            for (action, regret) in delta.0.iter_mut().enumerate() {
+                *regret += sample_weight * (children[action][deal_index] - node_value);
+            }
+            delta.1 += 1;
+        }
+        for (key, (deltas, updates)) in regret_deltas {
+            let node = self.nodes.get_mut(&key).expect("batch node inserted");
+            for (regret, delta) in node.regrets.iter_mut().zip(deltas) {
+                *regret += delta;
+            }
+            node.regret_updates += updates;
+        }
+        values
+    }
+
+    fn external_sampling(
+        &mut self,
+        state: GameState,
+        deal: &Deal,
+        traverser: usize,
+        sample_weight: f64,
+    ) -> f64 {
+        if state.terminal.is_some() {
+            self.terminal_evaluations += 1;
+            let utility = state.utility_p0(deal, &self.config);
+            return if traverser == 0 { utility } else { -utility };
+        }
+
+        let actions = state.legal_actions(&self.config);
+        debug_assert!(!actions.is_empty());
+        let (key, strategy) = self.current_strategy_at(&state, deal, &actions);
 
         if state.actor == traverser {
             let mut action_values = Vec::with_capacity(actions.len());
@@ -1409,6 +1961,7 @@ impl Trainer {
                     state.apply(action, &self.config),
                     deal,
                     traverser,
+                    sample_weight,
                 ));
             }
             let node_value = strategy
@@ -1418,7 +1971,7 @@ impl Trainer {
                 .sum::<f64>();
             let node = self.nodes.get_mut(&key).expect("node inserted");
             for (regret, action_value) in node.regrets.iter_mut().zip(action_values) {
-                *regret += action_value - node_value;
+                *regret += sample_weight * (action_value - node_value);
             }
             node.regret_updates += 1;
             node_value
@@ -1428,13 +1981,11 @@ impl Trainer {
             // ratio is needed. Simple averaging happens at these opponent
             // nodes during the other player's traversal.
             if self.completed_iterations >= self.config.averaging_delay {
+                let averaging_weight =
+                    self.strategy_averaging_weight(self.completed_iterations + 1);
                 let node = self.nodes.get_mut(&key).expect("node inserted");
-                let averaging_weight = dcfr_strategy_averaging_weight(
-                    self.completed_iterations + 1,
-                    &self.config.dcfr,
-                );
                 for (sum, probability) in node.strategy_sum.iter_mut().zip(&strategy) {
-                    *sum += averaging_weight * probability;
+                    *sum += sample_weight * averaging_weight * probability;
                 }
                 node.average_visits += 1;
             }
@@ -1443,6 +1994,7 @@ impl Trainer {
                 state.apply(&actions[selected], &self.config),
                 deal,
                 traverser,
+                sample_weight,
             )
         }
     }
@@ -1454,7 +2006,7 @@ impl Trainer {
             serde_json::to_vec(&self.config).expect("serializable blueprint configuration"),
         );
         let config_hash = stable_hash(&hash_input);
-        let training_hash_input = serde_json::to_vec(&serde_json::json!({
+        let mut training_config = serde_json::json!({
             "solver_version": SOLVER_VERSION,
             "model": MODEL,
             "small_blind_bb": self.config.small_blind_bb,
@@ -1464,13 +2016,26 @@ impl Trainer {
             "max_information_sets": self.config.max_information_sets,
             "seed": self.config.seed,
             "averaging_delay": self.config.averaging_delay,
+            "traverser_hand_batch_size": self.config.traverser_hand_batch_size,
             "recall_mode": self.config.recall_mode,
             "dcfr": &self.config.dcfr,
+            "dcfr_schedule": self.config.dcfr_schedule,
+            "dcfr_schedule_horizon": self.config.dcfr_schedule_horizon,
             "hand_abstraction": &self.config.hand_abstraction,
             "showdown_evaluation": &self.config.showdown_evaluation,
             "action_abstraction": &self.config.action_abstraction,
-        }))
-        .expect("serializable training configuration");
+        });
+        if self.config.opponent_hand_batch_size > 1 {
+            training_config
+                .as_object_mut()
+                .expect("training config object")
+                .insert(
+                    "opponent_hand_batch_size".to_owned(),
+                    self.config.opponent_hand_batch_size.into(),
+                );
+        }
+        let training_hash_input =
+            serde_json::to_vec(&training_config).expect("serializable training configuration");
         let training_config_hash = stable_hash(&training_hash_input);
         let action_value_pass = evaluate_information_set_actions(&self.config, &self.nodes);
         let strategies = self
@@ -1485,24 +2050,42 @@ impl Trainer {
                 let evaluated = action_value_pass.information_sets.get(key);
                 let (action_values, best_action, best_action_ev_bb) =
                     finalize_action_values(node, evaluated);
+                let public_history = self
+                    .public_histories
+                    .get(&node.descriptor.public_history_id)
+                    .expect("node history interned")
+                    .clone();
+                let is_root = node.descriptor.actor == Position::ButtonSmallBlind
+                    && node.descriptor.street == Street::Preflop
+                    && public_history.len() == 1
+                    && public_history[0].starts_with("blinds:");
                 ExportedInfoSet {
                     key: format!("{key:016x}"),
                     actor: node.descriptor.actor,
                     street: node.descriptor.street,
-                    hand_bucket_trajectory: node.descriptor.hand_bucket_trajectory.clone(),
-                    public_bucket_trajectory: node.descriptor.public_bucket_trajectory.clone(),
-                    public_history: self
-                        .public_histories
-                        .get(&node.descriptor.public_history_id)
-                        .expect("node history interned")
-                        .clone(),
+                    hand_bucket_trajectory: node
+                        .descriptor
+                        .hand_bucket_trajectory
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    public_bucket_trajectory: node
+                        .descriptor
+                        .public_bucket_trajectory
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    public_history,
                     pot_bb: node.descriptor.pot_bb,
                     to_call_bb: node.descriptor.to_call_bb,
                     effective_stack_remaining_bb: node.descriptor.effective_stack_remaining_bb,
+                    regret_updates: is_root.then_some(node.regret_updates),
+                    average_visits: is_root.then_some(node.average_visits),
+                    trained_average: is_root.then_some(node.average_visits > 0),
                     actions: node
                         .action_labels
                         .iter()
-                        .cloned()
+                        .map(ToString::to_string)
                         .zip(node.average_strategy())
                         .map(|(action, probability)| StrategyAction {
                             action,
@@ -1568,7 +2151,7 @@ impl Trainer {
         let root_local_deviation = evaluate_root_local_deviation(&self.config, &self.nodes);
         let mut provenance = vec![
             "External-sampling Discounted CFR with alternating traverser updates; traverser actions are enumerated and opponent/chance actions are sampled deterministically from the seeded current strategy.".to_owned(),
-            "Sampled information sets lazily receive every skipped global DCFR regret discount, and each average-strategy visit is weighted by the exact global iteration^gamma contribution.".to_owned(),
+            "Sampled information sets lazily receive every skipped global DCFR regret discount, and average-strategy visits follow the configured fixed or scheduled DCFR weighting recurrence.".to_owned(),
             "Exact private cards and boards are sampled without replacement; information sets use lossy coarse rollout-derived strength/potential and public buckets plus an abstract no-limit action grid.".to_owned(),
             "All-in showdowns before the river use deterministic conditional-expectation runout evaluation to reduce chance variance; sample counts and exact-turn behavior are recorded in config.showdown_evaluation.".to_owned(),
             "Rake-free, equal-stack, heads-up cash model with no ante; button posts the small blind, acts first preflop, and acts last postflop.".to_owned(),
@@ -1576,6 +2159,24 @@ impl Trainer {
             "Root local-deviation evaluation forces one button action at a time against the fixed average continuation/opponent policy. It is a one-step local best response with sampling error and is not exploitability or a full best response.".to_owned(),
             "A separate seeded evaluation pass records counterfactual values and standard errors for every action at each reached served information set. Low-sample or >0.02bb-standard-error values are flagged low confidence.".to_owned(),
         ];
+        if self.config.dcfr_schedule != DcfrSchedule::Fixed {
+            provenance.push(format!(
+                "HS-DCFR(30) varies alpha=1+3t/n, beta=-1-2t/n, and gamma=30-5t/n over a pinned {}-iteration horizon. Strategy contributions use the exact terminal-relative product of the changing gamma discounts, and lazy regret discounts preserve every skipped global factor.",
+                self.config.dcfr_schedule_horizon
+            ));
+        } else {
+            provenance.push(
+                "For fixed DCFR, the repeated average-strategy discount telescopes to the exact global iteration^gamma contribution used at each sampled visit."
+                    .to_owned(),
+            );
+        }
+        if self.config.traverser_hand_batch_size > 1 || self.config.opponent_hand_batch_size > 1 {
+            provenance.push(format!(
+                "Each alternating iteration samples one public board, then trains a deterministic batch of {} active-traverser by {} compatible opponent hands with normalized regret and average-policy weight. Independent opponent-action lanes selecting the same action share contiguous public-tree recursion.",
+                self.config.traverser_hand_batch_size,
+                self.config.opponent_hand_batch_size,
+            ));
+        }
         if self.config.recall_mode == RecallMode::CurrentStreet {
             provenance.push(
                 "Postflop abstraction retains only the current street's private/public bucket while preserving full public action history. This is imperfect recall, so standard perfect-recall CFR convergence guarantees do not transfer.".to_owned(),
@@ -1604,7 +2205,7 @@ impl Trainer {
                         self.config.max_information_sets
                     )
                 }),
-                sampled_deals: self.completed_iterations,
+                sampled_deals: self.sampled_deals,
                 terminal_evaluations: self.terminal_evaluations,
                 information_sets: self.nodes.len(),
                 preflop_information_sets: self
@@ -1655,12 +2256,69 @@ impl Trainer {
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100_0000_01b3);
+    let mut hash = StableHasher::new();
+    hash.update(bytes);
+    hash.finish()
+}
+
+struct StableHasher {
+    state: u64,
+}
+
+impl StableHasher {
+    const fn new() -> Self {
+        Self {
+            state: 0xcbf2_9ce4_8422_2325u64,
+        }
     }
-    hash
+
+    fn update(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.state ^= *byte as u64;
+            self.state = self.state.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+
+    fn update_joined<T: AsRef<str>>(&mut self, values: &[T], separator: u8) {
+        for (index, value) in values.iter().enumerate() {
+            if index > 0 {
+                self.update(&[separator]);
+            }
+            self.update(value.as_ref().as_bytes());
+        }
+    }
+
+    fn update_unsigned(&mut self, mut value: u64) {
+        if value == 0 {
+            self.update(b"0");
+            return;
+        }
+        let mut digits = [0u8; 20];
+        let mut offset = digits.len();
+        while value > 0 {
+            offset -= 1;
+            digits[offset] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+        self.update(&digits[offset..]);
+    }
+
+    fn update_fixed_three(&mut self, value: f64) {
+        debug_assert!(value.is_finite() && value >= 0.0);
+        let milli = (value * 1_000.0).round() as u64;
+        self.update_unsigned(milli / 1_000);
+        self.update(b".");
+        let fraction = milli % 1_000;
+        self.update(&[
+            b'0' + (fraction / 100) as u8,
+            b'0' + ((fraction / 10) % 10) as u8,
+            b'0' + (fraction % 10) as u8,
+        ]);
+    }
+
+    const fn finish(self) -> u64 {
+        self.state
+    }
 }
 
 pub fn solve(config: BlueprintConfig) -> Result<BlueprintArtifact, Box<dyn Error>> {
@@ -1675,9 +2333,7 @@ pub fn solve_controlled(
         .validate()
         .map_err(|error| format!("invalid blueprint config: {error}"))?;
     let mut trainer = if let Some(path) = &control.resume_path {
-        let checkpoint_file = fs::File::open(path)?;
-        let checkpoint: BlueprintCheckpoint =
-            serde_json::from_reader(BufReader::new(checkpoint_file))?;
+        let checkpoint = read_checkpoint(Path::new(path))?;
         if checkpoint.model != MODEL || !checkpoint.approximate {
             return Err("checkpoint model is incompatible".into());
         }
@@ -1690,7 +2346,42 @@ pub fn solve_controlled(
     Ok(trainer.artifact())
 }
 
-fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), Box<dyn Error>> {
+fn is_message_pack_checkpoint(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    name.ends_with(".msgpack")
+        || name.ends_with(".msgpack.gz")
+        || name.ends_with(".mpk")
+        || name.ends_with(".mpk.gz")
+}
+
+fn read_checkpoint(path: &Path) -> Result<BlueprintCheckpoint, Box<dyn Error>> {
+    let compressed = path.extension().and_then(|extension| extension.to_str()) == Some("gz");
+    let message_pack = is_message_pack_checkpoint(path);
+    let file = fs::File::open(path)?;
+    if compressed {
+        let reader = GzDecoder::new(BufReader::new(file));
+        if message_pack {
+            Ok(rmp_serde::from_read(reader)?)
+        } else {
+            Ok(serde_json::from_reader(reader)?)
+        }
+    } else {
+        let reader = BufReader::new(file);
+        if message_pack {
+            Ok(rmp_serde::from_read(reader)?)
+        } else {
+            Ok(serde_json::from_reader(reader)?)
+        }
+    }
+}
+
+fn write_message_pack_atomic<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
@@ -1698,9 +2389,43 @@ fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()
     }
     let temporary = path.with_extension("tmp");
     let file = fs::File::create(&temporary)?;
-    let mut writer = BufWriter::new(file);
-    serde_json::to_writer(&mut writer, value)?;
-    writer.flush()?;
+    if path.extension().and_then(|extension| extension.to_str()) == Some("gz") {
+        let buffered = BufWriter::new(file);
+        let mut gzip = GzEncoder::new(buffered, Compression::fast());
+        rmp_serde::encode::write_named(&mut gzip, value)?;
+        let mut buffered = gzip.finish()?;
+        buffered.flush()?;
+    } else {
+        let mut writer = BufWriter::new(file);
+        rmp_serde::encode::write_named(&mut writer, value)?;
+        writer.flush()?;
+    }
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+pub fn write_json_atomic<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temporary = path.with_extension("tmp");
+    let file = fs::File::create(&temporary)?;
+    if path.extension().and_then(|extension| extension.to_str()) == Some("gz") {
+        let buffered = BufWriter::new(file);
+        let mut gzip = GzEncoder::new(buffered, Compression::fast());
+        serde_json::to_writer(&mut gzip, value)?;
+        let mut buffered = gzip.finish()?;
+        buffered.flush()?;
+    } else {
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer(&mut writer, value)?;
+        writer.flush()?;
+    }
     fs::rename(temporary, path)?;
     Ok(())
 }
@@ -1734,34 +2459,41 @@ fn information_set(
             .into_iter()
             .collect();
     }
-    let history_identity = state.public_history.join("/");
-    let public_history_id = stable_hash(history_identity.as_bytes());
+    let mut public_history_hasher = StableHasher::new();
+    public_history_hasher.update_joined(&state.public_history, b'/');
+    let public_history_id = public_history_hasher.finish();
     let descriptor = NodeDescriptor {
         actor: Position::for_player(state.actor),
         street: state.street,
-        hand_bucket_trajectory,
-        public_bucket_trajectory,
+        hand_bucket_trajectory: hand_bucket_trajectory.into_boxed_slice(),
+        public_bucket_trajectory: public_bucket_trajectory.into_boxed_slice(),
         public_history_id,
         pot_bb: quantize(state.pot(), 0.001),
         to_call_bb: quantize(state.to_call(), 0.001),
         effective_stack_remaining_bb: quantize(state.remaining(state.actor, config), 0.001),
     };
-    let identity = format!(
-        "{:?}|p{}|h:{}|b:{}|pot:{:.3}|call:{:.3}|stack:{:.3}|{}",
-        descriptor.street,
-        state.actor,
-        descriptor.hand_bucket_trajectory.join(">"),
-        descriptor.public_bucket_trajectory.join(">"),
-        descriptor.pot_bb,
-        descriptor.to_call_bb,
-        descriptor.effective_stack_remaining_bb,
-        history_identity
-    );
-    (
-        stable_hash(identity.as_bytes()),
-        descriptor,
-        state.public_history.clone(),
-    )
+    let mut identity = StableHasher::new();
+    identity.update(match descriptor.street {
+        Street::Preflop => b"Preflop",
+        Street::Flop => b"Flop",
+        Street::Turn => b"Turn",
+        Street::River => b"River",
+    });
+    identity.update(b"|p");
+    identity.update_unsigned(state.actor as u64);
+    identity.update(b"|h:");
+    identity.update_joined(&descriptor.hand_bucket_trajectory, b'>');
+    identity.update(b"|b:");
+    identity.update_joined(&descriptor.public_bucket_trajectory, b'>');
+    identity.update(b"|pot:");
+    identity.update_fixed_three(descriptor.pot_bb);
+    identity.update(b"|call:");
+    identity.update_fixed_three(descriptor.to_call_bb);
+    identity.update(b"|stack:");
+    identity.update_fixed_three(descriptor.effective_stack_remaining_bb);
+    identity.update(b"|");
+    identity.update_joined(&state.public_history, b'/');
+    (identity.finish(), descriptor, state.public_history.clone())
 }
 
 fn hand_bucket_trajectory(
@@ -1769,11 +2501,8 @@ fn hand_bucket_trajectory(
     player: usize,
     through: Street,
     abstraction: &HandAbstraction,
-) -> Vec<String> {
-    let mut buckets = vec![format!(
-        "preflop:{}",
-        Combo::new(deal.holes[player][0], deal.holes[player][1]).label()
-    )];
+) -> Vec<Arc<str>> {
+    let mut buckets = vec![deal.hand_bucket(player, Street::Preflop, abstraction)];
     for street in [Street::Flop, Street::Turn, Street::River] {
         if street.board_len() > through.board_len() {
             break;
@@ -1783,13 +2512,13 @@ fn hand_bucket_trajectory(
     buckets
 }
 
-fn public_bucket_trajectory(deal: &Deal, through: Street) -> Vec<String> {
+fn public_bucket_trajectory(deal: &Deal, through: Street) -> Vec<Arc<str>> {
     let mut buckets = Vec::new();
     for street in [Street::Flop, Street::Turn, Street::River] {
         if street.board_len() > through.board_len() {
             break;
         }
-        buckets.push(public_board_bucket(&deal.board[..street.board_len()]));
+        buckets.push(deal.public_bucket(street));
     }
     buckets
 }
@@ -1801,10 +2530,11 @@ fn postflop_hand_bucket(
     abstraction: &HandAbstraction,
 ) -> String {
     let board = &deal.board[..street.board_len()];
-    let mut cards = Vec::with_capacity(board.len() + 2);
-    cards.extend_from_slice(&deal.holes[player]);
-    cards.extend_from_slice(board);
-    let score = evaluate(&cards);
+    let mut cards = [0u8; 7];
+    cards[..2].copy_from_slice(&deal.holes[player]);
+    cards[2..2 + board.len()].copy_from_slice(board);
+    let cards = &cards[..2 + board.len()];
+    let score = evaluate(cards);
     let category = score >> 24;
     let hole_high = (deal.holes[player][0] >> 2).max(deal.holes[player][1] >> 2);
     let board_high = board.iter().map(|card| card >> 2).max().unwrap_or(0);
@@ -1845,17 +2575,22 @@ fn visible_card_distribution_features(
     for card in hole.iter().chain(board.iter()) {
         known[*card as usize] = true;
     }
-    let mut available = (0..52u8)
-        .filter(|card| !known[*card as usize])
-        .collect::<Vec<_>>();
+    let mut available = [0u8; 52];
+    let mut available_len = 0usize;
+    for card in 0..52u8 {
+        if !known[card as usize] {
+            available[available_len] = card;
+            available_len += 1;
+        }
+    }
     let mut seed = 0xcbf2_9ce4_8422_2325u64;
-    let mut visible = hole.to_vec();
-    visible.sort_unstable();
-    visible.push(0xff);
-    let mut canonical_board = board.to_vec();
-    canonical_board.sort_unstable();
-    visible.extend_from_slice(&canonical_board);
-    for card in visible {
+    let mut visible = [0u8; 8];
+    visible[..2].copy_from_slice(hole);
+    visible[..2].sort_unstable();
+    visible[2] = 0xff;
+    visible[3..3 + board.len()].copy_from_slice(board);
+    visible[3..3 + board.len()].sort_unstable();
+    for &card in &visible[..3 + board.len()] {
         seed ^= card as u64 + 1;
         seed = seed.wrapping_mul(0x100_0000_01b3);
     }
@@ -1865,27 +2600,28 @@ fn visible_card_distribution_features(
     let mut improved = 0u64;
     let mut future_categories = [0u32; 9];
     let current_category = {
-        let mut current = Vec::with_capacity(2 + board.len());
-        current.extend_from_slice(hole);
-        current.extend_from_slice(board);
-        evaluate(&current) >> 24
+        let mut current = [0u8; 7];
+        current[..2].copy_from_slice(hole);
+        current[2..2 + board.len()].copy_from_slice(board);
+        evaluate(&current[..2 + board.len()]) >> 24
     };
 
     for _ in 0..samples {
         let needed = 2 + missing_board;
         for index in 0..needed {
-            let swap = index + rng.index(available.len() - index);
+            let swap = index + rng.index(available_len - index);
             available.swap(index, swap);
         }
         let opponent = [available[0], available[1]];
-        let mut completed_board = board.to_vec();
-        completed_board.extend_from_slice(&available[2..needed]);
-        let mut hero_cards = Vec::with_capacity(7);
-        hero_cards.extend_from_slice(hole);
-        hero_cards.extend_from_slice(&completed_board);
-        let mut opponent_cards = Vec::with_capacity(7);
-        opponent_cards.extend_from_slice(&opponent);
-        opponent_cards.extend_from_slice(&completed_board);
+        let mut completed_board = [0u8; 5];
+        completed_board[..board.len()].copy_from_slice(board);
+        completed_board[board.len()..].copy_from_slice(&available[2..needed]);
+        let mut hero_cards = [0u8; 7];
+        hero_cards[..2].copy_from_slice(hole);
+        hero_cards[2..].copy_from_slice(&completed_board);
+        let mut opponent_cards = [0u8; 7];
+        opponent_cards[..2].copy_from_slice(&opponent);
+        opponent_cards[2..].copy_from_slice(&completed_board);
         let hero_score = evaluate(&hero_cards);
         let opponent_score = evaluate(&opponent_cards);
         equity += match hero_score.cmp(&opponent_score) {
@@ -2134,11 +2870,15 @@ fn evaluate_information_set_actions(
                 let entry = pass.information_sets.entry(key).or_insert_with(|| {
                     InformationSetActionEvaluation {
                         visits: 0,
-                        action_labels: node.action_labels.clone(),
+                        action_labels: node.action_labels.iter().map(ToString::to_string).collect(),
                         actions: vec![ValueAccumulator::default(); actions.len()],
                     }
                 });
-                debug_assert_eq!(entry.action_labels, node.action_labels);
+                debug_assert!(entry
+                    .action_labels
+                    .iter()
+                    .map(String::as_str)
+                    .eq(node.action_labels.iter().map(AsRef::as_ref)));
                 entry.visits += 1;
                 for (action_index, action) in actions.iter().enumerate() {
                     let rollout_seed = config.evaluation_controls.action_value_seed
@@ -2178,7 +2918,11 @@ fn finalize_action_values(
     let Some(evaluation) = evaluation else {
         return (Vec::new(), None, None);
     };
-    debug_assert_eq!(node.action_labels, evaluation.action_labels);
+    debug_assert!(node
+        .action_labels
+        .iter()
+        .map(AsRef::as_ref)
+        .eq(evaluation.action_labels.iter().map(String::as_str)));
     let best_ev = evaluation
         .actions
         .iter()
@@ -2193,7 +2937,7 @@ fn finalize_action_values(
     let values = node
         .action_labels
         .iter()
-        .cloned()
+        .map(ToString::to_string)
         .zip(&evaluation.actions)
         .map(|(action, accumulator)| ActionValueEstimate {
             action,
@@ -2206,7 +2950,7 @@ fn finalize_action_values(
         .collect();
     (
         values,
-        Some(node.action_labels[best_index].clone()),
+        Some(node.action_labels[best_index].to_string()),
         Some(best_ev),
     )
 }
@@ -2457,6 +3201,161 @@ mod tests {
         Deal::from_cards([[51, 50], [45, 44]], [0, 5, 10, 27, 28])
     }
 
+    #[test]
+    fn traverser_hand_batch_is_unique_compatible_and_deterministic() {
+        let template = fixed_deal();
+        let mut first_rng = SplitMix64::new(73);
+        let mut second_rng = SplitMix64::new(73);
+        let first = sample_traverser_hand_batch(&template, 0, 32, &mut first_rng);
+        let second = sample_traverser_hand_batch(&template, 0, 32, &mut second_rng);
+        assert_eq!(first.len(), 32);
+        assert_eq!(
+            first.iter().map(|deal| deal.holes).collect::<Vec<_>>(),
+            second.iter().map(|deal| deal.holes).collect::<Vec<_>>()
+        );
+        let unique = first
+            .iter()
+            .map(|deal| Combo::new(deal.holes[0][0], deal.holes[0][1]).key())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), first.len());
+        for deal in first {
+            assert_eq!(deal.board, template.board);
+            assert_eq!(deal.holes[1], template.holes[1]);
+            assert!(deal.holes[0]
+                .iter()
+                .all(|card| !deal.board.contains(card) && !deal.holes[1].contains(card)));
+        }
+        let mut legacy_rng = SplitMix64::new(73);
+        let legacy_state = legacy_rng.state();
+        let legacy = sample_traverser_hand_batch(&template, 0, 1, &mut legacy_rng);
+        assert_eq!(legacy[0].holes, template.holes);
+        assert_eq!(legacy_rng.state(), legacy_state);
+    }
+
+    #[test]
+    fn joint_hand_batch_samples_compatible_opponent_ranges_deterministically() {
+        let template = fixed_deal();
+        let mut first_rng = SplitMix64::new(97);
+        let mut second_rng = SplitMix64::new(97);
+        let first = sample_joint_hand_batch(&template, 0, 3, 4, &mut first_rng);
+        let second = sample_joint_hand_batch(&template, 0, 3, 4, &mut second_rng);
+        assert_eq!(first.len(), 12);
+        assert_eq!(
+            first.iter().map(|deal| deal.holes).collect::<Vec<_>>(),
+            second.iter().map(|deal| deal.holes).collect::<Vec<_>>()
+        );
+        for group in first.chunks_exact(4) {
+            assert!(group
+                .iter()
+                .all(|deal| deal.holes[0] == group[0].holes[0] && deal.board == template.board));
+            let opponents = group
+                .iter()
+                .map(|deal| Combo::new(deal.holes[1][0], deal.holes[1][1]).key())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(opponents.len(), 4);
+            assert!(group.iter().all(|deal| {
+                deal.holes[0]
+                    .iter()
+                    .chain(&deal.holes[1])
+                    .all(|card| !deal.board.contains(card))
+                    && !deal.holes[0]
+                        .iter()
+                        .any(|card| deal.holes[1].contains(card))
+            }));
+        }
+
+        let mut direct_rng = SplitMix64::new(101);
+        let mut joint_rng = SplitMix64::new(101);
+        let direct = sample_traverser_hand_batch(&template, 1, 8, &mut direct_rng);
+        let joint = sample_joint_hand_batch(&template, 1, 8, 1, &mut joint_rng);
+        assert_eq!(direct_rng.state(), joint_rng.state());
+        assert_eq!(
+            direct.iter().map(|deal| deal.holes).collect::<Vec<_>>(),
+            joint.iter().map(|deal| deal.holes).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn contiguous_batch_matches_scalar_regrets_when_every_action_is_terminal() {
+        let config = tiny_config();
+        let state = GameState {
+            street: Street::River,
+            actor: 0,
+            invested: [5.0, 6.0],
+            street_invested: [0.0, 1.0],
+            last_full_raise: 1.0,
+            aggressions: 1,
+            checks: 0,
+            raise_reopened: true,
+            public_history: vec!["test:river:facing_all_in".to_owned()],
+            trajectory: Vec::new(),
+            terminal: None,
+        };
+        let mut deal_rng = SplitMix64::new(79);
+        let deals = sample_traverser_hand_batch(&fixed_deal(), 0, 8, &mut deal_rng);
+        let sample_weight = 1.0 / deals.len() as f64;
+
+        let mut scalar = Trainer::fresh(config.clone());
+        scalar.discounts.advance(1);
+        for deal in &deals {
+            scalar.external_sampling(state.clone(), deal, 0, sample_weight);
+        }
+        let mut contiguous = Trainer::fresh(config);
+        contiguous.discounts.advance(1);
+        let mut contiguous_rng = SplitMix64::new(103);
+        contiguous.external_sampling_batch(state, &deals, 0, sample_weight, &mut contiguous_rng);
+
+        assert_eq!(scalar.terminal_evaluations, contiguous.terminal_evaluations);
+        assert_eq!(scalar.public_histories, contiguous.public_histories);
+        assert_eq!(scalar.nodes.len(), contiguous.nodes.len());
+        for (key, scalar_node) in scalar.nodes {
+            let contiguous_node = contiguous.nodes.get(&key).expect("matching batch node");
+            assert_eq!(scalar_node.descriptor, contiguous_node.descriptor);
+            assert_eq!(scalar_node.action_labels, contiguous_node.action_labels);
+            assert_eq!(scalar_node.regrets, contiguous_node.regrets);
+            assert_eq!(scalar_node.strategy_sum, contiguous_node.strategy_sum);
+            assert_eq!(scalar_node.regret_updates, contiguous_node.regret_updates);
+            assert_eq!(scalar_node.average_visits, contiguous_node.average_visits);
+        }
+    }
+
+    #[test]
+    fn contiguous_batch_keeps_independent_opponent_sampling_lanes() {
+        let config = tiny_config();
+        let state = GameState {
+            street: Street::River,
+            actor: 1,
+            invested: [6.0, 5.0],
+            street_invested: [1.0, 0.0],
+            last_full_raise: 1.0,
+            aggressions: 1,
+            checks: 0,
+            raise_reopened: true,
+            public_history: vec!["test:river:opponent_facing_all_in".to_owned()],
+            trajectory: Vec::new(),
+            terminal: None,
+        };
+        let mut deal_rng = SplitMix64::new(83);
+        let deals = sample_traverser_hand_batch(&fixed_deal(), 0, 8, &mut deal_rng);
+        let mut trainer = Trainer::fresh(config);
+        trainer.discounts.advance(1);
+        let mut batch_rng = SplitMix64::new(107);
+        let mut expected_rng = SplitMix64::new(107);
+        for _ in &deals {
+            sample_index(&[0.5, 0.5], &mut expected_rng);
+        }
+
+        trainer.external_sampling_batch(state, &deals, 0, 1.0 / deals.len() as f64, &mut batch_rng);
+
+        assert_eq!(batch_rng.state(), expected_rng.state());
+        assert_eq!(trainer.nodes.len(), 1);
+        let node = trainer.nodes.values().next().expect("opponent batch node");
+        assert_eq!(node.regret_updates, 0);
+        assert_eq!(node.average_visits, deals.len() as u64);
+        assert_eq!(node.strategy_sum.as_ref(), &[0.5, 0.5]);
+        assert_eq!(trainer.terminal_evaluations, deals.len() as u64);
+    }
+
     fn tiny_config() -> BlueprintConfig {
         BlueprintConfig {
             effective_stack_bb: 6.0,
@@ -2598,6 +3497,21 @@ mod tests {
             assert!(!info_set.actions.is_empty());
             assert!(info_set.action_values.len() <= info_set.actions.len());
         }
+        let exported_roots = first
+            .strategies
+            .iter()
+            .filter(|info_set| {
+                info_set.actor == Position::ButtonSmallBlind
+                    && info_set.public_history.len() == 1
+                    && info_set.public_history[0].starts_with("blinds:")
+            })
+            .collect::<Vec<_>>();
+        assert!(!exported_roots.is_empty());
+        assert!(exported_roots.iter().all(|info_set| {
+            info_set.trained_average == Some(true)
+                && info_set.average_visits.is_some_and(|visits| visits > 0)
+                && info_set.regret_updates.is_some()
+        }));
         assert_eq!(first.validation.status, "advisory_only");
         assert!(first.artifact_id.starts_with("hu-blueprint-6bb-i3-s1-"));
         let deviation = &first.metrics.root_local_deviation;
@@ -2675,45 +3589,116 @@ mod tests {
     }
 
     #[test]
+    fn traverser_hand_batch_expands_active_private_coverage_deterministically() {
+        let mut scalar_config = tiny_config();
+        scalar_config.iterations = 1;
+        scalar_config.traverser_hand_batch_size = 1;
+        let mut scalar = Trainer::fresh(scalar_config);
+        scalar.train(&RunControl::default()).unwrap();
+
+        let mut batch_config = tiny_config();
+        batch_config.iterations = 1;
+        batch_config.traverser_hand_batch_size = 8;
+        let mut first = Trainer::fresh(batch_config.clone());
+        first.train(&RunControl::default()).unwrap();
+        let mut second = Trainer::fresh(batch_config);
+        second.train(&RunControl::default()).unwrap();
+
+        let trained_root_classes = |trainer: &Trainer| {
+            trainer
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.descriptor.actor == Position::ButtonSmallBlind
+                        && node.descriptor.street == Street::Preflop
+                        && node.regret_updates > 0
+                        && trainer
+                            .public_histories
+                            .get(&node.descriptor.public_history_id)
+                            .is_some_and(|history| history.len() == 1)
+                })
+                .count()
+        };
+        assert_eq!(scalar.sampled_deals, 1);
+        assert_eq!(first.sampled_deals, 8);
+        assert!(trained_root_classes(&first) > trained_root_classes(&scalar));
+        assert_eq!(first.rng.state(), second.rng.state());
+        assert_eq!(first.sampled_deals, second.sampled_deals);
+        assert_eq!(
+            serde_json::to_value(BlueprintCheckpointRef {
+                schema_version: BLUEPRINT_CHECKPOINT_SCHEMA_VERSION,
+                model: MODEL,
+                approximate: true,
+                config: &first.config,
+                completed_iterations: first.completed_iterations,
+                rng_state: first.rng.state(),
+                regret_discount_cumulative_logs: first.discounts.cumulative_logs,
+                sampled_deals: first.sampled_deals,
+                terminal_evaluations: first.terminal_evaluations,
+                public_histories: &first.public_histories,
+                nodes: &first.nodes,
+            })
+            .unwrap(),
+            serde_json::to_value(BlueprintCheckpointRef {
+                schema_version: BLUEPRINT_CHECKPOINT_SCHEMA_VERSION,
+                model: MODEL,
+                approximate: true,
+                config: &second.config,
+                completed_iterations: second.completed_iterations,
+                rng_state: second.rng.state(),
+                regret_discount_cumulative_logs: second.discounts.cumulative_logs,
+                sampled_deals: second.sampled_deals,
+                terminal_evaluations: second.terminal_evaluations,
+                public_histories: &second.public_histories,
+                nodes: &second.nodes,
+            })
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn dcfr_discounting_is_applied_only_to_regrets() {
         let mut node = Node {
             descriptor: NodeDescriptor {
                 actor: Position::ButtonSmallBlind,
                 street: Street::Preflop,
-                hand_bucket_trajectory: vec!["preflop:AA".to_owned()],
-                public_bucket_trajectory: Vec::new(),
+                hand_bucket_trajectory: vec!["preflop:AA".into()].into_boxed_slice(),
+                public_bucket_trajectory: Vec::new().into_boxed_slice(),
                 public_history_id: 1,
                 pot_bb: 1.5,
                 to_call_bb: 0.5,
                 effective_stack_remaining_bb: 99.5,
             },
-            action_labels: vec!["fold".to_owned(), "call".to_owned()],
-            regrets: vec![4.0, -4.0],
-            strategy_sum: vec![4.0, 4.0],
+            action_labels: vec!["fold".into(), "call".into()].into_boxed_slice(),
+            regrets: vec![4.0, -4.0].into_boxed_slice(),
+            strategy_sum: vec![4.0, 4.0].into_boxed_slice(),
             regret_updates: 1,
             average_visits: 1,
             last_discount_iteration: 0,
             last_regret_discount_cumulative_logs: [0.0; 2],
         };
-        let mut discounts = BlueprintDiscountAccumulator::new(DcfrParameters::default());
+        let mut discounts =
+            BlueprintDiscountAccumulator::new(DcfrParameters::default(), DcfrSchedule::Fixed, 0);
         discounts.advance(1);
         node.apply_dcfr_regret_discount(1, &discounts);
-        assert_eq!(node.regrets, vec![2.0, -2.0]);
-        assert_eq!(node.strategy_sum, vec![4.0, 4.0]);
+        assert_eq!(node.regrets.as_ref(), [2.0, -2.0]);
+        assert_eq!(node.strategy_sum.as_ref(), [4.0, 4.0]);
         node.apply_dcfr_regret_discount(1, &discounts);
-        assert_eq!(node.regrets, vec![2.0, -2.0]);
+        assert_eq!(node.regrets.as_ref(), [2.0, -2.0]);
     }
 
     #[test]
     fn lazy_full_game_dcfr_regret_discount_matches_eager_updates() {
         let parameters = DcfrParameters::default();
-        let mut lazy_discounts = BlueprintDiscountAccumulator::new(parameters.clone());
-        let mut eager_discounts = BlueprintDiscountAccumulator::new(parameters);
+        let mut lazy_discounts =
+            BlueprintDiscountAccumulator::new(parameters.clone(), DcfrSchedule::Fixed, 0);
+        let mut eager_discounts =
+            BlueprintDiscountAccumulator::new(parameters, DcfrSchedule::Fixed, 0);
         let descriptor = NodeDescriptor {
             actor: Position::ButtonSmallBlind,
             street: Street::Preflop,
-            hand_bucket_trajectory: vec!["preflop:AA".to_owned()],
-            public_bucket_trajectory: Vec::new(),
+            hand_bucket_trajectory: vec!["preflop:AA".into()].into_boxed_slice(),
+            public_bucket_trajectory: Vec::new().into_boxed_slice(),
             public_history_id: 1,
             pot_bb: 1.5,
             to_call_bb: 0.5,
@@ -2721,9 +3706,9 @@ mod tests {
         };
         let mut lazy = Node {
             descriptor: descriptor.clone(),
-            action_labels: vec!["fold".to_owned(), "call".to_owned()],
-            regrets: vec![3.0, -2.0],
-            strategy_sum: vec![4.0, 1.0],
+            action_labels: vec!["fold".into(), "call".into()].into_boxed_slice(),
+            regrets: vec![3.0, -2.0].into_boxed_slice(),
+            strategy_sum: vec![4.0, 1.0].into_boxed_slice(),
             regret_updates: 0,
             average_visits: 0,
             last_discount_iteration: 0,
@@ -2739,8 +3724,8 @@ mod tests {
         for (actual, expected) in lazy.regrets.iter().zip(&eager.regrets) {
             assert!((actual - expected).abs() < 1e-12);
         }
-        assert_eq!(lazy.strategy_sum, [4.0, 1.0]);
-        assert_eq!(eager.strategy_sum, [4.0, 1.0]);
+        assert_eq!(lazy.strategy_sum.as_ref(), [4.0, 1.0]);
+        assert_eq!(eager.strategy_sum.as_ref(), [4.0, 1.0]);
     }
 
     #[test]
@@ -2752,10 +3737,155 @@ mod tests {
     }
 
     #[test]
+    fn hs_dcfr_30_matches_published_linear_schedules() {
+        let discounts =
+            BlueprintDiscountAccumulator::new(DcfrParameters::default(), DcfrSchedule::Hs30, 1_000);
+        assert_eq!(
+            discounts.parameters_at(1_000),
+            DcfrParameters {
+                positive_regret_exponent: 4.0,
+                negative_regret_exponent: -3.0,
+                strategy_exponent: 25.0,
+            }
+        );
+        assert_eq!(
+            discounts.parameters_at(500),
+            DcfrParameters {
+                positive_regret_exponent: 2.5,
+                negative_regret_exponent: -2.0,
+                strategy_exponent: 27.5,
+            }
+        );
+
+        let weights = hs_dcfr_strategy_averaging_weights(1_000);
+        assert_eq!(weights[1_000], 1.0);
+        let gamma = 30.0 - 5.0 * 500.0 / 1_000.0;
+        let expected_ratio = (500.0f64 / 501.0).powf(gamma);
+        assert!((weights[500] / weights[501] - expected_ratio).abs() < 1e-14);
+        assert!(weights.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn hs_dcfr_average_weights_match_the_published_eager_recurrence() {
+        let horizon = 16;
+        let lazy = hs_dcfr_strategy_averaging_weights(horizon);
+        let mut eager = vec![0.0; horizon as usize + 1];
+        for current in 1..=horizon {
+            if current > 1 {
+                let previous = current - 1;
+                let gamma = 30.0 - 5.0 * previous as f64 / horizon as f64;
+                let discount = (previous as f64 / current as f64).powf(gamma);
+                for weight in &mut eager[1..current as usize] {
+                    *weight *= discount;
+                }
+            }
+            eager[current as usize] = 1.0;
+        }
+        for iteration in 1..=horizon as usize {
+            assert!((lazy[iteration] - eager[iteration]).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn hs_dcfr_terminal_relative_weights_preserve_interim_prefix_averages() {
+        let horizon = 16;
+        let cutoff = 8;
+        let terminal_weights = hs_dcfr_strategy_averaging_weights(horizon);
+        let direct_numerator = (1..=cutoff)
+            .map(|iteration| terminal_weights[iteration as usize] * iteration as f64)
+            .sum::<f64>();
+        let direct_denominator = (1..=cutoff)
+            .map(|iteration| terminal_weights[iteration as usize])
+            .sum::<f64>();
+
+        let mut eager_numerator = 0.0;
+        let mut eager_denominator = 0.0;
+        for current in 1..=cutoff {
+            if current > 1 {
+                let previous = current - 1;
+                let gamma = 30.0 - 5.0 * previous as f64 / horizon as f64;
+                let discount = (previous as f64 / current as f64).powf(gamma);
+                eager_numerator *= discount;
+                eager_denominator *= discount;
+            }
+            eager_numerator += current as f64;
+            eager_denominator += 1.0;
+        }
+        assert!(
+            (direct_numerator / direct_denominator - eager_numerator / eager_denominator).abs()
+                < 1e-13
+        );
+    }
+
+    #[test]
     fn publishable_defaults_use_trajectory_recall() {
         let config = BlueprintConfig::default();
         assert_eq!(config.recall_mode, RecallMode::Trajectory);
         assert_eq!(config.dcfr, DcfrParameters::default());
+        assert_eq!(config.dcfr_schedule, DcfrSchedule::Fixed);
+        assert_eq!(config.dcfr_schedule_horizon, 0);
+    }
+
+    #[test]
+    fn hs_dcfr_configuration_pins_a_compatible_training_horizon() {
+        let mut config = tiny_config();
+        config.dcfr_schedule_horizon = config.iterations;
+        assert!(config.validate().is_err());
+
+        config.dcfr_schedule = DcfrSchedule::Hs30;
+        assert!(config.validate().is_ok());
+
+        config.dcfr_schedule_horizon = config.iterations - 1;
+        assert!(config.validate().is_err());
+        config.dcfr_schedule_horizon = config.iterations;
+        config.dcfr.strategy_exponent = 1.0;
+        assert!(config.validate().is_err());
+        config.dcfr = DcfrParameters::default();
+        config.dcfr_schedule_horizon = MAX_HS_DCFR_HORIZON + 1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn hs_dcfr_checkpoint_resume_matches_uninterrupted_training() {
+        let path = std::env::temp_dir().join(format!(
+            "blueprint-hs30-checkpoint-{}-{}.json.gz",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let mut target = tiny_config();
+        target.dcfr_schedule = DcfrSchedule::Hs30;
+        target.dcfr_schedule_horizon = target.iterations;
+        let mut partial = target.clone();
+        partial.iterations = 2;
+        solve_controlled(
+            partial,
+            RunControl {
+                checkpoint_path: Some(path.to_string_lossy().into_owned()),
+                checkpoint_every: 1,
+                resume_path: None,
+            },
+        )
+        .expect("write HS-DCFR partial checkpoint");
+        let resumed = solve_controlled(
+            target.clone(),
+            RunControl {
+                checkpoint_path: None,
+                checkpoint_every: 0,
+                resume_path: Some(path.to_string_lossy().into_owned()),
+            },
+        )
+        .expect("resume HS-DCFR checkpoint");
+        let uninterrupted = solve(target).expect("uninterrupted HS-DCFR solve");
+        assert_eq!(resumed.config, uninterrupted.config);
+        assert_eq!(resumed.config_hash, uninterrupted.config_hash);
+        assert_eq!(
+            resumed.training_config_hash,
+            uninterrupted.training_config_hash
+        );
+        assert_eq!(resumed.strategies, uninterrupted.strategies);
+        assert_eq!(resumed.metrics, uninterrupted.metrics);
+        assert_eq!(resumed, uninterrupted);
+        fs::remove_file(path).expect("remove HS-DCFR checkpoint");
     }
 
     #[test]
@@ -2781,6 +3911,24 @@ mod tests {
         let first = visible_card_distribution_features(&[51, 46], &[0, 5, 10], &abstraction);
         let second = visible_card_distribution_features(&[51, 46], &[10, 0, 5], &abstraction);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn allocation_free_identity_fragments_match_formatted_hash_inputs() {
+        for milli in 0..=100_000u64 {
+            let value = milli as f64 / 1_000.0;
+            let mut direct = StableHasher::new();
+            direct.update_fixed_three(value);
+            assert_eq!(
+                direct.finish(),
+                stable_hash(format!("{value:.3}").as_bytes())
+            );
+        }
+
+        let history = vec!["blinds:0.500/1.000".to_owned(), "call".to_owned()];
+        let mut direct = StableHasher::new();
+        direct.update_joined(&history, b'/');
+        assert_eq!(direct.finish(), stable_hash(history.join("/").as_bytes()));
     }
 
     #[test]
@@ -2841,12 +3989,160 @@ mod tests {
     }
 
     #[test]
+    fn joint_hand_batch_checkpoint_preserves_deal_count_and_replay() {
+        let path = std::env::temp_dir().join(format!(
+            "blueprint-batch-checkpoint-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("batch-test")
+        ));
+        let mut partial = tiny_config();
+        partial.iterations = 2;
+        partial.traverser_hand_batch_size = 4;
+        partial.opponent_hand_batch_size = 2;
+        let partial_artifact = solve_controlled(
+            partial,
+            RunControl {
+                checkpoint_path: Some(path.to_string_lossy().into_owned()),
+                checkpoint_every: 1,
+                resume_path: None,
+            },
+        )
+        .expect("write batched checkpoint");
+        assert_eq!(partial_artifact.metrics.sampled_deals, 16);
+
+        let mut target = tiny_config();
+        target.traverser_hand_batch_size = 4;
+        target.opponent_hand_batch_size = 2;
+        let resumed = solve_controlled(
+            target.clone(),
+            RunControl {
+                checkpoint_path: None,
+                checkpoint_every: 0,
+                resume_path: Some(path.to_string_lossy().into_owned()),
+            },
+        )
+        .expect("resume batched checkpoint");
+        let uninterrupted = solve(target).expect("uninterrupted batched solve");
+        assert_eq!(resumed.metrics.sampled_deals, 24);
+        assert_eq!(resumed, uninterrupted);
+        fs::remove_file(path).expect("remove batched checkpoint");
+    }
+
+    #[test]
+    fn gzip_checkpoint_resume_matches_uninterrupted_training() {
+        let path = std::env::temp_dir().join(format!(
+            "blueprint-checkpoint-{}-{}.json.gz",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("gzip-test")
+        ));
+        let mut partial = tiny_config();
+        partial.iterations = 2;
+        solve_controlled(
+            partial,
+            RunControl {
+                checkpoint_path: Some(path.to_string_lossy().into_owned()),
+                checkpoint_every: 1,
+                resume_path: None,
+            },
+        )
+        .expect("write compressed checkpoint");
+        let resumed = solve_controlled(
+            tiny_config(),
+            RunControl {
+                checkpoint_path: None,
+                checkpoint_every: 0,
+                resume_path: Some(path.to_string_lossy().into_owned()),
+            },
+        )
+        .expect("resume compressed checkpoint");
+        assert_eq!(resumed, solve(tiny_config()).expect("uninterrupted solve"));
+        fs::remove_file(path).expect("remove compressed checkpoint");
+    }
+
+    #[test]
+    fn message_pack_checkpoint_preserves_exact_float_state_and_resume() {
+        let path = std::env::temp_dir().join(format!(
+            "blueprint-checkpoint-{}-{}.msgpack.gz",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("msgpack-test")
+        ));
+        let mut target = tiny_config();
+        target.iterations = 20;
+        let mut partial = target.clone();
+        partial.iterations = 10;
+        solve_controlled(
+            partial,
+            RunControl {
+                checkpoint_path: Some(path.to_string_lossy().into_owned()),
+                checkpoint_every: 10,
+                resume_path: None,
+            },
+        )
+        .expect("write MessagePack checkpoint");
+
+        let checkpoint = read_checkpoint(&path).expect("decode MessagePack checkpoint");
+        assert_eq!(
+            checkpoint.schema_version,
+            BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
+        );
+        let resumed = solve_controlled(
+            target.clone(),
+            RunControl {
+                checkpoint_path: None,
+                checkpoint_every: 0,
+                resume_path: Some(path.to_string_lossy().into_owned()),
+            },
+        )
+        .expect("resume MessagePack checkpoint");
+        assert_eq!(resumed, solve(target).expect("uninterrupted solve"));
+        fs::remove_file(path).expect("remove MessagePack checkpoint");
+    }
+
+    #[test]
+    fn completed_resume_does_not_rewrite_checkpoint() {
+        let stem = format!(
+            "blueprint-checkpoint-{}-{}-{}-no-rewrite",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("resume-test"),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after epoch")
+                .as_nanos()
+        );
+        let source = std::env::temp_dir().join(format!("{stem}.json.gz"));
+        let invalid_destination = std::env::temp_dir().join(format!("{stem}-directory"));
+        fs::create_dir(&invalid_destination).expect("create invalid checkpoint destination");
+        let mut complete = tiny_config();
+        complete.iterations = 2;
+        solve_controlled(
+            complete.clone(),
+            RunControl {
+                checkpoint_path: Some(source.to_string_lossy().into_owned()),
+                checkpoint_every: 1,
+                resume_path: None,
+            },
+        )
+        .expect("write completed checkpoint");
+        solve_controlled(
+            complete,
+            RunControl {
+                checkpoint_path: Some(invalid_destination.to_string_lossy().into_owned()),
+                checkpoint_every: 1,
+                resume_path: Some(source.to_string_lossy().into_owned()),
+            },
+        )
+        .expect("completed resume must not attempt a checkpoint rewrite");
+        fs::remove_file(source).expect("remove checkpoint source");
+        fs::remove_dir(invalid_destination).expect("remove checkpoint test directory");
+    }
+
+    #[test]
     fn checkpoint_money_is_recanonicalized_after_decimal_round_trip() {
         let mut descriptor = NodeDescriptor {
             actor: Position::BigBlind,
             street: Street::Flop,
-            hand_bucket_trajectory: vec!["bucket".to_owned()],
-            public_bucket_trajectory: vec!["board".to_owned()],
+            hand_bucket_trajectory: vec!["bucket".into()].into_boxed_slice(),
+            public_bucket_trajectory: vec!["board".into()].into_boxed_slice(),
             public_history_id: 1,
             pot_bb: serde_json::from_str("29.333").expect("decimal pot"),
             to_call_bb: serde_json::from_str("7.333").expect("decimal call"),

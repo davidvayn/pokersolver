@@ -148,8 +148,16 @@ impl DecisionAccumulator {
                 Position::BigBlind => 1,
             },
             street: descriptor.street,
-            hand_bucket_trajectory: descriptor.hand_bucket_trajectory.clone(),
-            public_bucket_trajectory: descriptor.public_bucket_trajectory.clone(),
+            hand_bucket_trajectory: descriptor
+                .hand_bucket_trajectory
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            public_bucket_trajectory: descriptor
+                .public_bucket_trajectory
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             public_history: history,
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
             count: 0,
@@ -587,13 +595,15 @@ fn observable_backoff_information_set(
         .last()
         .cloned()
         .into_iter()
-        .collect();
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     descriptor.public_bucket_trajectory = descriptor
         .public_bucket_trajectory
         .last()
         .cloned()
         .into_iter()
-        .collect();
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     let price = if state.to_call() <= EPSILON {
         0.0
     } else {
@@ -653,16 +663,25 @@ fn coarse_observable_backoff_information_set(
                 .find(|part| part.starts_with("sd"))
                 .copied()
                 .unwrap_or("sd0");
-            format!("{category}:{flush_draw}:{straight_draw}")
+            format!("{category}:{flush_draw}:{straight_draw}").into()
         })
         .into_iter()
-        .collect();
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     descriptor.public_bucket_trajectory = descriptor
         .public_bucket_trajectory
         .last()
-        .map(|bucket| bucket.split(':').take(3).collect::<Vec<_>>().join(":"))
+        .map(|bucket| {
+            bucket
+                .split(':')
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(":")
+                .into()
+        })
         .into_iter()
-        .collect();
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     let price = if state.to_call() <= EPSILON {
         0.0
     } else {
@@ -739,12 +758,17 @@ fn strategic_observable_backoff_information_set(
             if state.street == Street::Preflop {
                 bucket.clone()
             } else {
-                bucket.split(':').next().unwrap_or("unknown").to_owned()
+                bucket
+                    .split(':')
+                    .next()
+                    .unwrap_or("unknown")
+                    .to_owned()
+                    .into()
             }
         })
-        .unwrap_or_else(|| "unknown".to_owned());
-    descriptor.hand_bucket_trajectory = vec![strength.clone()];
-    descriptor.public_bucket_trajectory.clear();
+        .unwrap_or_else(|| "unknown".into());
+    descriptor.hand_bucket_trajectory = vec![strength.clone()].into_boxed_slice();
+    descriptor.public_bucket_trajectory = Vec::new().into_boxed_slice();
     let price = if state.to_call() <= EPSILON {
         "free"
     } else {
@@ -1119,8 +1143,8 @@ mod tests {
         let descriptor = NodeDescriptor {
             actor: Position::BigBlind,
             street: Street::Flop,
-            hand_bucket_trajectory: vec!["preflop:AKs".to_owned(), "pair".to_owned()],
-            public_bucket_trajectory: vec!["dry".to_owned()],
+            hand_bucket_trajectory: vec!["preflop:AKs".into(), "pair".into()].into_boxed_slice(),
+            public_bucket_trajectory: vec!["dry".into()].into_boxed_slice(),
             public_history_id: 1,
             pot_bb: 4.0,
             to_call_bb: 1.0,

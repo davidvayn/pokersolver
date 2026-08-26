@@ -83,6 +83,14 @@ impl ExploitabilityCertificateConfig {
 pub struct RiverResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
+    /// Experimental ReBeL-style pseudo-iterations contributed by the frozen
+    /// range policy before the exact river search. Zero preserves the
+    /// established zero-regret initialization.
+    pub policy_prior_iterations: u64,
+    /// Restrict the empirical prior to one seat while the other served seat
+    /// retains the established zero-regret solve. `None` applies the prior to
+    /// every seat served by this resolver.
+    pub policy_prior_actor: Option<usize>,
     /// Protect every board-compatible opponent hand with an exact blueprint
     /// best-response CFV opt-out and deploy only the acting player's policy.
     pub safe_resolving: bool,
@@ -105,6 +113,12 @@ pub struct RiverResolverConfig {
 pub struct TurnResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
+    /// Experimental frozen-policy regret and average-policy prior. This is
+    /// accepted only with zero averaging delay and no detached refinement.
+    pub policy_prior_iterations: u64,
+    /// Restrict the empirical prior to one seat while preserving the ordinary
+    /// zero-regret solve for the other served seat.
+    pub policy_prior_actor: Option<usize>,
     pub river_refinement_iterations: u64,
     pub regret_matching_plus: bool,
     /// Maximum workers used to freeze independent river branches for safe
@@ -132,6 +146,9 @@ pub struct TurnResolverConfig {
 pub struct FlopResolverConfig {
     pub iterations: u64,
     pub averaging_delay: u64,
+    /// Experimental frozen-policy regret and reach-weighted average prior.
+    /// Zero leaves the production/control solver unchanged.
+    pub policy_prior_iterations: u64,
     pub regret_matching_plus: bool,
     /// Deploy the trained flop CFR average instead of retaining the frozen
     /// range-policy frequencies and using the subgame only for action EVs.
@@ -595,6 +612,10 @@ pub struct ExploitabilityCertificate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub river_resolver_averaging_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_policy_prior_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub river_resolver_policy_prior_actor: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub river_resolver_safe_resolving: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub river_resolver_safe_resolved_actor: Option<usize>,
@@ -610,6 +631,10 @@ pub struct ExploitabilityCertificate {
     pub turn_resolver_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_averaging_delay: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_policy_prior_iterations: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_resolver_policy_prior_actor: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_resolver_river_refinement_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -628,6 +653,8 @@ pub struct ExploitabilityCertificate {
     pub flop_resolver_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_averaging_delay: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flop_resolver_policy_prior_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flop_resolver_regret_matching_plus: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -835,6 +862,10 @@ pub(super) struct FrozenPolicy {
     turn_strategy_cache: Mutex<TurnStrategyCache>,
     river_strategy_cache: Mutex<BTreeMap<[u8; 32], Arc<ResolvedPolicyCachedRow>>>,
     river_safe_resolve_diagnostics: Arc<Mutex<RiverSafeResolveDiagnosticsAccumulator>>,
+    /// Practice feedback consumes resolver action EVs. Best-response
+    /// certification consumes only the frozen probabilities and disables the
+    /// extra full-tree action-value pass.
+    resolver_action_values: bool,
     river_resolver: Option<RiverResolverConfig>,
     turn_resolver: Option<TurnResolverConfig>,
     flop_resolver: Option<FlopResolverRuntime>,
@@ -849,6 +880,22 @@ struct FlopResolverRuntime {
 
 fn resolver_serves_actor(resolved_actor: Option<usize>, actor: usize) -> bool {
     resolved_actor.is_none_or(|configured| configured == actor)
+}
+
+fn resolver_uses_policy_prior(
+    policy_prior_iterations: u64,
+    policy_prior_actor: Option<usize>,
+    actor: usize,
+) -> bool {
+    policy_prior_iterations > 0 && policy_prior_actor.is_none_or(|configured| configured == actor)
+}
+
+fn resolver_cache_actor_matches(
+    actor_scoped: bool,
+    requested_actor: usize,
+    candidate_actor: usize,
+) -> bool {
+    !actor_scoped || candidate_actor == requested_actor
 }
 
 fn river_resolver_safely_serves_actor(resolver: RiverResolverConfig, actor: usize) -> bool {
@@ -983,6 +1030,7 @@ impl FrozenPolicy {
             river_safe_resolve_diagnostics: Arc::new(Mutex::new(
                 RiverSafeResolveDiagnosticsAccumulator::default(),
             )),
+            resolver_action_values: true,
             river_resolver: None,
             turn_resolver: None,
             flop_resolver: None,
@@ -1014,6 +1062,7 @@ impl FrozenPolicy {
             turn_strategy_cache: Mutex::new(TurnStrategyCache::default()),
             river_strategy_cache: Mutex::new(BTreeMap::new()),
             river_safe_resolve_diagnostics: self.river_safe_resolve_diagnostics.clone(),
+            resolver_action_values: self.resolver_action_values,
             river_resolver: self.river_resolver,
             turn_resolver: self.turn_resolver,
             flop_resolver: self.flop_resolver.clone(),
@@ -1276,7 +1325,33 @@ impl FrozenPolicy {
                         solve_one(&blueprint, public.actor)?
                     }
                 } else if resolver.config.deploy_solved_policy {
-                    super::public_belief::solve_flop_policy(solve_config)?
+                    if resolver.config.policy_prior_iterations > 0 {
+                        let blueprint = self.flop_blueprint_strategies(
+                            state.clone(),
+                            &public.board,
+                            public.ranges.clone(),
+                            config,
+                        )?;
+                        if self.resolver_action_values {
+                            super::public_belief::solve_flop_policy_with_prior(
+                                solve_config,
+                                &blueprint,
+                                resolver.config.policy_prior_iterations,
+                            )?
+                        } else {
+                            super::public_belief::solve_flop_policy_probabilities_with_prior(
+                                solve_config,
+                                &blueprint,
+                                resolver.config.policy_prior_iterations,
+                            )?
+                        }
+                    } else {
+                        if self.resolver_action_values {
+                            super::public_belief::solve_flop_policy(solve_config)?
+                        } else {
+                            super::public_belief::solve_flop_policy_probabilities(solve_config)?
+                        }
+                    }
                 } else {
                     // A two-iteration online solve starts from zero regrets and
                     // can serve near-uniform or inverted frequencies even when
@@ -1289,7 +1364,14 @@ impl FrozenPolicy {
                         public.ranges.clone(),
                         config,
                     )?;
-                    super::public_belief::evaluate_frozen_flop_policy(solve_config, &blueprint)?
+                    if self.resolver_action_values {
+                        super::public_belief::evaluate_frozen_flop_policy(solve_config, &blueprint)?
+                    } else {
+                        super::public_belief::evaluate_frozen_flop_policy_probabilities(
+                            solve_config,
+                            &blueprint,
+                        )?
+                    }
                 };
                 let mut cache = self
                     .flop_strategy_cache
@@ -1429,8 +1511,37 @@ impl FrozenPolicy {
                             .filter(|strategy| strategy.actor != public.actor),
                     );
                     deployed
+                } else if resolver_uses_policy_prior(
+                    resolver.policy_prior_iterations,
+                    resolver.policy_prior_actor,
+                    public.actor,
+                ) {
+                    let blueprint = self.turn_blueprint_strategies(
+                        state.clone(),
+                        &public.board,
+                        public.ranges.clone(),
+                        config,
+                        resolver.threads,
+                    )?;
+                    if self.resolver_action_values {
+                        super::public_belief::solve_turn_river_policy_with_prior(
+                            solve_config,
+                            &blueprint,
+                            resolver.policy_prior_iterations,
+                        )?
+                    } else {
+                        super::public_belief::solve_turn_river_policy_probabilities_with_prior(
+                            solve_config,
+                            &blueprint,
+                            resolver.policy_prior_iterations,
+                        )?
+                    }
                 } else {
-                    super::public_belief::solve_turn_river_policy(solve_config)?
+                    if self.resolver_action_values {
+                        super::public_belief::solve_turn_river_policy(solve_config)?
+                    } else {
+                        super::public_belief::solve_turn_river_policy_probabilities(solve_config)?
+                    }
                 };
                 let mut cache = self
                     .turn_strategy_cache
@@ -1451,13 +1562,19 @@ impl FrozenPolicy {
                     resolved
                 } else {
                     cache.safe_scope = None;
+                    let requested_actor = public.actor;
+                    let seat_scoped_prior = resolver.policy_prior_actor.is_some();
                     cache_resolved_policy_rows(
                         &mut cache.rows,
                         key,
                         Street::Turn,
                         &public.board,
                         strategies.into_iter().filter(|strategy| {
-                            !strategy
+                            resolver_cache_actor_matches(
+                                seat_scoped_prior,
+                                requested_actor,
+                                strategy.actor,
+                            ) && !strategy
                                 .public_history
                                 .last()
                                 .is_some_and(|part| part.starts_with("chance:river:"))
@@ -1556,22 +1673,58 @@ impl FrozenPolicy {
                         .expect("river safe-resolve diagnostics")
                         .record(&safe);
                     safe.strategies
+                } else if resolver_uses_policy_prior(
+                    resolver.policy_prior_iterations,
+                    resolver.policy_prior_actor,
+                    public.actor,
+                ) {
+                    let blueprint = self.river_blueprint_strategies(
+                        state.clone(),
+                        &public.board,
+                        public.ranges.clone(),
+                        config,
+                    )?;
+                    if self.resolver_action_values {
+                        super::public_belief::solve_river_policy_with_prior(
+                            solve_config,
+                            &blueprint,
+                            resolver.policy_prior_iterations,
+                        )?
+                    } else {
+                        super::public_belief::solve_river_policy_probabilities_with_prior(
+                            solve_config,
+                            &blueprint,
+                            resolver.policy_prior_iterations,
+                        )?
+                    }
                 } else {
-                    super::public_belief::solve_river_policy(solve_config)?
+                    if self.resolver_action_values {
+                        super::public_belief::solve_river_policy(solve_config)?
+                    } else {
+                        super::public_belief::solve_river_policy_probabilities(solve_config)?
+                    }
                 };
                 let mut cache = self
                     .river_strategy_cache
                     .lock()
                     .expect("river strategy cache");
                 let requested_actor = public.actor;
-                let nested_actor_scope = resolver.safe_resolving;
+                // A seat-scoped prior must not leak the other seat's rows into
+                // its next decision. That seat receives a fresh ordinary
+                // zero-regret solve when requested.
+                let nested_actor_scope =
+                    resolver.safe_resolving || resolver.policy_prior_actor.is_some();
                 cache_resolved_policy_rows(
                     &mut cache,
                     key,
                     Street::River,
                     &public.board,
                     strategies.into_iter().filter(|strategy| {
-                        !nested_actor_scope || strategy.actor == requested_actor
+                        resolver_cache_actor_matches(
+                            nested_actor_scope,
+                            requested_actor,
+                            strategy.actor,
+                        )
                     }),
                     16_384,
                 )?
@@ -2324,6 +2477,11 @@ impl FrozenPolicy {
             || (!resolver.safe_resolving
                 && (resolver.safe_anchor_iterations > 0 || resolver.safe_bilateral))
             || (resolver.safe_resolving && resolver.deploy_solved_policy)
+            || resolver.policy_prior_iterations > 64
+            || (resolver.policy_prior_iterations > 0
+                && (!resolver.deploy_solved_policy
+                    || resolver.safe_resolving
+                    || resolver.averaging_delay != 0))
         {
             return Err("flop resolver configuration is invalid".into());
         }
@@ -2361,7 +2519,19 @@ impl FrozenPolicy {
             || !(0.0..=1.0).contains(&resolver.resolved_policy_weight)
             || resolver.safe_anchor_iterations == 1
             || resolver.resolved_actor.is_some_and(|actor| actor > 1)
+            || resolver.policy_prior_actor.is_some_and(|actor| actor > 1)
+            || (resolver.policy_prior_actor.is_some() && resolver.policy_prior_iterations == 0)
+            || resolver.policy_prior_actor.is_some_and(|prior_actor| {
+                resolver
+                    .resolved_actor
+                    .is_some_and(|resolved_actor| resolved_actor != prior_actor)
+            })
             || (!resolver.safe_resolving && resolver.safe_anchor_iterations > 0)
+            || resolver.policy_prior_iterations > 64
+            || (resolver.policy_prior_iterations > 0
+                && (resolver.safe_resolving
+                    || resolver.averaging_delay != 0
+                    || resolver.river_refinement_iterations > 0))
         {
             return Err("turn resolver configuration is invalid".to_owned());
         }
@@ -2390,6 +2560,13 @@ impl FrozenPolicy {
             || resolver.averaging_delay >= resolver.iterations
             || resolver.resolved_actor.is_some_and(|actor| actor > 1)
             || resolver.safe_resolved_actor.is_some_and(|actor| actor > 1)
+            || resolver.policy_prior_actor.is_some_and(|actor| actor > 1)
+            || (resolver.policy_prior_actor.is_some() && resolver.policy_prior_iterations == 0)
+            || resolver.policy_prior_actor.is_some_and(|prior_actor| {
+                resolver
+                    .resolved_actor
+                    .is_some_and(|resolved_actor| resolved_actor != prior_actor)
+            })
             || (resolver.safe_resolved_actor.is_some() && !resolver.safe_resolving)
             || (resolver.safe_maxmargin && !resolver.safe_resolving)
             || resolver.safe_iterations.is_some_and(|iterations| {
@@ -2400,6 +2577,9 @@ impl FrozenPolicy {
                     .resolved_actor
                     .is_some_and(|resolved_actor| resolved_actor != safe_actor)
             })
+            || resolver.policy_prior_iterations > 64
+            || (resolver.policy_prior_iterations > 0
+                && (resolver.safe_resolving || resolver.averaging_delay != 0))
         {
             return Err("river resolver configuration is invalid".to_owned());
         }
@@ -6827,6 +7007,9 @@ fn enable_certificate_resolvers(
     generator: &mut SampleGenerator,
     config: &ExploitabilityCertificateConfig,
 ) -> Result<(), Box<dyn Error>> {
+    if let Some(policy) = generator.networks.as_mut() {
+        policy.resolver_action_values = false;
+    }
     generator.enable_flop_resolver(config.flop_resolver.clone())?;
     generator.enable_turn_resolver(config.turn_resolver)?;
     generator.enable_river_resolver(config.river_resolver)?;
@@ -6951,6 +7134,13 @@ pub fn certify_exploitability_upper_bound(
     ];
     if let Some(resolver) = config.river_resolver {
         assumptions.push(river_resolver_policy_assumption(resolver));
+        if resolver.policy_prior_iterations > 0 {
+            assumptions.push(if resolver.policy_prior_actor.is_some() {
+                "the empirical frozen-policy pseudo-iteration prior is applied only to the configured acting seat; the other served seat retains ordinary zero-regret initialization"
+            } else {
+                "the empirical frozen-policy pseudo-iteration prior is applied to every seat served by the river resolver"
+            });
+        }
     }
     if let Some(resolver) = config.turn_resolver {
         assumptions.push(if resolver.resolved_actor.is_some() {
@@ -6958,6 +7148,13 @@ pub fn certify_exploitability_upper_bound(
         } else {
             "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR"
         });
+        if resolver.policy_prior_iterations > 0 {
+            assumptions.push(if resolver.policy_prior_actor.is_some() {
+                "the empirical frozen-policy pseudo-iteration prior is applied only to the configured acting seat; the other served seat retains ordinary zero-regret initialization"
+            } else {
+                "the empirical frozen-policy pseudo-iteration prior is applied to every seat served by the turn resolver"
+            });
+        }
         if config
             .turn_resolver
             .is_some_and(|resolver| resolver.safe_resolving)
@@ -7039,6 +7236,12 @@ pub fn certify_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_policy_prior_iterations: config
+            .river_resolver
+            .map(|resolver| resolver.policy_prior_iterations),
+        river_resolver_policy_prior_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.policy_prior_actor),
         river_resolver_safe_resolving: config
             .river_resolver
             .map(|resolver| resolver.safe_resolving),
@@ -7062,6 +7265,12 @@ pub fn certify_exploitability_upper_bound(
         turn_resolver_averaging_delay: config
             .turn_resolver
             .map(|resolver| resolver.averaging_delay),
+        turn_resolver_policy_prior_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.policy_prior_iterations),
+        turn_resolver_policy_prior_actor: config
+            .turn_resolver
+            .and_then(|resolver| resolver.policy_prior_actor),
         turn_resolver_river_refinement_iterations: config
             .turn_resolver
             .map(|resolver| resolver.river_refinement_iterations),
@@ -7089,6 +7298,10 @@ pub fn certify_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.averaging_delay),
+        flop_resolver_policy_prior_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.policy_prior_iterations),
         flop_resolver_regret_matching_plus: config
             .flop_resolver
             .as_ref()
@@ -7290,6 +7503,13 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
     ];
     if let Some(resolver) = config.river_resolver {
         assumptions.push(river_resolver_policy_assumption(resolver));
+        if resolver.policy_prior_iterations > 0 {
+            assumptions.push(if resolver.policy_prior_actor.is_some() {
+                "the empirical frozen-policy pseudo-iteration prior is applied only to the configured acting seat; the other served seat retains ordinary zero-regret initialization"
+            } else {
+                "the empirical frozen-policy pseudo-iteration prior is applied to every seat served by the river resolver"
+            });
+        }
     }
     if let Some(resolver) = config.turn_resolver {
         assumptions.push(if resolver.resolved_actor.is_some() {
@@ -7297,6 +7517,13 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         } else {
             "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR"
         });
+        if resolver.policy_prior_iterations > 0 {
+            assumptions.push(if resolver.policy_prior_actor.is_some() {
+                "the empirical frozen-policy pseudo-iteration prior is applied only to the configured acting seat; the other served seat retains ordinary zero-regret initialization"
+            } else {
+                "the empirical frozen-policy pseudo-iteration prior is applied to every seat served by the turn resolver"
+            });
+        }
     }
     if let Some(resolver) = &config.flop_resolver {
         assumptions.push(flop_resolver_policy_assumption(resolver));
@@ -7360,6 +7587,12 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_policy_prior_iterations: config
+            .river_resolver
+            .map(|resolver| resolver.policy_prior_iterations),
+        river_resolver_policy_prior_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.policy_prior_actor),
         river_resolver_safe_resolving: config
             .river_resolver
             .map(|resolver| resolver.safe_resolving),
@@ -7383,6 +7616,12 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
         turn_resolver_averaging_delay: config
             .turn_resolver
             .map(|resolver| resolver.averaging_delay),
+        turn_resolver_policy_prior_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.policy_prior_iterations),
+        turn_resolver_policy_prior_actor: config
+            .turn_resolver
+            .and_then(|resolver| resolver.policy_prior_actor),
         turn_resolver_river_refinement_iterations: config
             .turn_resolver
             .map(|resolver| resolver.river_refinement_iterations),
@@ -7410,6 +7649,10 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.averaging_delay),
+        flop_resolver_policy_prior_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.policy_prior_iterations),
         flop_resolver_regret_matching_plus: config
             .flop_resolver
             .as_ref()
@@ -7648,6 +7891,13 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
     ];
     if let Some(resolver) = config.river_resolver {
         assumptions.push(river_resolver_policy_assumption(resolver));
+        if resolver.policy_prior_iterations > 0 {
+            assumptions.push(if resolver.policy_prior_actor.is_some() {
+                "the empirical frozen-policy pseudo-iteration prior is applied only to the configured acting seat; the other served seat retains ordinary zero-regret initialization"
+            } else {
+                "the empirical frozen-policy pseudo-iteration prior is applied to every seat served by the river resolver"
+            });
+        }
     }
     if let Some(resolver) = config.turn_resolver {
         assumptions.push(if resolver.resolved_actor.is_some() {
@@ -7655,6 +7905,13 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         } else {
             "every reached turn action is replaced by deterministic exact-range joint turn/river public-belief CFR"
         });
+        if resolver.policy_prior_iterations > 0 {
+            assumptions.push(if resolver.policy_prior_actor.is_some() {
+                "the empirical frozen-policy pseudo-iteration prior is applied only to the configured acting seat; the other served seat retains ordinary zero-regret initialization"
+            } else {
+                "the empirical frozen-policy pseudo-iteration prior is applied to every seat served by the turn resolver"
+            });
+        }
     }
     if let Some(resolver) = &config.flop_resolver {
         assumptions.push(flop_resolver_policy_assumption(resolver));
@@ -7718,6 +7975,12 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         river_resolver_averaging_delay: config
             .river_resolver
             .map(|resolver| resolver.averaging_delay),
+        river_resolver_policy_prior_iterations: config
+            .river_resolver
+            .map(|resolver| resolver.policy_prior_iterations),
+        river_resolver_policy_prior_actor: config
+            .river_resolver
+            .and_then(|resolver| resolver.policy_prior_actor),
         river_resolver_safe_resolving: config
             .river_resolver
             .map(|resolver| resolver.safe_resolving),
@@ -7741,6 +8004,12 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
         turn_resolver_averaging_delay: config
             .turn_resolver
             .map(|resolver| resolver.averaging_delay),
+        turn_resolver_policy_prior_iterations: config
+            .turn_resolver
+            .map(|resolver| resolver.policy_prior_iterations),
+        turn_resolver_policy_prior_actor: config
+            .turn_resolver
+            .and_then(|resolver| resolver.policy_prior_actor),
         turn_resolver_river_refinement_iterations: config
             .turn_resolver
             .map(|resolver| resolver.river_refinement_iterations),
@@ -7768,6 +8037,10 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
             .flop_resolver
             .as_ref()
             .map(|resolver| resolver.averaging_delay),
+        flop_resolver_policy_prior_iterations: config
+            .flop_resolver
+            .as_ref()
+            .map(|resolver| resolver.policy_prior_iterations),
         flop_resolver_regret_matching_plus: config
             .flop_resolver
             .as_ref()
@@ -7834,10 +8107,25 @@ mod tests {
     }
 
     #[test]
+    fn policy_prior_actor_scope_preserves_zero_regret_control_seat() {
+        assert!(!resolver_uses_policy_prior(0, None, 0));
+        assert!(resolver_uses_policy_prior(15, None, 0));
+        assert!(resolver_uses_policy_prior(15, None, 1));
+        assert!(resolver_uses_policy_prior(15, Some(0), 0));
+        assert!(!resolver_uses_policy_prior(15, Some(0), 1));
+        assert!(!resolver_uses_policy_prior(15, Some(1), 0));
+        assert!(resolver_uses_policy_prior(15, Some(1), 1));
+        assert!(resolver_cache_actor_matches(false, 0, 1));
+        assert!(resolver_cache_actor_matches(true, 0, 0));
+        assert!(!resolver_cache_actor_matches(true, 0, 1));
+    }
+
+    #[test]
     fn flop_policy_assumption_distinguishes_frozen_and_solved_deployment() {
         let frozen = FlopResolverConfig {
             iterations: 2,
             averaging_delay: 0,
+            policy_prior_iterations: 0,
             regret_matching_plus: false,
             deploy_solved_policy: false,
             threads: 1,
@@ -7862,6 +8150,8 @@ mod tests {
         let unsafe_resolver = RiverResolverConfig {
             iterations: 2,
             averaging_delay: 0,
+            policy_prior_iterations: 0,
+            policy_prior_actor: None,
             safe_resolving: false,
             safe_maxmargin: false,
             safe_iterations: None,
@@ -8176,6 +8466,7 @@ mod tests {
             river_safe_resolve_diagnostics: Arc::new(Mutex::new(
                 RiverSafeResolveDiagnosticsAccumulator::default(),
             )),
+            resolver_action_values: true,
             river_resolver: None,
             turn_resolver: None,
             flop_resolver: None,
@@ -8365,9 +8656,12 @@ mod tests {
             river_safe_resolve_diagnostics: Arc::new(Mutex::new(
                 RiverSafeResolveDiagnosticsAccumulator::default(),
             )),
+            resolver_action_values: true,
             river_resolver: Some(RiverResolverConfig {
                 iterations: 4,
                 averaging_delay: 0,
+                policy_prior_iterations: 0,
+                policy_prior_actor: None,
                 safe_resolving: false,
                 safe_maxmargin: false,
                 safe_iterations: None,
@@ -9460,6 +9754,7 @@ mod tests {
             flop_resolver: Some(FlopResolverConfig {
                 iterations: 2,
                 averaging_delay: 0,
+                policy_prior_iterations: 0,
                 regret_matching_plus: false,
                 deploy_solved_policy: false,
                 threads: 1,
@@ -9626,6 +9921,8 @@ mod tests {
                 river_resolver: Some(RiverResolverConfig {
                     iterations: 2,
                     averaging_delay: 0,
+                    policy_prior_iterations: 0,
+                    policy_prior_actor: None,
                     safe_resolving: false,
                     safe_maxmargin: false,
                     safe_iterations: None,
@@ -9635,6 +9932,8 @@ mod tests {
                 turn_resolver: Some(TurnResolverConfig {
                     iterations: 2,
                     averaging_delay: 0,
+                    policy_prior_iterations: 0,
+                    policy_prior_actor: None,
                     river_refinement_iterations: 0,
                     regret_matching_plus: false,
                     threads: 1,
