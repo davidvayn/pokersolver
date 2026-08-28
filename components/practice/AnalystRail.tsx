@@ -300,9 +300,7 @@ function SettingsPanel({
               key={value}
               type="button"
               aria-pressed={shown.mode === value}
-              onClick={() =>
-                patch(value === 'push-fold' ? { mode: value, dealMode: 'authentic' } : { mode: value })
-              }
+              onClick={() => patch({ mode: value })}
               className={`min-h-11 rounded-md border px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${shown.mode === value ? 'border-accent bg-accent text-accent-fg' : 'border-border hover:border-accent/60'}`}
             >
               {label}
@@ -391,21 +389,6 @@ function SettingsPanel({
           <option value="button-small-blind">BTN / SB only</option>
           <option value="big-blind">BB only</option>
         </select>
-      </label>
-
-      <label className="block text-xs font-semibold uppercase text-muted">
-        Deal mode
-        <select
-          value={shown.dealMode}
-          onChange={(event) => patch({ dealMode: event.target.value as PracticeSettings['dealMode'] })}
-          className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg"
-        >
-          <option value="authentic">Authentic random</option>
-          <option value="adaptive" disabled>Adaptive (70/30)</option>
-        </select>
-        <span className="mt-2 block text-xs font-normal normal-case leading-5 text-muted">
-          Adaptive dealing activates after a validated graded sample corpus is installed.
-        </span>
       </label>
 
       {shown.mode !== 'push-fold' && (

@@ -1,5 +1,4 @@
 import type {
-  PracticeDecisionRecord,
   PracticeSettings,
   PracticeStreet,
   Seat,
@@ -23,7 +22,6 @@ const HERO_SEATS = new Set([
   'button-small-blind',
   'big-blind',
 ]);
-const DEAL_MODES = new Set(['authentic', 'adaptive']);
 const OPPONENT_STYLES = new Set(['baseline', 'adaptive-exploitative']);
 const GOALS = new Set(['continuous', 25, 50, 100]);
 const POSTFLOP_STREETS = new Set(['flop', 'turn', 'river']);
@@ -54,9 +52,6 @@ export function sanitizePracticeSettings(value: unknown): PracticeSettings {
     heroSeat: HERO_SEATS.has(candidate.heroSeat ?? '')
       ? (candidate.heroSeat as PracticeSettings['heroSeat'])
       : DEFAULT_PRACTICE_SETTINGS.heroSeat,
-    dealMode: DEAL_MODES.has(candidate.dealMode ?? '')
-      ? (candidate.dealMode as PracticeSettings['dealMode'])
-      : DEFAULT_PRACTICE_SETTINGS.dealMode,
     opponentStyle: OPPONENT_STYLES.has(candidate.opponentStyle ?? '')
       ? (candidate.opponentStyle as PracticeSettings['opponentStyle'])
       : DEFAULT_PRACTICE_SETTINGS.opponentStyle,
@@ -95,7 +90,6 @@ export function structuralSettingsChanged(
     current.depthBb !== next.depthBb ||
     current.pushFoldDepthBb !== next.pushFoldDepthBb ||
     current.heroSeat !== next.heroSeat ||
-    current.dealMode !== next.dealMode ||
     current.opponentStyle !== next.opponentStyle ||
     current.postflopStreets.join(',') !== next.postflopStreets.join(',')
   );
@@ -120,86 +114,6 @@ export function postflopStreetForHand(
     : DEFAULT_PRACTICE_SETTINGS.postflopStreets;
   const index = Math.abs(Math.trunc(completedHands)) % available.length;
   return available[index];
-}
-
-export interface AdaptiveGroup {
-  key: string;
-  street: PracticeStreet;
-  position: Seat;
-  depthBb: number;
-  handBucket: string;
-  facingAction: string;
-  attempts: number;
-  averageEvLossBb: number;
-}
-
-export function adaptiveGroups(
-  records: PracticeDecisionRecord[]
-): AdaptiveGroup[] {
-  const latest = [...records]
-    .sort((first, second) => second.answeredAt - first.answeredAt)
-    .slice(0, 200);
-  const groups = new Map<
-    string,
-    Omit<AdaptiveGroup, 'averageEvLossBb'> & { totalLoss: number; graded: number }
-  >();
-  for (const record of latest) {
-    const key = [
-      record.street,
-      record.position,
-      record.depthBb,
-      record.handBucket,
-      record.facingAction,
-    ].join('|');
-    const current = groups.get(key) ?? {
-      key,
-      street: record.street,
-      position: record.position,
-      depthBb: record.depthBb,
-      handBucket: record.handBucket,
-      facingAction: record.facingAction,
-      attempts: 0,
-      totalLoss: 0,
-      graded: 0,
-    };
-    current.attempts += 1;
-    if (record.evLossBb !== null) {
-      current.totalLoss += record.evLossBb;
-      current.graded += 1;
-    }
-    groups.set(key, current);
-  }
-  return [...groups.values()]
-    .map(({ totalLoss, graded, ...group }) => ({
-      ...group,
-      averageEvLossBb: graded ? totalLoss / graded : 0,
-    }))
-    .sort(
-      (first, second) =>
-        second.averageEvLossBb - first.averageEvLossBb ||
-        first.attempts - second.attempts
-    );
-}
-
-export function chooseAdaptiveGroup(
-  groups: AdaptiveGroup[],
-  random: () => number = Math.random
-): AdaptiveGroup | null {
-  if (groups.length === 0 || random() >= 0.7) return null;
-  const maxAttempts = Math.max(...groups.map((group) => group.attempts), 1);
-  const weights = groups.map(
-    (group) =>
-      0.01 +
-      group.averageEvLossBb +
-      (maxAttempts - group.attempts) / maxAttempts
-  );
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  let roll = random() * total;
-  for (let index = 0; index < groups.length; index++) {
-    roll -= weights[index];
-    if (roll <= 0) return groups[index];
-  }
-  return groups[groups.length - 1];
 }
 
 export function streetIndex(street: PracticeStreet): number {

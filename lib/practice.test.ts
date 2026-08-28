@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  adaptiveGroups,
-  chooseAdaptiveGroup,
   nextHeroSeat,
   postflopStreetForHand,
   sanitizePracticeSettings,
@@ -20,13 +18,11 @@ import {
 import {
   gradePolicyFrequency,
   gradePolicyChoice,
+  hasClearPracticeDecision,
   practiceActionChoices,
   validatePolicyNode,
 } from '@/lib/practice-grading';
-import type {
-  PolicyNode,
-  PracticeDecisionRecord,
-} from '@/lib/practice-types';
+import type { PolicyNode } from '@/lib/practice-types';
 import { DEFAULT_PRACTICE_SETTINGS } from '@/lib/practice-types';
 
 function hand(seed = 1, depthBb = 20) {
@@ -252,16 +248,31 @@ describe('EV grading and settings', () => {
     expect(validatePolicyNode(node)).toEqual([]);
   });
 
-  it('offers only the two highest-frequency actions without revealing rank by order', () => {
+  it('skips near-tied alternatives and preserves source order for a clear choice', () => {
     const choices = practiceActionChoices([
-      { id: 'fold', probability: 0.3 },
-      { id: 'call', probability: 0.1 },
-      { id: 'raise', probability: 0.6 },
+      { id: 'fold', probability: 0.47 },
+      { id: 'call', probability: 0.08 },
+      { id: 'raise', probability: 0.45 },
     ]);
     expect(choices).toEqual([
-      { id: 'fold', probability: 0.3 },
-      { id: 'raise', probability: 0.6 },
+      { id: 'fold', probability: 0.47 },
+      { id: 'call', probability: 0.08 },
     ]);
+  });
+
+  it('rejects decisions whose available frequencies are no more than five points apart', () => {
+    expect(
+      hasClearPracticeDecision([
+        { id: 'check', probability: 0.525 },
+        { id: 'bet', probability: 0.475 },
+      ])
+    ).toBe(false);
+    expect(
+      hasClearPracticeDecision([
+        { id: 'check', probability: 0.526 },
+        { id: 'bet', probability: 0.474 },
+      ])
+    ).toBe(true);
   });
 
   it('accepts explicitly low-confidence EVs without invented uncertainty', () => {
@@ -285,9 +296,13 @@ describe('EV grading and settings', () => {
   });
 
   it('falls back safely for malformed persisted settings and alternates seats', () => {
-    expect(sanitizePracticeSettings({ mode: 'bogus', depthBb: 999 }).mode).toBe(
-      'full-hand'
-    );
+    const sanitized = sanitizePracticeSettings({
+      mode: 'bogus',
+      depthBb: 999,
+      dealMode: 'adaptive',
+    });
+    expect(sanitized.mode).toBe('full-hand');
+    expect(sanitized).not.toHaveProperty('dealMode');
     expect(nextHeroSeat('alternate', 0)).toBe('button-small-blind');
     expect(nextHeroSeat('alternate', 1)).toBe('big-blind');
   });
@@ -313,45 +328,5 @@ describe('EV grading and settings', () => {
         decisionGoal: 25,
       })
     ).toBe(false);
-  });
-});
-
-describe('adaptive sampling', () => {
-  function record(id: string, loss: number, bucket: string): PracticeDecisionRecord {
-    return {
-      id,
-      handId: id,
-      answeredAt: Number(id.replace(/\D/g, '')) || 1,
-      responseMs: 100,
-      modelVersion: 'test',
-      mode: 'full-hand',
-      depthBb: 20,
-      street: 'flop',
-      position: 'button-small-blind',
-      handBucket: bucket,
-      facingAction: 'check',
-      stateHash: 'a'.repeat(64),
-      board: [],
-      heroCards: [0, 1],
-      chosenAction: { id: 'check', kind: 'check', label: 'Check' },
-      policyActions: [],
-      chosenActionEvBb: 0,
-      bestActionEvBb: loss,
-      evLossBb: loss,
-      grade: loss === 0.5 ? 'mistake' : 'good',
-      confidence: 'high',
-      lowConfidence: false,
-    };
-  }
-
-  it('uses only the latest 200 decisions and keeps a 30% authentic branch', () => {
-    const records = Array.from({ length: 210 }, (_, index) =>
-      record(`r${index + 1}`, index === 209 ? 0.5 : 0.01, index === 209 ? 'AA' : '72o')
-    );
-    const groups = adaptiveGroups(records);
-    expect(groups.reduce((sum, group) => sum + group.attempts, 0)).toBe(200);
-    expect(groups[0].handBucket).toBe('AA');
-    expect(chooseAdaptiveGroup(groups, () => 0.8)).toBeNull();
-    expect(chooseAdaptiveGroup(groups, () => 0)).not.toBeNull();
   });
 });

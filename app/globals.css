@@ -182,8 +182,7 @@ textarea {
   padding-inline: 2px;
 }
 
-.practice-seat-label,
-.practice-stack {
+.practice-seat-label {
   border: 1px solid rgb(255 255 255 / 0.16);
   border-radius: 9999px;
   background: rgb(4 10 12 / 0.72);
@@ -224,10 +223,99 @@ textarea {
   filter: drop-shadow(0 0 7px rgb(var(--accent) / 0.9));
 }
 
-.practice-stack {
-  margin-bottom: 4px;
-  padding: 5px 8px;
+.practice-money-stack {
+  --practice-chip-rgb: var(--accent);
+  --practice-chip-secondary-rgb: var(--raise);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 8px;
+  background: rgb(4 10 12 / 0.76);
+  padding: 5px 8px 5px 5px;
   color: white;
+  box-shadow: 0 5px 14px rgb(0 0 0 / 0.24);
+  backdrop-filter: blur(8px);
+  animation: practice-chip-stack-update 220ms ease-out both;
+}
+
+.practice-money-stack-player {
+  min-width: 76px;
+  margin-bottom: 1px;
+}
+
+.practice-money-stack-pot {
+  --practice-chip-rgb: var(--call);
+  min-width: 106px;
+  gap: 8px;
+  border-color: rgb(255 255 255 / 0.22);
+  background: rgb(3 10 12 / 0.86);
+  padding: 6px 10px 6px 7px;
+  box-shadow:
+    0 0 0 2px rgb(var(--call) / 0.1),
+    0 7px 18px rgb(0 0 0 / 0.28);
+}
+
+.practice-chip-collection {
+  position: relative;
+  display: flex;
+  width: 28px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: flex-end;
+}
+
+.practice-money-stack-pot .practice-chip-collection {
+  width: 45px;
+}
+
+.practice-chip-pile {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 34px;
+  flex: 0 0 24px;
+}
+
+.practice-chip-pile-secondary {
+  --practice-chip-rgb: var(--practice-chip-secondary-rgb);
+  margin-left: -3px;
+  transform: translateY(4px);
+}
+
+.practice-virtual-chip {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--practice-chip-level, 0) * 3px);
+  display: block;
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgb(255 255 255 / 0.74);
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle, rgb(4 10 12 / 0.82) 0 18%, rgb(255 255 255 / 0.82) 19% 27%, transparent 28%),
+    repeating-conic-gradient(from 0deg, rgb(255 255 255 / 0.82) 0deg 11deg, transparent 11deg 42deg),
+    rgb(var(--practice-chip-rgb));
+  box-shadow:
+    0 2px 0 rgb(0 0 0 / 0.3),
+    0 3px 5px rgb(0 0 0 / 0.28);
+}
+
+.practice-money-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.practice-money-copy small {
+  color: rgb(255 255 255 / 0.58);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.practice-money-copy strong {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   font-weight: 700;
@@ -274,17 +362,7 @@ textarea {
   left: 50%;
   top: calc(49% + 52px);
   z-index: 4;
-  display: flex;
-  min-height: 32px;
   transform: translateX(-50%);
-  align-items: center;
-  gap: 6px;
-  border: 1px solid rgb(255 255 255 / 0.12);
-  border-radius: 9999px;
-  background: rgb(4 10 12 / 0.66);
-  padding: 4px 10px;
-  color: white;
-  font-size: 12px;
 }
 
 .playing-card {
@@ -655,6 +733,17 @@ textarea {
   animation: practice-action-log-enter 240ms ease-out both;
 }
 
+@keyframes practice-chip-stack-update {
+  0% {
+    opacity: 0.72;
+    transform: translateY(4px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes practice-board-card-deal {
   0% {
     opacity: 0;
@@ -817,7 +906,7 @@ textarea {
   }
 
   .practice-pot {
-    top: calc(49% + 60px);
+    top: calc(49% + 48px);
   }
 
   .practice-action-dock {

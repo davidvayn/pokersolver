@@ -6,6 +6,39 @@ import { applyAction, createHand, seededRandom } from '@/lib/practice-engine';
 import type { PolicyNode } from '@/lib/practice-types';
 
 describe('PracticeTable decision controls', () => {
+  it('distinguishes both player stacks from the central pot with labeled chips', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const state = createHand({
+      id: 'virtual-chip-test',
+      modelVersion: 'test-v1',
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'button-small-blind',
+      random: seededRandom(3),
+    });
+
+    const html = renderToStaticMarkup(
+      React.createElement(PracticeTable, {
+        state,
+        node: null,
+        status: 'decision',
+        mode: 'full-hand',
+        revealOpponent: false,
+        selectedActionId: null,
+        onAction: vi.fn(),
+        onContinue: vi.fn(),
+        onRetry: vi.fn(),
+      })
+    );
+
+    expect(html.match(/practice-money-stack-player/g)).toHaveLength(2);
+    expect(html.match(/practice-money-stack-pot/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Hero stack, 19.5 big blinds"');
+    expect(html).toContain('aria-label="Opponent stack, 19.0 big blinds"');
+    expect(html).toContain('aria-label="Pot, 1.5 big blinds"');
+    expect(html.match(/practice-chip-pile-secondary/g)).toHaveLength(1);
+  });
+
   it('does not reveal policy percentages before the user acts', () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const state = createHand({

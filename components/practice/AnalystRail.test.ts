@@ -53,11 +53,14 @@ const feedback: PracticeDecisionRecord = {
   lowConfidence: false,
 };
 
-function renderFeedback(value: PracticeDecisionRecord | null): string {
+function renderFeedback(
+  value: PracticeDecisionRecord | null,
+  tab: 'feedback' | 'settings' = 'feedback'
+): string {
   (globalThis as typeof globalThis & { React: typeof React }).React = React;
   return renderToStaticMarkup(
     React.createElement(AnalystRail, {
-      tab: 'feedback',
+      tab,
       onTabChange: vi.fn(),
       feedback: value,
       recentHands: [],
@@ -74,6 +77,14 @@ function renderFeedback(value: PracticeDecisionRecord | null): string {
 }
 
 describe('AnalystRail decision feedback', () => {
+  it('omits deal-mode controls because every hand uses authentic random dealing', () => {
+    const html = renderFeedback(null, 'settings');
+    expect(html).toContain('Hero seat');
+    expect(html).not.toContain('Deal mode');
+    expect(html).not.toContain('Authentic random');
+    expect(html).not.toContain('Adaptive (70/30)');
+  });
+
   it('does not show a strategy mix before feedback is available', () => {
     const html = renderFeedback(null);
     expect(html).toContain('Choose an action to see the complete policy mix');

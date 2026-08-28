@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { seededRandom } from '@/lib/practice-engine';
-import { gradePolicyChoice, validatePolicyNode } from '@/lib/practice-grading';
+import {
+  gradePolicyChoice,
+  MIN_PRACTICE_ACTION_FREQUENCY_GAP,
+  validatePolicyNode,
+} from '@/lib/practice-grading';
 import { createPushFoldSpot } from '@/lib/push-fold-policy';
 
 describe('push/fold practice policy', () => {
@@ -16,6 +20,11 @@ describe('push/fold practice policy', () => {
 
       expect(validatePolicyNode(spot.node)).toEqual([]);
       expect(spot.node.actions).toHaveLength(2);
+      expect(
+        Math.abs(
+          spot.node.actions[0].probability - spot.node.actions[1].probability
+        )
+      ).toBeGreaterThan(MIN_PRACTICE_ACTION_FREQUENCY_GAP);
       expect(
         spot.node.actions.every(
           (action) =>

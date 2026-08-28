@@ -7,6 +7,7 @@ import {
   handBucket,
   type CreateHandOptions,
 } from '@/lib/practice-engine';
+import { hasClearPracticeDecision } from '@/lib/practice-grading';
 import type {
   HandState,
   LegalAction,
@@ -206,14 +207,16 @@ export async function createPushFoldSpot(options: {
       });
       replayActions.push(...state.actionHistory);
     }
+    const node = await nodeFor(index, state, options.hero);
+    if (!hasClearPracticeDecision(node.actions)) continue;
     return {
-      node: await nodeFor(index, state, options.hero),
+      node,
       state,
       scenario: index.scenario,
       replayActions,
     };
   }
-  throw new Error('Could not sample a reachable big-blind push/fold decision');
+  throw new Error('Could not sample a reachable clear-frequency push/fold decision');
 }
 
 export function finishPushFoldHand(

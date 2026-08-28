@@ -16,6 +16,8 @@ export interface GradeResult {
   lowConfidence: boolean;
 }
 
+export const MIN_PRACTICE_ACTION_FREQUENCY_GAP = 0.05;
+
 export function gradePolicyFrequency(
   chosenProbability: number,
   bestProbability: number,
@@ -89,14 +91,28 @@ export function gradePolicyChoice(
 export function practiceActionChoices<T extends { id: string; probability: number }>(
   actions: T[]
 ): T[] {
-  if (actions.length <= 2) return [...actions];
-  const selected = new Set(
-    [...actions]
-      .sort((first, second) => second.probability - first.probability)
-      .slice(0, 2)
-      .map((action) => action.id)
+  if (actions.length < 2) return [];
+  const ranked = [...actions].sort(
+    (first, second) => second.probability - first.probability
   );
+  const best = ranked[0];
+  const alternative = ranked
+    .slice(1)
+    .find(
+      (action) =>
+        best.probability - action.probability >
+        MIN_PRACTICE_ACTION_FREQUENCY_GAP + 1e-9
+    );
+  if (!alternative) return [];
+  const selected = new Set([best.id, alternative.id]);
   return actions.filter((action) => selected.has(action.id));
+}
+
+export function hasClearPracticeDecision<T extends {
+  id: string;
+  probability: number;
+}>(actions: T[]): boolean {
+  return practiceActionChoices(actions).length === 2;
 }
 
 export function validatePolicyNode(node: PolicyNode): string[] {

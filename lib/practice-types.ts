@@ -10,7 +10,6 @@ export type PushFoldDepth = 2 | 3 | 5 | 8 | 10 | 12 | 15 | 20;
 export type PracticeStreet = 'preflop' | 'flop' | 'turn' | 'river';
 export type Seat = 'button-small-blind' | 'big-blind';
 export type HeroSeatMode = 'alternate' | 'button-small-blind' | 'big-blind';
-export type DealMode = 'authentic' | 'adaptive';
 export type OpponentStyle = 'baseline' | 'adaptive-exploitative';
 export type DecisionGoal = 'continuous' | 25 | 50 | 100;
 export type ActionKind =
@@ -35,7 +34,6 @@ export interface PracticeSettings {
   pushFoldDepthBb: PushFoldDepth;
   postflopStreets: Array<Exclude<PracticeStreet, 'preflop'>>;
   heroSeat: HeroSeatMode;
-  dealMode: DealMode;
   opponentStyle: OpponentStyle;
   decisionGoal: DecisionGoal;
 }
@@ -344,7 +342,6 @@ export const DEFAULT_PRACTICE_SETTINGS: PracticeSettings = {
   pushFoldDepthBb: 20,
   postflopStreets: ['flop', 'turn', 'river'],
   heroSeat: 'alternate',
-  dealMode: 'authentic',
   opponentStyle: 'adaptive-exploitative',
   decisionGoal: 'continuous',
 };

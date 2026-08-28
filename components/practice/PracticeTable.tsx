@@ -64,10 +64,12 @@ function SeatDisplay({
   const cards = state.holeCards[seat];
   const active = state.toAct === seat;
   const label = seat === 'button-small-blind' ? 'BTN / SB' : 'Big blind';
+  const owner = opponent ? 'Opponent' : 'Hero';
   return (
     <div
       className={`practice-seat ${active ? 'practice-seat-active' : ''} ${folding ? 'practice-seat-folding' : ''}`}
-      aria-label={`${opponent ? 'Opponent' : 'Hero'}, ${label}, ${state.stacksBb[seat].toFixed(1)} big blinds`}
+      role="group"
+      aria-label={`${owner}, ${label}`}
     >
       <div className="practice-seat-meta">
         <span className="practice-seat-label">
@@ -88,10 +90,56 @@ function SeatDisplay({
           <PokerCard card={cards[0]} hidden={opponent && !revealOpponent} />
           <PokerCard card={cards[1]} hidden={opponent && !revealOpponent} />
         </div>
-        <span className="practice-stack">
-          {state.stacksBb[seat].toFixed(1)}bb
-        </span>
+        <VirtualChipStack
+          amountBb={state.stacksBb[seat]}
+          label={`${owner} stack`}
+          variant="player"
+        />
       </div>
+    </div>
+  );
+}
+
+function ChipPile({ secondary = false }: { secondary?: boolean }) {
+  return (
+    <span
+      className={`practice-chip-pile ${secondary ? 'practice-chip-pile-secondary' : ''}`}
+    >
+      {[0, 1, 2, 3].map((level) => (
+        <i
+          key={level}
+          className="practice-virtual-chip"
+          style={{ '--practice-chip-level': level } as CSSProperties}
+        />
+      ))}
+    </span>
+  );
+}
+
+function VirtualChipStack({
+  amountBb,
+  label,
+  variant,
+}: {
+  amountBb: number;
+  label: string;
+  variant: 'player' | 'pot';
+}) {
+  return (
+    <div
+      key={`${variant}-${amountBb.toFixed(2)}`}
+      className={`practice-money-stack practice-money-stack-${variant}`}
+      role="img"
+      aria-label={`${label}, ${amountBb.toFixed(1)} big blinds`}
+    >
+      <span className="practice-chip-collection" aria-hidden="true">
+        <ChipPile />
+        {variant === 'pot' && <ChipPile secondary />}
+      </span>
+      <span className="practice-money-copy" aria-hidden="true">
+        <small>{variant === 'pot' ? 'Pot' : 'Stack'}</small>
+        <strong>{amountBb.toFixed(1)}bb</strong>
+      </span>
     </div>
   );
 }
@@ -252,9 +300,8 @@ export function PracticeTable({
                 ))}
               </div>
 
-              <div className="practice-pot" aria-label={`Pot ${pot.toFixed(1)} big blinds`}>
-                <CircleDollarSign className="h-4 w-4" aria-hidden="true" />
-                <span className="font-mono font-semibold">{pot.toFixed(1)}bb</span>
+              <div className="practice-pot">
+                <VirtualChipStack amountBb={pot} label="Pot" variant="pot" />
               </div>
 
               <div className="practice-hero-seat">

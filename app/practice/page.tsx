@@ -19,6 +19,7 @@ import {
 } from '@/lib/practice-engine';
 import {
   gradePolicyChoice,
+  hasClearPracticeDecision,
   practiceActionChoices,
   samplePolicyAction,
   validatePolicyNode,
@@ -164,15 +165,20 @@ async function advancePolicyToHero(input: {
   onOpponentPolicy: (trace: OpponentPolicyTrace) => void;
 }): Promise<{ state: HandState; node: PolicyNode | null }> {
   let state = input.state;
-  while (!state.terminal && state.toAct !== state.hero) {
+  for (let actionCount = 0; actionCount < 64; actionCount++) {
+    if (state.terminal) return { state, node: null };
+    const heroTurn = state.toAct === state.hero;
     const lookup = await checkedPolicyNode(
       input.client,
       input.pinned,
       state,
       input.profile,
-      'opponent'
+      heroTurn ? 'grading' : 'opponent'
     );
     if (lookup.trace) input.onOpponentPolicy(lookup.trace);
+    if (heroTurn && hasClearPracticeDecision(lookup.node.actions)) {
+      return { state, node: lookup.node };
+    }
     const previous = state;
     state = applyAction(state, samplePolicyAction(lookup.node.actions));
     input.onProgress(state);
@@ -185,19 +191,9 @@ async function advancePolicyToHero(input: {
       return { state, node: null };
     }
   }
-  if (state.terminal) return { state, node: null };
-  return {
-    state,
-    node: (
-      await checkedPolicyNode(
-        input.client,
-        input.pinned,
-        state,
-        input.profile,
-        'grading'
-      )
-    ).node,
-  };
+  throw new PolicyUnavailableError(
+    'The sampled policy line exceeded the supported action history.'
+  );
 }
 
 interface PreparedContinuation {
@@ -238,18 +234,20 @@ async function advancePolicyToPostflopDecision(input: {
       return { state, node: null };
     }
     if (state.street === input.targetStreet && state.toAct === state.hero) {
-      return {
+      const lookup = await checkedPolicyNode(
+        input.client,
+        input.pinned,
         state,
-        node: (
-          await checkedPolicyNode(
-            input.client,
-            input.pinned,
-            state,
-            input.profile,
-            'grading'
-          )
-        ).node,
-      };
+        input.profile,
+        'grading'
+      );
+      if (hasClearPracticeDecision(lookup.node.actions)) {
+        return { state, node: lookup.node };
+      }
+      state = applyAction(state, samplePolicyAction(lookup.node.actions));
+      input.onProgress(state);
+      await postflopReplayPause();
+      continue;
     }
 
     const lookup = await checkedPolicyNode(
@@ -443,7 +441,7 @@ export default function PracticePage() {
                   ...sharedCallbacks,
                 });
           if (currentRequest !== requestId.current) return;
-          if (advanced.state.terminal) continue;
+          if (advanced.state.terminal || !advanced.node) continue;
           setState(advanced.state);
           setActiveNode(advanced.node);
           if (nextSettings.mode === 'full-hand' && advanced.node) {
@@ -495,19 +493,15 @@ export default function PracticePage() {
       recentHandsRef.current = hands;
       setRecentHands(hands.slice(0, 100));
       const availableDepths = fullHandDepths(availableManifests);
-      const persistenceSafe =
-        loaded.dealMode === 'adaptive'
-          ? { ...loaded, dealMode: 'authentic' as const }
-          : loaded;
       const effective =
-        (persistenceSafe.mode === 'full-hand' || persistenceSafe.mode === 'preflop') &&
+        (loaded.mode === 'full-hand' || loaded.mode === 'preflop') &&
         availableDepths.length > 0 &&
-        !availableDepths.includes(persistenceSafe.depthBb)
+        !availableDepths.includes(loaded.depthBb)
           ? {
-              ...persistenceSafe,
+              ...loaded,
               depthBb: availableDepths[0] as PracticeSettings['depthBb'],
             }
-          : persistenceSafe;
+          : loaded;
       setSettings(effective);
       if (effective !== loaded) savePracticeSettings(effective);
       goalTargetRef.current =
