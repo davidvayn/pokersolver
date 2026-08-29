@@ -9,7 +9,6 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { BadgeCheck } from 'lucide-react';
 import {
   Card,
   cardToStr,
@@ -22,13 +21,17 @@ import {
 import { CardSlots } from '@/components/board/CardPicker';
 import { RangeEditor } from '@/components/range/RangeEditor';
 import { AiPanel } from '@/components/ai/AiPanel';
-import { StrategyView } from '@/components/solver/SolverResults';
+import {
+  SolverNerdStats,
+  StrategyView,
+} from '@/components/solver/SolverResults';
 import {
   useSolver,
   rangeToTriples,
 } from '@/lib/solver/client';
 import type { SolverResult, SolverInput } from '@/lib/solver/client';
 import type { SpotContext } from '@/lib/ai/prompt';
+import { useUi } from '@/lib/ui-store';
 
 const OOP_COLOR = 'rgb(var(--check))';
 const IP_COLOR = 'rgb(var(--allin))';
@@ -81,6 +84,7 @@ export default function SolverPage() {
   const [stratTab, setStratTab] = useState<'oop' | 'ip'>('oop');
   const solveVersion = useRef(0);
   const { solve, running, available, error: solverError } = useSolver();
+  const showSolverStats = useUi((state) => state.showSolverStats);
 
   function applySizing(key: string) {
     setSizing(key);
@@ -176,27 +180,12 @@ export default function SolverPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Compact title + inline solution stats */}
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold">Postflop Solver</h1>
-          {running && (
-            <span role="status" className="text-xs text-muted">
-              Solving…
-            </span>
-          )}
-        </div>
-        {result && !result.error && (
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-            <InlineStat label="Exploitability" value={`${result.exploitability_pct}%`} />
-            <InlineStat label="OOP EV" value={`${result.oop_ev} bb`} />
-            <InlineStat label="IP EV" value={`${result.ip_ev} bb`} />
-            <InlineStat label="Model" value="CFR+" />
-            <InlineStat label="Iterations" value={`${result.iterations}`} />
-            {result.truncated && (
-              <span className="text-xs text-muted">ranges capped</span>
-            )}
-          </div>
+      <div className="flex items-center gap-3">
+        <h1 className="text-lg font-semibold">Postflop Solver</h1>
+        {running && (
+          <span role="status" className="text-xs text-muted">
+            Solving…
+          </span>
         )}
       </div>
 
@@ -243,20 +232,10 @@ export default function SolverPage() {
               size="lg"
             />
 
-            <div className="mb-1.5 mt-4 text-xs text-muted">Solve mode</div>
-            <div className="rounded-md border border-check/35 bg-check/10 p-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-fg">
-                <BadgeCheck className="h-4 w-4 text-check" aria-hidden="true" />
-                {SOLVER_LABEL}
-              </div>
-              <p className="mt-1.5 text-xs leading-relaxed text-muted">
-                CFR+ average strategy for this one-street betting abstraction.
-                Calls and check-backs use exact all-in runout equity; the reported
-                exploitability applies to this configured abstract game.
-              </p>
-            </div>
-
-            <label htmlFor="sizing" className="mb-1.5 mt-4 block text-xs text-muted">
+            <label
+              htmlFor="sizing"
+              className="mb-1.5 mt-4 block text-xs text-muted"
+            >
               Bet sizing
             </label>
             <select
@@ -275,9 +254,21 @@ export default function SolverPage() {
             {sizing === 'custom' && (
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <NumberField label="Pot (bb)" value={pot} onChange={setPot} />
-                <NumberField label="Stack (bb)" value={stack} onChange={setStack} />
-                <TextField label="Bet %" value={betSizes} onChange={setBetSizes} />
-                <TextField label="Raise %" value={raiseSizes} onChange={setRaiseSizes} />
+                <NumberField
+                  label="Stack (bb)"
+                  value={stack}
+                  onChange={setStack}
+                />
+                <TextField
+                  label="Bet %"
+                  value={betSizes}
+                  onChange={setBetSizes}
+                />
+                <TextField
+                  label="Raise %"
+                  value={raiseSizes}
+                  onChange={setRaiseSizes}
+                />
               </div>
             )}
           </div>
@@ -286,32 +277,43 @@ export default function SolverPage() {
         {/* Solution (right) — the enlarged strategy chart */}
         <div>
           {result && !result.error ? (
-            <div className="rounded-lg border border-border bg-surface p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <div className="flex flex-1 gap-1 rounded-md bg-surface-2 p-1">
-                <TabButton
-                  active={stratTab === 'oop'}
-                  color={OOP_COLOR}
-                  onClick={() => setStratTab('oop')}
-                >
-                  OOP · first to act
-                </TabButton>
-                <TabButton
-                  active={stratTab === 'ip'}
-                  color={IP_COLOR}
-                  onClick={() => setStratTab('ip')}
-                >
-                  IP · vs check
-                </TabButton>
+            <div className="flex flex-col gap-4">
+              <div className="rounded-lg border border-border bg-surface p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="flex flex-1 gap-1 rounded-md bg-surface-2 p-1">
+                    <TabButton
+                      active={stratTab === 'oop'}
+                      color={OOP_COLOR}
+                      onClick={() => setStratTab('oop')}
+                    >
+                      OOP · first to act
+                    </TabButton>
+                    <TabButton
+                      active={stratTab === 'ip'}
+                      color={IP_COLOR}
+                      onClick={() => setStratTab('ip')}
+                    >
+                      IP · vs check
+                    </TabButton>
+                  </div>
+                  <button
+                    onClick={clearAll}
+                    className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Clear
+                  </button>
                 </div>
-                <button
-                  onClick={clearAll}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  Clear
-                </button>
+                <StrategyView
+                  node={stratTab === 'oop' ? result.oop : result.ip}
+                />
+                {result.truncated && (
+                  <p className="mt-3 text-xs leading-relaxed text-muted">
+                    Ranges were capped to keep the solve fast; results use the
+                    highest-weight combos.
+                  </p>
+                )}
               </div>
-              <StrategyView node={stratTab === 'oop' ? result.oop : result.ip} />
+              {showSolverStats && <SolverNerdStats result={result} />}
             </div>
           ) : result?.error || solverError ? (
             <div
@@ -345,15 +347,6 @@ export default function SolverPage() {
 
       <AiPanel getSpot={buildSpot} />
     </div>
-  );
-}
-
-function InlineStat({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="flex items-baseline gap-1.5">
-      <span className="text-muted">{label}</span>
-      <span className="font-semibold tabular-nums">{value}</span>
-    </span>
   );
 }
 

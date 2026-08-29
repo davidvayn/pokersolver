@@ -190,74 +190,41 @@ export function StrategyView({ node }: { node: NodeStrategy }) {
   );
 }
 
-/** The compact summary bar (exploitability + EVs). Shown at the top so a
- * result is always immediately visible, and surfaces solver errors. */
-export function SolverStats({ result }: { result: SolverResult }) {
-  if (result.error) {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-raise/40 bg-raise/10 p-4 text-sm text-raise"
-      >
-        Solver error: {result.error}
-      </div>
-    );
-  }
+/** Optional diagnostics kept out of the primary solving flow. */
+export function SolverNerdStats({ result }: { result: SolverResult }) {
+  if (result.error) return null;
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Exploitability" value={`${result.exploitability_pct}%`} hint="of pot" />
+    <section
+      aria-labelledby="solver-nerd-stats-heading"
+      className="rounded-lg border border-border bg-surface p-4"
+    >
+      <div>
+        <h2 id="solver-nerd-stats-heading" className="text-sm font-semibold">
+          Stats for nerds
+        </h2>
+        <p className="mt-1 text-xs text-muted">
+          Diagnostics for the current abstract solve.
+        </p>
+      </div>
+      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-4 border-t border-border pt-4 sm:grid-cols-3 xl:grid-cols-5">
+        <Stat label="Exploitability" value={`${result.exploitability_pct}%`} />
         <Stat label="OOP EV" value={`${result.oop_ev} bb`} />
         <Stat label="IP EV" value={`${result.ip_ev} bb`} />
+        <Stat label="Model" value="CFR+" />
         <Stat label="Iterations" value={`${result.iterations}`} />
-      </div>
-      {result.truncated && (
-        <div className="rounded-md border border-border bg-surface-2 p-2 text-xs text-muted">
-          Ranges were capped to keep the solve fast — results use the
-          highest-weight combos.
-        </div>
-      )}
-    </div>
+      </dl>
+    </section>
   );
 }
 
-/** The strategy grids for both players. */
-export function SolverStrategies({ result }: { result: SolverResult }) {
-  if (result.error) return null;
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-4">
-      <StrategyView node={result.oop} />
-      <StrategyView node={result.ip} />
-    </div>
-  );
-}
-
-/** Combined view (stats + strategies), kept for convenience. */
-export function SolverResults({ result }: { result: SolverResult }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <SolverStats result={result} />
-      <SolverStrategies result={result} />
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-3">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="text-lg font-semibold tabular-nums">
+    <div>
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-1 font-mono text-sm font-semibold tabular-nums text-fg">
         {value}
-        {hint && <span className="ml-1 text-xs font-normal text-muted">{hint}</span>}
-      </div>
+      </dd>
     </div>
   );
 }

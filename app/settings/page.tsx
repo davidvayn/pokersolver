@@ -6,8 +6,8 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-xl font-semibold">Settings</h1>
         <p className="text-sm text-muted">
-          Configure the AI provider and API key used for spot analysis. You can
-          also open this from the gear icon in the header.
+          Configure solver details and the AI provider used for spot analysis.
+          You can also open this from the gear icon in the header.
         </p>
       </div>
       <div className="rounded-lg border border-border bg-surface p-5">

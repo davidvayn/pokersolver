@@ -44,14 +44,32 @@ export function SettingsModal() {
       }
     };
     window.addEventListener('keydown', onKey);
-    panelRef.current?.focus();
-    // Prevent background scroll while open.
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const previousBodyStyles = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      left: document.body.style.left,
+      width: document.body.style.width,
+    };
+
+    // Position-lock the document at its current visual position. Do not hide
+    // body overflow: the global 100% body height would clip scrolled content
+    // and leave an opaque document-background block beneath the modal scrim.
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = `-${scrollX}px`;
+    document.body.style.width = '100%';
+    panelRef.current?.focus({ preventScroll: true });
+
     return () => {
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
-      previouslyFocused?.focus();
+      document.body.style.position = previousBodyStyles.position;
+      document.body.style.top = previousBodyStyles.top;
+      document.body.style.left = previousBodyStyles.left;
+      document.body.style.width = previousBodyStyles.width;
+      window.scrollTo(scrollX, scrollY);
+      previouslyFocused?.focus({ preventScroll: true });
     };
   }, [open, close]);
 
@@ -88,7 +106,7 @@ export function SettingsModal() {
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-        <SettingsForm />
+        <SettingsForm sectionHeadingLevel="h3" />
       </div>
     </div>,
     document.body
