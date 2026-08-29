@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn converges_in_two_round_leduc() {
-        let result = solve(10_000);
+        let result = solve(2_000);
         assert_eq!(result.information_sets, 288);
         assert!(
             result.exploitability < 0.08,

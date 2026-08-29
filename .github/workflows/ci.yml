@@ -29,6 +29,17 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Cache Rust release solver
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            preflop-solver/target/release
+          key: ${{ runner.os }}-rust-release-${{ hashFiles('preflop-solver/Cargo.lock', 'preflop-solver/Cargo.toml', 'preflop-solver/src/**/*.rs', 'preflop-solver/tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-release-
+
       - name: Test Rust release solver
         run: cargo test --release --manifest-path preflop-solver/Cargo.toml
 
