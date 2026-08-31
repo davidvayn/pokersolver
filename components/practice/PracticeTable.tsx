@@ -1,4 +1,6 @@
-import type { CSSProperties } from 'react';
+'use client';
+
+import { useState, type CSSProperties } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -10,8 +12,15 @@ import {
   LogOut,
   RefreshCw,
   ShieldAlert,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { PokerCard } from '@/components/cards/PokerCard';
+import { usePracticeTableSounds } from '@/components/practice/usePracticeTableSounds';
+import {
+  playPracticeSound,
+  unlockPracticeAudio,
+} from '@/lib/practice-sounds';
 import { totalPotBb } from '@/lib/practice-engine';
 import { practiceActionChoices } from '@/lib/practice-grading';
 import type {
@@ -195,6 +204,19 @@ export function PracticeTable({
   onRetry,
   onOpenAnalyst,
 }: PracticeTableProps) {
+  const [soundsEnabled, setSoundsEnabled] = useState(true);
+  usePracticeTableSounds(state, soundsEnabled);
+
+  function toggleSounds() {
+    const next = !soundsEnabled;
+    setSoundsEnabled(next);
+    if (next) {
+      void unlockPracticeAudio().then((unlocked) => {
+        if (unlocked) playPracticeSound({ kind: 'chips' });
+      });
+    }
+  }
+
   const opponent: Seat = state
     ? state.hero === 'button-small-blind'
       ? 'big-blind'
@@ -259,6 +281,20 @@ export function PracticeTable({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleSounds}
+            aria-pressed={soundsEnabled}
+            aria-label="Table sounds"
+            title={soundsEnabled ? 'Mute table sounds' : 'Turn table sounds on'}
+            className="grid h-11 w-11 place-items-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:border-accent hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            {soundsEnabled ? (
+              <Volume2 className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <VolumeX className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
           {onOpenAnalyst && (
             <button
               type="button"

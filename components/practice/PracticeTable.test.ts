@@ -37,6 +37,8 @@ describe('PracticeTable decision controls', () => {
     expect(html).toContain('aria-label="Opponent stack, 19.0 big blinds"');
     expect(html).toContain('aria-label="Pot, 1.5 big blinds"');
     expect(html.match(/practice-chip-pile-secondary/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Table sounds"');
+    expect(html).toContain('aria-pressed="true"');
   });
 
   it('does not reveal policy percentages before the user acts', () => {
