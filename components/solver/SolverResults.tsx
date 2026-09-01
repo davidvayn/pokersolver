@@ -124,7 +124,17 @@ function HandMixReadout({
   );
 }
 
-export function StrategyView({ node }: { node: NodeStrategy }) {
+export function StrategyView({
+  node,
+  framed = true,
+  compact = false,
+  matrixClassName = '',
+}: {
+  node: NodeStrategy;
+  framed?: boolean;
+  compact?: boolean;
+  matrixClassName?: string;
+}) {
   const [selectedHand, setSelectedHand] = useState<string | null>(null);
   const colors = useMemo(() => colorForActions(node.actions), [node.actions]);
   const strategy = useMemo(() => toStrategy(node, colors), [node, colors]);
@@ -147,10 +157,19 @@ export function StrategyView({ node }: { node: NodeStrategy }) {
   if (!node.rows.length) return null;
 
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <div className="mb-3 flex items-center justify-between">
+    <div
+      className={
+        framed
+          ? `rounded-lg border border-border bg-surface ${compact ? 'p-3' : 'p-4'}`
+          : 'min-h-0'
+      }
+    >
+      <div
+        data-solver-strategy-heading
+        className={`${compact ? 'mb-2' : 'mb-3'} flex items-center justify-between gap-3`}
+      >
         <div className="text-sm font-semibold">{node.title}</div>
-        <div className="flex flex-wrap justify-end gap-2 text-xs">
+        <div className="flex flex-wrap justify-end gap-x-2 gap-y-1 text-xs">
           {node.actions.map((a) => (
             <span key={a} className="flex items-center gap-1.5">
               <span
@@ -167,7 +186,7 @@ export function StrategyView({ node }: { node: NodeStrategy }) {
         actions={selectedRow?.actions ?? []}
         colors={colors}
       />
-      <div className="w-full">
+      <div className={`mx-auto w-full ${matrixClassName}`}>
         <HandMatrix
           mode="display"
           strategy={strategy}
@@ -182,32 +201,44 @@ export function StrategyView({ node }: { node: NodeStrategy }) {
           }
         />
       </div>
-      <p className="mt-2 text-[11px] text-muted">
-        Select a hand for exact action frequencies; the small number is its EV
-        (bb).
-      </p>
+      {!compact && (
+        <p className="mt-2 text-[11px] text-muted">
+          Select a hand for exact action frequencies; the small number is its EV
+          (bb).
+        </p>
+      )}
     </div>
   );
 }
 
 /** Optional diagnostics kept out of the primary solving flow. */
-export function SolverNerdStats({ result }: { result: SolverResult }) {
+export function SolverNerdStats({
+  result,
+  compact = false,
+}: {
+  result: SolverResult;
+  compact?: boolean;
+}) {
   if (result.error) return null;
 
   return (
     <section
       aria-labelledby="solver-nerd-stats-heading"
-      className="rounded-lg border border-border bg-surface p-4"
+      className={`rounded-lg border border-border bg-surface ${compact ? 'p-3' : 'p-4'}`}
     >
       <div>
         <h2 id="solver-nerd-stats-heading" className="text-sm font-semibold">
           Stats for nerds
         </h2>
-        <p className="mt-1 text-xs text-muted">
-          Diagnostics for the current abstract solve.
-        </p>
+        {!compact && (
+          <p className="mt-1 text-xs text-muted">
+            Diagnostics for the current abstract solve.
+          </p>
+        )}
       </div>
-      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-4 border-t border-border pt-4 sm:grid-cols-3 xl:grid-cols-5">
+      <dl
+        className={`${compact ? 'mt-2 gap-x-3 gap-y-2 pt-2' : 'mt-4 gap-x-4 gap-y-4 pt-4'} grid grid-cols-2 border-t border-border sm:grid-cols-3 xl:grid-cols-5`}
+      >
         <Stat label="Exploitability" value={`${result.exploitability_pct}%`} />
         <Stat label="OOP EV" value={`${result.oop_ev} bb`} />
         <Stat label="IP EV" value={`${result.ip_ev} bb`} />

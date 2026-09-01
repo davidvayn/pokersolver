@@ -25,6 +25,45 @@
   --allin-fg: 255 255 255;
 }
 
+/* Dense postflop workspace selected from the solver UI exploration. */
+.solver-workspace button:not(:disabled),
+.solver-workspace select:not(:disabled) {
+  cursor: pointer;
+}
+
+.solver-workspace-matrix {
+  max-width: min(100%, 60vh, calc(100dvh - 360px));
+}
+
+.solver-workspace-range-matrix {
+  max-width: min(100%, 58vh, calc(100dvh - 390px));
+}
+
+@media (max-width: 767px) {
+  .solver-workspace-matrix {
+    max-width: min(100%, 34vh) !important;
+  }
+
+  .solver-workspace [data-solver-hand-mix] {
+    display: none;
+  }
+}
+
+@media (max-height: 600px) {
+  .solver-workspace-matrix,
+  .solver-workspace-range-matrix {
+    max-width: min(100%, 22vh) !important;
+  }
+
+  .solver-workspace [data-solver-hand-mix] {
+    display: none;
+  }
+
+  .solver-workspace [data-solver-strategy-heading] {
+    display: none;
+  }
+}
+
 .dark {
   color-scheme: dark;
   --bg: 12 15 20;
@@ -484,6 +523,11 @@ textarea {
 .playing-card.playing-card-size-lg {
   width: 48px;
   height: 66px;
+}
+
+.playing-card.playing-card-size-xl {
+  width: 52px;
+  height: 72px;
 }
 
 .playing-card-size-sm .playing-card-corner-top {

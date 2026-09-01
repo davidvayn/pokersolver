@@ -16,7 +16,7 @@ export function PlayingCard({
   dimmed,
 }: {
   card: Card;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   dimmed?: boolean;
 }) {
@@ -104,10 +104,16 @@ export function CardSlots({
   used: Set<Card>;
   onChange: (cards: Card[]) => void;
   label?: string;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
   const addDims =
-    size === 'lg' ? 'h-16 w-12 text-lg' : size === 'sm' ? 'h-7 w-5' : 'h-10 w-7';
+    size === 'xl'
+      ? 'h-[72px] w-[52px] text-xl'
+      : size === 'lg'
+        ? 'h-16 w-12 text-lg'
+        : size === 'sm'
+          ? 'h-7 w-5'
+          : 'h-10 w-7';
   const [open, setOpen] = useState(false);
   const [slot, setSlot] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -176,7 +182,7 @@ export function CardSlots({
               />
               <button
                 onClick={() => removeAt(i)}
-                className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-raise text-[10px] text-white opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
+                className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-full bg-raise text-[10px] text-white opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
                 aria-label={`Remove ${cardToStr(c)}`}
               >
                 ×

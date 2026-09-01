@@ -3,8 +3,6 @@
 import { useMemo } from 'react';
 import { HandMatrix } from '@/components/hand-matrix/HandMatrix';
 import {
-  parseRange,
-  rangeToWeights,
   weightsToRange,
   rangeComboCount,
   handClassLabel,
@@ -15,16 +13,18 @@ interface RangeEditorProps {
   onChange: (weights: Record<string, number>) => void;
   title?: string;
   accent?: string;
+  compact?: boolean;
+  showActions?: boolean;
 }
 
-const PRESETS: { label: string; range: string }[] = [
-  { label: 'BTN RFI', range: '22+,A2s+,K7s+,Q9s+,J9s+,T8s+,97s+,86s+,75s+,64s+,54s,A7o+,K9o+,Q9o+,J9o+,T9o' },
-  { label: 'CO RFI', range: '22+,A2s+,K9s+,QTs+,J9s+,T9s,98s,A9o+,KTo+,QJo' },
-  { label: 'UTG RFI', range: '77+,AJs+,KQs,AKo' },
-  { label: 'Broadways', range: 'AKs,AQs,AJs,ATs,KQs,KJs,QJs,JTs,AKo,AQo,AJo,KQo' },
-];
-
-export function RangeEditor({ weights, onChange, title, accent }: RangeEditorProps) {
+export function RangeEditor({
+  weights,
+  onChange,
+  title,
+  accent,
+  compact = false,
+  showActions = true,
+}: RangeEditorProps) {
   const comboCount = useMemo(
     () => rangeComboCount(weightsToRange(weights)),
     [weights]
@@ -39,7 +39,7 @@ export function RangeEditor({ weights, onChange, title, accent }: RangeEditorPro
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className={`flex min-h-0 flex-col ${compact ? 'gap-2' : 'gap-3'}`}>
       {title && (
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 font-medium">
@@ -59,29 +59,24 @@ export function RangeEditor({ weights, onChange, title, accent }: RangeEditorPro
 
       <HandMatrix mode="select" weights={weights} onWeightsChange={onChange} />
 
-      <div className="flex flex-wrap gap-1">
-        {PRESETS.map((p) => (
+      {showActions && (
+        <div className="flex justify-end gap-1">
           <button
-            key={p.label}
-            onClick={() => onChange(rangeToWeights(parseRange(p.range)))}
-            className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            type="button"
+            onClick={selectAll}
+            className="min-h-8 rounded-md border border-border px-2 text-xs text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            {p.label}
+            All
           </button>
-        ))}
-        <button
-          onClick={selectAll}
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          All
-        </button>
-        <button
-          onClick={() => onChange({})}
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Clear
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => onChange({})}
+            className="min-h-8 rounded-md border border-border px-2 text-xs text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Clear
+          </button>
+        </div>
+      )}
     </div>
   );
 }

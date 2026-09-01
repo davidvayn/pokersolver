@@ -3,7 +3,7 @@ import { cardRank, cardSuit, RANKS, type Card } from '@/lib/cards';
 export const CARD_SUIT_GLYPHS = ['♣', '♦', '♥', '♠'] as const;
 export const CARD_SUIT_NAMES = ['clubs', 'diamonds', 'hearts', 'spades'] as const;
 
-type PokerCardSize = 'practice' | 'sm' | 'md' | 'lg';
+type PokerCardSize = 'practice' | 'sm' | 'md' | 'lg' | 'xl';
 
 export function PokerCard({
   card,
