@@ -294,11 +294,16 @@ function StrategySurface({ context }: { context: WorkspaceContext }) {
           <GeminiMark className="h-5 w-5" />
         </button>
       </div>
-      {analysisOpen ? (
-        <div className="min-h-0 flex-1 overflow-hidden rounded-md bg-surface-2/40 p-3">
-          <AiPanel getSpot={context.getAnalysisSpot} embedded />
-        </div>
-      ) : node && context.result && !context.result.error ? (
+      <div
+        className={
+          analysisOpen
+            ? 'min-h-0 flex-1 overflow-hidden rounded-md bg-surface-2/40 p-3'
+            : 'hidden'
+        }
+      >
+        <AiPanel getSpot={context.getAnalysisSpot} embedded />
+      </div>
+      {!analysisOpen && node && context.result && !context.result.error ? (
         <div className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden">
           <StrategyView
             node={node}
@@ -312,9 +317,9 @@ function StrategySurface({ context }: { context: WorkspaceContext }) {
             </span>
           )}
         </div>
-      ) : (
+      ) : !analysisOpen ? (
         <EmptyStrategy context={context} />
-      )}
+      ) : null}
       {!analysisOpen &&
         context.showSolverStats &&
         context.result &&

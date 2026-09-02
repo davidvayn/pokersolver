@@ -16,6 +16,67 @@ export interface SpotContext {
   extra?: Record<string, string>;
 }
 
+export interface AiConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const TRANSIENT_SPOT_FIELDS = new Set(['Exploitability', 'OOP EV', 'IP EV']);
+
+/**
+ * Stable identity for the inputs a user considers "the spot". Solver
+ * diagnostics arrive asynchronously and must not create a new chat thread.
+ */
+export function buildSpotThreadKey(spot: SpotContext | null): string {
+  if (!spot) return 'empty-spot';
+  const extra = Object.fromEntries(
+    Object.entries(spot.extra ?? {})
+      .filter(([key]) => !TRANSIENT_SPOT_FIELDS.has(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+  return JSON.stringify({
+    kind: spot.kind,
+    board: spot.board ?? '',
+    hero: spot.hero ?? '',
+    villain: spot.villain ?? '',
+    heroRange: spot.heroRange ?? '',
+    villainRange: spot.villainRange ?? '',
+    potBB: spot.potBB ?? null,
+    stackBB: spot.stackBB ?? null,
+    extra,
+  });
+}
+
+export function describeSpot(spot: SpotContext | null): string {
+  if (!spot) return 'Incomplete spot';
+  const board = spot.board?.match(/.{1,2}/g)?.join(' ') || 'No board';
+  const pot = spot.potBB == null ? null : `${spot.potBB}bb pot`;
+  return [board, pot].filter(Boolean).join(' · ');
+}
+
+/** Keep follow-up context bounded and provider-safe at the API boundary. */
+export function normalizeConversation(
+  value: unknown,
+  maxMessages = 12
+): AiConversationMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (message): message is AiConversationMessage =>
+        Boolean(message) &&
+        typeof message === 'object' &&
+        ((message as AiConversationMessage).role === 'user' ||
+          (message as AiConversationMessage).role === 'assistant') &&
+        typeof (message as AiConversationMessage).content === 'string'
+    )
+    .map((message) => ({
+      role: message.role,
+      content: message.content.trim().slice(0, 8000),
+    }))
+    .filter((message) => message.content.length > 0)
+    .slice(-maxMessages);
+}
+
 export const SYSTEM_PROMPT =
   'You are a world-class Texas Hold\'em poker coach. Analyze the given spot ' +
   'using GTO and exploitative reasoning. Be concise and specific: reference ' +

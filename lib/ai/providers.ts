@@ -1,7 +1,7 @@
 // AI provider definitions. Adding a provider here + a branch in the analyze
 // route is all that's needed to support it.
 
-export type ProviderId = 'anthropic' | 'openai';
+export type ProviderId = 'anthropic' | 'openai' | 'gemini';
 
 export interface ProviderDef {
   id: ProviderId;
@@ -28,6 +28,20 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1'],
     keyPlaceholder: 'sk-…',
     keyUrl: 'https://platform.openai.com/api-keys',
+  },
+  gemini: {
+    id: 'gemini',
+    label: 'Google (Gemini)',
+    defaultModel: 'gemini-3.7-flash',
+    models: [
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-3.5-flash-lite',
+      'gemini-2.5-pro',
+    ],
+    keyPlaceholder: 'AIza…',
+    keyUrl: 'https://aistudio.google.com/app/apikey',
   },
 };
 
