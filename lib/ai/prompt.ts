@@ -82,7 +82,9 @@ export const SYSTEM_PROMPT =
   'using GTO and exploitative reasoning. Be concise and specific: reference ' +
   'concrete hands, board textures, ranges, and equities. Prefer bullet points. ' +
   'When equity or solver numbers are provided, ground your reasoning in them ' +
-  'rather than contradicting them. Avoid generic advice.';
+  'rather than contradicting them. Format responses as Markdown with short ' +
+  'headings and bullet lists. Use plain card notation such as Qh, 7s, and 2c; ' +
+  'do not use LaTeX. Avoid generic advice.';
 
 export function buildUserPrompt(spot: SpotContext): string {
   const lines: string[] = [];

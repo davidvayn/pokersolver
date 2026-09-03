@@ -196,7 +196,7 @@ function RangeSurface({ context }: { context: WorkspaceContext }) {
           showActions={false}
         />
         <div
-          className="mt-2 grid grid-cols-3 gap-2 border-t border-border pt-2"
+          className="mt-4 grid grid-cols-3 gap-2"
           aria-label="Range and spot tools"
         >
           <button

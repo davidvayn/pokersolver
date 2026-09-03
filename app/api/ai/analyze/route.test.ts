@@ -202,4 +202,51 @@ describe("AI analysis route conversation", () => {
       await reader.cancel();
     }
   });
+
+  it("closes after Gemini's terminal event without waiting for the socket", async () => {
+    const encoder = new TextEncoder();
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"candidates":[{"content":{"parts":[{"text":"Complete"}]},"finishReason":"STOP"}]}\r\n\r\n',
+          ),
+        );
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(upstream, {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const response = await POST(
+      new NextRequest("http://localhost/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "gemini",
+          apiKey: "gemini-test-key",
+          model: "gemini-3.7-flash",
+          spot: SPOT,
+        }),
+      }),
+    );
+    const reader = response.body!.getReader();
+
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(
+      "Complete",
+    );
+    const completed = await Promise.race([
+      reader.read(),
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), 50),
+      ),
+    ]);
+    expect(completed).not.toBe("timeout");
+    if (completed !== "timeout") expect(completed.done).toBe(true);
+  });
 });

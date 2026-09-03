@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { SendHorizontal } from "lucide-react";
+import { AiMarkdown } from "@/components/ai/AiMarkdown";
 import { GeminiMark } from "@/components/ai/GeminiMark";
 import {
   buildSpotThreadKey,
@@ -33,6 +34,7 @@ type AiStatus = "idle" | "streaming" | "switching";
 type StreamOutcome = "completed" | "aborted" | "failed";
 
 const FIRST_TOKEN_TIMEOUT_MS = 30_000;
+const STREAM_IDLE_TIMEOUT_MS = 15_000;
 
 const SUGGESTED_QUESTIONS = [
   "Why this sizing?",
@@ -158,10 +160,19 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
     requestRef.current = controller;
     let receivedText = false;
     let timedOut = false;
+    let completedAfterIdle = false;
+    let streamIdleTimeout: number | undefined;
     const firstTokenTimeout = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, FIRST_TOKEN_TIMEOUT_MS);
+    const armStreamIdleTimeout = () => {
+      if (streamIdleTimeout) window.clearTimeout(streamIdleTimeout);
+      streamIdleTimeout = window.setTimeout(() => {
+        completedAfterIdle = true;
+        controller.abort();
+      }, STREAM_IDLE_TIMEOUT_MS);
+    };
     setError("");
     setStatus("streaming");
 
@@ -196,6 +207,7 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
           if (!receivedText) window.clearTimeout(firstTokenTimeout);
           receivedText = true;
           onChunk(chunk);
+          armStreamIdleTimeout();
         }
       }
       const remainder = decoder.decode();
@@ -210,6 +222,10 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
       if (requestRef.current === controller) setStatus("idle");
       return "completed";
     } catch (caught) {
+      if (completedAfterIdle && receivedText) {
+        if (requestRef.current === controller) setStatus("idle");
+        return "completed";
+      }
       if (timedOut) {
         if (requestRef.current === controller) {
           setStatus("idle");
@@ -225,6 +241,7 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
       return "failed";
     } finally {
       window.clearTimeout(firstTokenTimeout);
+      if (streamIdleTimeout) window.clearTimeout(streamIdleTimeout);
       if (requestRef.current === controller) requestRef.current = null;
     }
   }
@@ -376,20 +393,22 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
               Previous spot · {thread.label}
             </summary>
             <div className="max-h-52 space-y-2 overflow-y-auto border-t border-border p-3 text-fg/80">
-              <p className="whitespace-pre-wrap leading-relaxed">
-                {thread.analysis}
-              </p>
+              <AiMarkdown content={thread.analysis} />
               {thread.messages.map((message) => (
-                <p
+                <div
                   key={message.id}
-                  className={`whitespace-pre-wrap rounded-md px-2.5 py-2 leading-relaxed ${
+                  className={`rounded-md px-2.5 py-2 leading-relaxed ${
                     message.role === "user"
                       ? "ml-6 bg-accent/15"
                       : "mr-6 bg-surface-2"
                   }`}
                 >
-                  {message.content}
-                </p>
+                  {message.role === "assistant" ? (
+                    <AiMarkdown content={message.content} />
+                  ) : (
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  )}
+                </div>
               ))}
             </div>
           </details>
@@ -463,32 +482,37 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
 
         {analysis ? (
           <div className="space-y-3 pb-3">
-            <div
-              aria-live="polite"
-              className="prose-poker whitespace-pre-wrap text-sm leading-relaxed text-fg/90"
-            >
-              {analysis}
+            <div aria-live="polite">
+              <AiMarkdown
+                content={analysis}
+                className="prose-poker text-sm text-fg/90"
+              />
             </div>
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`whitespace-pre-wrap rounded-lg px-3 py-2.5 text-sm leading-relaxed ${
+                className={`rounded-lg px-3 py-2.5 text-sm leading-relaxed ${
                   message.role === "user"
                     ? "ml-8 bg-accent/15 text-fg"
                     : "mr-8 border border-border bg-surface text-fg/90"
                 }`}
               >
-                {message.content ||
-                  (pendingReplyId === message.id ? (
-                    <span
-                      className="inline-flex gap-1"
-                      aria-label="AI is replying"
-                    >
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:120ms]" />
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:240ms]" />
-                    </span>
-                  ) : null)}
+                {message.content ? (
+                  message.role === "assistant" ? (
+                    <AiMarkdown content={message.content} />
+                  ) : (
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  )
+                ) : pendingReplyId === message.id ? (
+                  <span
+                    className="inline-flex gap-1"
+                    aria-label="AI is replying"
+                  >
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:120ms]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:240ms]" />
+                  </span>
+                ) : null}
               </div>
             ))}
             {messages.length === 0 && status !== "streaming" && (

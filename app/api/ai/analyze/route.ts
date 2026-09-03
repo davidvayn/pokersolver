@@ -189,7 +189,12 @@ function normalizeStream(
         .map((line) => line.slice(5).trimStart())
         .join("\n")
         .trim();
-      if (!data || data === "[DONE]") continue;
+      if (!data) continue;
+      if (data === "[DONE]") {
+        controller.close();
+        void reader.cancel();
+        return true;
+      }
       try {
         const obj = JSON.parse(data);
         // Surface provider-side errors instead of silently dropping them.
@@ -218,6 +223,15 @@ function normalizeStream(
                   .join("")
               : (obj.choices?.[0]?.delta?.content ?? "");
         if (text) controller.enqueue(encoder.encode(text));
+        const streamFinished =
+          (provider === "gemini" &&
+            Boolean(obj.candidates?.[0]?.finishReason)) ||
+          (provider === "anthropic" && obj.type === "message_stop");
+        if (streamFinished) {
+          controller.close();
+          void reader.cancel();
+          return true;
+        }
       } catch {
         /* skip non-JSON keepalive events */
       }
