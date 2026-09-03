@@ -32,7 +32,7 @@
 }
 
 .solver-workspace-matrix {
-  max-width: min(100%, 60vh, calc(100dvh - 360px));
+  max-width: min(100%, 60vh, calc(100dvh - 380px));
 }
 
 .solver-workspace-range-matrix {
@@ -50,7 +50,10 @@
 }
 
 @media (max-height: 600px) {
-  .solver-workspace-matrix,
+  .solver-workspace-matrix {
+    max-width: min(100%, 22vh, calc(100dvh - 318px)) !important;
+  }
+
   .solver-workspace-range-matrix {
     max-width: min(100%, 22vh) !important;
   }
