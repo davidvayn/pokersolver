@@ -317,21 +317,67 @@ export interface EvBreakdown {
   lowConfidencePercentage: number;
 }
 
+export interface PracticeTrendPoint {
+  key: string;
+  label: string;
+  timestamp: number;
+  decisions: number;
+  graded: number;
+  averageEvLossBb: number | null;
+  strongDecisionPercentage: number | null;
+  averageResponseMs: number | null;
+}
+
+export interface PracticeActivityPoint {
+  key: string;
+  label: string;
+  timestamp: number;
+  decisions: number;
+}
+
+export interface PracticeGradeBreakdown {
+  grade: PracticeGrade;
+  label: string;
+  decisions: number;
+  percentage: number;
+}
+
+export interface PracticeDecisionPoint {
+  id: string;
+  label: string;
+  responseMs: number;
+  evLossBb: number;
+  grade: PracticeGrade;
+}
+
 export interface PracticeStats {
   hands: number;
   decisions: number;
   gradedDecisions: number;
+  strongDecisions: number;
+  strongDecisionPercentage: number;
+  gradedCoveragePercentage: number;
   averageEvLossBb: number | null;
   totalEvLossBb: number;
   lowConfidencePercentage: number;
   averageResponseMs: number;
+  averageHandDurationMs: number;
+  decisionsPerHand: number;
+  activeDays: number;
+  currentStreakDays: number;
+  longestStreakDays: number;
   trendEvLossBb: number | null;
+  dailyTrend: PracticeTrendPoint[];
+  activity: PracticeActivityPoint[];
+  gradeDistribution: PracticeGradeBreakdown[];
+  decisionPoints: PracticeDecisionPoint[];
   byStreet: EvBreakdown[];
   byStack: EvBreakdown[];
   byPosition: EvBreakdown[];
   byAction: EvBreakdown[];
   byMode: EvBreakdown[];
   bySeverity: EvBreakdown[];
+  byResponseTime: EvBreakdown[];
   weaknesses: EvBreakdown[];
   recentCostly: PracticeDecisionRecord[];
 }

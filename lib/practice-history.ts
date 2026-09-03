@@ -11,7 +11,16 @@ export const PRACTICE_DB_NAME = 'poker-lab-practice-v3';
 export const PRACTICE_DB_VERSION = 1;
 export const PRACTICE_HAND_STORE = 'hands';
 const HISTORY_EVENT = 'poker-lab-practice-history-v3';
+const HISTORY_CHANNEL = 'poker-lab-practice-history-sync-v3';
 const MAX_HANDS = 5_000;
+
+function notifyPracticeHistoryChanged(): void {
+  window.dispatchEvent(new Event(HISTORY_EVENT));
+  if (typeof window.BroadcastChannel === 'undefined') return;
+  const channel = new window.BroadcastChannel(HISTORY_CHANNEL);
+  channel.postMessage(HISTORY_EVENT);
+  channel.close();
+}
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -201,7 +210,7 @@ export async function savePracticeHand(
     transaction.objectStore(PRACTICE_HAND_STORE).put(hand);
     await transactionDone(transaction);
     await trimHistory(database);
-    window.dispatchEvent(new Event(HISTORY_EVENT));
+    notifyPracticeHistoryChanged();
     return true;
   } catch {
     return false;
@@ -217,7 +226,7 @@ export async function clearPracticeHistory(): Promise<boolean> {
     const transaction = database.transaction(PRACTICE_HAND_STORE, 'readwrite');
     transaction.objectStore(PRACTICE_HAND_STORE).clear();
     await transactionDone(transaction);
-    window.dispatchEvent(new Event(HISTORY_EVENT));
+    notifyPracticeHistoryChanged();
     return true;
   } catch {
     return false;
@@ -229,5 +238,14 @@ export async function clearPracticeHistory(): Promise<boolean> {
 export function subscribePracticeHistory(listener: () => void): () => void {
   if (typeof window === 'undefined') return () => undefined;
   window.addEventListener(HISTORY_EVENT, listener);
-  return () => window.removeEventListener(HISTORY_EVENT, listener);
+  const channel =
+    typeof window.BroadcastChannel === 'undefined'
+      ? null
+      : new window.BroadcastChannel(HISTORY_CHANNEL);
+  channel?.addEventListener('message', listener);
+  return () => {
+    window.removeEventListener(HISTORY_EVENT, listener);
+    channel?.removeEventListener('message', listener);
+    channel?.close();
+  };
 }

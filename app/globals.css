@@ -181,6 +181,95 @@ textarea {
   cursor: pointer;
 }
 
+/* Practice analytics: restrained, one-shot motion for chart comprehension. */
+@keyframes stats-overview-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes stats-line-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes stats-bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.stats-overview-item {
+  animation: stats-overview-enter 360ms ease-out both;
+}
+
+.stats-overview-item:nth-child(2) {
+  animation-delay: 45ms;
+}
+
+.stats-overview-item:nth-child(3) {
+  animation-delay: 90ms;
+}
+
+.stats-overview-item:nth-child(4) {
+  animation-delay: 135ms;
+}
+
+.stats-overview-item + .stats-overview-item {
+  border-top: 1px solid rgb(var(--border));
+}
+
+.stats-chart-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: stats-line-draw 720ms 160ms ease-out forwards;
+}
+
+.stats-bar-fill {
+  animation: stats-bar-grow 520ms 120ms ease-out both;
+}
+
+.stats-live-dot {
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.14);
+}
+
+.stats-empty-state > div:first-child {
+  background-image:
+    linear-gradient(rgb(var(--border) / 0.42) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--border) / 0.42) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, transparent, black 45%, transparent);
+}
+
+@media (min-width: 640px) and (max-width: 1279px) {
+  .stats-overview-item:nth-child(even) {
+    border-left: 1px solid rgb(var(--border));
+  }
+
+  .stats-overview-item:nth-child(3) {
+    border-top: 1px solid rgb(var(--border));
+  }
+}
+
+@media (min-width: 1280px) {
+  .stats-overview-item + .stats-overview-item {
+    border-left: 1px solid rgb(var(--border));
+    border-top: 0;
+  }
+}
+
 /* Heads-up practice table */
 .practice-table-shell {
   min-height: 540px;

@@ -5,6 +5,7 @@ import {
   loadPracticeHands,
   PRACTICE_DB_NAME,
   savePracticeHand,
+  subscribePracticeHistory,
 } from '@/lib/practice-history';
 import { analyzePractice } from '@/lib/practice-stats';
 import { buildOpponentModel } from '@/lib/opponent-model';
@@ -74,11 +75,7 @@ function deleteDatabase(): Promise<void> {
 }
 
 beforeEach(async () => {
-  vi.stubGlobal('window', {
-    dispatchEvent: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  });
+  vi.stubGlobal('window', new EventTarget());
   await deleteDatabase();
 });
 
@@ -97,6 +94,34 @@ describe('fresh IndexedDB practice history', () => {
     ]);
     expect(await clearPracticeHistory()).toBe(true);
     expect(await loadPracticeHands()).toEqual([]);
+  });
+
+  it('notifies live stats subscribers when practice writes new history', async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribePracticeHistory(listener);
+    expect(await savePracticeHand(hand('h4', [decision('d4', 0.1)]))).toBe(true);
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
+    expect(await clearPracticeHistory()).toBe(true);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes subscribers when another tab broadcasts a history change', () => {
+    const channels: EventTarget[] = [];
+    class TestBroadcastChannel extends EventTarget {
+      constructor(_name: string) {
+        super();
+        channels.push(this);
+      }
+
+      close() {}
+    }
+    Object.assign(window, { BroadcastChannel: TestBroadcastChannel });
+    const listener = vi.fn();
+    const unsubscribe = subscribePracticeHistory(listener);
+    channels[0].dispatchEvent(new Event('message'));
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
   });
 
   it('ignores malformed writes instead of contaminating the fresh schema', async () => {

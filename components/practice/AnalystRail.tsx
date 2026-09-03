@@ -16,6 +16,7 @@ import type {
   PracticeSettings,
 } from '@/lib/practice-types';
 import { pushFoldDepths } from '@/lib/push-fold-policy';
+import { summarizePracticeDecisions } from '@/lib/practice-stats';
 
 export type RailTab = 'feedback' | 'history' | 'settings' | 'stats';
 
@@ -476,17 +477,15 @@ function HistoryPanel({ recentHands }: { recentHands: PracticeHandRecord[] }) {
 }
 
 function StatsPanel({ decisions }: { decisions: PracticeDecisionRecord[] }) {
-  const graded = decisions.filter((decision) => decision.evLossBb !== null);
-  const total = graded.reduce((sum, decision) => sum + (decision.evLossBb ?? 0), 0);
-  const low = decisions.filter((decision) => decision.lowConfidence).length;
+  const stats = summarizePracticeDecisions(decisions);
   return (
     <div className="p-4">
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border">
         {[
-          ['Decisions', String(decisions.length)],
-          ['Graded', String(graded.length)],
-          ['Avg EV loss', graded.length ? `${(total / graded.length).toFixed(3)}bb` : '—'],
-          ['Low confidence', decisions.length ? `${Math.round((low / decisions.length) * 100)}%` : '—'],
+          ['Decisions', String(stats.decisions)],
+          ['Strong decisions', pct(stats.strongDecisionPercentage)],
+          ['Avg EV loss', stats.averageEvLossBb === null ? '—' : `${stats.averageEvLossBb.toFixed(3)}bb`],
+          ['Average response', stats.averageResponseMs ? `${(stats.averageResponseMs / 1_000).toFixed(1)}s` : '—'],
         ].map(([label, value]) => (
           <div key={label} className="bg-surface p-3">
             <p className="text-[11px] text-muted">{label}</p>
@@ -494,6 +493,9 @@ function StatsPanel({ decisions }: { decisions: PracticeDecisionRecord[] }) {
           </div>
         ))}
       </div>
+      <p className="mt-3 font-mono text-[11px] text-muted">
+        {stats.gradedDecisions}/{stats.decisions} EV graded · {pct(stats.lowConfidencePercentage)} low confidence
+      </p>
       <p className="mt-4 text-xs leading-5 text-muted">
         Goals finish the current hand before showing a summary. Continuing keeps this table and run intact.
       </p>
