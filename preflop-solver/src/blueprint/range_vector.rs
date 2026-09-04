@@ -59,6 +59,7 @@ pub(super) struct PublicInformationSetCache {
     board: [u8; 5],
     hand_bucket_trajectories: [Vec<Option<Vec<Arc<str>>>>; 4],
     public_bucket_trajectories: [Vec<Arc<str>>; 4],
+    terminal: OnceLock<PublicTerminalCache>,
 }
 
 impl PublicInformationSetCache {
@@ -76,11 +77,24 @@ impl PublicInformationSetCache {
         let streets = [Street::Preflop, Street::Flop, Street::Turn, Street::River];
         Ok(Self {
             board,
+            terminal: OnceLock::new(),
             hand_bucket_trajectories: std::array::from_fn(|_| vec![None; EXACT_COMBO_COUNT]),
             public_bucket_trajectories: std::array::from_fn(|index| {
                 public_bucket_trajectory(&deal, streets[index])
             }),
         })
+    }
+
+    pub fn terminal_values(
+        &self,
+        invested: [f64; 2],
+        opponent_reach: &[f64],
+        player: usize,
+        terminal: RangeTerminalKind,
+    ) -> Result<Vec<f64>, String> {
+        self.terminal
+            .get_or_init(|| PublicTerminalCache::new(self.board))
+            .values(invested, opponent_reach, player, terminal)
     }
 
     pub fn map(
@@ -100,6 +114,7 @@ impl PublicInformationSetCache {
         };
         let mut keys = vec![None; EXACT_COMBO_COUNT];
         let mut descriptors = BTreeMap::<u64, (NodeDescriptor, Vec<String>)>::new();
+        let mut bucket_keys = BTreeMap::<Vec<Arc<str>>, u64>::new();
         for (combo_index, (combo, active)) in exact_combos().iter().zip(active_combos).enumerate() {
             if !*active {
                 continue;
@@ -119,12 +134,17 @@ impl PublicInformationSetCache {
                 self.hand_bucket_trajectories[street_index][combo_index] = Some(buckets.clone());
                 buckets
             };
+            if let Some(key) = bucket_keys.get(&hand_buckets) {
+                keys[combo_index] = Some(*key);
+                continue;
+            }
             let (key, descriptor, public_history) = information_set_from_bucket_trajectories(
                 state,
                 config,
-                hand_buckets,
+                hand_buckets.clone(),
                 self.public_bucket_trajectories[street_index].clone(),
             );
+            bucket_keys.insert(hand_buckets, key);
             if let Some((existing_descriptor, existing_history)) = descriptors.get(&key) {
                 if existing_descriptor != &descriptor || existing_history != &public_history {
                     return Err("information-set hash collision in public-range mapping".to_owned());
@@ -213,7 +233,7 @@ pub fn aggregate_information_set_updates(
     let mut updates = BTreeMap::<u64, RangeInformationSetUpdate>::new();
     for combo in 0..EXACT_COMBO_COUNT {
         let Some(key) = information_set_keys[combo] else {
-            if private_chance_weights[combo] > EPSILON || actor_realization_reach[combo] > EPSILON {
+            if private_chance_weights[combo] > 0.0 || actor_realization_reach[combo] > 0.0 {
                 return Err("reached exact combo is missing an information-set key".to_owned());
             }
             continue;
@@ -234,7 +254,7 @@ pub fn aggregate_information_set_updates(
                 average_contributions: 0,
             });
         let chance_weight = private_chance_weights[combo];
-        if chance_weight > EPSILON {
+        if chance_weight > 0.0 {
             let expected = evaluation.expected_counterfactual_values_bb[actor][combo];
             for (action, delta) in update.regret_deltas_bb.iter_mut().enumerate() {
                 *delta +=
@@ -291,7 +311,7 @@ pub fn aggregate_average_strategy_updates(
     for combo in 0..EXACT_COMBO_COUNT {
         let reach = actor_realization_reach[combo];
         let Some(key) = information_set_keys[combo] else {
-            if reach > EPSILON {
+            if reach > 0.0 {
                 return Err("reached exact combo is missing an information-set key".to_owned());
             }
             continue;
@@ -346,11 +366,11 @@ pub fn opponent_action_proposal(
         return Err("opponent action proposal has invalid dimensions or weights".to_owned());
     }
     let total_reach = actor_reach.iter().sum::<f64>();
-    if total_reach <= EPSILON {
+    if total_reach <= 0.0 || !total_reach.is_finite() {
         return Err("opponent action proposal requires positive range reach".to_owned());
     }
     for combo in 0..EXACT_COMBO_COUNT {
-        if actor_reach[combo] <= EPSILON {
+        if actor_reach[combo] == 0.0 {
             continue;
         }
         let total = action_probabilities
@@ -391,7 +411,7 @@ pub fn importance_sample_opponent_range(
         || selected_action >= action_probabilities.len()
         || action_probabilities[selected_action].len() != EXACT_COMBO_COUNT
         || !proposal_probability.is_finite()
-        || proposal_probability <= EPSILON
+        || proposal_probability <= 0.0
     {
         return Err("importance-sampled opponent range has invalid inputs".to_owned());
     }
@@ -403,6 +423,67 @@ pub fn importance_sample_opponent_range(
         }
     }
     Ok(child)
+}
+
+/// Remove analytically integrated actions from the proposal, then normalize
+/// only the remaining support. The recursive estimator must divide by this
+/// conditional probability, not by the original all-action probability.
+pub fn continuation_action_proposal(
+    proposal: &[f64],
+    terminal: &[bool],
+) -> Result<Option<Vec<f64>>, String> {
+    if proposal.len() != terminal.len()
+        || proposal.is_empty()
+        || proposal.iter().any(|p| !p.is_finite() || *p < 0.0)
+        || (proposal.iter().sum::<f64>() - 1.0).abs() > 1e-9
+    {
+        return Err("invalid terminal/continuation proposal".to_owned());
+    }
+    let mut remaining = proposal
+        .iter()
+        .zip(terminal)
+        .map(|(p, terminal)| if *terminal { 0.0 } else { *p })
+        .collect::<Vec<_>>();
+    let mass = remaining.iter().sum::<f64>();
+    if mass == 0.0 {
+        return Ok(None);
+    }
+    for p in &mut remaining {
+        *p /= mass;
+    }
+    Ok(Some(remaining))
+}
+
+/// Add a sampled control-variate residual to the integrated branch baselines.
+/// `sampled_cfv` already includes the proposal correction in its input range;
+/// `baseline` is the uncorrected branch contribution (including sigma).
+pub fn add_baseline_residual(
+    integrated: &mut [f64],
+    sampled_cfv: &[f64],
+    baseline: &[f64],
+    proposal_probability: f64,
+) -> Result<(), String> {
+    if integrated.len() != EXACT_COMBO_COUNT
+        || sampled_cfv.len() != integrated.len()
+        || baseline.len() != integrated.len()
+        || !proposal_probability.is_finite()
+        || proposal_probability <= 0.0
+        || proposal_probability > 1.0
+        || integrated
+            .iter()
+            .chain(sampled_cfv)
+            .chain(baseline)
+            .any(|v| !v.is_finite())
+    {
+        return Err("invalid baseline-corrected range values".to_owned());
+    }
+    for ((value, sampled), baseline) in integrated.iter_mut().zip(sampled_cfv).zip(baseline) {
+        *value += sampled - baseline / proposal_probability;
+        if !value.is_finite() {
+            return Err("non-finite baseline-corrected range value".to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// Apply one exact-combo policy row at a public node. The actor reach is split
@@ -505,7 +586,7 @@ fn validate_action_probabilities(
             }
             total += probability;
         }
-        if ranges[actor][combo] > EPSILON && (total - 1.0).abs() > 1e-9 {
+        if ranges[actor][combo] > 0.0 && (total - 1.0).abs() > 1e-9 {
             return Err("reached exact-combo action probabilities must sum to one".to_owned());
         }
     }
@@ -532,7 +613,7 @@ pub fn evaluate_terminal_ranges(
         .zip(&compatible_opponent_mass[0])
         .map(|(reach, mass)| reach * mass)
         .sum::<f64>();
-    if joint_reach_mass <= EPSILON {
+    if joint_reach_mass <= 0.0 {
         return Err("exact ranges contain no compatible private deals".to_owned());
     }
 
@@ -608,7 +689,7 @@ fn validate_inputs(
             ));
         }
         if range.iter().zip(combos).any(|(weight, combo)| {
-            *weight > EPSILON && combo.cards().iter().any(|card| unique.contains(card))
+            *weight > 0.0 && combo.cards().iter().any(|card| unique.contains(card))
         }) {
             return Err(format!(
                 "player {player} range assigns reach to a board-blocked combination"
@@ -621,6 +702,131 @@ fn validate_inputs(
 fn exact_combos() -> &'static [Combo] {
     static COMBOS: OnceLock<Vec<Combo>> = OnceLock::new();
     COMBOS.get_or_init(all_combos)
+}
+
+/// Board-local terminal kernel. Rank each compatible hand once per sampled
+/// board, then evaluate each changing opponent range in linear time. For hero
+/// cards x,y, compatible mass is total - mass(x) - mass(y) + mass(x,y).
+/// The same inclusion/exclusion identity applies separately to weaker hands,
+/// ties and stronger hands. Only the traverser's CFVs are needed by MCCFR.
+struct PublicTerminalCache {
+    active: Vec<bool>,
+    ranked: Vec<usize>,
+    group_ends: Vec<usize>,
+}
+
+impl PublicTerminalCache {
+    fn new(board: [u8; 5]) -> Self {
+        let combos = exact_combos();
+        let active = combos
+            .iter()
+            .map(|combo| !combo.cards().iter().any(|card| board.contains(card)))
+            .collect::<Vec<_>>();
+        let mut scores = combos
+            .iter()
+            .enumerate()
+            .filter_map(|(key, combo)| {
+                active[key].then(|| {
+                    let cards = combo.cards();
+                    (
+                        evaluate(&[
+                            cards[0], cards[1], board[0], board[1], board[2], board[3], board[4],
+                        ]),
+                        key,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        scores.sort_unstable();
+        let mut group_ends = Vec::new();
+        for index in 0..scores.len() {
+            if index + 1 == scores.len() || scores[index].0 != scores[index + 1].0 {
+                group_ends.push(index + 1);
+            }
+        }
+        Self {
+            active,
+            ranked: scores.into_iter().map(|(_, key)| key).collect(),
+            group_ends,
+        }
+    }
+
+    fn values(
+        &self,
+        invested: [f64; 2],
+        opponent: &[f64],
+        player: usize,
+        terminal: RangeTerminalKind,
+    ) -> Result<Vec<f64>, String> {
+        if player > 1
+            || opponent.len() != EXACT_COMBO_COUNT
+            || invested.iter().any(|v| !v.is_finite() || *v < 0.0)
+            || matches!(terminal, RangeTerminalKind::Fold { winner } if winner > 1)
+            || opponent
+                .iter()
+                .zip(&self.active)
+                .any(|(mass, active)| !mass.is_finite() || *mass < 0.0 || (*mass > 0.0 && !active))
+        {
+            return Err("cached terminal has invalid investments or opponent reach".to_owned());
+        }
+        let combos = exact_combos();
+        let mut total = 0.0;
+        let mut card_total = [0.0; 52];
+        for &key in &self.ranked {
+            let [x, y] = combos[key].cards();
+            let mass = opponent[key];
+            total += mass;
+            card_total[x as usize] += mass;
+            card_total[y as usize] += mass;
+        }
+        let mut values = vec![0.0; EXACT_COMBO_COUNT];
+        if let RangeTerminalKind::Fold { winner } = terminal {
+            let utility = if winner == player {
+                invested[1 - player]
+            } else {
+                -invested[player]
+            };
+            for &key in &self.ranked {
+                let [x, y] = combos[key].cards();
+                values[key] = (total - card_total[x as usize] - card_total[y as usize]
+                    + opponent[key])
+                    .max(0.0)
+                    * utility;
+            }
+            return Ok(values);
+        }
+
+        let mut lower = 0.0f64;
+        let mut card_lower = [0.0f64; 52];
+        let mut start = 0;
+        for &end in &self.group_ends {
+            let mut equal = 0.0;
+            let mut card_equal = [0.0; 52];
+            for &key in &self.ranked[start..end] {
+                let [x, y] = combos[key].cards();
+                equal += opponent[key];
+                card_equal[x as usize] += opponent[key];
+                card_equal[y as usize] += opponent[key];
+            }
+            for &key in &self.ranked[start..end] {
+                let [x, y] = combos[key].cards().map(usize::from);
+                let weaker = (lower - card_lower[x] - card_lower[y]).max(0.0);
+                // The identical private combo is subtracted twice by the two
+                // card masses, so it must be added back once in the tie group.
+                let tied = (equal - card_equal[x] - card_equal[y] + opponent[key]).max(0.0);
+                let compatible = total - card_total[x] - card_total[y] + opponent[key];
+                let stronger = (compatible - weaker - tied).max(0.0);
+                values[key] = weaker * invested[1 - player] - stronger * invested[player]
+                    + tied * 0.5 * (invested[1 - player] - invested[player]);
+            }
+            lower += equal;
+            for card in 0..52 {
+                card_lower[card] += card_equal[card];
+            }
+            start = end;
+        }
+        Ok(values)
+    }
 }
 
 fn compatible_masses(range: &[f64], conflicts: &[Vec<usize>]) -> Vec<f64> {
@@ -872,6 +1078,66 @@ mod tests {
     }
 
     #[test]
+    fn cached_linear_terminal_matches_reference_on_dense_sparse_and_tied_ranges() {
+        let mut rng = SplitMix64::new(94001);
+        for board in [[0, 5, 10, 27, 28], [32, 36, 40, 44, 48], [0, 1, 2, 3, 51]] {
+            let cache = PublicTerminalCache::new(board);
+            for sparse in [false, true] {
+                let ranges: [Vec<f64>; 2] = std::array::from_fn(|_| {
+                    cache
+                        .active
+                        .iter()
+                        .map(|active| {
+                            if *active && (!sparse || rng.index(11) == 0) {
+                                (rng.index(1000) + 1) as f64 / 1234.0
+                            } else {
+                                0.0
+                            }
+                        })
+                        .collect()
+                });
+                for terminal in [
+                    RangeTerminalKind::Showdown,
+                    RangeTerminalKind::Fold { winner: 0 },
+                    RangeTerminalKind::Fold { winner: 1 },
+                ] {
+                    let reference =
+                        evaluate_terminal_ranges(board, [7.0, 11.0], &ranges, terminal).unwrap();
+                    for player in 0..2 {
+                        let actual = cache
+                            .values([7.0, 11.0], &ranges[1 - player], player, terminal)
+                            .unwrap();
+                        for key in 0..EXACT_COMBO_COUNT {
+                            if cache.active[key] {
+                                assert!(
+                                    (actual[key] - reference.counterfactual_values_bb[player][key])
+                                        .abs()
+                                        < 1e-9,
+                                    "board={board:?} key={key} terminal={terminal:?}"
+                                );
+                            } else {
+                                assert_eq!(actual[key], 0.0);
+                            }
+                        }
+                    }
+                }
+                // CFR visits zero-own-reach branches: the CFVs depend only
+                // on the opponent range. An empty opponent range returns zero.
+                assert!(cache
+                    .values(
+                        [7.0, 11.0],
+                        &vec![0.0; EXACT_COMBO_COUNT],
+                        0,
+                        RangeTerminalKind::Showdown
+                    )
+                    .unwrap()
+                    .iter()
+                    .all(|v| *v == 0.0));
+            }
+        }
+    }
+
+    #[test]
     fn action_value_recombination_uses_counterfactual_reach_semantics() {
         let mut probabilities = vec![vec![0.5; EXACT_COMBO_COUNT]; 2];
         probabilities[0][10] = 0.25;
@@ -1042,5 +1308,100 @@ mod tests {
         }
         assert_eq!(children[0][1], ranges[1]);
         assert_eq!(children[1][1], ranges[1]);
+    }
+
+    #[test]
+    fn positive_range_mass_and_sampling_support_are_not_chip_tolerances() {
+        let mut ranges = std::array::from_fn(|_| vec![0.0; EXACT_COMBO_COUNT]);
+        ranges[0][Combo::new(51, 50).key()] = 1e-12;
+        ranges[1][Combo::new(45, 44).key()] = 1e-12;
+        let probabilities = vec![
+            vec![1e-12; EXACT_COMBO_COUNT],
+            vec![1.0 - 1e-12; EXACT_COMBO_COUNT],
+        ];
+        let proposal = opponent_action_proposal(&ranges[0], &probabilities)
+            .expect("positive ranges retain their support at any scale");
+        assert!((proposal[0] / 1e-12 - 1.0).abs() < 1e-12);
+        let child = importance_sample_opponent_range(&ranges, 0, &probabilities, 0, proposal[0])
+            .expect("a tiny positive proposal remains a legal importance sample");
+        assert_eq!(child[0], ranges[0]);
+        let result = evaluate_terminal_ranges(
+            [0, 5, 10, 27, 28],
+            [3.0, 5.0],
+            &ranges,
+            RangeTerminalKind::Fold { winner: 0 },
+        )
+        .expect("positive joint mass");
+        assert!((result.profile_value_p0_bb - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn terminal_integration_plus_conditional_sampling_preserves_expectation() {
+        let proposal = [0.8, 0.05, 0.15];
+        let conditional = continuation_action_proposal(&proposal, &[true, false, false])
+            .unwrap()
+            .unwrap();
+        for policy in [[0.9, 0.02, 0.08], [0.1, 0.7, 0.2]] {
+            let utilities = [-7.0, 11.0, 3.0];
+            let exact: f64 = policy.iter().zip(utilities).map(|(p, u)| p * u).sum();
+            let integrated = policy[0] * utilities[0];
+            let sampled_mean: f64 = (1..3)
+                .map(|action| {
+                    conditional[action]
+                        * (integrated + policy[action] * utilities[action] / conditional[action])
+                })
+                .sum();
+            assert!((sampled_mean - exact).abs() < 1e-12);
+        }
+        assert!(continuation_action_proposal(&proposal, &[true, true, true])
+            .unwrap()
+            .is_none());
+        assert!(continuation_action_proposal(&proposal, &[true]).is_err());
+    }
+
+    #[test]
+    fn baseline_residual_is_unbiased_and_exact_baselines_remove_action_variance() {
+        let proposal = [0.7, 0.1, 0.2];
+        let branches: Vec<Vec<f64>> = (0..3)
+            .map(|a| {
+                (0..EXACT_COMBO_COUNT)
+                    .map(|h| (h as f64 - 663.0) * (a as f64 - 0.7) / 100.0)
+                    .collect()
+            })
+            .collect();
+        let exact: Vec<f64> = (0..EXACT_COMBO_COUNT)
+            .map(|h| branches.iter().map(|b| b[h]).sum())
+            .collect();
+        for scale in [0.0, -3.0, 0.7, 1.0] {
+            let baselines: Vec<Vec<f64>> = branches
+                .iter()
+                .map(|b| b.iter().map(|v| v * scale).collect())
+                .collect();
+            let integrated: Vec<f64> = exact.iter().map(|v| v * scale).collect();
+            let mut mean = vec![0.0; EXACT_COMBO_COUNT];
+            for a in 0..3 {
+                let mut values = integrated.clone();
+                let corrected_child: Vec<f64> =
+                    branches[a].iter().map(|v| v / proposal[a]).collect();
+                add_baseline_residual(&mut values, &corrected_child, &baselines[a], proposal[a])
+                    .unwrap();
+                for h in 0..EXACT_COMBO_COUNT {
+                    mean[h] += proposal[a] * values[h];
+                    if scale == 1.0 {
+                        assert!(
+                            (values[h] - exact[h]).abs() < 1e-12,
+                            "zero sampling variance with exact baseline"
+                        );
+                    }
+                }
+            }
+            for h in 0..EXACT_COMBO_COUNT {
+                assert!(
+                    (mean[h] - exact[h]).abs() < 1e-12,
+                    "unbiased even for a deliberately wrong baseline"
+                );
+            }
+        }
+        assert!(add_baseline_residual(&mut exact.clone(), &exact, &exact, 0.0).is_err());
     }
 }

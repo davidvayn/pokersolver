@@ -596,14 +596,14 @@ fn observable_backoff_information_set(
         .cloned()
         .into_iter()
         .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .into();
     descriptor.public_bucket_trajectory = descriptor
         .public_bucket_trajectory
         .last()
         .cloned()
         .into_iter()
         .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .into();
     let price = if state.to_call() <= EPSILON {
         0.0
     } else {
@@ -667,7 +667,7 @@ fn coarse_observable_backoff_information_set(
         })
         .into_iter()
         .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .into();
     descriptor.public_bucket_trajectory = descriptor
         .public_bucket_trajectory
         .last()
@@ -681,7 +681,7 @@ fn coarse_observable_backoff_information_set(
         })
         .into_iter()
         .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .into();
     let price = if state.to_call() <= EPSILON {
         0.0
     } else {
@@ -767,8 +767,8 @@ fn strategic_observable_backoff_information_set(
             }
         })
         .unwrap_or_else(|| "unknown".into());
-    descriptor.hand_bucket_trajectory = vec![strength.clone()].into_boxed_slice();
-    descriptor.public_bucket_trajectory = Vec::new().into_boxed_slice();
+    descriptor.hand_bucket_trajectory = vec![strength.clone()].into();
+    descriptor.public_bucket_trajectory = Vec::new().into();
     let price = if state.to_call() <= EPSILON {
         "free"
     } else {
@@ -1143,8 +1143,8 @@ mod tests {
         let descriptor = NodeDescriptor {
             actor: Position::BigBlind,
             street: Street::Flop,
-            hand_bucket_trajectory: vec!["preflop:AKs".into(), "pair".into()].into_boxed_slice(),
-            public_bucket_trajectory: vec!["dry".into()].into_boxed_slice(),
+            hand_bucket_trajectory: vec!["preflop:AKs".into(), "pair".into()].into(),
+            public_bucket_trajectory: vec!["dry".into()].into(),
             public_history_id: 1,
             pot_bb: 4.0,
             to_call_bb: 1.0,

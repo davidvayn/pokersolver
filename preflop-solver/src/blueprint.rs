@@ -43,7 +43,9 @@ fn read_json_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 
 const MODEL_BINARY_MAGIC: &[u8; 8] = b"PKRMODL2";
 const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
-const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 4;
+// Version 5 rejects training state accumulated under the old absolute
+// probability/regret cutoff. A deterministic new run must use one recurrence.
+const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 5;
 const MAX_HS_DCFR_HORIZON: u64 = 10_000_000;
 
 fn model_binary_path(path: &Path) -> PathBuf {
@@ -226,6 +228,14 @@ pub struct BlueprintConfig {
     /// the established scalar external-sampling stream and artifact identity.
     #[serde(default, skip_serializing_if = "is_default_blueprint_traversal")]
     pub traversal: BlueprintTraversal,
+    /// Integrate cheap terminal opponent actions exactly and sample only a
+    /// continuation, with its conditional proposal probability. Research-only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub integrate_terminal_actions: bool,
+    /// Stateless check/call-to-showdown control variate. Samples the original
+    /// opponent proposal, retaining its stopping frequency. Research-only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub opponent_checkdown_baseline: bool,
     pub export_postflop_strategies: bool,
     pub recall_mode: RecallMode,
     pub dcfr: DcfrParameters,
@@ -253,6 +263,10 @@ fn is_default_hand_batch_size(size: &usize) -> bool {
 
 fn is_default_blueprint_traversal(traversal: &BlueprintTraversal) -> bool {
     *traversal == BlueprintTraversal::ExternalSampling
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -366,6 +380,8 @@ impl Default for BlueprintConfig {
             traverser_hand_batch_size: 1,
             opponent_hand_batch_size: 1,
             traversal: BlueprintTraversal::ExternalSampling,
+            integrate_terminal_actions: false,
+            opponent_checkdown_baseline: false,
             export_postflop_strategies: false,
             recall_mode: RecallMode::Trajectory,
             dcfr: DcfrParameters::default(),
@@ -392,6 +408,16 @@ impl BlueprintConfig {
         }
         if self.max_information_sets == 0 {
             return Err("max information sets must be positive".to_owned());
+        }
+        if (self.integrate_terminal_actions || self.opponent_checkdown_baseline)
+            && self.traversal != BlueprintTraversal::PublicChanceSampling
+        {
+            return Err("opponent variance reduction requires public-chance sampling".to_owned());
+        }
+        if self.integrate_terminal_actions && self.opponent_checkdown_baseline {
+            return Err(
+                "choose terminal integration or the checkdown baseline, not both".to_owned(),
+            );
         }
         if self.averaging_delay >= self.iterations {
             return Err("averaging delay must be smaller than iterations".to_owned());
@@ -1101,6 +1127,20 @@ fn showdown_result(holes: &[[u8; 2]; 2], board: &[u8]) -> f64 {
     }
 }
 
+/// Cheap legal rollout used only as a control variate, without policy lookup
+/// or table mutation. No bets are added beyond calling the existing amount.
+fn checkdown_terminal(mut state: GameState, config: &BlueprintConfig) -> Result<GameState, String> {
+    while state.terminal.is_none() {
+        let action = state
+            .legal_actions(config)
+            .into_iter()
+            .find(|action| matches!(action.kind, ActionKind::Check | ActionKind::Call))
+            .ok_or_else(|| "nonterminal checkdown has no check/call action".to_owned())?;
+        state = state.apply(&action, config);
+    }
+    Ok(state)
+}
+
 fn showdown_seed(holes: &[[u8; 2]; 2], board: &[u8]) -> u64 {
     let mut bytes = Vec::with_capacity(4 + board.len());
     for hole in holes {
@@ -1131,8 +1171,8 @@ pub struct InfoSetDescriptor {
 struct NodeDescriptor {
     actor: Position,
     street: Street,
-    hand_bucket_trajectory: Box<[Arc<str>]>,
-    public_bucket_trajectory: Box<[Arc<str>]>,
+    hand_bucket_trajectory: Arc<[Arc<str>]>,
+    public_bucket_trajectory: Arc<[Arc<str>]>,
     public_history_id: u64,
     pot_bb: f64,
     to_call_bb: f64,
@@ -1150,7 +1190,7 @@ impl NodeDescriptor {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Node {
     descriptor: NodeDescriptor,
-    action_labels: Box<[Arc<str>]>,
+    action_labels: Arc<[Arc<str>]>,
     regrets: Box<[f64]>,
     strategy_sum: Box<[f64]>,
     regret_updates: u64,
@@ -1165,21 +1205,23 @@ impl Node {
     fn new(
         descriptor: NodeDescriptor,
         actions: &[LegalAction],
-        string_interner: &mut BTreeMap<String, Arc<str>>,
+        string_interner: &mut NodeStorageInterner,
     ) -> Self {
         let action_labels = actions
             .iter()
             .map(|action| {
-                if let Some(canonical) = string_interner.get(action.label.as_str()) {
+                if let Some(canonical) = string_interner.strings.get(action.label.as_str()) {
                     canonical.clone()
                 } else {
                     let label: Arc<str> = action.label.as_str().into();
-                    string_interner.insert(action.label.clone(), label.clone());
+                    string_interner
+                        .strings
+                        .insert(action.label.clone(), label.clone());
                     label
                 }
             })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+            .collect::<Vec<_>>();
+        let action_labels = string_interner.intern_slice(&action_labels);
         Self {
             regrets: vec![0.0; action_labels.len()].into_boxed_slice(),
             strategy_sum: vec![0.0; action_labels.len()].into_boxed_slice(),
@@ -1312,11 +1354,20 @@ fn hs_dcfr_strategy_averaging_weights(horizon: u64) -> Vec<f64> {
 
 fn normalize_or_uniform(mut weights: Vec<f64>) -> Vec<f64> {
     let total = weights.iter().sum::<f64>();
-    if total > EPSILON {
+    if total > 0.0 && total.is_finite() {
         for weight in &mut weights {
             *weight /= total;
         }
         weights
+    } else if total.is_infinite() {
+        // Regret matching is homogeneous: a chip-accounting tolerance must
+        // never erase positive regret support. Scale only on overflow so
+        // ordinary finite inputs retain their established rounding order.
+        let maximum = weights.iter().copied().fold(0.0f64, f64::max);
+        for weight in &mut weights {
+            *weight /= maximum;
+        }
+        normalize_or_uniform(weights)
     } else {
         let probability = 1.0 / weights.len() as f64;
         weights.fill(probability);
@@ -1502,28 +1553,43 @@ pub struct BlueprintValidation {
     pub reasons: Vec<String>,
 }
 
-fn rebuild_string_interner(nodes: &mut BTreeMap<u64, Node>) -> BTreeMap<String, Arc<str>> {
-    let mut interner = BTreeMap::<String, Arc<str>>::new();
+/// Immutable descriptor sequences repeat at millions of betting histories.
+/// Share whole sequences as well as their strings; numerical arrays remain
+/// private to each information set. Serde still stores ordinary sequences.
+#[derive(Default)]
+struct NodeStorageInterner {
+    strings: BTreeMap<String, Arc<str>>,
+    slices: BTreeMap<Vec<Arc<str>>, Arc<[Arc<str>]>>,
+}
+
+impl NodeStorageInterner {
+    fn intern_slice(&mut self, values: &[Arc<str>]) -> Arc<[Arc<str>]> {
+        if let Some(canonical) = self.slices.get(values) {
+            return canonical.clone();
+        }
+        let canonical = values
+            .iter()
+            .map(|value| {
+                self.strings
+                    .entry(value.to_string())
+                    .or_insert_with(|| value.clone())
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let shared: Arc<[Arc<str>]> = canonical.clone().into();
+        self.slices.insert(canonical, shared.clone());
+        shared
+    }
+}
+
+fn rebuild_string_interner(nodes: &mut BTreeMap<u64, Node>) -> NodeStorageInterner {
+    let mut interner = NodeStorageInterner::default();
     for node in nodes.values_mut() {
-        for bucket in node
-            .descriptor
-            .hand_bucket_trajectory
-            .iter_mut()
-            .chain(&mut node.descriptor.public_bucket_trajectory)
-        {
-            if let Some(canonical) = interner.get(bucket.as_ref()) {
-                *bucket = canonical.clone();
-            } else {
-                interner.insert(bucket.to_string(), bucket.clone());
-            }
-        }
-        for label in &mut node.action_labels {
-            if let Some(canonical) = interner.get(label.as_ref()) {
-                *label = canonical.clone();
-            } else {
-                interner.insert(label.to_string(), label.clone());
-            }
-        }
+        node.descriptor.hand_bucket_trajectory =
+            interner.intern_slice(&node.descriptor.hand_bucket_trajectory);
+        node.descriptor.public_bucket_trajectory =
+            interner.intern_slice(&node.descriptor.public_bucket_trajectory);
+        node.action_labels = interner.intern_slice(&node.action_labels);
     }
     interner
 }
@@ -1536,7 +1602,7 @@ struct Trainer {
     strategy_averaging_weights: Option<Vec<f64>>,
     sampled_deals: u64,
     terminal_evaluations: u64,
-    string_interner: BTreeMap<String, Arc<str>>,
+    string_interner: NodeStorageInterner,
     public_histories: BTreeMap<u64, Vec<String>>,
     nodes: BTreeMap<u64, Node>,
 }
@@ -1561,7 +1627,7 @@ impl Trainer {
             completed_iterations: 0,
             sampled_deals: 0,
             terminal_evaluations: 0,
-            string_interner: BTreeMap::new(),
+            string_interner: NodeStorageInterner::default(),
             public_histories: BTreeMap::new(),
             nodes: BTreeMap::new(),
         }
@@ -1691,18 +1757,12 @@ impl Trainer {
     }
 
     fn intern_descriptor_buckets(&mut self, descriptor: &mut NodeDescriptor) {
-        for bucket in descriptor
-            .hand_bucket_trajectory
-            .iter_mut()
-            .chain(&mut descriptor.public_bucket_trajectory)
-        {
-            if let Some(canonical) = self.string_interner.get(bucket.as_ref()) {
-                *bucket = canonical.clone();
-            } else {
-                self.string_interner
-                    .insert(bucket.to_string(), bucket.clone());
-            }
-        }
+        descriptor.hand_bucket_trajectory = self
+            .string_interner
+            .intern_slice(&descriptor.hand_bucket_trajectory);
+        descriptor.public_bucket_trajectory = self
+            .string_interner
+            .intern_slice(&descriptor.public_bucket_trajectory);
     }
 
     fn train(&mut self, control: &RunControl) -> Result<(), Box<dyn Error>> {
@@ -1836,6 +1896,7 @@ impl Trainer {
         actions: &[LegalAction],
     ) -> Result<(Vec<Option<u64>>, Vec<Vec<f64>>), String> {
         let mapping = cache.map(state, &self.config, active_combos)?;
+        let mut strategies = BTreeMap::<u64, Vec<f64>>::new();
         for (key, (mut descriptor, public_history)) in mapping.descriptors {
             if !self.nodes.contains_key(&key)
                 && self.nodes.len() >= self.config.max_information_sets
@@ -1870,22 +1931,12 @@ impl Trainer {
                 );
             }
             node.apply_dcfr_regret_discount(self.completed_iterations + 1, &self.discounts);
+            strategies.insert(key, node.current_strategy());
         }
 
         let uniform = 1.0 / actions.len() as f64;
         let mut action_probabilities =
             vec![vec![uniform; range_vector::EXACT_COMBO_COUNT]; actions.len()];
-        let mut strategies = BTreeMap::<u64, Vec<f64>>::new();
-        for key in mapping.keys.iter().flatten() {
-            if !strategies.contains_key(key) {
-                let strategy = self
-                    .nodes
-                    .get(key)
-                    .ok_or_else(|| "public-range node was not inserted".to_owned())?
-                    .current_strategy();
-                strategies.insert(*key, strategy);
-            }
-        }
         for (combo, key) in mapping.keys.iter().enumerate() {
             let Some(key) = key else {
                 continue;
@@ -1994,9 +2045,13 @@ impl Trainer {
                 }
                 Terminal::Showdown => range_vector::RangeTerminalKind::Showdown,
             };
-            let evaluation =
-                range_vector::evaluate_terminal_ranges(board, state.invested, ranges, terminal)?;
-            return Ok(evaluation.counterfactual_values_bb[traverser].clone());
+            let evaluation = information_set_cache.terminal_values(
+                state.invested,
+                &ranges[1 - traverser],
+                traverser,
+                terminal,
+            )?;
+            return Ok(evaluation);
         }
 
         let actions = state.legal_actions(&self.config);
@@ -2007,12 +2062,12 @@ impl Trainer {
         let active = if actor == traverser {
             private_chance
                 .iter()
-                .map(|weight| *weight > EPSILON)
+                .map(|weight| *weight > 0.0)
                 .collect::<Vec<_>>()
         } else {
             ranges[actor]
                 .iter()
-                .map(|reach| *reach > EPSILON)
+                .map(|reach| *reach > 0.0)
                 .collect::<Vec<_>>()
         };
         let (keys, probabilities) =
@@ -2070,6 +2125,140 @@ impl Trainer {
         // traverser CFV unbiased while avoiding one recursive branch per
         // opponent information set.
         let proposal = range_vector::opponent_action_proposal(&ranges[actor], &probabilities)?;
+        if self.config.opponent_checkdown_baseline {
+            let children = actions
+                .iter()
+                .map(|action| state.apply(action, &self.config))
+                .collect::<Vec<_>>();
+            let mut baselines = Vec::with_capacity(actions.len());
+            for (action, child) in children.iter().enumerate() {
+                if proposal[action] == 0.0 {
+                    baselines.push(vec![0.0; range_vector::EXACT_COMBO_COUNT]);
+                    continue;
+                }
+                let branch_ranges = range_vector::importance_sample_opponent_range(
+                    ranges,
+                    actor,
+                    &probabilities,
+                    action,
+                    1.0,
+                )?;
+                // This is a training control variate, never a policy/value
+                // replacement. It may use the sampled runout but creates no
+                // information sets and makes no hidden-information decisions.
+                let terminal = checkdown_terminal(child.clone(), &self.config)?;
+                let kind = match terminal.terminal {
+                    Some(Terminal::Fold { winner }) => {
+                        range_vector::RangeTerminalKind::Fold { winner }
+                    }
+                    Some(Terminal::Showdown) => range_vector::RangeTerminalKind::Showdown,
+                    None => unreachable!("checkdown must terminate"),
+                };
+                baselines.push(information_set_cache.terminal_values(
+                    terminal.invested,
+                    &branch_ranges[actor],
+                    traverser,
+                    kind,
+                )?);
+            }
+            let mut values = vec![0.0; range_vector::EXACT_COMBO_COUNT];
+            for baseline in &baselines {
+                for (value, contribution) in values.iter_mut().zip(baseline) {
+                    *value += contribution;
+                }
+            }
+            let selected = sample_index(&proposal, rng);
+            if children[selected].terminal.is_none() {
+                let child_ranges = range_vector::importance_sample_opponent_range(
+                    ranges,
+                    actor,
+                    &probabilities,
+                    selected,
+                    proposal[selected],
+                )?;
+                let sampled = self.public_chance_external_sampling(
+                    children[selected].clone(),
+                    board,
+                    &child_ranges,
+                    private_chance,
+                    traverser,
+                    rng,
+                    information_set_cache,
+                )?;
+                // Control-variate identity: Davis et al. (ICML 2020), Eq. 4:
+                // https://proceedings.mlr.press/v119/davis20a.html
+                // Child CFVs already include 1/q through the opponent range.
+                // Dividing them again would bias this estimator.
+                range_vector::add_baseline_residual(
+                    &mut values,
+                    &sampled,
+                    &baselines[selected],
+                    proposal[selected],
+                )?;
+            }
+            // A selected terminal has an exact baseline and zero residual.
+            return Ok(values);
+        }
+        if self.config.integrate_terminal_actions {
+            let children = actions
+                .iter()
+                .map(|action| state.apply(action, &self.config))
+                .collect::<Vec<_>>();
+            let terminal_mask = children
+                .iter()
+                .map(|child| child.terminal.is_some())
+                .collect::<Vec<_>>();
+            let mut values = vec![0.0; range_vector::EXACT_COMBO_COUNT];
+            for (action, child) in children.iter().enumerate() {
+                if !terminal_mask[action] || proposal[action] == 0.0 {
+                    continue;
+                }
+                let terminal_ranges = range_vector::importance_sample_opponent_range(
+                    ranges,
+                    actor,
+                    &probabilities,
+                    action,
+                    1.0,
+                )?;
+                let terminal_values = self.public_chance_external_sampling(
+                    child.clone(),
+                    board,
+                    &terminal_ranges,
+                    private_chance,
+                    traverser,
+                    rng,
+                    information_set_cache,
+                )?;
+                for (value, contribution) in values.iter_mut().zip(terminal_values) {
+                    *value += contribution;
+                }
+            }
+            if let Some(conditional) =
+                range_vector::continuation_action_proposal(&proposal, &terminal_mask)?
+            {
+                let selected = sample_index(&conditional, rng);
+                let child_ranges = range_vector::importance_sample_opponent_range(
+                    ranges,
+                    actor,
+                    &probabilities,
+                    selected,
+                    conditional[selected],
+                )?;
+                let continuation = self.public_chance_external_sampling(
+                    children[selected].clone(),
+                    board,
+                    &child_ranges,
+                    private_chance,
+                    traverser,
+                    rng,
+                    information_set_cache,
+                )?;
+                for (value, contribution) in values.iter_mut().zip(continuation) {
+                    *value += contribution;
+                }
+            }
+            return Ok(values);
+        }
         let selected = sample_index(&proposal, rng);
         let child_ranges = range_vector::importance_sample_opponent_range(
             ranges,
@@ -2468,8 +2657,15 @@ impl Trainer {
             "Rake-free, equal-stack, heads-up cash model with no ante; button posts the small blind, acts first preflop, and acts last postflop.".to_owned(),
             "Reported regret is a training diagnostic, not exploitability or a Nash-distance certificate.".to_owned(),
             "Root local-deviation evaluation forces one button action at a time against the fixed average continuation/opponent policy. It is a one-step local best response with sampling error and is not exploitability or a full best response.".to_owned(),
+            "Root best-action selection and reporting reuse samples. Its maximum has selection bias; reported root confidence bounds are descriptive, not selection-corrected exploitability certificates.".to_owned(),
             "A separate seeded evaluation pass records counterfactual values and standard errors for every action at each reached served information set. Low-sample or >0.02bb-standard-error values are flagged low confidence.".to_owned(),
         ];
+        if self.config.integrate_terminal_actions {
+            provenance.push("Opponent terminal actions are integrated exactly; remaining public actions use a conditional proposal with per-combo importance correction. This reduces terminal-action sampling variance without changing legal actions or average-policy weights.".to_owned());
+        }
+        if self.config.opponent_checkdown_baseline {
+            provenance.push("Research stateless check/call-to-showdown opponent control variates use the original public-action proposal and importance-corrected residuals. Baselines use the sampled board only during training, do not replace policy values, and do not create persistent nodes. Baseline accuracy affects variance, not the estimator expectation.".to_owned());
+        }
         if self.config.dcfr_schedule != DcfrSchedule::Fixed {
             provenance.push(format!(
                 "HS-DCFR(30) varies alpha=1+3t/n, beta=-1-2t/n, and gamma=30-5t/n over a pinned {}-iteration horizon. Strategy contributions use the exact terminal-relative product of the changing gamma discounts, and lazy regret discounts preserve every skipped global factor.",
@@ -2789,8 +2985,8 @@ fn information_set_from_bucket_trajectories(
     let descriptor = NodeDescriptor {
         actor: Position::for_player(state.actor),
         street: state.street,
-        hand_bucket_trajectory: hand_bucket_trajectory.into_boxed_slice(),
-        public_bucket_trajectory: public_bucket_trajectory.into_boxed_slice(),
+        hand_bucket_trajectory: hand_bucket_trajectory.into(),
+        public_bucket_trajectory: public_bucket_trajectory.into(),
         public_history_id,
         pot_bb: quantize(state.pot(), 0.001),
         to_call_bb: quantize(state.to_call(), 0.001),
@@ -3986,14 +4182,14 @@ mod tests {
             descriptor: NodeDescriptor {
                 actor: Position::ButtonSmallBlind,
                 street: Street::Preflop,
-                hand_bucket_trajectory: vec!["preflop:AA".into()].into_boxed_slice(),
-                public_bucket_trajectory: Vec::new().into_boxed_slice(),
+                hand_bucket_trajectory: vec!["preflop:AA".into()].into(),
+                public_bucket_trajectory: Vec::new().into(),
                 public_history_id: 1,
                 pot_bb: 1.5,
                 to_call_bb: 0.5,
                 effective_stack_remaining_bb: 99.5,
             },
-            action_labels: vec!["fold".into(), "call".into()].into_boxed_slice(),
+            action_labels: vec!["fold".into(), "call".into()].into(),
             regrets: vec![4.0, -4.0].into_boxed_slice(),
             strategy_sum: vec![4.0, 4.0].into_boxed_slice(),
             regret_updates: 1,
@@ -4021,8 +4217,8 @@ mod tests {
         let descriptor = NodeDescriptor {
             actor: Position::ButtonSmallBlind,
             street: Street::Preflop,
-            hand_bucket_trajectory: vec!["preflop:AA".into()].into_boxed_slice(),
-            public_bucket_trajectory: Vec::new().into_boxed_slice(),
+            hand_bucket_trajectory: vec!["preflop:AA".into()].into(),
+            public_bucket_trajectory: Vec::new().into(),
             public_history_id: 1,
             pot_bb: 1.5,
             to_call_bb: 0.5,
@@ -4030,7 +4226,7 @@ mod tests {
         };
         let mut lazy = Node {
             descriptor: descriptor.clone(),
-            action_labels: vec!["fold".into(), "call".into()].into_boxed_slice(),
+            action_labels: vec!["fold".into(), "call".into()].into(),
             regrets: vec![3.0, -2.0].into_boxed_slice(),
             strategy_sum: vec![4.0, 1.0].into_boxed_slice(),
             regret_updates: 0,
@@ -4159,38 +4355,203 @@ mod tests {
     }
 
     #[test]
-    fn public_chance_checkpoint_resume_matches_uninterrupted_training() {
-        let path = std::env::temp_dir().join(format!(
-            "blueprint-public-chance-checkpoint-{}-{}.msgpack.gz",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+    fn regret_matching_is_invariant_to_positive_weight_scale() {
+        for scale in [1.0, 1e-12, 1e-200, 1e300] {
+            let actual = normalize_or_uniform(vec![scale, 3.0 * scale, 0.0]);
+            assert_eq!(actual, vec![0.25, 0.75, 0.0], "scale={scale}");
+        }
+        assert_eq!(normalize_or_uniform(vec![0.0, 0.0]), vec![0.5, 0.5]);
+        assert_eq!(normalize_or_uniform(vec![1e308, 1e308]), vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn shared_descriptor_storage_survives_checkpoint_decode_without_aliasing_regrets() {
+        let config = tiny_config();
+        let deal = Deal::from_cards([[51, 50], [45, 44]], [0, 5, 10, 27, 28]);
+        let state = GameState::initial(&config);
+        let (_, descriptor, _) = information_set(&state, &deal, &config);
+        let actions = state.legal_actions(&config);
+        let mut interner = NodeStorageInterner::default();
+        let mut nodes = BTreeMap::new();
+        for key in [1, 2] {
+            nodes.insert(key, Node::new(descriptor.clone(), &actions, &mut interner));
+        }
+        let encoded = rmp_serde::to_vec_named(&nodes).unwrap();
+        let mut decoded: BTreeMap<u64, Node> = rmp_serde::from_slice(&encoded).unwrap();
+        let _interner = rebuild_string_interner(&mut decoded);
+        assert!(Arc::ptr_eq(
+            &decoded[&1].descriptor.hand_bucket_trajectory,
+            &decoded[&2].descriptor.hand_bucket_trajectory
         ));
-        let mut target = tiny_config();
-        target.traversal = BlueprintTraversal::PublicChanceSampling;
-        target.max_information_sets = 500_000;
-        let mut partial = target.clone();
-        partial.iterations = 1;
-        solve_controlled(
-            partial,
-            RunControl {
-                checkpoint_path: Some(path.to_string_lossy().into_owned()),
-                checkpoint_every: 1,
-                resume_path: None,
-            },
-        )
-        .expect("write public-chance partial checkpoint");
-        let resumed = solve_controlled(
-            target.clone(),
-            RunControl {
-                checkpoint_path: None,
-                checkpoint_every: 0,
-                resume_path: Some(path.to_string_lossy().into_owned()),
-            },
-        )
-        .expect("resume public-chance checkpoint");
-        let uninterrupted = solve(target).expect("uninterrupted public-chance solve");
-        assert_eq!(resumed, uninterrupted);
-        fs::remove_file(path).expect("remove public-chance checkpoint");
+        assert!(Arc::ptr_eq(
+            &decoded[&1].descriptor.public_bucket_trajectory,
+            &decoded[&2].descriptor.public_bucket_trajectory
+        ));
+        assert!(Arc::ptr_eq(
+            &decoded[&1].action_labels,
+            &decoded[&2].action_labels
+        ));
+        assert_eq!(rmp_serde::to_vec_named(&decoded).unwrap(), encoded);
+        decoded.get_mut(&1).unwrap().regrets[0] = 7.0;
+        assert_eq!(decoded[&2].regrets[0], 0.0);
+    }
+
+    #[test]
+    fn integrated_opponent_all_in_response_is_exact_without_action_sampling() {
+        let mut config = tiny_config();
+        config.traversal = BlueprintTraversal::PublicChanceSampling;
+        config.integrate_terminal_actions = true;
+        let initial = GameState::initial(&config);
+        let shove = initial
+            .legal_actions(&config)
+            .into_iter()
+            .find(|action| action.label.contains("all_in"))
+            .unwrap();
+        let response = initial.apply(&shove, &config);
+        assert_eq!(response.actor, 1);
+        let actions = response.legal_actions(&config);
+        assert_eq!(actions.len(), 2);
+        assert!(actions
+            .iter()
+            .all(|action| response.apply(action, &config).terminal.is_some()));
+        let board = [0, 5, 10, 27, 28];
+        let combos = all_combos();
+        let private: Vec<f64> = combos
+            .iter()
+            .map(|combo| {
+                if combo.cards().iter().any(|c| board.contains(c)) {
+                    0.0
+                } else {
+                    1.0 / 1081.0
+                }
+            })
+            .collect();
+        let ranges = [private.clone(), private.clone()];
+        let mut trainer = Trainer::fresh(config.clone());
+        trainer.discounts.advance(1);
+        let mut rng = SplitMix64::new(29);
+        let rng_before = rng.state();
+        let mut cache = range_vector::PublicInformationSetCache::new(board).unwrap();
+        let actual = trainer
+            .public_chance_external_sampling(
+                response.clone(),
+                board,
+                &ranges,
+                &private,
+                0,
+                &mut rng,
+                &mut cache,
+            )
+            .unwrap();
+        assert_eq!(
+            rng.state(),
+            rng_before,
+            "all actions were integrated exactly"
+        );
+        let mut expected = vec![0.0; range_vector::EXACT_COMBO_COUNT];
+        for action in &actions {
+            let child = response.apply(action, &config);
+            let terminal = match child.terminal.unwrap() {
+                Terminal::Fold { winner } => range_vector::RangeTerminalKind::Fold { winner },
+                Terminal::Showdown => range_vector::RangeTerminalKind::Showdown,
+            };
+            let reference =
+                range_vector::evaluate_terminal_ranges(board, child.invested, &ranges, terminal)
+                    .unwrap();
+            for (value, cfv) in expected
+                .iter_mut()
+                .zip(&reference.counterfactual_values_bb[0])
+            {
+                *value += 0.5 * cfv;
+            }
+        }
+        for (key, mass) in private.iter().enumerate() {
+            if *mass > 0.0 {
+                assert!((actual[key] - expected[key]).abs() < 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn public_chance_checkpoint_resume_matches_uninterrupted_training() {
+        for mode in 0..3 {
+            let path = std::env::temp_dir().join(format!(
+                "blueprint-public-chance-checkpoint-{}-{}-{mode}.msgpack.gz",
+                std::process::id(),
+                std::thread::current().name().unwrap_or("test")
+            ));
+            let mut target = tiny_config();
+            target.traversal = BlueprintTraversal::PublicChanceSampling;
+            target.integrate_terminal_actions = mode == 1;
+            target.opponent_checkdown_baseline = mode == 2;
+            target.max_information_sets = 500_000;
+            let mut partial = target.clone();
+            partial.iterations = 1;
+            solve_controlled(
+                partial,
+                RunControl {
+                    checkpoint_path: Some(path.to_string_lossy().into_owned()),
+                    checkpoint_every: 1,
+                    resume_path: None,
+                },
+            )
+            .expect("write public-chance partial checkpoint");
+            let mut old_schema = read_checkpoint(&path).expect("read partial checkpoint");
+            old_schema.schema_version = BLUEPRINT_CHECKPOINT_SCHEMA_VERSION - 1;
+            assert!(Trainer::from_checkpoint(old_schema, &target).is_err());
+            let resumed = solve_controlled(
+                target.clone(),
+                RunControl {
+                    checkpoint_path: None,
+                    checkpoint_every: 0,
+                    resume_path: Some(path.to_string_lossy().into_owned()),
+                },
+            )
+            .expect("resume public-chance checkpoint");
+            let mut changed_mode = target.clone();
+            changed_mode.integrate_terminal_actions = mode != 1;
+            changed_mode.opponent_checkdown_baseline = false;
+            assert!(
+                solve_controlled(
+                    changed_mode,
+                    RunControl {
+                        checkpoint_path: None,
+                        checkpoint_every: 0,
+                        resume_path: Some(path.to_string_lossy().into_owned()),
+                    }
+                )
+                .is_err(),
+                "resuming must pin the estimator, not merely the action grid"
+            );
+            let uninterrupted = solve(target).expect("uninterrupted public-chance solve");
+            assert_eq!(resumed, uninterrupted);
+            fs::remove_file(path).expect("remove public-chance checkpoint");
+        }
+    }
+
+    #[test]
+    fn checkdown_baseline_preserves_terminal_accounting_and_requires_pcs() {
+        let mut config = tiny_config();
+        config.opponent_checkdown_baseline = true;
+        assert!(config.validate().is_err());
+        config.traversal = BlueprintTraversal::PublicChanceSampling;
+        assert!(config.validate().is_ok());
+        config.integrate_terminal_actions = true;
+        assert!(config.validate().is_err());
+        config.integrate_terminal_actions = false;
+        let initial = GameState::initial(&config);
+        for action in initial.legal_actions(&config) {
+            let child = initial.apply(&action, &config);
+            let terminal = checkdown_terminal(child.clone(), &config).unwrap();
+            if child.terminal.is_some() {
+                assert_eq!(terminal.invested, child.invested);
+                assert_eq!(terminal.terminal, child.terminal);
+            } else {
+                assert_eq!(terminal.terminal, Some(Terminal::Showdown));
+                let called_amount = child.invested[0].max(child.invested[1]);
+                assert_eq!(terminal.invested, [called_amount; 2]);
+            }
+        }
     }
 
     #[test]
@@ -4508,8 +4869,8 @@ mod tests {
         let mut descriptor = NodeDescriptor {
             actor: Position::BigBlind,
             street: Street::Flop,
-            hand_bucket_trajectory: vec!["bucket".into()].into_boxed_slice(),
-            public_bucket_trajectory: vec!["board".into()].into_boxed_slice(),
+            hand_bucket_trajectory: vec!["bucket".into()].into(),
+            public_bucket_trajectory: vec!["board".into()].into(),
             public_history_id: 1,
             pot_bb: serde_json::from_str("29.333").expect("decimal pot"),
             to_call_bb: serde_json::from_str("7.333").expect("decimal call"),

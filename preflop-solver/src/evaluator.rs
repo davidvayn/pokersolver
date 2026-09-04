@@ -105,11 +105,11 @@ pub fn evaluate(cards: &[u8]) -> u32 {
 }
 
 fn straight_high(mask: u32) -> i32 {
-    for high in (4..=12i32).rev() {
-        let needed = 0b11111u32 << (high - 4);
-        if (mask & needed) == needed {
-            return high;
-        }
+    // A set bit marks the low rank of a five-rank run. Evaluate all nine
+    // possible runs in parallel, then extract the highest one.
+    let runs = mask & (mask >> 1) & (mask >> 2) & (mask >> 3) & (mask >> 4);
+    if runs != 0 {
+        return (31 - runs.leading_zeros()) as i32 + 4;
     }
     let wheel = (1 << 12) | (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
     if (mask & wheel) == wheel {
@@ -120,15 +120,14 @@ fn straight_high(mask: u32) -> i32 {
 
 fn top_n(mask: u32, count: usize) -> u32 {
     let mut result = 0u32;
-    let mut found = 0;
-    for rank in (0..13u32).rev() {
-        if mask & (1 << rank) != 0 {
-            result = (result << 4) | rank;
-            found += 1;
-            if found == count {
-                break;
-            }
+    let mut available = mask;
+    for _ in 0..count {
+        if available == 0 {
+            break;
         }
+        let rank = 31 - available.leading_zeros();
+        result = (result << 4) | rank;
+        available ^= 1 << rank;
     }
     result
 }
@@ -142,17 +141,45 @@ fn highest_except(mask: u32, except: &[u32]) -> u32 {
     for &rank in except {
         available &= !(1 << rank);
     }
-    for rank in (0..13u32).rev() {
-        if available & (1 << rank) != 0 {
-            return rank;
-        }
+    if available == 0 {
+        0
+    } else {
+        31 - available.leading_zeros()
     }
-    0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bit_parallel_rank_operations_match_all_8192_rank_masks() {
+        for mask in 0..(1u32 << 13) {
+            let expected_straight = (4..=12)
+                .rev()
+                .find(|high| {
+                    let needed = 0b11111 << (high - 4);
+                    mask & needed == needed
+                })
+                .unwrap_or_else(|| if mask & 0x100f == 0x100f { 3 } else { -1 });
+            assert_eq!(straight_high(mask), expected_straight, "mask={mask}");
+            for count in 1..=5 {
+                let expected = (0..13)
+                    .rev()
+                    .filter(|rank| mask & (1 << rank) != 0)
+                    .take(count)
+                    .fold(0, |packed, rank| (packed << 4) | rank);
+                assert_eq!(top_n(mask, count), expected);
+            }
+            for except in 0..13 {
+                let expected = (0..13)
+                    .rev()
+                    .find(|rank| *rank != except && mask & (1 << rank) != 0)
+                    .unwrap_or(0);
+                assert_eq!(highest_except(mask, &[except]), expected);
+            }
+        }
+    }
 
     #[test]
     fn ranks_known_seven_card_hands() {

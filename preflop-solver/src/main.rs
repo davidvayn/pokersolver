@@ -2885,6 +2885,12 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         config.traversal = BlueprintTraversal::PublicChanceSampling;
     }
+    config.integrate_terminal_actions = args
+        .iter()
+        .any(|argument| argument == "--integrate-terminal-actions");
+    config.opponent_checkdown_baseline = args
+        .iter()
+        .any(|argument| argument == "--opponent-checkdown-baseline");
     config.evaluation_controls.held_out_deals = parse_or(
         args,
         "--held-out-deals",
@@ -3162,6 +3168,21 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
                 "traversal".to_owned(),
                 serde_json::to_value(artifact.config.traversal)?,
             );
+        for (field, enabled) in [
+            (
+                "integrateTerminalActions",
+                artifact.config.integrate_terminal_actions,
+            ),
+            (
+                "opponentCheckdownBaseline",
+                artifact.config.opponent_checkdown_baseline,
+            ),
+        ] {
+            summary_value
+                .as_object_mut()
+                .expect("blueprint summary object")
+                .insert(field.to_owned(), enabled.into());
+        }
         blueprint::write_json_atomic(&summary, &summary_value)?;
     }
     eprintln!(
@@ -3347,6 +3368,8 @@ Blueprint options:
   --traverser-hand-batch-size <n> Default: 1; research pilot, maximum 990
   --opponent-hand-batch-size <n>  Default: 1; research pilot, maximum 990
   --public-chance-sampling        Research: update all board-compatible hands
+  --integrate-terminal-actions   Research: integrate terminal opponent actions
+  --opponent-checkdown-baseline   Research: stateless opponent control variate
   --action-value-seed <integer>   Fixed per-action evaluation seed
   --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)
   --dcfr-beta <number>            Negative-regret exponent (default: 0)

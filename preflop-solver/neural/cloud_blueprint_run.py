@@ -4,9 +4,11 @@
 The trainer itself is intentionally single-worker and deterministic. This
 orchestrator uses cloud cores only for independent seeds; it never merges
 incompatible regret tables or changes the sampled game. Internal resumable
-checkpoints use schema 4; frozen policy artifacts remain model schema v3.
-New checkpoints use lossless named MessagePack inside streaming gzip; legacy
-JSON-gzip checkpoints remain readable. Final artifacts use streaming JSON-gzip.
+checkpoints use schema 5; frozen policy artifacts remain model schema v3.
+New checkpoints use lossless named MessagePack inside streaming gzip. Both
+MessagePack and JSON-gzip codecs are readable for schema 5; older training
+schemas require their original binary and cannot be resumed here. Final
+artifacts use streaming JSON-gzip.
 Completed checkpoints can also be evaluated again at the same iteration count
 without retraining or copying the frozen tables.
 """
@@ -436,6 +438,12 @@ def validate_summary(
                 f"blueprint summary {field} does not match the run: "
                 f"expected {value!r}, found {summary.get(field)!r}"
             )
+    for field, enabled in (
+        ("integrateTerminalActions", args.integrate_terminal_actions),
+        ("opponentCheckdownBaseline", args.opponent_checkdown_baseline),
+    ):
+        if summary.get(field, False) is not enabled:
+            raise ValueError(f"blueprint summary {field} does not match the run")
     if summary.get("depthBb") != args.depth:
         raise ValueError("blueprint summary depth does not match the run")
     if summary.get("stoppedEarly") is not False:
@@ -605,6 +613,8 @@ def run_fingerprint(
         "dcfrScheduleHorizon": schedule_horizon,
         "compactServingGrid": args.compact_serving_grid,
         "publicChanceSampling": args.public_chance_sampling,
+        "integrateTerminalActions": args.integrate_terminal_actions,
+        "opponentCheckdownBaseline": args.opponent_checkdown_baseline,
         "exportPostflopStrategies": args.export_postflop_strategies,
         "evaluationOnly": args.evaluation_only,
         "parentRunFingerprint": parent_run_fingerprint,
@@ -661,6 +671,10 @@ def build_command(args: argparse.Namespace, run: SeedRun) -> list[str]:
         command.append("--compact-serving-grid")
     if args.public_chance_sampling:
         command.append("--public-chance-sampling")
+    if args.integrate_terminal_actions:
+        command.append("--integrate-terminal-actions")
+    if args.opponent_checkdown_baseline:
+        command.append("--opponent-checkdown-baseline")
     _, schedule_horizon, schedule_flag = selected_dcfr_schedule(args)
     if schedule_flag is not None:
         command.extend([schedule_flag, str(schedule_horizon)])
@@ -729,12 +743,21 @@ def parse_args() -> argparse.Namespace:
         help="diagnostic preflop-only artifact; never use for a full-hand model",
     )
     parser.set_defaults(export_postflop_strategies=True)
+    variance_mode = parser.add_mutually_exclusive_group()
+    variance_mode.add_argument("--integrate-terminal-actions", action="store_true")
+    variance_mode.add_argument("--opponent-checkdown-baseline", action="store_true")
     parser.add_argument("--allow-resource-oversubscription", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
 
 def validate_numeric_options(args: argparse.Namespace) -> None:
+    if args.integrate_terminal_actions and args.opponent_checkdown_baseline:
+        raise SystemExit("choose only one opponent variance-reduction mode")
+    if (
+        args.integrate_terminal_actions or args.opponent_checkdown_baseline
+    ) and not args.public_chance_sampling:
+        raise SystemExit("opponent variance reduction requires public-chance sampling")
     if not math.isfinite(args.depth) or args.depth <= 1.0:
         raise SystemExit("depth must be finite and exceed the 1bb big blind")
     if not 2 <= args.iterations <= MAX_U64:
@@ -914,6 +937,12 @@ def load_parent_stage(
             isinstance(command, list) and "--public-chance-sampling" in command
         ) != bool(args.public_chance_sampling):
             raise SystemExit("resume source changes the blueprint traversal")
+        for flag, enabled in (
+            ("--integrate-terminal-actions", args.integrate_terminal_actions),
+            ("--opponent-checkdown-baseline", args.opponent_checkdown_baseline),
+        ):
+            if (isinstance(command, list) and flag in command) != enabled:
+                raise SystemExit(f"resume source changes immutable setting {flag}")
         record = parent_seeds[str(seed)]
         if not isinstance(record, dict) or record.get("status") != "complete":
             raise SystemExit(f"resume source seed {seed} is not complete")

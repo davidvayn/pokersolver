@@ -1,0 +1,1690 @@
+{
+  "schema": "hu-pcs-math-audit-2026-09-04-v1",
+  "date": "2026-09-04",
+  "baseCommit": "4ef673f15bad90f9d933c7a6f3cf9dce590e58f7",
+  "host": {
+    "cpu": "Apple M5",
+    "memoryBytes": 17179869184,
+    "rustc": "1.97.1",
+    "trainingConcurrency": 1
+  },
+  "scope": "Offline 20bb tabular abstract full-game training; preflop-only export; no full-game exploitability certification or serving promotion",
+  "evaluation": {
+    "heldOutDeals": 2000,
+    "heldOutSeedOffset": 100000,
+    "rootSamplesPerClass": 256,
+    "rootSeedOffset": 200000,
+    "actionValueDeals": 2000,
+    "actionValueSeedOffset": 300000,
+    "exception": "integrated200 uses the same evaluation counts; baseline100 reproduction omitted"
+  },
+  "binarySha256": {
+    "baseline": "ca49b282036eef0d5e4028b1554afcec2d7ac2675a140b2604c566d286f46934",
+    "optimized": "b19a759c2b19ed6ba11f42f05fa7b7405a04f7c05d745e647095b2767acdc3e9",
+    "lookup-optimized": "fe6d45c769be9ff3724b221b05d8deb96e0e757a18d45ce041d093acdbcd85cb",
+    "final-v03": "03ffffd138655cc536f4fd294d356c5800ff0ad4a87c58d405e628f0e9c75fd0",
+    "checkdown-v03": "9f304a13b476171009b63dedd065e87e2c515d92388daf68e36999af0fb99cd9"
+  },
+  "rootStrategyExactEqualityAfterLookupAndEvaluatorOptimization": true,
+  "caveats": [
+    "Wall times are local observations, not cloud runtime promises. Some integrated runs overlapped compilation and experienced high kernel time/memory compression; use user CPU and instructions as additional cost evidence.",
+    "The evaluator policy lookup and root rollout algorithm are unchanged across estimator modes; the terminal kernel changes only training. Bit-level evaluator helpers are exhaustively tested for equivalence.",
+    "Root max selection reuses evaluation samples; nominal root lower confidence bounds are not selection corrected.",
+    "No cross-seed stability metric is proof of equilibrium.",
+    "Separate full-game neural-serving reports apply to a different model.",
+    "No checkdown baseline variance-times-cost advantage on a frozen full policy was measured; pair results are mixed."
+  ],
+  "runs": [
+    {
+      "arm": "baseline400",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2405,
+        "actionValueExportedInformationSetCoverage": 0.1206424747174301,
+        "actionValueStandardErrorCoverage": 0.17337439711217328,
+        "artifactId": "hu-blueprint-20bb-i400-s26001-acd3715feddbe4d6",
+        "averagingDelay": 0,
+        "configHash": "acd3715feddbe4d6",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16810,
+        "heldOutButtonMeanNetBb": 0.3190393693181817,
+        "heldOutButtonNetStandardErrorBb": 0.14489845836685816,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.14713134966299524,
+        "heldOutUntrainedInformationSetFraction": 0.014630938681571592,
+        "informationSets": 6602943,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 6586043,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.21296608063119926,
+        "rootContinuationUntrainedInformationSetFraction": 0.023334488344387564,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5916919463048741,
+        "rootLocalDeviationGainBb": 0.6496386679722199,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.024908880703086916,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 3815619,
+        "trainingConfigHash": "7dd3bc6e5ad282d6",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "8eb1ae8d26cab93aebc1679b02b4f08ed299dadd389b22dce1d01e9b01284aff",
+      "time": {
+        "wallSeconds": 47.82,
+        "userCpuSeconds": 46.35,
+        "systemCpuSeconds": 1.27,
+        "maxRssBytes": 2875965440,
+        "peakFootprintBytes": 2939668928,
+        "instructionsRetired": 662252056062,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "baseline400",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2320,
+        "actionValueExportedInformationSetCoverage": 0.11904193047425636,
+        "actionValueStandardErrorCoverage": 0.17397055247984408,
+        "artifactId": "hu-blueprint-20bb-i400-s26002-439f481af76332d0",
+        "averagingDelay": 0,
+        "configHash": "439f481af76332d0",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16742,
+        "heldOutButtonMeanNetBb": 0.16730864204545448,
+        "heldOutButtonNetStandardErrorBb": 0.13898295208803432,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.13472549680026946,
+        "heldOutUntrainedInformationSetFraction": 0.014651397777029302,
+        "informationSets": 6386367,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 6369467,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.2054872455935943,
+        "rootContinuationUntrainedInformationSetFraction": 0.022876124841964354,
+        "rootLocalDeviation99PctLowerBoundBb": 0.6218284045626479,
+        "rootLocalDeviationGainBb": 0.6752880002169244,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.022980052231980373,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 3674304,
+        "trainingConfigHash": "4d5ede304379963f",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "1b20f586e10fa677b2e745d20e76b11a74786fa7ec78b977b1e91d6e6012cb0c",
+      "time": {
+        "wallSeconds": 44.36,
+        "userCpuSeconds": 43.18,
+        "systemCpuSeconds": 0.97,
+        "maxRssBytes": 2815098880,
+        "peakFootprintBytes": 2834958712,
+        "instructionsRetired": 639735024019,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "optimized400",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2405,
+        "actionValueExportedInformationSetCoverage": 0.1206424747174301,
+        "actionValueStandardErrorCoverage": 0.17337439711217337,
+        "artifactId": "hu-blueprint-20bb-i400-s26001-acd3715feddbe4d6",
+        "averagingDelay": 0,
+        "configHash": "acd3715feddbe4d6",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16810,
+        "heldOutButtonMeanNetBb": 0.3190393693181817,
+        "heldOutButtonNetStandardErrorBb": 0.14489845836685816,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.14713134966299524,
+        "heldOutUntrainedInformationSetFraction": 0.014630938681571592,
+        "informationSets": 6602943,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 6586043,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.21296608063119926,
+        "rootContinuationUntrainedInformationSetFraction": 0.023334488344387564,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5916919463048742,
+        "rootLocalDeviationGainBb": 0.64963866797222,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.024908880703086906,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 3815619,
+        "trainingConfigHash": "7dd3bc6e5ad282d6",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "729c3dc2fec1e7f7843351ab6257485edb75a863200342b78a044cbc0d598f6d",
+      "time": {
+        "wallSeconds": 43.85,
+        "userCpuSeconds": 42.92,
+        "systemCpuSeconds": 0.5,
+        "maxRssBytes": 2191458304,
+        "peakFootprintBytes": 2187675544,
+        "instructionsRetired": 623543414018,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "optimized400",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2320,
+        "actionValueExportedInformationSetCoverage": 0.11904193047425636,
+        "actionValueStandardErrorCoverage": 0.17397036861432927,
+        "artifactId": "hu-blueprint-20bb-i400-s26002-439f481af76332d0",
+        "averagingDelay": 0,
+        "configHash": "439f481af76332d0",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16742,
+        "heldOutButtonMeanNetBb": 0.16730864204545448,
+        "heldOutButtonNetStandardErrorBb": 0.13898295208803432,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.13472549680026946,
+        "heldOutUntrainedInformationSetFraction": 0.014651397777029302,
+        "informationSets": 6386378,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 6369478,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.20548429119818737,
+        "rootContinuationUntrainedInformationSetFraction": 0.02287744940671338,
+        "rootLocalDeviation99PctLowerBoundBb": 0.6217550215546318,
+        "rootLocalDeviationGainBb": 0.6752146852140439,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.02298008146455406,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 3674318,
+        "trainingConfigHash": "4d5ede304379963f",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "30773f94332049e639b835390441f13a1cc37f06bf3c9ea521366032ebea3043",
+      "time": {
+        "wallSeconds": 42.86,
+        "userCpuSeconds": 42.23,
+        "systemCpuSeconds": 0.52,
+        "maxRssBytes": 2118696960,
+        "peakFootprintBytes": 2117519208,
+        "instructionsRetired": 601788893383,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "control400-final",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2405,
+        "actionValueExportedInformationSetCoverage": 0.1206424747174301,
+        "actionValueStandardErrorCoverage": 0.17337439711217337,
+        "artifactId": "hu-blueprint-20bb-i400-s26001-2b5c1e20f923dfc7",
+        "averagingDelay": 0,
+        "configHash": "2b5c1e20f923dfc7",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16810,
+        "heldOutButtonMeanNetBb": 0.3190393693181817,
+        "heldOutButtonNetStandardErrorBb": 0.14489845836685816,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.14713134966299524,
+        "heldOutUntrainedInformationSetFraction": 0.014630938681571592,
+        "informationSets": 6602943,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 6586043,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.21296608063119926,
+        "rootContinuationUntrainedInformationSetFraction": 0.023334488344387564,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5916919463048742,
+        "rootLocalDeviationGainBb": 0.64963866797222,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.024908880703086906,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 3815619,
+        "trainingConfigHash": "125abf2464565867",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "b96eae39e869f5f4fadcd51ab210aad6509c21b330a0e812f3cdc6999c8889de",
+      "time": {
+        "wallSeconds": 35.96,
+        "userCpuSeconds": 35.01,
+        "systemCpuSeconds": 0.54,
+        "maxRssBytes": 2189819904,
+        "peakFootprintBytes": 2186282904,
+        "instructionsRetired": 505768693114,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "control600-final",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2375,
+        "actionValueExportedInformationSetCoverage": 0.11220729822893141,
+        "actionValueStandardErrorCoverage": 0.18298901899104902,
+        "artifactId": "hu-blueprint-20bb-i600-s26001-247482616cd7dbc9",
+        "averagingDelay": 0,
+        "configHash": "247482616cd7dbc9",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16826,
+        "heldOutButtonMeanNetBb": 0.19363440909090904,
+        "heldOutButtonNetStandardErrorBb": 0.14381178108802917,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.15384615384615385,
+        "heldOutUntrainedInformationSetFraction": 0.014920424403183023,
+        "informationSets": 9687109,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 9670209,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 600,
+        "rootContinuationUnknownInformationSetFraction": 0.20207434771197813,
+        "rootContinuationUntrainedInformationSetFraction": 0.026341591439168477,
+        "rootLocalDeviation99PctLowerBoundBb": 0.4978059601297925,
+        "rootLocalDeviationGainBb": 0.5556847007770495,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.024879658495673862,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 5578545,
+        "trainingConfigHash": "18d7aa7087a4a715",
+        "trainingIterations": 600,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "dcf0b743997425957318572773a601a0755bae4b998bff4cfdf01b78b17c9bf7",
+      "time": {
+        "wallSeconds": 50.57,
+        "userCpuSeconds": 49.71,
+        "systemCpuSeconds": 0.76,
+        "maxRssBytes": 3188015104,
+        "peakFootprintBytes": 3186379392,
+        "instructionsRetired": 715391604074,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "control600-final",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2366,
+        "actionValueExportedInformationSetCoverage": 0.11310901430182185,
+        "actionValueStandardErrorCoverage": 0.1773806418418767,
+        "artifactId": "hu-blueprint-20bb-i600-s26002-86aca4fff0c03d2b",
+        "averagingDelay": 0,
+        "configHash": "86aca4fff0c03d2b",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16851,
+        "heldOutButtonMeanNetBb": 0.07617461931818184,
+        "heldOutButtonNetStandardErrorBb": 0.13197487520803353,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.12333219295244612,
+        "heldOutUntrainedInformationSetFraction": 0.017447827574409852,
+        "informationSets": 9325004,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 9308104,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 600,
+        "rootContinuationUnknownInformationSetFraction": 0.18226629198039007,
+        "rootContinuationUntrainedInformationSetFraction": 0.023524800057017476,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5060778388425299,
+        "rootLocalDeviationGainBb": 0.5597557037353407,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.023073877081210264,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 5379847,
+        "trainingConfigHash": "ef313d2cd8e9c728",
+        "trainingIterations": 600,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "460fd58b363de47397ef0fa57ae19fcded91488a9544b30dc05dd30d74809548",
+      "time": {
+        "wallSeconds": 48.86,
+        "userCpuSeconds": 48.01,
+        "systemCpuSeconds": 0.74,
+        "maxRssBytes": 3072557056,
+        "peakFootprintBytes": 3071969800,
+        "instructionsRetired": 695607984696,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "integrated200",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2128,
+        "actionValueExportedInformationSetCoverage": 0.11364758144126358,
+        "actionValueStandardErrorCoverage": 0.18239564421109972,
+        "artifactId": "hu-blueprint-20bb-i200-s26001-c6ccdcaf36e475a3",
+        "averagingDelay": 0,
+        "configHash": "c6ccdcaf36e475a3",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16208,
+        "heldOutButtonMeanNetBb": 0.07407315340909089,
+        "heldOutButtonNetStandardErrorBb": 0.13919205674825652,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.16913497139010433,
+        "heldOutUntrainedInformationSetFraction": 0.015314708852238304,
+        "informationSets": 4863945,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 4847056,
+        "preflopInformationSets": 16889,
+        "requestedIterations": 200,
+        "rootContinuationUnknownInformationSetFraction": 0.23138085609718945,
+        "rootContinuationUntrainedInformationSetFraction": 0.020408375831795923,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5189499404603445,
+        "rootLocalDeviationGainBb": 0.5768167769019972,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.02487454137379487,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 2604599,
+        "trainingConfigHash": "3fc76b265a72271b",
+        "trainingIterations": 200,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "9499c7cf35280d1dd9f7cdf83726a40de95eb1c205ff5ff4606450b71110e1c5",
+      "time": {
+        "wallSeconds": 29.97,
+        "userCpuSeconds": 29.55,
+        "systemCpuSeconds": 0.35,
+        "maxRssBytes": 1607712768,
+        "peakFootprintBytes": 1607206400,
+        "instructionsRetired": 413418625452,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "integrated200",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2091,
+        "actionValueExportedInformationSetCoverage": 0.11022092740956543,
+        "actionValueStandardErrorCoverage": 0.19971726972522852,
+        "artifactId": "hu-blueprint-20bb-i200-s26002-6e08d955d29eff49",
+        "averagingDelay": 0,
+        "configHash": "6e08d955d29eff49",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16476,
+        "heldOutButtonMeanNetBb": 0.15057019886363635,
+        "heldOutButtonNetStandardErrorBb": 0.13597755198521144,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.15887363114896574,
+        "heldOutUntrainedInformationSetFraction": 0.011819920041717365,
+        "informationSets": 4847834,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 4830934,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 200,
+        "rootContinuationUnknownInformationSetFraction": 0.2340290033685573,
+        "rootContinuationUntrainedInformationSetFraction": 0.021759616760538506,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5458151459617476,
+        "rootLocalDeviationGainBb": 0.5993092621106348,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.022994891153964702,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 2610392,
+        "trainingConfigHash": "1a124ae0c72de532",
+        "trainingIterations": 200,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "0499380d76f99e5f5055c0169af24987fde3987ea331200bc0c3edc2f6d0f242",
+      "time": {
+        "wallSeconds": 30.51,
+        "userCpuSeconds": 29.89,
+        "systemCpuSeconds": 0.41,
+        "maxRssBytes": 1608237056,
+        "peakFootprintBytes": 1607386600,
+        "instructionsRetired": 412622564714,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "integrated400-full",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2157,
+        "actionValueExportedInformationSetCoverage": 0.10260547388550256,
+        "actionValueStandardErrorCoverage": 0.21395461441444058,
+        "artifactId": "hu-blueprint-20bb-i400-s26001-2a9b7291bdfa581b",
+        "averagingDelay": 0,
+        "configHash": "2a9b7291bdfa581b",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16734,
+        "heldOutButtonMeanNetBb": 0.13979840909090904,
+        "heldOutButtonNetStandardErrorBb": 0.13332721607974418,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.14353813559322035,
+        "heldOutUntrainedInformationSetFraction": 0.017478813559322032,
+        "informationSets": 10013901,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 9997001,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.20675708794384426,
+        "rootContinuationUntrainedInformationSetFraction": 0.026142137634481883,
+        "rootLocalDeviation99PctLowerBoundBb": 0.4116271939412221,
+        "rootLocalDeviationGainBb": 0.46325903226310783,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.022194375526953414,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 5318060,
+        "trainingConfigHash": "1713cc503af342f3",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "f04b67faa9ac4d74a8799abd0c6b1b23499df1489ae2278f2096af4f1ebb477d",
+      "time": {
+        "wallSeconds": 66.29,
+        "userCpuSeconds": 57.13,
+        "systemCpuSeconds": 7.15,
+        "maxRssBytes": 3165618176,
+        "peakFootprintBytes": 3268807320,
+        "instructionsRetired": 750226132896,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "integrated400-full",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2100,
+        "actionValueExportedInformationSetCoverage": 0.10093446747334371,
+        "actionValueStandardErrorCoverage": 0.20931803577307243,
+        "artifactId": "hu-blueprint-20bb-i400-s26002-14e94e0e068f14e1",
+        "averagingDelay": 0,
+        "configHash": "14e94e0e068f14e1",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16694,
+        "heldOutButtonMeanNetBb": 0.13566840340909084,
+        "heldOutButtonNetStandardErrorBb": 0.12701369872913282,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.1264903129657228,
+        "heldOutUntrainedInformationSetFraction": 0.01732488822652757,
+        "informationSets": 9390665,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 9373765,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.19834298517428958,
+        "rootContinuationUntrainedInformationSetFraction": 0.024927627953376177,
+        "rootLocalDeviation99PctLowerBoundBb": 0.43475480322794446,
+        "rootLocalDeviationGainBb": 0.486139187466938,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.02208800532941857,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.2.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 5031603,
+        "trainingConfigHash": "c2ceaf5993f8feaa",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "0f7701ff47d9fc2f83fef1345c34aefa5aa922a06fc416dfd246a9ba96755ab7",
+      "time": {
+        "wallSeconds": 57.87,
+        "userCpuSeconds": 56.03,
+        "systemCpuSeconds": 0.65,
+        "maxRssBytes": 3077357568,
+        "peakFootprintBytes": 3076327968,
+        "instructionsRetired": 702832320507,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "integrated800-final",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2127,
+        "actionValueExportedInformationSetCoverage": 0.09103866025298414,
+        "actionValueStandardErrorCoverage": 0.2341085011887672,
+        "artifactId": "hu-blueprint-20bb-i800-s26001-569b7696843fa599",
+        "averagingDelay": 0,
+        "configHash": "569b7696843fa599",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16839,
+        "heldOutButtonMeanNetBb": 0.28248629545454557,
+        "heldOutButtonNetStandardErrorBb": 0.12495342830255608,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.11514253980007405,
+        "heldOutUntrainedInformationSetFraction": 0.018696778970751574,
+        "informationSets": 19064302,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 19047402,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 800,
+        "rootContinuationUnknownInformationSetFraction": 0.16839602159890127,
+        "rootContinuationUntrainedInformationSetFraction": 0.02801269146429607,
+        "rootLocalDeviation99PctLowerBoundBb": 0.3520452256772648,
+        "rootLocalDeviationGainBb": 0.40709294996420764,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.023662722545571797,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 10040116,
+        "trainingConfigHash": "51e33cb9b672654b",
+        "trainingIterations": 800,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "1a4e22104df24ea5c89ad6644cf348849da1b9e0033c66b9f4b36661db72dac3",
+      "time": {
+        "wallSeconds": 126.28,
+        "userCpuSeconds": 93.82,
+        "systemCpuSeconds": 26.81,
+        "maxRssBytes": 4759027712,
+        "peakFootprintBytes": 6183244504,
+        "instructionsRetired": 1299208288026,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "integrated800-final",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2235,
+        "actionValueExportedInformationSetCoverage": 0.08834341278311396,
+        "actionValueStandardErrorCoverage": 0.21529569154339787,
+        "artifactId": "hu-blueprint-20bb-i800-s26002-371dab4f0f8cf8cf",
+        "averagingDelay": 0,
+        "configHash": "371dab4f0f8cf8cf",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16866,
+        "heldOutButtonMeanNetBb": 0.2990206931818183,
+        "heldOutButtonNetStandardErrorBb": 0.129073452218777,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.1168002915451895,
+        "heldOutUntrainedInformationSetFraction": 0.018403790087463557,
+        "informationSets": 18871516,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "postflopInformationSets": 18854616,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 800,
+        "rootContinuationUnknownInformationSetFraction": 0.1681341298399846,
+        "rootContinuationUntrainedInformationSetFraction": 0.02862976812545251,
+        "rootLocalDeviation99PctLowerBoundBb": 0.3325241034933676,
+        "rootLocalDeviationGainBb": 0.3843531037938767,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.022279127244797067,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 9998313,
+        "trainingConfigHash": "3c7088ac0d4e5ac2",
+        "trainingIterations": 800,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "a7cbd0c063daeb47d15001302528b9093cd150166dc19466e63506798d368bdf",
+      "time": {
+        "wallSeconds": 120.04,
+        "userCpuSeconds": 93.13,
+        "systemCpuSeconds": 22.95,
+        "maxRssBytes": 4779311104,
+        "peakFootprintBytes": 6130012840,
+        "instructionsRetired": 1274044551917,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "checkdown400",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2362,
+        "actionValueExportedInformationSetCoverage": 0.12054778064748634,
+        "actionValueStandardErrorCoverage": 0.1821527798017326,
+        "artifactId": "hu-blueprint-20bb-i400-s26001-2debccc259b19b92",
+        "averagingDelay": 0,
+        "configHash": "2debccc259b19b92",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16649,
+        "heldOutButtonMeanNetBb": -0.06116834090909093,
+        "heldOutButtonNetStandardErrorBb": 0.14268609954616096,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.14318108195659215,
+        "heldOutUntrainedInformationSetFraction": 0.01635892452218983,
+        "informationSets": 6961294,
+        "integrateTerminalActions": false,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "opponentCheckdownBaseline": true,
+        "postflopInformationSets": 6944394,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.20751116772305572,
+        "rootContinuationUntrainedInformationSetFraction": 0.022057047551491023,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5283107389556109,
+        "rootLocalDeviationGainBb": 0.5870946615015852,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.025268758470288127,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 4014349,
+        "trainingConfigHash": "a097ed2447825bfa",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "69cd4e54819dcd91e377392bbe82d7e9d1a7fc2147f0bb5c421dec4b954cbde2",
+      "time": {
+        "wallSeconds": 35.91,
+        "userCpuSeconds": 35.16,
+        "systemCpuSeconds": 0.4,
+        "maxRssBytes": 2308784128,
+        "peakFootprintBytes": 2304952312,
+        "instructionsRetired": 525925572472,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "checkdown400",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2447,
+        "actionValueExportedInformationSetCoverage": 0.12105104198127455,
+        "actionValueStandardErrorCoverage": 0.17394556322541818,
+        "artifactId": "hu-blueprint-20bb-i400-s26002-1a06a7e1a4bff916",
+        "averagingDelay": 0,
+        "configHash": "1a06a7e1a4bff916",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16555,
+        "heldOutButtonMeanNetBb": 0.11799153977272732,
+        "heldOutButtonNetStandardErrorBb": 0.13744170489807758,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.16071428571428573,
+        "heldOutUntrainedInformationSetFraction": 0.016558441558441557,
+        "informationSets": 6580592,
+        "integrateTerminalActions": false,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "opponentCheckdownBaseline": true,
+        "postflopInformationSets": 6563692,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 400,
+        "rootContinuationUnknownInformationSetFraction": 0.21128883017244562,
+        "rootContinuationUntrainedInformationSetFraction": 0.0236401564470782,
+        "rootLocalDeviation99PctLowerBoundBb": 0.5117861465529614,
+        "rootLocalDeviationGainBb": 0.5670426869669307,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.02375248389612487,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 3757480,
+        "trainingConfigHash": "4b71294d5b8d0d23",
+        "trainingIterations": 400,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "d97effefab2c969322d3002da2237b91df82c3be93e7ba1396c7e4eba9bfdf12",
+      "time": {
+        "wallSeconds": 33.92,
+        "userCpuSeconds": 33.44,
+        "systemCpuSeconds": 0.43,
+        "maxRssBytes": 2187001856,
+        "peakFootprintBytes": 2183202736,
+        "instructionsRetired": 500895713408,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "checkdown800",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2388,
+        "actionValueExportedInformationSetCoverage": 0.10766205910390848,
+        "actionValueStandardErrorCoverage": 0.19282069127879017,
+        "artifactId": "hu-blueprint-20bb-i800-s26001-9cccea6f77516e2f",
+        "averagingDelay": 0,
+        "configHash": "9cccea6f77516e2f",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16784,
+        "heldOutButtonMeanNetBb": 0.12518871022727274,
+        "heldOutButtonNetStandardErrorBb": 0.1315396997741091,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.1311447525089301,
+        "heldOutUntrainedInformationSetFraction": 0.019220955944888585,
+        "informationSets": 13010564,
+        "integrateTerminalActions": false,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "opponentCheckdownBaseline": true,
+        "postflopInformationSets": 12993664,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 800,
+        "rootContinuationUnknownInformationSetFraction": 0.18865408884735005,
+        "rootContinuationUntrainedInformationSetFraction": 0.02626055412105755,
+        "rootLocalDeviation99PctLowerBoundBb": 0.42376543894578317,
+        "rootLocalDeviationGainBb": 0.4824087370008188,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.025208309862188583,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26001,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 7465584,
+        "trainingConfigHash": "e9af6fafe12a215f",
+        "trainingIterations": 800,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "1091d0fa060740b72330fcbf64b61414745297ce705cfb062fd406f70f630787",
+      "time": {
+        "wallSeconds": 80.43,
+        "userCpuSeconds": 77.12,
+        "systemCpuSeconds": 1.43,
+        "maxRssBytes": 4261871616,
+        "peakFootprintBytes": 4270394752,
+        "instructionsRetired": 959927672730,
+        "processSwaps": 0
+      }
+    },
+    {
+      "arm": "checkdown800",
+      "summary": {
+        "actionValueDeals": 2000,
+        "actionValueEvaluatedInformationSets": 2385,
+        "actionValueExportedInformationSetCoverage": 0.10206871953394364,
+        "actionValueStandardErrorCoverage": 0.18473385516115537,
+        "artifactId": "hu-blueprint-20bb-i800-s26002-4099909f229ef57b",
+        "averagingDelay": 0,
+        "configHash": "4099909f229ef57b",
+        "dcfr": {
+          "negative_regret_exponent": 0,
+          "positive_regret_exponent": 1.5,
+          "strategy_exponent": 2
+        },
+        "dcfrSchedule": "fixed",
+        "dcfrScheduleHorizon": 0,
+        "depthBb": 20,
+        "exportedInformationSets": 16822,
+        "heldOutButtonMeanNetBb": 0.054908204545454524,
+        "heldOutButtonNetStandardErrorBb": 0.13523679047132436,
+        "heldOutDeals": 2000,
+        "heldOutUnknownInformationSetFraction": 0.12541308658294778,
+        "heldOutUntrainedInformationSetFraction": 0.01900198281559815,
+        "informationSets": 12324904,
+        "integrateTerminalActions": false,
+        "model": "hu-abstracted-external-sampling-dcfr-trajectory-v3",
+        "opponentCheckdownBaseline": true,
+        "postflopInformationSets": 12308004,
+        "preflopInformationSets": 16900,
+        "requestedIterations": 800,
+        "rootContinuationUnknownInformationSetFraction": 0.1899098066462806,
+        "rootContinuationUntrainedInformationSetFraction": 0.02641554366585672,
+        "rootLocalDeviation99PctLowerBoundBb": 0.428884887040631,
+        "rootLocalDeviationGainBb": 0.48142549566676796,
+        "rootLocalDeviationSamplesPerClass": 256,
+        "rootLocalDeviationStandardErrorBb": 0.022585018007559163,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "schema": "hu-blueprint-run-summary-v1",
+        "seed": 26002,
+        "solverVersion": "0.3.0",
+        "stopReason": null,
+        "stoppedEarly": false,
+        "trainedInformationSets": 7051216,
+        "trainingConfigHash": "bcda1df84cc35c56",
+        "trainingIterations": 800,
+        "traversal": "public_chance_sampling",
+        "traverserHandBatchSize": 1,
+        "validationReasons": [
+          "No exploitability or Nash-distance certificate is computed for the abstract full game.",
+          "Cross-seed strategy stability and a full or stronger local-best-response validation must pass before publishing ranges as solver-backed recommendations.",
+          "Unvisited or pre-averaging information sets are omitted from the strategy export; their coverage remains visible in metrics and the resumable checkpoint."
+        ],
+        "validationStatus": "advisory_only"
+      },
+      "artifactGzipSha256": "92cce36251ef427145d2c86b66a39044c699f2bba9d400ee262617f2f818c3e5",
+      "time": {
+        "wallSeconds": 65.41,
+        "userCpuSeconds": 63.94,
+        "systemCpuSeconds": 1.16,
+        "maxRssBytes": 4056399872,
+        "peakFootprintBytes": 4053060824,
+        "instructionsRetired": 921338718158,
+        "processSwaps": 0
+      }
+    }
+  ],
+  "pairs": {
+    "baseline400": {
+      "left_artifact_id": "hu-blueprint-20bb-i400-s26001-acd3715feddbe4d6",
+      "right_artifact_id": "hu-blueprint-20bb-i400-s26002-439f481af76332d0",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.2951437798826415,
+          "right": 0.28181176365547617,
+          "right_minus_left": -0.013332016227165344,
+          "absolute_delta": 0.013332016227165344
+        },
+        "limp": {
+          "left": 0.18683175566189758,
+          "right": 0.16500143639645673,
+          "right_minus_left": -0.02183031926544085,
+          "absolute_delta": 0.02183031926544085
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.07489576660104699,
+          "right": 0.10562296403284764,
+          "right_minus_left": 0.03072719743180065,
+          "absolute_delta": 0.03072719743180065
+        },
+        "raise_to_2.000bb": {
+          "left": 0.1376785175735525,
+          "right": 0.09256320224785827,
+          "right_minus_left": -0.04511531532569424,
+          "absolute_delta": 0.04511531532569424
+        },
+        "raise_to_2.500bb": {
+          "left": 0.10417131327497109,
+          "right": 0.09103059814795932,
+          "right_minus_left": -0.013140715127011773,
+          "absolute_delta": 0.013140715127011773
+        },
+        "raise_to_3.000bb": {
+          "left": 0.06028388440663367,
+          "right": 0.10466935874482539,
+          "right_minus_left": 0.04438547433819172,
+          "absolute_delta": 0.04438547433819172
+        },
+        "raise_to_4.000bb": {
+          "left": 0.08622944397557024,
+          "right": 0.07636797033145111,
+          "right_minus_left": -0.009861473644119129,
+          "absolute_delta": 0.009861473644119129
+        },
+        "raise_to_5.000bb": {
+          "left": 0.05476553862368653,
+          "right": 0.08293270644312556,
+          "right_minus_left": 0.02816716781943903,
+          "absolute_delta": 0.02816716781943903
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.07265830143400763,
+        "limp": 0.10993625896336011,
+        "raise_all_in_to_20.000bb": 0.06350185782992411,
+        "raise_to_2.000bb": 0.10460158887392602,
+        "raise_to_2.500bb": 0.08148869892716339,
+        "raise_to_3.000bb": 0.06503759975507548,
+        "raise_to_4.000bb": 0.057830728218040625,
+        "raise_to_5.000bb": 0.04404132514690664
+      },
+      "per_hand_total_variation": {
+        "median": 0.3022503039970026,
+        "p95": 0.5170140610407958,
+        "max": 0.6162035208300688,
+        "mean": 0.3011171499795349
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.5088757396449705,
+        "combo_weighted_fraction": 0.5369532428355958
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": -0.15173072727272724,
+        "combined_standard_error_bb": 0.2007780471271622,
+        "absolute_z_score": 0.7557137318734304
+      }
+    },
+    "control600": {
+      "left_artifact_id": "hu-blueprint-20bb-i600-s26001-247482616cd7dbc9",
+      "right_artifact_id": "hu-blueprint-20bb-i600-s26002-86aca4fff0c03d2b",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.311807632567001,
+          "right": 0.30965624140551107,
+          "right_minus_left": -0.002151391161489935,
+          "absolute_delta": 0.002151391161489935
+        },
+        "limp": {
+          "left": 0.18799510271686298,
+          "right": 0.17904599058751935,
+          "right_minus_left": -0.008949112129343628,
+          "absolute_delta": 0.008949112129343628
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.06613459514991052,
+          "right": 0.08188065679074928,
+          "right_minus_left": 0.015746061640838763,
+          "absolute_delta": 0.015746061640838763
+        },
+        "raise_to_2.000bb": {
+          "left": 0.1178393779029962,
+          "right": 0.10560409315537851,
+          "right_minus_left": -0.012235284747617689,
+          "absolute_delta": 0.012235284747617689
+        },
+        "raise_to_2.500bb": {
+          "left": 0.09535371469617407,
+          "right": 0.07099118495391496,
+          "right_minus_left": -0.02436252974225911,
+          "absolute_delta": 0.02436252974225911
+        },
+        "raise_to_3.000bb": {
+          "left": 0.0887556343519855,
+          "right": 0.07485512276058844,
+          "right_minus_left": -0.01390051159139706,
+          "absolute_delta": 0.01390051159139706
+        },
+        "raise_to_4.000bb": {
+          "left": 0.06833600253768812,
+          "right": 0.08621303766516344,
+          "right_minus_left": 0.01787703512747532,
+          "absolute_delta": 0.01787703512747532
+        },
+        "raise_to_5.000bb": {
+          "left": 0.06377794007738162,
+          "right": 0.09175367268117497,
+          "right_minus_left": 0.027975732603793352,
+          "absolute_delta": 0.027975732603793352
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.06001979514653977,
+        "limp": 0.08405373681876092,
+        "raise_all_in_to_20.000bb": 0.03676523168260246,
+        "raise_to_2.000bb": 0.07188573237556418,
+        "raise_to_2.500bb": 0.07814954869588685,
+        "raise_to_3.000bb": 0.05420507736169123,
+        "raise_to_4.000bb": 0.044456007167056034,
+        "raise_to_5.000bb": 0.04964881031056833
+      },
+      "per_hand_total_variation": {
+        "median": 0.25128457381735175,
+        "p95": 0.47492015888266836,
+        "max": 0.6209942997578525,
+        "mean": 0.24711155129837512
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.6035502958579881,
+        "combo_weighted_fraction": 0.6455505279034691
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": -0.1174597897727272,
+        "combined_standard_error_bb": 0.19519015360895448,
+        "absolute_z_score": 0.6017710811788544
+      }
+    },
+    "integrated200": {
+      "left_artifact_id": "hu-blueprint-20bb-i200-s26001-c6ccdcaf36e475a3",
+      "right_artifact_id": "hu-blueprint-20bb-i200-s26002-6e08d955d29eff49",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.28604808640430895,
+          "right": 0.30857155781763945,
+          "right_minus_left": 0.022523471413330498,
+          "absolute_delta": 0.022523471413330498
+        },
+        "limp": {
+          "left": 0.21053096566626717,
+          "right": 0.14726023731154744,
+          "right_minus_left": -0.06327072835471972,
+          "absolute_delta": 0.06327072835471972
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.10994569280163966,
+          "right": 0.13922064510036414,
+          "right_minus_left": 0.029274952298724483,
+          "absolute_delta": 0.029274952298724483
+        },
+        "raise_to_2.000bb": {
+          "left": 0.07412988498141591,
+          "right": 0.08542192875945122,
+          "right_minus_left": 0.011292043778035304,
+          "absolute_delta": 0.011292043778035304
+        },
+        "raise_to_2.500bb": {
+          "left": 0.037396377796388526,
+          "right": 0.09059114189536945,
+          "right_minus_left": 0.05319476409898092,
+          "absolute_delta": 0.05319476409898092
+        },
+        "raise_to_3.000bb": {
+          "left": 0.07519421456159292,
+          "right": 0.04731654786752841,
+          "right_minus_left": -0.02787766669406451,
+          "absolute_delta": 0.02787766669406451
+        },
+        "raise_to_4.000bb": {
+          "left": 0.11883958438456431,
+          "right": 0.11399183618832366,
+          "right_minus_left": -0.004847748196240648,
+          "absolute_delta": 0.004847748196240648
+        },
+        "raise_to_5.000bb": {
+          "left": 0.08791519340382259,
+          "right": 0.06762610505977655,
+          "right_minus_left": -0.02028908834404604,
+          "absolute_delta": 0.02028908834404604
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.09386792700280722,
+        "limp": 0.13583280881838664,
+        "raise_all_in_to_20.000bb": 0.07847143403110908,
+        "raise_to_2.000bb": 0.06263732977201097,
+        "raise_to_2.500bb": 0.06162336290248628,
+        "raise_to_3.000bb": 0.05027351691663519,
+        "raise_to_4.000bb": 0.07723130758689717,
+        "raise_to_5.000bb": 0.04942335350264307
+      },
+      "per_hand_total_variation": {
+        "median": 0.31863327919642237,
+        "p95": 0.5485887714121852,
+        "max": 0.6645908316630188,
+        "mean": 0.30748492548018913
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.44970414201183434,
+        "combo_weighted_fraction": 0.46153846153846156
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": 0.07649704545454546,
+        "combined_standard_error_bb": 0.19458757233107346,
+        "absolute_z_score": 0.393124003440428
+      }
+    },
+    "integrated400": {
+      "left_artifact_id": "hu-blueprint-20bb-i400-s26001-2a9b7291bdfa581b",
+      "right_artifact_id": "hu-blueprint-20bb-i400-s26002-14e94e0e068f14e1",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.3456412016406695,
+          "right": 0.36391995685531664,
+          "right_minus_left": 0.018278755214647113,
+          "absolute_delta": 0.018278755214647113
+        },
+        "limp": {
+          "left": 0.20910705479641636,
+          "right": 0.17662676589889298,
+          "right_minus_left": -0.032480288897523385,
+          "absolute_delta": 0.032480288897523385
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.0681075023610016,
+          "right": 0.09431152005916904,
+          "right_minus_left": 0.026204017698167437,
+          "absolute_delta": 0.026204017698167437
+        },
+        "raise_to_2.000bb": {
+          "left": 0.08407448559016127,
+          "right": 0.054214224725069,
+          "right_minus_left": -0.029860260865092268,
+          "absolute_delta": 0.029860260865092268
+        },
+        "raise_to_2.500bb": {
+          "left": 0.05039404836303216,
+          "right": 0.09439005718671317,
+          "right_minus_left": 0.043996008823681015,
+          "absolute_delta": 0.043996008823681015
+        },
+        "raise_to_3.000bb": {
+          "left": 0.10252544853082542,
+          "right": 0.04619696141613109,
+          "right_minus_left": -0.05632848711469433,
+          "absolute_delta": 0.05632848711469433
+        },
+        "raise_to_4.000bb": {
+          "left": 0.08583397698725813,
+          "right": 0.09152238911743299,
+          "right_minus_left": 0.005688412130174861,
+          "absolute_delta": 0.005688412130174861
+        },
+        "raise_to_5.000bb": {
+          "left": 0.05431628173063557,
+          "right": 0.07881812474127516,
+          "right_minus_left": 0.02450184301063959,
+          "absolute_delta": 0.02450184301063959
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.07577283486411415,
+        "limp": 0.08901875731025177,
+        "raise_all_in_to_20.000bb": 0.04433034890354453,
+        "raise_to_2.000bb": 0.0529359842294119,
+        "raise_to_2.500bb": 0.05919232294442843,
+        "raise_to_3.000bb": 0.06801479179324524,
+        "raise_to_4.000bb": 0.056319142899690845,
+        "raise_to_5.000bb": 0.052230339044001976
+      },
+      "per_hand_total_variation": {
+        "median": 0.2779159200461155,
+        "p95": 0.4672080338830287,
+        "max": 0.5886432221511655,
+        "mean": 0.2570586849122823
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.6153846153846154,
+        "combo_weighted_fraction": 0.6395173453996983
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": -0.004130005681818205,
+        "combined_standard_error_bb": 0.18414295048257948,
+        "absolute_z_score": 0.02242825843180414
+      }
+    },
+    "integrated800": {
+      "left_artifact_id": "hu-blueprint-20bb-i800-s26001-569b7696843fa599",
+      "right_artifact_id": "hu-blueprint-20bb-i800-s26002-371dab4f0f8cf8cf",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.3955437326263402,
+          "right": 0.37877823538818883,
+          "right_minus_left": -0.01676549723815135,
+          "absolute_delta": 0.01676549723815135
+        },
+        "limp": {
+          "left": 0.16707588773154208,
+          "right": 0.2000439584289695,
+          "right_minus_left": 0.03296807069742741,
+          "absolute_delta": 0.03296807069742741
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.06402258360683837,
+          "right": 0.06381515637584192,
+          "right_minus_left": -0.00020742723099644034,
+          "absolute_delta": 0.00020742723099644034
+        },
+        "raise_to_2.000bb": {
+          "left": 0.06575538560334844,
+          "right": 0.08292999096255846,
+          "right_minus_left": 0.01717460535921002,
+          "absolute_delta": 0.01717460535921002
+        },
+        "raise_to_2.500bb": {
+          "left": 0.07159959117029012,
+          "right": 0.08822947766841736,
+          "right_minus_left": 0.016629886498127244,
+          "absolute_delta": 0.016629886498127244
+        },
+        "raise_to_3.000bb": {
+          "left": 0.10435392607146353,
+          "right": 0.0516351850216831,
+          "right_minus_left": -0.05271874104978043,
+          "absolute_delta": 0.05271874104978043
+        },
+        "raise_to_4.000bb": {
+          "left": 0.08356541122391782,
+          "right": 0.0775332831858127,
+          "right_minus_left": -0.006032128038105128,
+          "absolute_delta": 0.006032128038105128
+        },
+        "raise_to_5.000bb": {
+          "left": 0.048083481966259334,
+          "right": 0.05703471296852822,
+          "right_minus_left": 0.008951231002268883,
+          "absolute_delta": 0.008951231002268883
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.05735441048152036,
+        "limp": 0.08281593983678649,
+        "raise_all_in_to_20.000bb": 0.029832195323205555,
+        "raise_to_2.000bb": 0.04724123061074305,
+        "raise_to_2.500bb": 0.04479414269895027,
+        "raise_to_3.000bb": 0.06366253982288657,
+        "raise_to_4.000bb": 0.04938189022077518,
+        "raise_to_5.000bb": 0.03603594521751326
+      },
+      "per_hand_total_variation": {
+        "median": 0.22898097690879782,
+        "p95": 0.4076136659085362,
+        "max": 0.5784209339823038,
+        "mean": 0.21385572831928226
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.6449704142011834,
+        "combo_weighted_fraction": 0.6681749622926093
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": 0.01653439772727272,
+        "combined_standard_error_bb": 0.17964775342941236,
+        "absolute_z_score": 0.09203787640889959
+      }
+    },
+    "checkdown400": {
+      "left_artifact_id": "hu-blueprint-20bb-i400-s26001-2debccc259b19b92",
+      "right_artifact_id": "hu-blueprint-20bb-i400-s26002-1a06a7e1a4bff916",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.28154238672148074,
+          "right": 0.286704507211987,
+          "right_minus_left": 0.005162120490506239,
+          "absolute_delta": 0.005162120490506239
+        },
+        "limp": {
+          "left": 0.1558868981490884,
+          "right": 0.1971729483100076,
+          "right_minus_left": 0.041286050160919185,
+          "absolute_delta": 0.041286050160919185
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.04793622296320378,
+          "right": 0.07537124343501196,
+          "right_minus_left": 0.02743502047180818,
+          "absolute_delta": 0.02743502047180818
+        },
+        "raise_to_2.000bb": {
+          "left": 0.12471914684747802,
+          "right": 0.14345288561518044,
+          "right_minus_left": 0.018733738767702415,
+          "absolute_delta": 0.018733738767702415
+        },
+        "raise_to_2.500bb": {
+          "left": 0.13236047296009854,
+          "right": 0.10098703617093452,
+          "right_minus_left": -0.031373436789164016,
+          "absolute_delta": 0.031373436789164016
+        },
+        "raise_to_3.000bb": {
+          "left": 0.12012101999235858,
+          "right": 0.06488884867282108,
+          "right_minus_left": -0.055232171319537504,
+          "absolute_delta": 0.055232171319537504
+        },
+        "raise_to_4.000bb": {
+          "left": 0.06599458658859113,
+          "right": 0.052812347933355965,
+          "right_minus_left": -0.013182238655235164,
+          "absolute_delta": 0.013182238655235164
+        },
+        "raise_to_5.000bb": {
+          "left": 0.07143926577770068,
+          "right": 0.07861018265070158,
+          "right_minus_left": 0.007170916873000893,
+          "absolute_delta": 0.007170916873000893
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.07944308322271369,
+        "limp": 0.11006010027286155,
+        "raise_all_in_to_20.000bb": 0.04325868146923824,
+        "raise_to_2.000bb": 0.0862250078499951,
+        "raise_to_2.500bb": 0.06885096099353484,
+        "raise_to_3.000bb": 0.06972687225663236,
+        "raise_to_4.000bb": 0.04344301331788071,
+        "raise_to_5.000bb": 0.04771176173567155
+      },
+      "per_hand_total_variation": {
+        "median": 0.28595278273403757,
+        "p95": 0.44793980444821124,
+        "max": 0.6325722518522346,
+        "mean": 0.2819295474987263
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.5266272189349113,
+        "combo_weighted_fraction": 0.5671191553544495
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": 0.17915988068181826,
+        "combined_standard_error_bb": 0.19811497987024404,
+        "absolute_z_score": 0.9043227362169157
+      }
+    },
+    "checkdown800": {
+      "left_artifact_id": "hu-blueprint-20bb-i800-s26001-9cccea6f77516e2f",
+      "right_artifact_id": "hu-blueprint-20bb-i800-s26002-4099909f229ef57b",
+      "combo_weighted_aggregate_frequencies": {
+        "fold": {
+          "left": 0.3162733245884218,
+          "right": 0.3043702970596908,
+          "right_minus_left": -0.011903027528730958,
+          "absolute_delta": 0.011903027528730958
+        },
+        "limp": {
+          "left": 0.18173656693879356,
+          "right": 0.20310861642047104,
+          "right_minus_left": 0.02137204948167748,
+          "absolute_delta": 0.02137204948167748
+        },
+        "raise_all_in_to_20.000bb": {
+          "left": 0.042229463704538346,
+          "right": 0.04893761819749004,
+          "right_minus_left": 0.006708154492951694,
+          "absolute_delta": 0.006708154492951694
+        },
+        "raise_to_2.000bb": {
+          "left": 0.1035367495247704,
+          "right": 0.1166652294175856,
+          "right_minus_left": 0.013128479892815195,
+          "absolute_delta": 0.013128479892815195
+        },
+        "raise_to_2.500bb": {
+          "left": 0.1156378134135284,
+          "right": 0.09020218544117288,
+          "right_minus_left": -0.025435627972355518,
+          "absolute_delta": 0.025435627972355518
+        },
+        "raise_to_3.000bb": {
+          "left": 0.11766119982449216,
+          "right": 0.09935373495431028,
+          "right_minus_left": -0.01830746487018188,
+          "absolute_delta": 0.01830746487018188
+        },
+        "raise_to_4.000bb": {
+          "left": 0.06522221878107075,
+          "right": 0.07776697584570037,
+          "right_minus_left": 0.012544757064629625,
+          "absolute_delta": 0.012544757064629625
+        },
+        "raise_to_5.000bb": {
+          "left": 0.05770266322438448,
+          "right": 0.059595342663578944,
+          "right_minus_left": 0.0018926794391944668,
+          "absolute_delta": 0.0018926794391944668
+        }
+      },
+      "combo_weighted_per_action_mae": {
+        "fold": 0.06543506052418259,
+        "limp": 0.08793914289774916,
+        "raise_all_in_to_20.000bb": 0.03155300604034685,
+        "raise_to_2.000bb": 0.0792308891720315,
+        "raise_to_2.500bb": 0.08187491370685787,
+        "raise_to_3.000bb": 0.062203773692117326,
+        "raise_to_4.000bb": 0.04671647630688438,
+        "raise_to_5.000bb": 0.033209532376117755
+      },
+      "per_hand_total_variation": {
+        "median": 0.24057746071607844,
+        "p95": 0.4317640778246917,
+        "max": 0.4916654634656104,
+        "mean": 0.2505456569604897
+      },
+      "primary_action_agreement": {
+        "hand_class_fraction": 0.5798816568047337,
+        "combo_weighted_fraction": 0.6199095022624435
+      },
+      "held_out_button_ev_consistency": {
+        "right_minus_left_bb": -0.0702805056818182,
+        "combined_standard_error_bb": 0.18865757899869182,
+        "absolute_z_score": 0.372529458158188
+      }
+    }
+  }
+}

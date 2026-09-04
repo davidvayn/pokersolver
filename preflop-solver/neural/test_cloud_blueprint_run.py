@@ -86,6 +86,8 @@ def arguments(root: Path) -> argparse.Namespace:
         hs_dcfr_30_horizon=0,
         compact_serving_grid=False,
         public_chance_sampling=False,
+        integrate_terminal_actions=False,
+        opponent_checkdown_baseline=False,
         export_postflop_strategies=True,
         bytes_per_information_set=2_300,
         minimum_free_disk_gb=20.0,
@@ -164,6 +166,10 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args.public_chance_sampling = True
             self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
             args.public_chance_sampling = False
+            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline"):
+                setattr(args, field, True)
+                self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
+                setattr(args, field, False)
             args.evaluation_only = True
             self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
             args.evaluation_only = False
@@ -192,6 +198,29 @@ class CloudBlueprintRunTests(unittest.TestCase):
                 "--public-chance-sampling",
                 build_command(args, seed_run(root / "public-chance")),
             )
+            for field, flag in (
+                ("integrate_terminal_actions", "--integrate-terminal-actions"),
+                ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
+            ):
+                setattr(args, field, True)
+                self.assertIn(flag, build_command(args, seed_run(root / field)))
+                setattr(args, field, False)
+
+    def test_opponent_variance_modes_require_pcs_and_are_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = arguments(Path(directory))
+            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline"):
+                setattr(args, field, True)
+                with self.assertRaisesRegex(SystemExit, "requires public-chance"):
+                    validate_numeric_options(args)
+                args.public_chance_sampling = True
+                validate_numeric_options(args)
+                setattr(args, field, False)
+                args.public_chance_sampling = False
+            args.public_chance_sampling = True
+            args.integrate_terminal_actions = args.opponent_checkdown_baseline = True
+            with self.assertRaisesRegex(SystemExit, "choose only one"):
+                validate_numeric_options(args)
 
     def test_extension_pins_parent_checkpoint_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -247,6 +276,14 @@ class CloudBlueprintRunTests(unittest.TestCase):
             fingerprint, checkpoints = load_parent_stage(args, binary_hash)
             self.assertEqual(fingerprint, "f" * 64)
             self.assertEqual(set(checkpoints), set(args.seeds))
+            for field, flag in (
+                ("integrate_terminal_actions", "--integrate-terminal-actions"),
+                ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
+            ):
+                setattr(args, field, True)
+                with self.assertRaisesRegex(SystemExit, flag):
+                    load_parent_stage(args, binary_hash)
+                setattr(args, field, False)
             extension = replace(
                 seed_run(root / "extension"), resume_source=checkpoints[26_001]
             )
@@ -447,6 +484,17 @@ class CloudBlueprintRunTests(unittest.TestCase):
                 "validationReasons": ["independent validation still required"],
             }
             self.assertIs(validate_summary(summary, args, 26_001), summary)
+            for field, summary_field in (
+                ("integrate_terminal_actions", "integrateTerminalActions"),
+                ("opponent_checkdown_baseline", "opponentCheckdownBaseline"),
+            ):
+                setattr(args, field, True)
+                with self.assertRaisesRegex(ValueError, summary_field):
+                    validate_summary(summary, args, 26_001)
+                summary[summary_field] = True
+                self.assertIs(validate_summary(summary, args, 26_001), summary)
+                setattr(args, field, False)
+                summary[summary_field] = False
             args.hs_dcfr_30_horizon = 600_000
             with self.assertRaisesRegex(ValueError, "dcfrSchedule"):
                 validate_summary(summary, args, 26_001)

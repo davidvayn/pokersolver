@@ -4,12 +4,34 @@ This runbook launches the corrected trajectory-recall external-sampling DCFR
 trainer. It does not launch the older neural `long_run.py` experiment and it
 does not merge regret tables from different random seeds.
 
-> **Production launch status: hold; public-chance scaling pilot pending.** The
-> scalar commands below are reproducible, but the local 600k terminal pair
-> misses known root policy gates and should not be repeated. The new opt-in
-> compatible-range trainer is policy-changing and beats the scalar matched-CPU
-> pilots on both seeds. Its 800-round local pair preserves improvement and
-> authorizes the staged 1,600-round cloud pilot below, not serving or promotion.
+> **September 4 update: scaling pilot only, production still on hold.** Solver
+> `0.3.0` / checkpoint schema **5** adds scale-correct probability handling,
+> shared immutable storage, linear cached terminal evaluation, and two opt-in
+> variance-reduction modes. The selected accuracy-focused 800-round terminal-
+> integration pair reaches 0.407/0.384bb **root local deviation**, not full-game
+> exploitability. Use the updated 1,600-round command below with a **45M** cap.
+> It is a bounded experiment, not a promise that a $15 run will pass every gate.
+> No paid server or automatic server-deletion system has been created.
+
+The [September 4 audit](../validation/2026-09-04-pcs-math-audit.md) is the current
+selection record and lists all remaining metrics. Earlier observations below
+are historical context, not interchangeable scores: evaluation seeds/counts
+and solver versions differ. The new stateless `--opponent-checkdown-baseline`
+uses roughly one-third fewer states at 800 rounds, but has worse root values
+and primary agreement than integration; keep it as a research comparator.
+These two flags are mutually exclusive and require `--public-chance-sampling`.
+The runner pins the chosen mode in its fingerprint, summary, and resume checks.
+
+**Start a new schema-5 lineage.** Schema-4 training state cannot resume under
+this corrected recurrence. Keep old checkpoints and their original binary if
+needed; do not relabel a checkpoint to bypass the schema check. Both JSON-gzip
+and MessagePack-gzip are supported codecs for the current schema.
+
+Before any paid launch, confirm the actual provider shape, live hourly price,
+taxes, disk/transfer charges, and the user's budget. The solver's information-
+set guard and resumable runner do not delete a billed server. Independent
+deletion/watchdog verification remains required; an in-server shutdown alone
+does not establish that billing stopped. Do not provision from these commands.
 
 The August 25 public-chance vector vertical slice does not lift this hold. Its
 exact frozen-update implementation is deterministic and 27--33% faster in
@@ -204,10 +226,10 @@ the expensive complete postflop export:
 ```bash
 python3 preflop-solver/neural/cloud_blueprint_run.py \
   --binary "$PWD/preflop-solver/target/release/preflop-solver" \
-  --output-dir "$PWD/preflop-solver/neural/runs/public-chance-20bb-i1600" \
-  --public-chance-sampling \
+  --output-dir "$PWD/preflop-solver/neural/runs/public-chance-terminal-v03-20bb-i1600" \
+  --public-chance-sampling --integrate-terminal-actions \
   --depth 20 --iterations 1600 --seeds 26001,26002 \
-  --max-concurrent 2 --max-information-sets 25000000 \
+  --max-concurrent 2 --max-information-sets 45000000 \
   --averaging-delay 0 --checkpoint-every 800 \
   --held-out-deals 5000 --root-deviation-samples 256 \
   --action-value-deals 5000 --dcfr-alpha 1.5 --dcfr-beta 0 \
@@ -216,10 +238,21 @@ python3 preflop-solver/neural/cloud_blueprint_run.py \
   --minimum-free-disk-gb 100 --dry-run
 ```
 
-Use a 128GB host for two concurrent workers. Resume to 3,200 fixed-DCFR rounds
-only if the 1,600 pair improves both root values and at least two stability or
-coverage families. Do not enable complete postflop export until a policy stage
-is selected; do not serve any public-chance artifact before the release gates.
+Use a 128GB host for two concurrent workers. The 45M cap at 700 bytes per set,
+two workers, and 20% extra headroom projects **75.6GB (70.4GiB)**. This is a
+conservative preflop-export pilot estimate, not measured full-export/checkpoint
+peak memory. Integration grows more states per round; reusing the old 25M cap
+could stop the experiment early. Keep the generic 2,300-byte default for
+complete-export jobs until the new path is measured at scale.
+
+Consider 3,200 rounds only if the 1,600 pair improves both root values and at
+least two stability or coverage families, the observed memory slope permits a
+new cap, and paid time remains. Do not automatically extend a 45M-cap run or
+assume both workers still fit. Before a long continuation, test a legal
+full-hand responder against this exact frozen tabular policy; the existing
+neural responder's old scores are not this model's exploitability. Complete
+postflop export, serving-size audit, independent response testing, and
+action-value precision remain distinct work. Nothing here promotes a model.
 
 Dry-run the exact paired command and resource guard:
 
