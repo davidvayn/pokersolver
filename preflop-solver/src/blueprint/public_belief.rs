@@ -22,6 +22,8 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+pub mod sampled_flop;
+
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
 const SHARED_CONTEXT_PUBLIC_COUNT: usize = 21;

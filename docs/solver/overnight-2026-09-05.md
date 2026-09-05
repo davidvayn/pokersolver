@@ -1206,3 +1206,157 @@ returns to unresolved flop policy actions: inspect the existing public-belief
 `solve_flop` / `solve_flop_public_chance_vector_mvp` continuation requirements and
 the tabular turn/river adapter before selecting a bounded flop experiment.
 This is not a scheduled new oracle/network rewrite, and no flop run has started.
+
+## Fixed-flop sampled subgame proposal
+
+Implemented `public_belief::sampled_flop::solve`: a pure, explicitly research-only
+fixed-flop solve using the existing trajectory-recall PCS/DCFR traversal. It
+trains through terminal outcomes without a neural leaf oracle and returns only
+the current root's frozen average policy. It is not a complete continuation
+policy, safe continual resolver, action-EV grader, or full-game certificate.
+The normal full-hand training and serving paths do not call it.
+
+The sampled future board proposal is uniform over 49*48 ordered turn/river
+pairs. For a fixed compatible private pair, actual chance is uniform over
+45*44 pairs. Future-blocked range weights become zero without renormalization;
+the opponent CFV receives `(49*48)/(45*44)` exactly once. Zero joint-mass
+proposals contribute zero rather than being resampled. Exact chance-mass/fold
+integration, deterministic output, card uniqueness, legal normalized rows,
+resource/invalid-input rejection and a known profitable all-in call are tested.
+Any required root combo lacking both regret and average updates fails closed.
+
+The research direction is motivated by the previously inspected
+[MCCR paper](https://www.ifaamas.org/Proceedings/aamas2019/pdfs/p224.pdf): sample
+from a current public subgame rather than train every possible full-game root.
+This module does **not** implement that paper's full-game protection/statistics
+and must not inherit its convergence claim. It retains the supplied game's
+betting and card abstractions; only the local training controls are reset.
+
+### Bounded cost measurement
+
+First cohort: `local-sampled-flop-20260905-cost1`. The 4bb-pot probe reached its
+500,000-information-set guard after 1.81 seconds (sampled footprint 165,003,744
+bytes); the test failed and the other two pots were not attempted. No memory
+or time safety stop fired. Frozen test executable:
+`5fea8bfb9054a3643f5578d0c408ec59ab09f2ab2d9f1ff445faf9f9a888f94b`.
+
+Second cohort: `local-sampled-flop-20260905-cost2`. Explicitly increased only
+the experimental node cap to 2M, keeping the 2GiB sampled-memory stop, 120-second
+overall stop and 20GiB disk reserve. All three 20bb/default-abstraction roots
+completed at 32 iterations, uniform flop ranges, board `[48,21,2]`:
+
+| Pot, bb | Seed | Information sets | Seconds | Trained root combos | Minimum averaging contributions |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 83001 | 881,173 | 3.484 | 1,176 | 12 |
+| 10 | 83002 | 592,142 | 2.613 | 1,176 | 10 |
+| 20 | 83003 | 391,837 | 2.354 | 1,176 | 10 |
+
+Whole-worker sampled peak: 293,569,064 bytes; elapsed 8.658 seconds; exit 0;
+no stop. Concurrent compilation means these are observed costs, not isolated
+speedup measurements. Averaging contributions are not independent effective
+sample counts or a quality gate. No checkpoints were written. Frozen test
+executable `2d705f2e2a60639879c21fb1c4bb5f3636dcb74daf155a8249289a7e904aef98`;
+log SHA `94dd1a89c1ddbdaa8e6772716a90d1ff8b859a75d52469525c1b3fd2d141de02`.
+
+The module-only work passed 237 release library tests (one explicitly ignored
+cost probe), nine CLI tests and the release build. Two additional test-only
+pilot checks subsequently passed: conditional private/runout sampling and zero
+paired gain for identical root policies. The full suite after that addition
+has not yet been rerun.
+
+### Conditional root-action pilot
+
+`local-sampled-flop-20260905-rootpair1` is now complete; results are below.
+Its test-only driver loads original 800-round checkpoints sequentially, retains
+terminal-flop weight 0.5 and joint-four turn/river, and collects one authentic
+nonterminal flop decision per seat. For each public root it reconstructs ranges
+from the frozen observed action frequencies, then trains two independent
+32-round proposals (84001/84002, 2M-state cap). All private hands and future
+cards are absent from the proposal input.
+
+Both proposed mixes are evaluated on the same 128 independent conditional
+private-pair/runout draws; initial actions are enumerated and continuation
+streams are shared. Every later decision uses the unchanged retained profile,
+including its original turn-range reconstruction. This intentionally measures
+**one-decision conditional payoff**, not a newly integrated multi-street policy:
+the local training continuation differs from the evaluation continuation. A
+positive result would justify testing integration, not model activation or an
+exploitability claim. The two exact roots per source are not population coverage
+or an untouched full-game test. Each source has a 30-minute/7.5GiB stop and a
+20GiB disk reserve; no additional full-size worker runs concurrently.
+
+### Accidental loose-artifact overwrite
+
+An operator call to the old frozen executable with `blueprint --help` was
+mistakenly assumed read-only. That subcommand ignores this flag and instead
+completed a default run, atomically replacing the previously untracked root
+`blueprint-artifact.json`. The attempted process stop arrived after completion.
+The overwrite was disclosed immediately; no original content hash was recorded,
+so byte identity with the preceding loose artifact cannot be established.
+No duplicate was found in the repository or `/tmp`; the listed local snapshots
+were OS-update snapshots, not an identified recovery copy. The preceding loose
+artifact is **not restored**. Current file SHA:
+`f9ce87ffe648b90b6ae6b5b10ffe4ccb59c3ee57cae0d4292708a1b8755a65b2`
+(33,055,215 bytes). Leave it untracked, do not count it as an experiment, and do
+not claim it was preserved. The original source checkpoints, serving model,
+reports, and other unrelated files were not overwritten. Read CLI source/help
+text directly for subsequent diagnostics; all intentional runs specify new
+explicit output paths. No files have been deleted.
+
+### Completed root-pair result and next experiment
+
+Both source checkpoints completed without resource stops. The root collector
+selected the same visible flop `[42,28,21]` for both sources, with different
+preflop opens and flop bet sizes. These are therefore **not four independent
+flop textures**. Each row below compares the two proposal training seeds
+84001 / 84002 against its unchanged retained continuation:
+
+| Source | Decision | Conditional gain, bb (seed 1 / seed 2) | SE, bb (seed 1 / seed 2) |
+| --- | --- | ---: | ---: |
+| 26001 | SB facing 4.5bb bet, 10.5bb pot | +2.749064 / +2.234088 | 0.432734 / 0.417405 |
+| 26001 | BB opening action, 6bb pot | -0.245809 / -0.228770 | 0.348317 / 0.424942 |
+| 26002 | SB facing 1.667bb bet, 6.667bb pot | +0.543443 / +0.305331 | 0.433885 / 0.426486 |
+| 26002 | BB opening action, 5bb pot | +0.186164 / +0.719841 | 0.372645 / 0.402985 |
+
+Only source A's facing-bet root has positive individual normal-approximation
+99% intervals for both proposal seeds (lower endpoints +1.634416 / +1.158925bb).
+Every other interval crosses zero. No family correction was applied. These are
+128 conditional deal samples per root, not full-hand win rates or an
+exploitability improvement. There is evidence worth following up at a facing-bet
+decision, but **no broad flop-policy winner and no activation**.
+
+Actual authentic-range proposal costs were 0.974–2.301 seconds and
+84,845–430,280 information sets at 32 iterations. Every proposal served all
+1,176 board-compatible root combos. Whole-worker runtimes including checkpoint
+loading/evaluation: 135.727 / 202.800 seconds; sampled footprints:
+5,952,148,112 / 5,909,303,832 bytes. Only one source was loaded at a time.
+Frozen test executable:
+`f424a838840824cf8a3e4ae019d8d5d64c2e8bd63a9f9dfb3afecb080f04d442`.
+Independently checked log hashes:
+A `940eb0c3c12a540eb4bf079ed70249c57e71dd2426c1ba211545f4a8d4328999`;
+B `86cc0b8fd9c030a03132eb0f8616990fe38642111b2a03071ec776502f210df8`.
+The local manifest retains each public line, input/policy hashes and all gains
+and intervals. Neither worker remains live.
+
+After adding the pilot, full `cargo test --release` passes 239 library tests
+and nine CLI tests; the two expensive development probes are explicitly ignored
+by default and were run separately above. `cargo build --release` passes; binary
+SHA `1f44c0c784c32a43da9c8874c9ebdad77f9759fbd4679ed3510a0c0f9a74a248`.
+A fresh two-round integrated-PCS replay matches the preceding frozen executable's
+artifact **and summary bytes**, artifact SHA
+`c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`;
+fixtures `/tmp/poker-sampled-flop-replay.RtODeQ`. This is not a full-size
+deterministic replay. The 25 existing cloud-runner/resource-guard Python tests
+also pass. No TypeScript/browser/serving code changed.
+
+Next bounded action work: retain the exact public root inputs and per-sampled-
+hand action-value vectors in the development pilot so subsequent short training
+comparisons can reuse the **same frozen evaluation** instead of repeatedly
+loading the full checkpoint and resolving the same continuations. The current
+logs retain policy hashes, not reconstructible proposal rows/value vectors, so
+do not claim such a cache already exists. Use it for a controlled short 32-vs-128
+iteration comparison and additional fresh flop textures, including both seats
+facing bets. Development reuse is not independent validation; any selected
+policy still needs a genuinely fresh full-hand challenge. Do not start a long
+run from this one-texture result, rewrite the neural oracle, or change serving
+behavior or gates. All quality gaps at the top of this document remain open.
