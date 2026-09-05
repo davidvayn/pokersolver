@@ -138,6 +138,7 @@ mod tests {
                 bank: DecisionBank::default(),
                 weight: 0.25,
                 all_in_samples: Some(2048),
+                prior_terminal: None,
             })),
             None,
         );

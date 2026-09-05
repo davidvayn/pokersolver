@@ -111,6 +111,9 @@ pub(super) struct FlopPatch {
     bank: DecisionBank,
     weight: f64,
     all_in_samples: Option<u32>,
+    // Saved nonterminal decisions must not discard the control's terminal
+    // correction, including when their own blend weight is zero.
+    prior_terminal: Option<TerminalFlopOptions>,
 }
 
 impl FlopPatch {
@@ -119,6 +122,7 @@ impl FlopPatch {
             bank: DecisionBank::default(),
             weight: options.weight,
             all_in_samples: Some(options.equity_samples),
+            prior_terminal: None,
         }
     }
     pub(super) fn strategy(
@@ -130,7 +134,17 @@ impl FlopPatch {
         game: &BlueprintConfig,
         mut baseline: Vec<f64>,
     ) -> Vec<f64> {
-        if state.street != Street::Flop || self.weight == 0.0 {
+        if state.street != Street::Flop {
+            return baseline;
+        }
+        if let Some(prior) = &self.prior_terminal {
+            if actions.iter().all(|action| state.apply(action, game).terminal.is_some()) {
+                // Preserve the entire terminal rule, including its abstention
+                // on uncertain values. A coarse saved decision cannot override it.
+                return Self::terminal(prior).strategy(base, state, deal, actions, game, baseline);
+            }
+        }
+        if self.weight == 0.0 {
             return baseline;
         }
         if let Some(samples) = self.all_in_samples {
@@ -358,6 +372,11 @@ pub fn evaluate_flop_patch(
         },
         weight: config.weight,
         all_in_samples: config.all_in_samples,
+        prior_terminal: if config.all_in_samples.is_none() {
+            proposal.terminal_flop.clone()
+        } else {
+            None
+        },
     });
     if patch.bank.len() == 0 && config.all_in_samples.is_none() && config.flop_backoff.is_none() {
         return Err("no calibrated confident flop decisions for this proposal".into());
@@ -477,6 +496,7 @@ pub fn evaluate_flop_patch(
         "checkpoint_training_iterations":table.rounds, "depth_bb":game.effective_stack_bb,
         "defender_turn_resolver":proposal.turn_resolver, "patch_weight":config.weight,
         "defender_control_terminal_flop":proposal.terminal_flop,
+        "defender_candidate_prior_terminal_flop":patch.prior_terminal,
         "defender_control_flop_backoff":proposal.flop_backoff,
         "defender_candidate_flop_backoff":config.flop_backoff.as_ref().or(proposal.flop_backoff.as_ref()),
         "flop_backoff_summary":candidate_backoff.as_ref().map(|b| b.summary()),
@@ -518,6 +538,44 @@ mod tests {
     }
 
     #[test]
+    fn saved_decisions_preserve_terminal_correction_and_abstention() {
+        let (policy, deal, flop, _) = flop_fixture();
+        let game = &policy.table.config;
+        let facing = flop.apply(flop.legal_actions(game).last().unwrap(), game);
+        let actions = facing.legal_actions(game);
+        assert!(actions.iter().all(|a| facing.apply(a, game).terminal.is_some()));
+        let baseline = policy.frozen_strategy(&facing, &deal, &actions, game);
+        let (key, descriptor, history) = information_set(&facing, &deal, game);
+        for selected in 0..actions.len() {
+            let mut acc = DecisionAccumulator::new(&descriptor, history.clone(), &actions);
+            let mut values = vec![0.0; actions.len()];
+            values[selected] = 1.0;
+            for _ in 0..4 {
+                acc.add(&values);
+            }
+            let decision = acc.finish(key, ResolverGranularity::ExactTrajectory, 20.0);
+            for equity_samples in [128, 2048] {
+                let prior = TerminalFlopOptions { equity_samples, weight: 0.25 };
+                let expected = FlopPatch::terminal(&prior)
+                    .strategy(&policy, &facing, &deal, &actions, game, baseline.clone());
+                for weight in [0.0, 0.25] {
+                    let saved = FlopPatch {
+                        bank: DecisionBank::from_decisions(
+                            std::iter::once(&decision), ResolverGranularity::ExactTrajectory,
+                        ).unwrap(),
+                        weight,
+                        all_in_samples: None,
+                        prior_terminal: Some(prior.clone()),
+                    };
+                    assert_eq!(expected, saved.strategy(
+                        &policy, &facing, &deal, &actions, game, baseline.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn patch_is_bounded_and_identical_for_serving_and_range_replay() {
         let (mut policy, deal, flop, decision) = flop_fixture();
         let game = policy.table.config.clone();
@@ -531,6 +589,7 @@ mod tests {
             .unwrap(),
             weight: 0.25,
             all_in_samples: None,
+            prior_terminal: None,
         }));
         let changed = policy.strategy(&flop, &deal, &actions, &game);
         assert_eq!(
@@ -598,6 +657,7 @@ mod tests {
             .unwrap(),
             weight: 0.25,
             all_in_samples: None,
+            prior_terminal: None,
         }));
         assert_eq!(
             baseline,
@@ -767,6 +827,18 @@ mod tests {
                 .unwrap()
             {
                 assert_eq!(pair[0], pair[1]);
+            }
+        }
+        let mut zero_saved = pooling.clone();
+        zero_saved.flop_backoff = None;
+        zero_saved.weight = 0.0;
+        let unchanged = evaluate_flop_patch(zero_saved).unwrap();
+        for row in unchanged["results"].as_array().unwrap() {
+            for pair in row["paired_samples_control_candidate_and_attack_flags"]
+                .as_array()
+                .unwrap()
+            {
+                assert_eq!(pair[0], pair[1], "zero saved-action weight must preserve the control policy");
             }
         }
         pooling.integrate_terminal = true;

@@ -8,6 +8,25 @@ rejected-response zero, or fixed-opponent payoff gain into an upper certificate.
 The expected user return is approximately 18:30 UTC. The local 16GiB machine
 remains the only authorized compute; no deployment or paid resources.
 
+## Existing quality gaps (not additional gates)
+
+The retained 800-round run manifest already records failing preflop root
+stability: maximum combo-weighted per-action MAE 8.2816 percentage points
+(target 5), maximum aggregate action-frequency delta 5.2719 points (target 3),
+minimum primary-action agreement 64.497% unweighted / 66.817% combo-weighted
+(target 85%). Root coverage is complete for all 169 classes per seed, legal
+action sets match, and maximum probability-sum error is 3.33e-16 (passing).
+The routed candidate has the same preflop action frequencies, so routing the
+later streets has not fixed these stability gaps.
+
+The source table's existing local action-value evaluation reports only 21.530%
+minimum standard-error coverage, versus the intended 95% precision target.
+That is a source-table diagnostic, not a new precision measurement of the
+routed full-hand candidate. Likewise its mean root-local-deviation gain of
+0.395723bb is not total full-game exploitability. Missing flop rows, uncertainty,
+preflop stability, and full-game qualification remain unresolved; do not
+present a restricted-response zero as all metrics passing.
+
 ## Preserved milestone
 
 `e25ec44` was committed and pushed to `origin/main`. It contains the bounded
@@ -244,10 +263,10 @@ The regression confirms unchanged authentic trajectories and identical
 postflop labels versus the full training pass. All 223 Rust library tests,
 6 CLI tests, and 32 Python runner/resource tests pass; release build passes.
 
-## Active focused postflop pair and next density pilot
+## Completed focused postflop pair and active density pilot
 
 `preflop-solver/neural/runs/local-postflop-response-20260905-pair1/cohort.json`
-is **active**. It retains joint-four turn/river, 25% terminal correction, and
+is **complete**. It retains joint-four turn/river, 25% terminal correction, and
 the non-pooled 800-round source. New offset 2400000; per-seat budgets are
 4,000 training / 4,000 calibration / 4,000 evaluation hands, four rollouts,
 minimum four particles, exact terminal labels, and `--postflop-response-only`.
@@ -257,14 +276,39 @@ Four shared-table workers, sequential seeds, 45-minute / 7.5GiB sampled stop,
 This reallocates label-generation work toward postflop; it is not a complete
 best-response algorithm or a claimed exploitability upper bound.
 
+Both BTN/SB responses passed calibration and earned positive independent
+holdout gains. The BB responses failed calibration; their deployed zeros
+remain inconclusive, not evidence of zero exploitability.
+
+| Seed | Seat | Calibration gain | Calibration 99.5% lower | Holdout gain | Holdout SE | Holdout 99.5% lower |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 26001 | BTN/SB | 0.18054125 | 0.04434942 | 0.14910475 | 0.05157395 | 0.01625906 |
+| 26001 | BB | 0.09758375 | -0.00238066 | rejected | — | — |
+| 26002 | BTN/SB | 0.21062475 | 0.08910018 | 0.18147950 | 0.04806679 | 0.05766765 |
+| 26002 | BB | 0.15929000 | -0.00489311 | rejected | — | — |
+
+These are restricted-response **lower-bound evidence of postflop leakage**,
+not a full-game upper bound or proof that either numerical release target
+passes. Accepted-seat postflop lookup coverage on holdout was 35.232% /
+19.966%, with 18 / 19 admitted information sets out of 94 / 110 learned.
+The stronger critic found a weakness; the defender itself is unchanged.
+This pair changed both the training allocation and sample budgets, so it
+does not isolate the contribution of each change.
+
+Runtimes: 1,288.697 / 1,557.786 seconds. Sampled peak physical footprints:
+7,557,142,192 / 7,571,576,496 bytes; neither resource stop fired.
+Verified output hashes:
+A `680aa8640087463c117d9f464a3f73e3de6e54ad1316d77d0d2df2c6e5b4d8a0`;
+B `2f40036b18d15be1280b59ad4bc007ee704f089d9ea20ce6e7dc11036d4be374`.
+
 The resource-guarded blueprint runner now supports `--potential-bins`, with
 default three retaining the legacy fingerprint and command identity. The
 setting is pinned in new fingerprints, resume checks, and native summaries.
 Tests first failed on all three missing checks, then passed after implementation.
 Native CLI tests verify the actual non-default artifact and summary values.
 
-After the active full-size worker is done, the planned separate policy-density
-screen is a fresh 400-round pair, seeds 27001/27002, `--potential-bins 1`,
+The separate policy-density screen started after the full-size response pair
+finished: a fresh 400-round pair, seeds 27001/27002, `--potential-bins 1`,
 against the retained 400-round control pair. Keep the full betting grid,
 trajectory recall, 10 equity bins, draw features, future category, and legacy
 suit mode unchanged. Only the coarse improvement-probability dimension changes.
@@ -277,4 +321,28 @@ implementation of their clustering algorithm. Use the same 4,000 held-out /
 64 root-deviation-per-class / 1,000 action-value budgets as the control,
 sequential workers, 6GiB / 20-minute stops and 20GiB disk reserve. A longer
 stage requires an actual promising policy/resource screen; no such stage is
-authorized by a node-count decrease alone. The density pilot has **not started**.
+authorized by a node-count decrease alone. The density pilot is **active** at
+`preflop-solver/neural/runs/local-potential1-20260905-pair400/run-manifest.json`.
+It uses the focused response pair's frozen executable (`96bf53f...`), not
+the subsequently rebuilt mutable target. Its fingerprint matches the prior
+dry run: `1084a493c2423dc83fc05d161d2743b83054dbf3b548442a50d572570ca17e04`.
+
+## Saved flop correction composition regression
+
+Before testing the accepted response's nonterminal flop actions as a bounded
+defender correction, a deterministic 71-hand panel exposed a comparison bug:
+even a **zero-weight** saved-action patch could change a payoff from +20bb to
+-4bb, because it replaced the control's terminal correction. This was not a
+training or RNG change. Pooling mode already preserved that correction;
+saved-action mode did not.
+
+The fix composes saved nonterminal corrections with the existing terminal
+rule. All-terminal decisions retain that rule, including abstention on noisy
+equity; coarse saved decisions cannot override it. The original terminal-only
+pilot remains a separate explicit replacement. Reports disclose the inherited
+terminal options. This preserves a rule, not a theorem of safe resolving:
+earlier changed actions can still change later action-conditioned ranges.
+The zero-weight end-to-end regression and direct terminal/nonzero-weight
+tests cover this seam. All 224 Rust release library tests, 6 CLI tests, and
+32 Python runner/resource tests pass. The release build and whitespace check
+pass. No saved-action policy has been selected or activated.
