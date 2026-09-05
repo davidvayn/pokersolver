@@ -3,15 +3,22 @@
 //! full-game exploitability certificate. All non-turn-reaching hands count zero.
 use super::*;
 use crate::blueprint::public_belief::{self as belief, frozen_turn_response};
+mod split;
 
 #[test]
 fn frozen_tail_snapshot_is_the_policy_used_by_actual_play() {
+    for iterations in [4, 64] {
+        assert_snapshot_matches_actual_play(iterations);
+    }
+}
+
+fn assert_snapshot_matches_actual_play(iterations: u64) {
     let (mut base, _) = super::super::super::tests::tabular_fixture();
     let table = Arc::get_mut(&mut base.table).unwrap();
     table.config.effective_stack_bb = 2.0;
     table.nodes.clear();
     let game = table.config.clone();
-    let (policy, _) = profile(base.table, 87001);
+    let (policy, _) = profile_with_turn_iterations(base.table, 87001, iterations);
     let deal = Deal::from_sampled_cards([[48, 49], [44, 45]], [0, 5, 10, 15, 20]);
     let mut state = GameState::initial(&game);
     while state.street != Street::Turn {
@@ -22,9 +29,13 @@ fn frozen_tail_snapshot_is_the_policy_used_by_actual_play() {
             .unwrap();
         state = state.apply(&action, &game);
     }
+    let input_only = policy.turn_root_input(&state, &deal.board[..4]).unwrap();
     let (config, rows) = policy
         .take_frozen_turn_profile(&state, &deal.board[..4])
         .unwrap();
+    assert_eq!(input_only.state, config.state);
+    assert_eq!(input_only.game, config.game);
+    assert_eq!(config.iterations, iterations);
     let repeated = belief::solve_turn_river_policy_probabilities(config.clone()).unwrap();
     // Snapshot order is sorted, whereas the solve's traversal export may differ.
     let sorted = |rows: Vec<PublicBeliefStrategy>| {
@@ -48,6 +59,33 @@ fn frozen_tail_snapshot_is_the_policy_used_by_actual_play() {
         &actions,
     );
     assert_eq!(expected, policy.strategy(&state, &deal, &actions, &game));
+    // The full-hand candidate must serve its frozen river descendants too,
+    // not silently invoke a four-iteration or checkpoint continuation.
+    let mut river = state.clone();
+    while river.street != Street::River {
+        let check = river
+            .legal_actions(&game)
+            .into_iter()
+            .find(|a| a.kind == ActionKind::Check)
+            .unwrap();
+        river = river.apply(&check, &game);
+    }
+    let mut key = river.public_history.clone();
+    key.push(format!("chance:river:{}", deal.board[4]));
+    let row = rows.iter().find(|r| r.public_history == key).unwrap();
+    let river_actions = river.legal_actions(&game);
+    let combo = Combo::new(deal.holes[river.actor][0], deal.holes[river.actor][1]).key();
+    let width = river_actions.len();
+    let river_expected = normalize_or_uniform(
+        row.probabilities[combo * width..(combo + 1) * width]
+            .iter()
+            .map(|p| f64::from(*p))
+            .collect(),
+    );
+    assert_eq!(
+        river_expected,
+        policy.strategy(&river, &deal, &river_actions, &game)
+    );
     let result = frozen_turn_response::evaluate(config, &rows).unwrap();
     assert!(result.gain_bb.iter().all(|v| *v >= -1e-8));
 }

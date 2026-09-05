@@ -10,6 +10,17 @@ fn profile(
     table: Arc<InferenceTable>,
     seed: u64,
 ) -> (turn::TabularTurnPolicy, Arc<flop::FlopPatch>) {
+    profile_with_turn_iterations(table, seed, 4)
+}
+
+// Keep the archived four-iteration control explicit. Higher-iteration full-hand
+// candidates use the same preflop/flop policy and complete river descendants.
+fn profile_with_turn_iterations(
+    table: Arc<InferenceTable>,
+    seed: u64,
+    iterations: u64,
+) -> (turn::TabularTurnPolicy, Arc<flop::FlopPatch>) {
+    assert!([4, 16, 64].contains(&iterations));
     let mut patch = flop::FlopPatch::terminal(&TerminalFlopOptions {
         equity_samples: 2048,
         weight: 0.5,
@@ -27,7 +38,7 @@ fn profile(
         turn::TabularTurnPolicy::new(
             base,
             TurnResolveOptions {
-                iterations: 4,
+                iterations,
                 safe_bilateral: false,
                 maximum_policy_rows: 20000,
             },

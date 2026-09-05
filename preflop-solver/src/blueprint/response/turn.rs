@@ -68,6 +68,24 @@ pub(super) struct TabularTurnPolicy {
 
 impl TabularTurnPolicy {
     #[cfg(test)]
+    pub(super) fn turn_root_input(
+        &self,
+        state: &GameState,
+        board: &[u8],
+    ) -> Result<TurnRiverSolveConfig, String> {
+        let root = self.turn_root(state)?;
+        let ranges = self.ranges_at_root(&root, board)?;
+        Ok(TurnRiverSolveConfig {
+            game: self.base.table.config.clone(),
+            state: PublicBeliefState::from_game_state(board.to_vec(), &root, ranges),
+            iterations: self.options.iterations,
+            averaging_delay: 0,
+            river_refinement_iterations: 0,
+            regret_matching_plus: false,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn take_frozen_turn_profile(
         &self,
         state: &GameState,

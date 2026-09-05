@@ -1773,3 +1773,98 @@ Frozen exact-tail experiment executable:
 `9d7aa81af625b8fd27867da79e45c46c6752810bcacce5fe48380ef07aa23cea`.
 All new experiment entry points and the policy snapshot helper are test-only;
 no production action mix, serving artifact, browser UI or release gate changed.
+
+### Exact-tail result, memory-separated completion, and retained candidate
+
+Implementation milestone `1c5241724ffbec724dcb3e897abcf4c1b132760d` was
+pushed and passed CI 33997425315. The original combined-memory pair then
+completed source A and source B's first solve-seed set, but **did not finish**:
+the second B set hit the 7.5GiB physical-footprint stop at hand index 29.
+Observed peak was 8,065,292,864 bytes versus the 8,053,063,680-byte limit.
+The original manifest remains `failed`; it was not relabeled complete and
+the memory budget was not raised. Source A's completed time/peak were
+491.872 seconds / 8,022,546,984 bytes; B stopped at 352.298 seconds. Their
+log hashes are `5a016c7dce35b27b051add9f16b718c396973860b1c85c08ccff69098a56aa0c`
+and `3fe2dbc379f102c336bf555b084511f81a363747a4c9cc83658dc1cd6ab089b8`.
+Frozen failed-parent manifest SHA:
+`8756c599c4cf5534c8a3ec5f8df7c9573a6e254dc8ba63e518475611ea14d20c`.
+
+`local-sampled-flop-20260905-tailrecover1` **completed the missing portion**
+without rerunning the three completed sets. It first solved the saved large
+A/87001/7 public root in a standalone process. All three policy hashes and
+every exact response value matched the original report exactly. Peak physical
+footprint was only 535,118,712 bytes, runtime 29.327 seconds. This proves
+the separated calculation at that root, not an unperformed whole-run byte
+comparison. No full checkpoint is loaded by the standalone endgame worker.
+
+The recovery then collected only B/87002 hand indices 29..127 (99 prefixes),
+without constructing endgame policies. A cold replay produced byte-identical
+public-state/range input for the interrupted index 29. Collection took 156.785
+seconds / 5,814,538,704-byte peak. Once the checkpoint process exited, two
+independent workers solved the 13 remaining turn-root inputs under separate
+2GiB / 180-second guards. Maximum per-root peak was 543,638,416 bytes; all
+jobs passed. The full recovery took 313.778 seconds. Completed prefixes,
+including those not reaching a turn, were combined exactly once with the
+preserved parent results. No missing result was replaced by zero.
+
+Final paired data: four sets of 128 authentic full-hand prefixes, two source
+checkpoints times two flop-solve seeds. There are 512 prefix executions and
+46 live turn-root encounters; the common 128-deal chance stream is reused
+across sets, **not 512 independent evaluation deals**. Within each set,
+4/16/64 endgame iterations share the identical public prefix and ranges.
+
+The following numbers are **sums of the two seats' turn/river response gains,
+in bb per full hand**, counting zero only for hands ending before a live turn.
+They are not half-seat averages and not unrestricted full-game exploitability.
+
+| Source / flop seed | Turn encounters | 4 iterations | 16 iterations | 64 iterations | 64-minus-4 individual 99% interval |
+| --- | ---: | ---: | ---: | ---: | --- |
+| A / 87001 | 11 | 0.408226 | 0.069611 | 0.006785 | [-0.715844, -0.087039] |
+| A / 87002 | 9 | 0.282612 | 0.052651 | 0.005156 | [-0.542815, -0.012096] |
+| B / 87001 | 13 | 0.376708 | 0.058354 | 0.006206 | [-0.671948, -0.069055] |
+| B / 87002 | 13 | 0.431623 | 0.068045 | 0.007434 | [-0.745046, -0.103333] |
+
+All 46 encountered roots have lower seat-summed loss at 64 than at four.
+Full-hand-weighted tail loss drops 98.18–98.35% across sets. Every displayed
+paired individual normal-approximation 99% interval is negative; these are
+not family-adjusted intervals. An independent read-only reconstruction of all
+512 prefix records verified the reported means and standard errors within
+1e-12. All 15 recovery worker log hashes and all referenced old/new public
+root input hashes were verified. Recovery manifest SHA:
+`5a8dd26f8ceffeef832fa2d1e3b37de7b03315114672c4f7edc85180f036af16`;
+frozen recovery executable SHA:
+`582704c0a226bc87d8e07454c76e38a50b5b02cb6789953a49b37d458af1022a`.
+The original failed run, checkpoints and completed logs remain untouched.
+
+Retain **64 joint turn/river iterations as the next experimental endgame
+candidate**, with the existing 32-iteration sampled flop and terminal weight
+0.50. `profile_with_turn_iterations(table, seed, 64)` now constructs that
+complete full-hand profile. The old `profile(table, seed)` deliberately stays
+at four iterations to preserve archived control drivers. A subsequent response
+configuration must also name 64 iterations; do not accidentally use the old
+factory or describe a four-iteration evaluation as the new candidate.
+Tests verify actual turn **and river** queries against the exported policy
+for both four and 64 iterations, and compare the input-only public-root
+collector against the actual runtime generation's input.
+
+This is a substantial demonstrated improvement to the late-street policy,
+not an unrestricted full-game winner or an Approximate GTO certificate.
+Next action work should challenge the preflop/flop choices against this
+stronger continuation, with a range-aware exact-card opponent rather than
+another 16-hand sparse learned critic. Preserve the full-game objective;
+do not spend another long run shaving an already-small tail-only number or
+treat this suffix's low loss as passing the earlier-street/full-game gates.
+The preflop stability, full-hand coverage, and action-EV precision gaps at the
+top of this document remain unresolved. No source preflop probabilities or
+browser-facing model were replaced.
+
+Final verification after the memory split and candidate wiring: 247 release
+library tests plus nine CLI tests pass; 12 explicit research probes are ignored
+by the normal suite. Release build and whitespace checks pass. A fresh
+explicit-path two-round production replay in
+`/tmp/poker-tail-split-replay.bY9zaA` matches both prior artifact and summary
+bytes, artifact SHA still `c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`.
+Production executable SHA is
+`4802462816308f3fd84bddf284345593036e95862a05fa2ac1c919290a95d69a`.
+All sequence-owned workers have completed or were explicitly stopped as
+recorded above; none remains live. The managed goal remains active.
