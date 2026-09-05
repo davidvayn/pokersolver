@@ -1039,3 +1039,54 @@ Use the existing resource guard and summary/artifact validators. If promising,
 reproduce the deterministic run before saving a full checkpoint for later routed
 evaluation; the diagnostic preflop export cannot serve the full-hand model.
 This saves disk, not training memory, and no completed policy result is claimed yet.
+
+## Streetwise 400-round screen: rejected
+
+The implementation milestone `17636b3` was committed/pushed. Frozen executable
+SHA-256: `58f2437e4a58450d01f8e5c580b295030526b7e609cb4f6f51d1d2c4f089bc76`.
+The screen is complete at
+`preflop-solver/neural/runs/local-streetwise-20260905-screen400/screen.json`.
+Both seeds use the integration-400 control commands with only the estimator,
+binary/output paths and omission of checkpoint writes changed. The original
+800-round source checkpoints and previously rejected checkpoints are untouched.
+
+| Metric | Integration 400 control | Streetwise 400 candidate |
+| --- | ---: | ---: |
+| Infosets A / B, million | 10.014 / 9.391 | 8.944 / 8.687 |
+| Root local gain A / B, bb | 0.463259 / 0.486139 | 0.482961 / 0.492458 |
+| Mean root local gain, bb | 0.474699 | 0.487710 |
+| Maximum action MAE | 8.902% | 9.368% |
+| Primary agreement, unweighted | 61.538% | 47.929% |
+| Primary agreement, combo-weighted | 63.952% | 51.735% |
+| Maximum aggregate action delta | 5.633% | 7.080% |
+| Maximum held-out unknown fraction | 14.354% | 14.397% |
+| Minimum action-EV SE coverage | 20.932% | 20.266% |
+
+State savings are 10.69% / 7.49%, but policy consistency deteriorates and both
+root-gain point estimates worsen. Their standard errors are 0.022968 / 0.022706bb;
+no paired per-deal significance claim is made. **Reject the candidate; do not
+extend this hybrid or save a new full checkpoint.** It has not improved full-game
+exploitability. All 169 root classes, legal-action compatibility and probability
+sums still pass. Preserve the existing integration-800 research source.
+
+Runtimes A/B excluding checkpoint writes: 44.591 / 42.566 seconds. Sampled
+physical footprints: 2,936,850,880 / 2,859,665,784 bytes. No resource stop fired.
+Do not compare those times directly with controls that wrote full checkpoints.
+Both canonical artifact hashes were retained:
+A `8e46d7d2f3a2122d91b508041abd409dd0b3f4f833f372f23fc026dfa41c8fd4`;
+B `e6222b8b648f9d807533a2a5de187aac303f330faf1feace9e3b83e6ef8be2fa`.
+Compressed output hashes were independently verified:
+A `035f8c1a5232f79afd63e084835f4fbcd70ee185dee0d00104b41d213f5968d3`;
+B `d4848a04b0d409f1f35828814bdf5e8a6ac8bb199f3cb302f5d4e9b9b65a8f98`.
+
+The one-off supervisor initially omitted `export_postflop_strategies=False` from
+its validator namespace. Seed A had already exited successfully and written both
+outputs when validation raised an AttributeError. Preserve `pilot-original.py`
+and its recorded hash; the corrected supervisor validates and reuses A's exact
+command/output/resource record, then runs B once. No solver process was restarted,
+training modified, or failed evaluation counted as passing. `screen.json` records
+both script identities and this recovery. Both solver processes are now terminal.
+
+The pure-checkdown and hybrid screens now both argue against sacrificing
+terminal-integration accuracy for fewer visited states. Further work should not
+repeat either arm with a longer budget merely to recover the lost consistency.
