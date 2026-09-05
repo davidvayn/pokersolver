@@ -3,6 +3,20 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn preflop_runouts_reject_noops_and_unbounded_allocations_before_io() {
+    for (options, message) in [
+        (vec!["--postflop-response-only"], "require preflop response training"),
+        (vec!["--rollouts-per-action", "4097"], "limited to 4096"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["full-game-lbr", "--tabular-checkpoint", "unused", "--response-preflop-runouts"])
+            .args(options).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+    }
+}
+
+#[test]
 fn flop_pilot_rejects_missing_budget_values_before_artifact_io() {
     for flag in [
         "--weight",

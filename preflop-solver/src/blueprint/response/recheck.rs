@@ -46,6 +46,7 @@ pub fn recheck_full_game_response(
         terminal_flop: report.terminal_flop.clone(),
         flop_backoff: report.flop_backoff.clone(),
         exact_terminal_training_values: report.exact_terminal_training_values,
+        conditional_preflop_runouts: report.conditional_preflop_runouts,
         postflop_only_response: report.postflop_only_response,
     };
     // Check the method and source identity before loading the large table.
@@ -83,7 +84,8 @@ mod tests {
             maximum_granularity: ResolverGranularity::StrategicObservableBackoff,
             seed: 715, response_workers: 1, turn_resolver: None,
             terminal_flop: Some(TerminalFlopOptions { equity_samples: 128, weight: 0.25 }),
-            flop_backoff: None, exact_terminal_training_values: true, postflop_only_response: true,
+            flop_backoff: None, exact_terminal_training_values: true, postflop_only_response: false,
+            conditional_preflop_runouts: true,
         }).unwrap();
         fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
         let mut config = ResponseRecheckConfig {
@@ -91,6 +93,8 @@ mod tests {
             evaluation_deals: 71, seed: 716, workers: 1,
         };
         let serial = recheck_full_game_response(config.clone()).unwrap();
+        assert!(serial.conditional_preflop_runouts);
+        assert_eq!(serial.method, original.method);
         assert_eq!(serde_json::to_vec(&original.resolvers).unwrap(), serde_json::to_vec(&serial.resolvers).unwrap());
         assert_eq!(serde_json::to_vec(&original.preflop_responses).unwrap(), serde_json::to_vec(&serial.preflop_responses).unwrap());
         assert_eq!(original.terminal_flop, serial.terminal_flop);

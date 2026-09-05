@@ -703,3 +703,77 @@ Postflop training hands are not replaced by preflop hands: the same authentic
 trajectories now also receive preflop action labels. Terminal-50 remains the
 previously confirmed fallback; full weight is under fresh attack assessment,
 not activated or labeled Approximate GTO. No distillation is running.
+
+Targeted research check while that run trains: the
+[primary LBR paper](https://arxiv.org/html/1612.07547v1) shows that greedy
+early-street deviations can earn less than delayed attacks, despite offering
+more actions. Therefore an all-street learned critic is a different challenge,
+not automatically a stronger one; retain focused postflop evidence as well.
+Its Bayesian range update supports exact-card terminal decisions, but a
+frozen-range response is not a minimax certificate.
+
+Read-only inspection of the old baseline reports found one supported
+preflop terminal fold/call row in seed A and nine in seed B, each with just
+4–6 training particles under the old noisy estimator. This count includes
+both `call` and `call_all_in` labels; repeated abstraction layers are not
+independent evidence. These do not justify
+extending the terminal patch to preflop yet. No such extension is implemented
+or scheduled; inspect the fresh all-street action records first.
+
+The completed terminal-50 response milestone (`873267a`, CI 33969469385)
+and full-weight paired pilot (`a107958`, CI 33969879393) were both pushed
+and passed remote CI.
+
+All-street seed A is complete while B is still running. Both responses failed
+calibration: gains 0.044375 (SE 0.026450459, 99.5% lower -0.023756868) and
+0.0847075 (SE 0.044002075, lower -0.028634335) bb/hand. Neither was deployed
+in holdout; their reported zeros are **inconclusive**, not low-exploitability
+wins. No recheck is scheduled. Runtime 3,774.244 seconds; sampled footprint
+7,210,751,448 bytes; no stop. Verified output A:
+`f64b0ef6d21d3439938a6f60ee9dc6cb874987e36c958f5865a15bc843e3d000`.
+
+## Conditional preflop chance averaging
+
+The new all-street records expose a specific label-sampling weakness. For
+example, Q9o after limp/jam has four training particles, call value -20bb,
+and a selected-gain SE of zero. Its three matching key layers repeat the same
+evidence. This does **not** establish that folding Q9o is optimal against the
+actual range: the preflop terminal samples can all share losing runouts.
+
+A minimized native regression fixes AA versus KK and the preflop betting
+line, changes just one unrevealed board card, and requests 64 action rollouts.
+It reproduced call values -20 versus +20bb; the information-set identity and
+known settlement controls passed. The cause is that the old preflop Q loop
+replays the same predealt board on every rollout. It remains unbiased across
+authentic independent deals, but more action rollouts do not average this
+source of chance noise. Do not claim a bias correction or hidden-card leak.
+
+Implemented opt-in `--response-preflop-runouts`: sample a fresh uniform legal
+board per preflop rollout, conditional on both **offline training** holdings,
+and share that board across all candidate actions. A separate seeded chance
+domain preserves paired action RNG streams and the original authentic hand
+trajectory. All preflop continuations, not just immediate all-ins, use the
+paired board samples; postflop labels remain byte-identical. Default behavior
+is unchanged. The report flag and method suffix pin the new estimator;
+retained-response checks inherit it and reject silent method upgrades.
+Postflop-only no-ops and allocations beyond 4,096 runouts are rejected.
+
+Verification: 228 Rust release library tests, 8 CLI tests, 35 Python tests,
+release build, and whitespace checks pass. Tests cover legal unique cards,
+determinism, the reproduced board-reuse symptom, legacy values, unchanged
+authentic postflop records, serial/three-worker parity, provenance inheritance,
+and invalid options. A separate two-round/245-node fixture with 32 training
+and 16 calibration/holdout hands yields byte-identical old/new **default**
+reports: SHA-256
+`aec78edf8e4764525d15ed29aae19b2c4d4a739d60ad94948a518a24523fe919`.
+The enabled option changes preflop labels while preserving checkpoint identity.
+This tiny replay is not a full-size qualification. Temporary comparison
+artifacts are retained at `/tmp/poker-preflop-runouts.MUEL5n`.
+
+Verified new binary:
+`0c66f00a6ede193a94201f9c7e00a89edef241fedb52418b91c4b37d907ddacd`.
+The ongoing all-street pair remains frozen on `804d9f8...` with this option
+off. No large conditional-runout pilot has started; finish that pair before
+choosing a short cost/quality pilot. This change does not edit the defender,
+lower a gate, fix all small-sample confidence issues, or establish a stronger
+learned response by itself.

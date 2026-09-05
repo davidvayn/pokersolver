@@ -2193,6 +2193,7 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
             exact_terminal_training_values: args
                 .iter()
                 .any(|a| a == "--response-terminal-expectations"),
+            conditional_preflop_runouts: args.iter().any(|a| a == "--response-preflop-runouts"),
             flop_backoff: parse_flop_backoff(args)?,
             terminal_flop: value(args, "--terminal-flop-samples")
                 .map(|samples| {
@@ -2231,6 +2232,7 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
                 "terminalFlop": evaluation.terminal_flop,
                 "flopBackoff": evaluation.flop_backoff,
                 "exactTerminalTrainingValues": evaluation.exact_terminal_training_values,
+                "conditionalPreflopRunouts": evaluation.conditional_preflop_runouts,
                 "postflopOnlyResponse": evaluation.postflop_only_response,
                 "checkpointTrainingIterations": evaluation.checkpoint_training_iterations,
                 "sourcePolicyCoverage": evaluation.source_policy_coverage,
@@ -3776,6 +3778,8 @@ Full-game learned-response options:
                                   128..16384 equity samples, tabular checkpoints only
   --terminal-flop-weight <0..1>   Terminal-only correction blend; default 0.25
   --training-deals <integer>      Default: 10000 response-training deals
+  --response-preflop-runouts     Fresh conditional board per preflop action rollout;
+                                  paired across actions, training only, opt-in
   --response-workers <integer>    Default: 1; 1..=4 shared-table CPU workers (tabular only)
   --calibration-deals <integer>   Default: 2000 disjoint response-selection deals
   --evaluation-deals <integer>    Default: 10000 independent paired deals

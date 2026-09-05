@@ -58,6 +58,7 @@ def main():
     parser.add_argument('--flop-backoff-minimum-visits', type=int)
     parser.add_argument('--flop-backoff-weight', type=float, default=1.0)
     parser.add_argument('--response-terminal-expectations', action='store_true')
+    parser.add_argument('--response-preflop-runouts', action='store_true')
     parser.add_argument('--postflop-response-only', action='store_true')
     parser.add_argument('--calibration-deals', type=int, default=256)
     parser.add_argument('--evaluation-deals', type=int, default=1024)
@@ -66,6 +67,10 @@ def main():
     parser.add_argument('--max-worker-minutes', type=float, default=30)
     parser.add_argument('--max-worker-memory-gib', type=float, default=7.5)
     args = parser.parse_args()
+    if args.response_preflop_runouts and args.postflop_response_only:
+        parser.error('preflop runouts require preflop response training')
+    if args.response_preflop_runouts and args.rollouts_per_action > 4096:
+        parser.error('preflop runouts are limited to 4096 per action')
     if args.flop_backoff_minimum_visits is not None and (args.flop_backoff_minimum_visits < 1
             or not math.isfinite(args.flop_backoff_weight) or not 0 <= args.flop_backoff_weight <= 1):
         parser.error('flop pooling requires positive support and weight 0..1')
@@ -82,7 +87,8 @@ def main():
     if args.recheck_responses:
         overrides = ['--training-deals', '--rollouts-per-action', '--minimum-range-particles',
                      '--terminal-flop-samples', '--terminal-flop-weight', '--flop-backoff-minimum-visits',
-                     '--flop-backoff-weight', '--response-terminal-expectations', '--postflop-response-only']
+                     '--flop-backoff-weight', '--response-terminal-expectations',
+                     '--response-preflop-runouts', '--postflop-response-only']
         if arms != ['recheck'] or any(arg.split('=', 1)[0] in overrides for arg in sys.argv[1:]):
             parser.error('recheck requires --arms recheck and inherits all training/profile settings')
         try:
@@ -161,6 +167,8 @@ def main():
             command += ['--response-workers',str(args.response_workers)]
             if args.response_terminal_expectations:
                 command += ['--response-terminal-expectations']
+            if args.response_preflop_runouts:
+                command += ['--response-preflop-runouts']
             if args.postflop_response_only:
                 command += ['--postflop-response-only']
             if arm not in ('baseline', 'recheck'):

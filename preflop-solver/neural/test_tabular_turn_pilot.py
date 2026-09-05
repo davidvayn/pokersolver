@@ -2,12 +2,26 @@ import math
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 
 from tabular_turn_pilot import load_recheck_reports, response_comparison_eligible
 
 
 class ResponseComparisonTests(unittest.TestCase):
+    def test_preflop_resampling_rejects_noops_and_unbounded_allocations_before_io(self):
+        base = [sys.executable, str(Path(__file__).with_name('tabular_turn_pilot.py')),
+                '--binary', 'unused', '--checkpoint-stage', 'unused',
+                '--output-dir', 'unused', '--seed-offset', '123',
+                '--response-preflop-runouts']
+        for options, message in [(['--postflop-response-only'], 'require preflop response training'),
+                                 (['--rollouts-per-action', '4097'], 'limited to 4096'),
+                                 (['--arms', 'recheck', '--recheck-responses', 'unused'], 'inherits all training/profile settings')]:
+            result = subprocess.run([*base, *options], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+
     def report(self):
         return {'response_deployed': [True, True], 'players': [
             {'estimated_gain_bb': .4, 'gain_standard_error_bb': .02},

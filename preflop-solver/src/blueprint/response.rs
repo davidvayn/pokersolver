@@ -77,6 +77,7 @@ pub struct ResponseEvaluationConfig {
     pub terminal_flop: Option<TerminalFlopOptions>,
     pub flop_backoff: Option<FlopBackoffOptions>,
     pub exact_terminal_training_values: bool,
+    pub conditional_preflop_runouts: bool,
     pub postflop_only_response: bool,
     pub response_workers: usize,
 }
@@ -399,6 +400,8 @@ pub struct FullGameResponseEvaluation {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exact_terminal_training_values: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conditional_preflop_runouts: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub postflop_only_response: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_training: Option<RetainedResponseTraining>,
@@ -670,6 +673,7 @@ pub fn evaluate_full_game_response(
 fn response_method(config: &ResponseEvaluationConfig) -> String {
     "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws_and_paired_baseline_advantages"
         .to_owned() + if config.exact_terminal_training_values { "_with_exact_postflop_terminal_training_values" } else { "" }
+        + if config.conditional_preflop_runouts { "_with_conditional_preflop_public_chance_rollouts" } else { "" }
         + if config.postflop_only_response { "_postflop_response_only" } else { "" }
 }
 
@@ -677,6 +681,12 @@ fn evaluate_full_game_response_inner(
     mut config: ResponseEvaluationConfig,
     retained: Option<(FullGameResponseEvaluation, String)>,
 ) -> Result<FullGameResponseEvaluation, Box<dyn Error>> {
+    if config.conditional_preflop_runouts && config.postflop_only_response {
+        return Err("conditional preflop runouts require preflop response training".into());
+    }
+    if config.conditional_preflop_runouts && config.rollouts_per_action > 4096 {
+        return Err("conditional preflop runouts are limited to 4096 per action".into());
+    }
     if let Some(options) = &config.flop_backoff {
         options.validate()?;
         if !matches!(&config.source, ResponsePolicySource::TabularCheckpoint(_)) {
@@ -892,6 +902,7 @@ fn evaluate_full_game_response_inner(
         terminal_flop: config.terminal_flop,
         flop_backoff: config.flop_backoff,
         exact_terminal_training_values: config.exact_terminal_training_values,
+        conditional_preflop_runouts: config.conditional_preflop_runouts,
         postflop_only_response: config.postflop_only_response,
         retained_training,
         resolution_diagnostics,
@@ -955,6 +966,7 @@ fn train_learned_response(
                 responder,
                 config.rollouts_per_action,
                 config.exact_terminal_training_values,
+                config.conditional_preflop_runouts,
                 config.postflop_only_response,
                 config.seed,
                 deal_index,
@@ -1080,6 +1092,7 @@ fn collect_trajectory_decisions(
     responder: usize,
     rollouts_per_action: u32,
     exact_terminal_training_values: bool,
+    conditional_preflop_runouts: bool,
     postflop_only_response: bool,
     response_seed: u64,
     deal_index: u64,
@@ -1102,6 +1115,19 @@ fn collect_trajectory_decisions(
             coarse_observable_backoff_information_set(&state, deal, game, &actions);
         let (strategic_key, strategic_descriptor, strategic_history, strategic_labels) =
             strategic_observable_backoff_information_set(&state, deal, game, &actions);
+        // Average public chance conditional on both offline training holdings.
+        // Reuse each sampled board across actions, not one future board across
+        // every rollout. A separate RNG domain preserves action-stream pairing
+        // and the original authentic trajectory. No new cards reach inference.
+        let preflop_deals = (conditional_preflop_runouts && state.street == Street::Preflop)
+            .then(|| (0..rollouts_per_action).map(|rollout| {
+                let mut chance = SplitMix64::new(derived_seed(
+                    response_seed ^ ((responder as u64 + 1) << 61) ^ 0x4348_414e_4345_0001,
+                    deal_index ^ key,
+                    rollout as u64,
+                ));
+                terminal::sample_preflop_runout(deal.holes, &mut chance)
+            }).collect::<Vec<_>>());
         let values = actions
             .iter()
             .map(|action| {
@@ -1118,7 +1144,9 @@ fn collect_trajectory_decisions(
                             deal_index ^ key,
                             rollout as u64,
                         ));
-                        let utility = baseline_rollout(policy, next.clone(), deal, game, &mut rng);
+                        let rollout_deal = preflop_deals.as_ref()
+                            .map_or(deal, |deals| &deals[rollout as usize]);
+                        let utility = baseline_rollout(policy, next.clone(), rollout_deal, game, &mut rng);
                         if responder == 0 {
                             utility
                         } else {
@@ -1151,6 +1179,7 @@ fn collect_trajectory_decisions(
         responder,
         rollouts_per_action,
         exact_terminal_training_values,
+        conditional_preflop_runouts,
         postflop_only_response,
         response_seed,
         deal_index,
@@ -2086,6 +2115,7 @@ mod tests {
             terminal_flop: None,
             flop_backoff: None,
             exact_terminal_training_values: false,
+            conditional_preflop_runouts: false,
             postflop_only_response: false,
         };
         let first = evaluate_full_game_response(config.clone()).unwrap();
@@ -2112,6 +2142,21 @@ mod tests {
             );
         }
         assert_eq!(first.depth_bb, 20.0);
+        let mut resampled = config.clone();
+        resampled.training_deals = 71;
+        resampled.conditional_preflop_runouts = true;
+        let serial_resampled = evaluate_full_game_response(resampled.clone()).unwrap();
+        assert!(serial_resampled.conditional_preflop_runouts);
+        assert!(serial_resampled.method.contains("conditional_preflop_public_chance"));
+        resampled.response_workers = 3;
+        let mut parallel_resampled = evaluate_full_game_response(resampled.clone()).unwrap();
+        parallel_resampled.response_workers = 1;
+        assert_eq!(serde_json::to_vec(&serial_resampled).unwrap(), serde_json::to_vec(&parallel_resampled).unwrap());
+        resampled.postflop_only_response = true;
+        assert!(evaluate_full_game_response(resampled.clone()).is_err());
+        resampled.postflop_only_response = false;
+        resampled.rollouts_per_action = 4097;
+        assert!(evaluate_full_game_response(resampled).is_err());
         let mut corrected = config.clone();
         corrected.exact_terminal_training_values = true;
         corrected.postflop_only_response = true;
