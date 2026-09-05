@@ -475,9 +475,36 @@ profile inheritance, worker determinism, seed and method rejection, checkpoint
 mismatch, and ambiguous/chained runner inputs. Planned one-time follow-up:
 the original focused responses, **8,000 fresh calibration / 8,000 fresh holdout
 hands per seat**, offset 2800000, four shared-table workers, 30-minute/7.5GiB
-stops, sequential seeds. It is **active** at
+stops, sequential seeds. It is **complete** at
 `preflop-solver/neural/runs/local-postflop-recheck-20260905-pair1/cohort.json`.
 No second recheck is scheduled. Release build and whitespace checks also pass.
+
+The recheck implementation and completed density/correction pilots were
+committed and pushed as `dcd55f4`; CI passed (33963811748). Active binary:
+`991db6cbf5c86c79698b5c8e8ff60920bb72d965f3ba26704c3db929e014fd4f`.
+Seed A is complete: both responses passed fresh calibration. Calibration
+gains were 0.215530625 / 0.120656125bb, with 99.5% lower bounds
+0.115929414 / 0.054096965bb. Independent holdout gains were
+0.258166625 (SE 0.040220500; lower 0.154565482) and
+0.156583375 (SE 0.029665678; lower 0.080169653) bb/hand.
+Their **seat-summed restricted-response gain is 0.41475bb/hand**. This is
+stronger evidence of leakage in the unchanged defender, not a policy
+regression or an exploitability upper-bound pass. Runtime 606.899 seconds;
+sampled peak footprint 7,552,063,152 bytes; no stop. Output A:
+`b33d4970543c63b0e4c2c5950d8ec270a2ea12b81c9f2f1b87e0a6c7fec63cce`.
+Seed B also completed with both responses passing calibration: gains
+0.256062125 / 0.166977625bb, SE 0.036316578 / 0.037707158,
+99.5% lower bounds 0.162516819 / 0.069850423. Independent holdout gains:
+BTN/SB **0.240406250** (SE 0.035801115; lower 0.148188688) and
+BB **0.084977250** (SE 0.038441634; lower **-0.014041838**) bb/hand.
+The BB holdout result is therefore inconclusive at this confidence level,
+despite passing the separate calibration gate. Seat-summed gain is
+**0.3253835bb/hand**. Runtime 912.662 seconds; sampled peak footprint
+7,564,236,464 bytes; no stop. Output B:
+`d1063cb7cf54cdfd6b517cee3f804dd7a769f851df5bc05dedbdb995192791d0`.
+Both output hashes were independently verified. Earlier calibration failures
+remain preserved. There is no claim that an exploitability upper bound passes,
+nor that the unchanged defender improved. No second recheck is planned.
 
 The next direct policy pilot is the already-supported **50% terminal-flop
 range correction versus the retained 25% correction**, leaving every other
@@ -488,4 +515,18 @@ opponents with 1,024 fresh hands per seat/opponent, offset 3000000, two
 workers, exact terminal-action/runout payoff integration, and unchanged
 30-minute/7.5GiB stops. A larger confirmation requires consistent promising
 results. The range calculation is still against a frozen profile, not a
-minimax safety guarantee. This pilot has **not started**.
+minimax safety guarantee. This pilot is **active** at
+`preflop-solver/neural/runs/local-terminal50-20260905-pair1/cohort.json`,
+using the recheck cohort's frozen `991db6c...` executable and the rechecked
+reports as proposals/focused opponents. Their underlying learned opponents
+are unchanged from the original focused reports, not additional diverse
+opponents; do not include both copies in a panel.
+
+Now both proposal seats pass calibration, a separate 25% **both-seat** saved
+flop pilot is also warranted against the same retained 25% terminal control.
+It is a different candidate from the rejected BTN/SB-only patch: BB has 16 /
+31 supported flop rows across the seeds, most nonterminal. Use 1,024 fresh
+hands per seat/opponent, offset 3100000, raw paired rollout payoffs, two workers,
+and unchanged resource stops. Seed B's BB holdout uncertainty stays disclosed.
+This comparison has **not started**. Do not combine these two policy changes
+or allocate longer confirmation runs before the short pilots justify it.
