@@ -1308,6 +1308,9 @@ mod tests {
         }
         assert_eq!(children[0][1], ranges[1]);
         assert_eq!(children[1][1], ranges[1]);
+        for child in &children {
+            assert!((child[0].iter().sum::<f64>() - ranges[0].iter().sum::<f64>()).abs() < 1e-12);
+        }
     }
 
     #[test]

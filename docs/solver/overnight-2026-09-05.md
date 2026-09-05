@@ -1090,3 +1090,119 @@ both script identities and this recovery. Both solver processes are now terminal
 The pure-checkdown and hybrid screens now both argue against sacrificing
 terminal-integration accuracy for fewer visited states. Further work should not
 repeat either arm with a longer budget merely to recover the lost consistency.
+
+## Common-sample counterfactual training pilot
+
+The previous screen's remote CI passed (33988945311). The earlier implementation
+CI 33988647857 was superseded/cancelled, not a separate passing run.
+
+Research/code review first checked whether tiny shared-action probabilities
+cause unbounded counterfactual values. For the existing proposal
+`q[a] = sum_h(r[h] * sigma[h,a]) / sum_h(r[h])`, the corrected child range has
+`sum_h(r[h] * sigma[h,a] / q[a]) = sum_h(r[h])`. After exact terminal integration,
+the conditional proposal multiplies this total by the remaining continuation
+mass, at most one. The code's regression now explicitly checks this mass
+identity. Large per-combo `sigma/q` alone is therefore not evidence of exploding
+aggregate range values. No proposal floor, clipping or changed action weights
+were added on that unsupported premise.
+
+The next hypothesis targets **cross-action covariance**, not range-mass scale.
+[Lee et al., UAI 2020](https://proceedings.mlr.press/v124/lee20a/lee20a.pdf)
+describe common random numbers for rollout comparisons: the variance of a
+difference includes `-2 Cov(X,Y)`. Positive covariance helps; negative covariance
+hurts. This is a general simulation technique, not their experiment on our CFR
+implementation. [Gibson et al., AAAI 2012](https://ojs.aaai.org/index.php/AAAI/article/view/8241/8100)
+relate bounded unbiased counterfactual estimates and their variance to sampled
+regret minimization. Neither reference certifies this candidate's exploitability.
+Owen's chapter appeared in search, but direct PDF retrieval was denied; the
+accessible primary rollout paper supplies the formula used here.
+
+For this pilot, implemented experimental `--coupled-traverser-samples`: at a traverser node, draw one
+fresh continuation seed and give each sibling counterfactual action its own
+clone of that stream. Opponent nodes still use their exact reached-range
+proposal, terminal integration and importance correction. Along a path, future
+samples remain fresh; sibling public histories are disjoint. The adaptation
+preserves conditional marginal sampling expectations while changing correlations.
+It requires the existing integrated PCS/trajectory-recall mode. It does not
+change evaluation sampling, the game, probability policies, neural weights,
+chance-card removal, or the default recurrence.
+
+Config, summary, training hash, runner fingerprint and resume compatibility pin
+the option. Coupled checkpoints use schema 7; schemas 5 and 6 remain unchanged.
+Verification: 234 Rust release library tests, 10 CLI tests and 33 Python
+runner/resource/pilot tests pass. Tests cover exact terminal CFVs/regrets,
+explicit configuration, mode/schema rejection, and deterministic resume in all
+five experimental modes. Small old/new artifact **and summary** comparisons are byte-identical
+for ordinary PCS, terminal integration, checkdown and streetwise modes. Fixtures:
+`/tmp/poker-coupled-check.Lf3nFv`; the first three artifact hashes match the prior
+streetwise replay, and streetwise hashes to
+`9e405461f1679043cfe854a8628ba7ffd43c8db9bfc10e3bdd4ae4062c215ead`.
+The preceding executable rejects an actual coupled schema-7 checkpoint. These
+are correctness checks, not a demonstrated variance or policy-quality win.
+
+Frozen pilot executable:
+`dae25592c5bc44716610cd233582015d356537c0eacfcc46ead656e685a7f77d`.
+The checkpoint-free development screen runs sequential seeds 26001/26002 for
+400 rounds, full default sizing and legacy buckets, fixed DCFR 1.5/0/2, zero
+averaging delay, and matched 2,000 / 256 / 2,000 evaluation budgets. It retains
+the 12M-state cap, 6GiB sampled-footprint stop, 20-minute limit and 20GiB disk
+reserve. Directory: `preflop-solver/neural/runs/local-coupled-20260905-screen400`.
+Only the training coupling and checkpoint-write omission differ from the
+preserved integration-400 control, besides executable/output paths. No long run
+or source-policy replacement is authorized by the implementation tests alone.
+
+### Completed paired result and disposition
+
+Both 400-round seeds completed, without resource stops or full checkpoint writes.
+
+| Metric | Integration 400 control | Coupled 400 candidate |
+| --- | ---: | ---: |
+| Infosets A / B, million | 10.014 / 9.391 | 9.388 / 8.811 |
+| Root local gain A / B, bb | 0.463259 / 0.486139 | 0.446816 / 0.500419 |
+| Mean root local gain, bb | 0.474699 | 0.473617 |
+| Maximum action MAE | 8.902% | 8.637% |
+| Primary agreement, unweighted | 61.538% | 55.621% |
+| Primary agreement, combo-weighted | 63.952% | 56.712% |
+| Maximum aggregate action delta | 5.633% | 4.081% |
+| Maximum held-out unknown fraction | 14.354% | 13.019% |
+| Minimum action-EV SE coverage | 20.932% | 21.687% |
+
+This is mixed evidence, not a useful overall policy winner. Root gains move in
+opposite directions across seeds, and the mean is essentially unchanged; primary
+agreement worsens. Reduced frequency error/unknown fraction and a small EV-precision
+increase do not establish lower exploitability. These held-out trajectories follow
+each policy and are not identical fixed-trajectory coverage tests. **Reject the
+candidate; no longer coupling run or full-checkpoint reproduction follows.**
+
+Unlike the prior streetwise implementation, this unsuccessful coupling option is
+**not retained in the supported trainer/runner**. Its source diff is archived next
+to the immutable executable, driver, summaries and exports in the local cohort:
+`experimental-source.patch`, SHA-256
+`92d13be05552894c5b532e3c610c79e693ab9a202aa9879ad4e8d80a2d698a60`.
+It applies to `dd09cfd`; use that archived version for reproduction, not the current
+runner. Schema 7 identifies only this archived coupled experiment and must not be
+reused for an unrelated future recurrence. The small range-mass regression remains;
+the normal training recurrence, config and schemas are unchanged from `dd09cfd`.
+
+Runtimes without checkpoint writes: 41.022 / 38.983 seconds. Sampled footprints:
+3,058,616,864 / 2,874,378,640 bytes. Root gain SE: 0.022401 / 0.022383bb.
+Canonical artifact hashes:
+A `fa41ad7a0eec4c8c9173652150eccfe485738b96309821ce31c353a922c0a8b6`;
+B `4503cfe26c6569955ad208217c9744c60612d6aa8a0419807d4e29efb50d5307`.
+Independently verified compressed output hashes:
+A `c6da3f672a3eabae8969b464f19254c2340872ddada86e4b9dd74f586e9784b0`;
+B `862942ff16ab14d220a7d827d4e650a57b0fef9e6d6ef0f0cb86a4e0fcf79e3b`.
+Neither worker remains live. No source checkpoint, retained response, website model,
+gate, or user file was changed or deleted.
+
+After removing the unsuccessful experimental option, the supported worktree
+passes 232 release library tests, 9 CLI tests, 32 Python runner/resource/pilot
+tests and the release build. Its release executable is byte-identical to the
+preceding `58f2437...` binary. The only retained native edit from this experiment
+is the proposal/range-mass regression assertion; there is no new serving policy.
+
+The three estimator screens do not support extending a new sampler. Next focus
+returns to unresolved flop policy actions: inspect the existing public-belief
+`solve_flop` / `solve_flop_public_chance_vector_mvp` continuation requirements and
+the tabular turn/river adapter before selecting a bounded flop experiment.
+This is not a scheduled new oracle/network rewrite, and no flop run has started.
