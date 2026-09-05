@@ -821,7 +821,7 @@ B runtime 1,305.021 seconds, sampled footprint 7,210,178,032 bytes, no stop.
 Both control output hashes were independently verified:
 A `198424be03573d4a7b026aaa1170f3747dca36732776da2b76e782dbc10b91e1`;
 B `dde06e31df9a892b7a7e445546a87ea2ca134af4709f0db802f2f5d4f6612061`.
-The resampled arm is now active at
+The resampled arm is complete at
 `preflop-solver/neural/runs/local-preflop-runouts-20260905-resampled1`.
 Configuration comparison verifies identical frozen executable SHA, seeds and
 budgets: only the preflop-runout flag differs (besides input/output paths).
@@ -869,3 +869,76 @@ were added, and no model or release gate was changed.
 The scheduler milestone was committed/pushed as `a9346f6`; remote CI
 33984490992 passed. Its scheduler is deliberately not used by either arm
 of the ongoing conditional-runout comparison.
+
+## Conditional-runout pilot: matched results
+
+Resampled seed A completed in 1,042.046 seconds, sampled footprint
+7,133,779,344 bytes, no stop. Verified report SHA-256:
+`172b5df2eb817bb02d9128abdf1bd4d072c304860b9b1c1fb883231a70c2e0d1`.
+Neither A response passed calibration:
+SB gain 0.0285835bb, SE 0.060547640, lower -0.127376886bb;
+BB gain 0.03475bb, SE 0.025911762, lower -0.031994277bb.
+This is not a stronger accepted response or a defender improvement.
+
+Matched-record comparison confirms identical preflop information-set keys,
+action labels, sample counts, hand buckets and public histories (461 SB /
+72 BB rows, including repeated abstraction layers). All preflop Q rows
+changed; both complete postflop resolver records are exactly identical.
+Considering only exact-trajectory rows, the median non-fold action standard
+error drops 3.320618 -> 2.110785bb for SB and 5.858963 -> 3.112920bb for BB.
+These are diagnostic medians over training labels, not reach-weighted served
+EV-precision gates. Locally supported exact rows change 11 -> 9 SB and
+2 -> 5 BB; higher counts are not themselves a quality win. The comparison
+supports variance reduction on this seed, not accurate enough action values
+or a longer identical run.
+The control-results commit `acef0e5` passed CI 33984986143.
+
+Resampled seed B also completed without a stop: 1,116.871 seconds,
+7,147,607,464 bytes sampled footprint. Verified report SHA-256:
+`5510e2261fafab928460d5b48ca704a66a4e07ff8a1b703c6b3315a9b2d482d6`.
+Both responses were rejected: SB gain -0.0009165bb, SE 0.073673915,
+lower -0.190687929bb; BB gain 0.019333bb, SE 0.021526814,
+lower -0.036116398bb. No accepted holdout gain is established in either seed.
+
+B preserves the same 498 SB / 45 BB preflop keys and sample counts; Q values
+change in 497 / 45 rows. Both postflop resolver records remain exactly equal
+to control. Among 123 / 8 exact rows, median non-fold label SE changes
+3.727280 -> 2.250386bb for SB, but **2.464595 -> 2.946186bb for BB**.
+Locally supported exact rows change 18 -> 9 SB and 3 -> 0 BB. Sparse-node
+sample SE is not a ground-truth accuracy measurement, and fewer locally
+supported actions need not be worse if old evidence was overconfident.
+
+Decision: retain the opt-in sampler and its correctness regressions, but do
+not claim a stronger response or defender. SB variance improvement repeats;
+BB is mixed. No larger identical response run or calibration recheck follows.
+This completed experiment does not change any release metric or active model.
+
+## Next bounded policy-training comparison
+
+Targeted source review revisited the existing
+[checkdown-baseline results](../validation/2026-09-04-pcs-math-audit.md)
+and the primary [Davis et al. baseline framework](https://proceedings.mlr.press/v119/davis20a.html).
+The framework does not give our stateless checkdown approximation its
+predictive-baseline zero-variance guarantee. At 800 rounds this implementation
+used 32–35% fewer states but had weaker root diagnostics; additional rounds
+within similar storage are a hypothesis to test, not a promised win.
+
+Selected short test, now active at
+`preflop-solver/neural/runs/local-checkdown-20260905-pair600`:
+fresh training with the existing checkdown-baseline option, 600 rounds per
+seed 26001/26002, versus the preserved 400-round terminal-integration
+controls in `local-pcs-20260904-checkpoint400`. Both retain full sizing,
+legacy suit buckets, potential bins three, fixed DCFR 1.5/0/2 and zero
+averaging delay. Held-out / root-per-class / action-value budgets and seeds
+match the controls (2,000 / 256 / 2,000). This is an approximately
+table-size-matched development screen using historical controls, not an
+equal-round/equal-wall-time or untouched final qualification comparison.
+The 800-round integration candidate remains unchanged.
+
+Use one training process at a time, a 12M-state cap, 6GiB sampled-footprint
+stop, 20-minute stop per seed and 20GiB disk reserve. Checkpoints retain
+all-street training; the diagnostic artifact exports only preflop. The
+verified `2f023b5...` binary is copied to immutable
+`runs/local-checkdown-20260905-solver`. No new training math, model interface,
+abstraction, or gate is added. Require a useful policy-quality result before
+considering further scaling; earlier equal-round evidence was not a win.
