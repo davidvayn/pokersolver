@@ -448,6 +448,7 @@ def validate_summary(
                 f"expected {value!r}, found {summary.get(field)!r}"
             )
     for field, enabled in (
+        ("canonicalSuitBuckets", args.canonical_suit_buckets),
         ("integrateTerminalActions", args.integrate_terminal_actions),
         ("opponentCheckdownBaseline", args.opponent_checkdown_baseline),
     ):
@@ -629,6 +630,8 @@ def run_fingerprint(
         "verifyCheckpointReaderUpgrade": args.verify_checkpoint_reader_upgrade,
         "parentRunFingerprint": parent_run_fingerprint,
     }
+    if args.canonical_suit_buckets:
+        settings["canonicalSuitBuckets"] = True
     canonical = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
 
@@ -681,6 +684,8 @@ def build_command(args: argparse.Namespace, run: SeedRun) -> list[str]:
         command.append("--compact-serving-grid")
     if args.public_chance_sampling:
         command.append("--public-chance-sampling")
+    if args.canonical_suit_buckets:
+        command.append("--canonical-suit-buckets")
     if args.integrate_terminal_actions:
         command.append("--integrate-terminal-actions")
     if args.opponent_checkdown_baseline:
@@ -744,6 +749,10 @@ def parse_args() -> argparse.Namespace:
         help="wall-clock limit per seed including reload/export; 0 disables",
     )
     parser.add_argument("--compact-serving-grid", action="store_true")
+    parser.add_argument(
+        "--canonical-suit-buckets", action="store_true",
+        help="new suit-invariant bucket identity; incompatible with legacy checkpoints",
+    )
     parser.add_argument(
         "--public-chance-sampling",
         action="store_true",
@@ -996,6 +1005,7 @@ def load_parent_stage(
         ) != bool(args.public_chance_sampling):
             raise SystemExit("resume source changes the blueprint traversal")
         for flag, enabled in (
+            ("--canonical-suit-buckets", args.canonical_suit_buckets),
             ("--integrate-terminal-actions", args.integrate_terminal_actions),
             ("--opponent-checkdown-baseline", args.opponent_checkdown_baseline),
         ):

@@ -3048,6 +3048,9 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
         config.dcfr_schedule = DcfrSchedule::Hs30;
         config.dcfr_schedule_horizon = horizon.parse::<u64>()?;
     }
+    config.hand_abstraction.canonical_suit_buckets = args
+        .iter()
+        .any(|argument| argument == "--canonical-suit-buckets");
     config.hand_abstraction.distribution_samples = parse_or(
         args,
         "--distribution-samples",
@@ -3288,6 +3291,10 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
             );
         for (field, enabled) in [
             (
+                "canonicalSuitBuckets",
+                artifact.config.hand_abstraction.canonical_suit_buckets,
+            ),
+            (
                 "integrateTerminalActions",
                 artifact.config.integrate_terminal_actions,
             ),
@@ -3496,6 +3503,7 @@ Blueprint options:
   --hs-dcfr-30-horizon <N>        Experimental AAAI-2026 alpha/beta/gamma
                                   schedule pinned to an N-iteration horizon
   --distribution-samples <int>    Default: 128 per visible-card bucket
+  --canonical-suit-buckets       Research: suit-invariant buckets; fresh training required
   --equity-bins <int>             Default: 10
   --potential-bins <int>          Default: 3
   --preflop-runout-samples <int>  Default: 256

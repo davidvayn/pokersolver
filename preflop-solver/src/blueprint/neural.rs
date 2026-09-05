@@ -4659,7 +4659,7 @@ fn straight_window_density(mask: u16) -> u32 {
     regular.max((mask & ((1 << 12) | 0b1111)).count_ones())
 }
 
-fn canonical_suit_map(private_cards: [u8; 2], board: &[u8]) -> [usize; 4] {
+pub(super) fn canonical_suit_map(private_cards: [u8; 2], board: &[u8]) -> [usize; 4] {
     let mut private_masks = [0u16; 4];
     let mut board_masks = [0u16; 4];
     for card in private_cards {

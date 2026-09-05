@@ -269,8 +269,34 @@ pub struct ResolverDecision {
     pub selected_action: usize,
     pub selected_action_mean_gap_bb: f64,
     pub approximate_selected_action_gap_lower_bound_99_5_percent_bb: f64,
+    /// Paired improvement over the evaluated profile, rather than a margin
+    /// over the runner-up action. Absent in legacy retained reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_advantage: Option<ResponseAdvantage>,
+    /// Legacy confidence in a unique best action, not in beating the baseline.
     pub low_confidence: bool,
     pub range_particles: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResponseAdvantage {
+    pub baseline_mean_ev_bb: f64,
+    pub selected_mean_gain_bb: f64,
+    pub selected_gain_standard_error_bb: f64,
+    pub approximate_gain_lower_bound_99_5_percent_bb: f64,
+}
+
+impl ResolverDecision {
+    fn is_profitable_response(&self) -> bool {
+        self.response_advantage
+            .as_ref()
+            .map_or(!self.low_confidence, |advantage| {
+                advantage
+                    .approximate_gain_lower_bound_99_5_percent_bb
+                    .is_finite()
+                    && advantage.approximate_gain_lower_bound_99_5_percent_bb > 0.0
+            })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -371,6 +397,10 @@ struct DecisionAccumulator {
     // the incorrect independence assumption for marginal EV errors.
     gap_means: Vec<f64>,
     gap_m2: Vec<f64>,
+    advantage_count: u64,
+    baseline_sum: f64,
+    advantage_means: Vec<f64>,
+    advantage_m2: Vec<f64>,
 }
 
 impl DecisionAccumulator {
@@ -398,6 +428,34 @@ impl DecisionAccumulator {
             squared_sums: vec![0.0; actions.len()],
             gap_means: vec![0.0; actions.len() * actions.len()],
             gap_m2: vec![0.0; actions.len() * actions.len()],
+            advantage_count: 0,
+            baseline_sum: 0.0,
+            advantage_means: vec![0.0; actions.len()],
+            advantage_m2: vec![0.0; actions.len()],
+        }
+    }
+
+    fn add_with_strategy(&mut self, values: &[f64], baseline_strategy: &[f64]) {
+        assert_eq!(values.len(), baseline_strategy.len());
+        assert!(baseline_strategy.iter().all(|p| p.is_finite() && *p >= 0.0));
+        assert!((baseline_strategy.iter().sum::<f64>() - 1.0).abs() < 1e-6);
+        assert_eq!(
+            self.advantage_count, self.count,
+            "incomplete baseline observations"
+        );
+        self.add(values);
+        self.advantage_count += 1;
+        let baseline = values
+            .iter()
+            .zip(baseline_strategy)
+            .map(|(v, p)| v * p)
+            .sum::<f64>();
+        self.baseline_sum += baseline;
+        for (action, value) in values.iter().enumerate() {
+            let difference = value - baseline;
+            let delta = difference - self.advantage_means[action];
+            self.advantage_means[action] += delta / self.advantage_count as f64;
+            self.advantage_m2[action] += delta * (difference - self.advantage_means[action]);
         }
     }
 
@@ -466,6 +524,21 @@ impl DecisionAccumulator {
                 (gap, gap - 2.575_829_303_548_900_4 * gap_standard_error)
             })
             .unwrap_or((0.0, 0.0));
+        let response_advantage = (self.advantage_count > 0).then(|| {
+            assert_eq!(self.advantage_count, self.count);
+            let error = if self.count < 2 {
+                unevaluated_standard_error_bb
+            } else {
+                (self.advantage_m2[selected_action].max(0.0) / ((count - 1.0) * count)).sqrt()
+            };
+            ResponseAdvantage {
+                baseline_mean_ev_bb: self.baseline_sum / count,
+                selected_mean_gain_bb: self.advantage_means[selected_action],
+                selected_gain_standard_error_bb: error,
+                approximate_gain_lower_bound_99_5_percent_bb: self.advantage_means[selected_action]
+                    - 2.575_829_303_548_900_4 * error,
+            }
+        });
         ResolverDecision {
             information_set: key,
             granularity,
@@ -480,6 +553,7 @@ impl DecisionAccumulator {
             selected_action,
             selected_action_mean_gap_bb,
             approximate_selected_action_gap_lower_bound_99_5_percent_bb: gap_lower_bound,
+            response_advantage,
             low_confidence: runner_up.is_some() && gap_lower_bound <= 0.0,
             range_particles: self.count,
         }
@@ -696,7 +770,7 @@ pub fn evaluate_full_game_response(
         / 2.0;
     Ok(FullGameResponseEvaluation {
         schema: if checkpoint_training_iterations.is_some() { "hu-tabular-checkpoint-information-set-response-v1" } else { RESPONSE_SCHEMA }.to_owned(),
-        method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws"
+        method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws_and_paired_baseline_advantages"
             .to_owned(),
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
@@ -803,7 +877,8 @@ fn train_learned_response(
                         value
                     });
                     assert_eq!(&accumulator.action_labels, expected);
-                    accumulator.add(&observation.values);
+                    accumulator
+                        .add_with_strategy(&observation.values, &observation.baseline_strategy);
                 }
             }
         },
@@ -873,6 +948,7 @@ fn train_learned_response(
 }
 
 struct DecisionObservation {
+    baseline_strategy: Vec<f64>,
     keys: [(u64, NodeDescriptor, Vec<String>); 4],
     strategic_labels: Vec<String>,
     actions: Vec<LegalAction>,
@@ -896,6 +972,10 @@ fn collect_trajectory_decisions(
         return;
     }
     let actions = state.legal_actions(game);
+    // This is the profile actually being attacked, including exact/private
+    // distinctions forgotten by coarser response keys. Average Q-values alone
+    // cannot establish that a coarser response beats that informed profile.
+    let strategy = policy.strategy(&state, deal, &actions, game);
     if state.actor == responder {
         let (key, descriptor, history) = information_set(&state, deal, game);
         let (backoff_key, backoff_descriptor, backoff_history) =
@@ -932,6 +1012,7 @@ fn collect_trajectory_decisions(
             })
             .collect::<Vec<_>>();
         observations.push(DecisionObservation {
+            baseline_strategy: strategy.clone(),
             keys: [
                 (key, descriptor, history),
                 (backoff_key, backoff_descriptor, backoff_history),
@@ -943,7 +1024,6 @@ fn collect_trajectory_decisions(
             values,
         });
     }
-    let strategy = policy.strategy(&state, deal, &actions, game);
     let selected = sample_index(&strategy, trajectory_rng);
     collect_trajectory_decisions(
         policy,
@@ -1196,7 +1276,7 @@ fn evaluate_resolver(
         .chain(&resolver.decisions)
         .filter(|decision| {
             deploy_response
-                && !decision.low_confidence
+                && decision.is_profitable_response()
                 && granularity_rank(decision.granularity)
                     <= granularity_rank(config.maximum_granularity)
         });
@@ -1219,7 +1299,7 @@ fn evaluate_resolver(
         .chain(&resolver.decisions)
         .filter(|decision| {
             deploy_response
-                && !decision.low_confidence
+                && decision.is_profitable_response()
                 && decision.granularity == ResolverGranularity::StrategicObservableBackoff
                 && granularity_rank(decision.granularity)
                     <= granularity_rank(config.maximum_granularity)
@@ -1530,6 +1610,92 @@ fn sha256_file(path: &Path) -> Result<String, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tied_good_actions_can_still_exploit_a_lossy_baseline_mix() {
+        let (trainer, deal) = fixture_trainer();
+        let state = GameState::initial(&trainer.config);
+        let (key, descriptor, history) = information_set(&state, &deal, &trainer.config);
+        let actions = state.legal_actions(&trainer.config);
+        let mut acc = DecisionAccumulator::new(&descriptor, history, &actions);
+        let mut values = vec![-10.0; actions.len()];
+        values[0] = 1.0;
+        values[1] = 1.0;
+        assert!(values.iter().sum::<f64>() / (values.len() as f64) < 1.0);
+        for _ in 0..8 {
+            acc.add_with_strategy(&values, &vec![1.0 / actions.len() as f64; actions.len()]);
+        }
+        let decision = acc.finish(key, ResolverGranularity::ExactTrajectory, 20.0);
+        assert_eq!(decision.selected_action_mean_gap_bb, 0.0);
+        assert!(decision.is_profitable_response(),
+            "either tied winner strictly improves the uniform baseline; a unique winner is unnecessary");
+        let advantage = decision.response_advantage.unwrap();
+        assert_eq!(advantage.selected_gain_standard_error_bb, 0.0);
+        assert!(
+            (advantage.selected_mean_gain_bb
+                - (1.0 - values.iter().sum::<f64>() / values.len() as f64))
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn response_compares_against_the_informed_baseline_not_an_averaged_mix() {
+        let (trainer, deal) = fixture_trainer();
+        let state = GameState::initial(&trainer.config);
+        let (_, descriptor, history) = information_set(&state, &deal, &trainer.config);
+        let actions = state.legal_actions(&trainer.config);
+        let mut acc = DecisionAccumulator::new(&descriptor, history, &actions);
+        for sample in 0..1_000 {
+            let mut values = vec![-10.0; actions.len()];
+            let mut baseline = vec![0.0; actions.len()];
+            if sample % 10 < 6 {
+                values[0] = 10.0;
+                values[1] = 0.0;
+                baseline[0] = 1.0;
+            } else {
+                values[0] = 0.0;
+                values[1] = 9.0;
+                baseline[1] = 1.0;
+            }
+            acc.add_with_strategy(&values, &baseline);
+        }
+        let decision = acc.finish(0, ResolverGranularity::StrategicObservableBackoff, 20.0);
+        assert_eq!(decision.selected_action, 0);
+        assert!(
+            !decision.low_confidence,
+            "the old unique-action rule accepts this losing response"
+        );
+        assert!(!decision.is_profitable_response());
+        let advantage = decision.response_advantage.unwrap();
+        assert!((advantage.baseline_mean_ev_bb - 9.6).abs() < 1e-12);
+        assert!((advantage.selected_mean_gain_bb + 3.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn paired_response_advantages_cancel_common_noise_and_reject_identity_updates() {
+        let (trainer, deal) = fixture_trainer();
+        let state = GameState::initial(&trainer.config);
+        let (_, descriptor, history) = information_set(&state, &deal, &trainer.config);
+        let actions = state.legal_actions(&trainer.config);
+        for baseline_action in [0, 1] {
+            let mut acc = DecisionAccumulator::new(&descriptor, history.clone(), &actions);
+            let mut baseline = vec![0.0; actions.len()];
+            baseline[baseline_action] = 1.0;
+            for sample in 0..100 {
+                let noise = if sample % 2 == 0 { 10.0 } else { -10.0 };
+                let mut values = vec![noise - 5.0; actions.len()];
+                values[0] = noise + 1.0;
+                values[1] = noise;
+                acc.add_with_strategy(&values, &baseline);
+            }
+            let decision = acc.finish(0, ResolverGranularity::ExactTrajectory, 20.0);
+            assert_eq!(decision.is_profitable_response(), baseline_action == 1);
+            let advantage = decision.response_advantage.unwrap();
+            assert_eq!(advantage.selected_mean_gain_bb, baseline_action as f64);
+            assert_eq!(advantage.selected_gain_standard_error_bb, 0.0);
+        }
+    }
 
     #[test]
     fn forcing_the_same_action_preserves_paired_continuation_draws() {

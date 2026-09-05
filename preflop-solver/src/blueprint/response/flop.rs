@@ -34,11 +34,18 @@ impl DecisionBank {
                 || !decision
                     .approximate_selected_action_gap_lower_bound_99_5_percent_bb
                     .is_finite()
+                || decision.response_advantage.as_ref().is_some_and(|a| {
+                    !a.baseline_mean_ev_bb.is_finite()
+                        || !a.selected_mean_gain_bb.is_finite()
+                        || !a.selected_gain_standard_error_bb.is_finite()
+                        || a.selected_gain_standard_error_bb < 0.0
+                        || !a.approximate_gain_lower_bound_99_5_percent_bb.is_finite()
+                })
             {
                 return Err("invalid retained response decision".to_owned());
             }
             let rank = granularity_rank(decision.granularity) as usize;
-            if decision.low_confidence || rank > granularity_rank(maximum) as usize {
+            if !decision.is_profitable_response() || rank > granularity_rank(maximum) as usize {
                 continue;
             }
             if bank.rows[rank]
@@ -333,10 +340,7 @@ pub fn evaluate_flop_patch(
                     .enumerate()
                     .filter(|(seat, _)| proposal.response_deployed[*seat])
                     .flat_map(|(_, resolver)| resolver.decisions.iter())
-                    .filter(|d| {
-                        d.street == Street::Flop
-                            && d.approximate_selected_action_gap_lower_bound_99_5_percent_bb > 0.0
-                    }),
+                    .filter(|d| d.street == Street::Flop && d.is_profitable_response()),
                 proposal.maximum_granularity,
             )?
         },

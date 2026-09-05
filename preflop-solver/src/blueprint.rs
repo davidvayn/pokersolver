@@ -333,11 +333,15 @@ impl Default for EvaluationControls {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct HandAbstraction {
     pub distribution_samples: u32,
     pub equity_bins: u8,
     pub potential_bins: u8,
+    /// New abstraction identity: normalize visible suit labels before sampling.
+    /// Keep the legacy default for exact replay of already-frozen checkpoints.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub canonical_suit_buckets: bool,
 }
 
 impl Default for HandAbstraction {
@@ -346,6 +350,7 @@ impl Default for HandAbstraction {
             distribution_samples: 128,
             equity_bins: 10,
             potential_bins: 3,
+            canonical_suit_buckets: false,
         }
     }
 }
@@ -548,7 +553,7 @@ pub struct RunControl {
 struct Deal {
     holes: [[u8; 2]; 2],
     board: [u8; 5],
-    hand_bucket_cache: RefCell<BTreeMap<(usize, usize), Arc<str>>>,
+    hand_bucket_cache: RefCell<BTreeMap<(usize, usize, HandAbstraction), Arc<str>>>,
     public_bucket_cache: RefCell<BTreeMap<usize, Arc<str>>>,
     showdown_equity_cache: RefCell<BTreeMap<usize, f64>>,
 }
@@ -590,7 +595,7 @@ impl Deal {
         street: Street,
         abstraction: &HandAbstraction,
     ) -> Arc<str> {
-        let key = (player, street.board_len());
+        let key = (player, street.board_len(), abstraction.clone());
         if let Some(bucket) = self.hand_bucket_cache.borrow().get(&key) {
             return bucket.clone();
         }
@@ -3130,6 +3135,22 @@ fn visible_card_distribution_features(
     board: &[u8],
     abstraction: &HandAbstraction,
 ) -> (u8, u8, u8) {
+    let canonical_hole;
+    let mut canonical_board = [0u8; 5];
+    let (hole, board) = if abstraction.canonical_suit_buckets {
+        // The mapping uses only the acting player's cards and the currently
+        // visible board. Suit-equivalent observations therefore seed AND draw
+        // from the same canonical legal deck, not just the same random seed.
+        let suits = neural::canonical_suit_map(*hole, board);
+        let relabel = |card: u8| (card & !3) | suits[(card & 3) as usize] as u8;
+        canonical_hole = hole.map(relabel);
+        for (dest, card) in canonical_board.iter_mut().zip(board) {
+            *dest = relabel(*card);
+        }
+        (&canonical_hole, &canonical_board[..board.len()])
+    } else {
+        (hole, board)
+    };
     let samples = abstraction.distribution_samples as usize;
     let mut known = [false; 52];
     for card in hole.iter().chain(board.iter()) {
@@ -3933,6 +3954,7 @@ mod tests {
                 distribution_samples: 4,
                 equity_bins: 4,
                 potential_bins: 2,
+                canonical_suit_buckets: false,
             },
             action_abstraction: ActionAbstraction {
                 open_sizes_bb: vec![2.0],
@@ -4719,6 +4741,82 @@ mod tests {
             ..BlueprintConfig::default()
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn hand_bucket_cache_keeps_distinct_abstraction_settings_separate() {
+        let deal = Deal::from_cards([[31, 14], [20, 32]], [11, 40, 45, 44, 39]);
+        let original = HandAbstraction::default();
+        let mut other = original.clone();
+        other.equity_bins = 1;
+        deal.hand_bucket(0, Street::Turn, &original);
+        assert_eq!(
+            deal.hand_bucket(0, Street::Turn, &other).as_ref(),
+            postflop_hand_bucket(&deal, 0, Street::Turn, &other)
+        );
+    }
+
+    #[test]
+    fn rollout_buckets_do_not_split_suit_isomorphic_observations() {
+        let abstraction = HandAbstraction {
+            canonical_suit_buckets: true,
+            ..HandAbstraction::default()
+        };
+        let mut rng = SplitMix64::new(915_051);
+        let mut permutations = Vec::new();
+        for a in 0..4u8 {
+            for b in 0..4u8 {
+                for c in 0..4u8 {
+                    if a != b && b != c && a != c {
+                        permutations.push([a, b, c, 6 - a - b - c]);
+                    }
+                }
+            }
+        }
+        assert_eq!(permutations.len(), 24);
+        for _ in 0..8 {
+            let deal = Deal::sample(&mut rng);
+            for permutation in &permutations {
+                let relabel = |card: u8| (card & !3) | permutation[(card & 3) as usize];
+                let equivalent = Deal::from_sampled_cards(
+                    deal.holes.map(|hole| hole.map(relabel)),
+                    deal.board.map(relabel),
+                );
+                for street in [Street::Flop, Street::Turn, Street::River] {
+                    assert_eq!(
+                        postflop_hand_bucket(&deal, 0, street, &abstraction),
+                        postflop_hand_bucket(&equivalent, 0, street, &abstraction),
+                        "identical poker observation split by suit labels on {street:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_bucket_identity_remains_explicit_and_replayable() {
+        let legacy = HandAbstraction::default();
+        assert_eq!(
+            visible_card_distribution_features(&[31, 14], &[11, 40, 45, 44], &legacy),
+            (3, 0, 1)
+        );
+        let encoded = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "distribution_samples":128, "equity_bins":10, "potential_bins":3
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<HandAbstraction>(encoded).unwrap(),
+            legacy
+        );
+        let mut canonical = legacy.clone();
+        canonical.canonical_suit_buckets = true;
+        assert_ne!(
+            serde_json::to_vec(&legacy).unwrap(),
+            serde_json::to_vec(&canonical).unwrap()
+        );
     }
 
     #[test]

@@ -90,6 +90,7 @@ def arguments(root: Path) -> argparse.Namespace:
         hs_dcfr_30_horizon=0,
         compact_serving_grid=False,
         public_chance_sampling=False,
+        canonical_suit_buckets=False,
         integrate_terminal_actions=False,
         opponent_checkdown_baseline=False,
         export_postflop_strategies=True,
@@ -199,7 +200,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args.public_chance_sampling = True
             self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
             args.public_chance_sampling = False
-            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline"):
+            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline", "canonical_suit_buckets"):
                 setattr(args, field, True)
                 self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
                 setattr(args, field, False)
@@ -234,6 +235,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             for field, flag in (
                 ("integrate_terminal_actions", "--integrate-terminal-actions"),
                 ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
+                ("canonical_suit_buckets", "--canonical-suit-buckets"),
             ):
                 setattr(args, field, True)
                 self.assertIn(flag, build_command(args, seed_run(root / field)))
@@ -312,6 +314,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             for field, flag in (
                 ("integrate_terminal_actions", "--integrate-terminal-actions"),
                 ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
+                ("canonical_suit_buckets", "--canonical-suit-buckets"),
             ):
                 setattr(args, field, True)
                 with self.assertRaisesRegex(SystemExit, flag):
@@ -572,6 +575,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             for field, summary_field in (
                 ("integrate_terminal_actions", "integrateTerminalActions"),
                 ("opponent_checkdown_baseline", "opponentCheckdownBaseline"),
+                ("canonical_suit_buckets", "canonicalSuitBuckets"),
             ):
                 setattr(args, field, True)
                 with self.assertRaisesRegex(ValueError, summary_field):
