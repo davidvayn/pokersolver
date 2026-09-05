@@ -686,8 +686,8 @@ Runtimes 207.132 / 293.361 seconds; sampled peak footprints
 A `f83bec143dc851c9212f4456445c15922d9750c0c6494419fe622f8a93d19f0d`;
 B `7dedfda64707e1a7c1929ec252a8f83a1725c4d9b4175869d3e65c5c914157eb`.
 
-The full-weight candidate has earned a genuinely fresh **all-street** response
-pair, now **active** at
+The full-weight candidate earned a genuinely fresh **all-street** response
+pair, now **complete** at
 `preflop-solver/neural/runs/local-terminal100-full-response-20260905-pair1`.
 This deliberately includes preflop deviations rather than treating the focused
 postflop critic as a full-game qualification. It uses the verified frozen
@@ -724,13 +724,29 @@ The completed terminal-50 response milestone (`873267a`, CI 33969469385)
 and full-weight paired pilot (`a107958`, CI 33969879393) were both pushed
 and passed remote CI.
 
-All-street seed A is complete while B is still running. Both responses failed
+All-street seed A is complete. Both responses failed
 calibration: gains 0.044375 (SE 0.026450459, 99.5% lower -0.023756868) and
 0.0847075 (SE 0.044002075, lower -0.028634335) bb/hand. Neither was deployed
 in holdout; their reported zeros are **inconclusive**, not low-exploitability
 wins. No recheck is scheduled. Runtime 3,774.244 seconds; sampled footprint
 7,210,751,448 bytes; no stop. Verified output A:
 `f64b0ef6d21d3439938a6f60ee9dc6cb874987e36c958f5865a15bc843e3d000`.
+
+Seed B is also complete. The SB response passed calibration: gain
+0.123833625bb, SE 0.039925169, one-sided 99.5% lower 0.020993204bb. Its
+independent holdout gain is **0.16775bb/hand**, SE 0.039577156, lower
+0.065806002bb. It uses 77 supported response rows out of 966 learned rows;
+holdout response lookup coverage is 6.849% preflop / 31.263% postflop.
+The BB response narrowly failed calibration: gain 0.117103125bb,
+SE 0.045915691, lower -0.001167859bb. It was not deployed in holdout;
+its zero is inconclusive. No recheck or larger identical run is scheduled.
+Runtime 4,461.491 seconds; sampled footprint 7,145,674,224 bytes; no stop.
+Verified output B:
+`00a79d8a3fb97b16e4def837e5846936de8146c3096bd712c4faa6fa9638c33d`.
+Neither seed has two accepted responses, so the pair is not eligible for a
+complete two-seat response comparison or a below-0.50 exploitability claim.
+Do not subtract its lower-looking totals from the earlier focused attacks:
+the learned responses, training scope, and random corpora differ.
 
 ## Conditional preflop chance averaging
 
@@ -772,8 +788,22 @@ artifacts are retained at `/tmp/poker-preflop-runouts.MUEL5n`.
 
 Verified new binary:
 `0c66f00a6ede193a94201f9c7e00a89edef241fedb52418b91c4b37d907ddacd`.
-The ongoing all-street pair remains frozen on `804d9f8...` with this option
-off. No large conditional-runout pilot has started; finish that pair before
-choosing a short cost/quality pilot. This change does not edit the defender,
+The completed all-street pair remained frozen on `804d9f8...` with this option
+off. The implementation was committed/pushed as `14a54fb`; remote CI
+33974273771 passed. No large conditional-runout pilot has started. This
+change does not edit the defender,
 lower a gate, fix all small-sample confidence issues, or establish a stronger
 learned response by itself.
+
+Next selected experiment is a short matched control/resampled pair, not
+another long qualification run: original 800-round seeds, joint-four,
+terminal 1.0 / 2,048 samples, 1,024 training / 2,000 calibration / 2,000
+holdout hands per seat, four action rollouts, exact postflop terminal labels,
+minimum four particles, three workers, offset 4000000. Both arms use the
+same source checkpoints, executable and phase seeds; only conditional
+preflop runouts differ. Separate immutable cohorts preserve each result.
+Seeds and arms run sequentially with 30-minute / 7.5GiB sampled-footprint
+stops and a 20GiB disk reserve. Compare runtime, preflop label uncertainty
+and independent response gains; more admitted rows alone is not success.
+Small-sample rejected responses remain inconclusive, and this pilot alone
+will not qualify or activate the defender.
