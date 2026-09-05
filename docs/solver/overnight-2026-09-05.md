@@ -600,3 +600,37 @@ preflop deviations too; this focused critic alone cannot qualify the full game.
 No additional
 memory rewrite, abstraction variant, new response-key layer, or neural
 distillation is currently selected; finish these concrete policy pilots first.
+
+## Full terminal-weight experiment support
+
+The terminal-only correction now accepts weights through 1.0, while saved
+nonterminal corrections retain their 0.50 cap. Defaults remain unchanged at
+0.25, and the retained research candidate remains the independently confirmed
+0.50 profile. No validation threshold or active website model changes.
+
+This tests a specific remaining policy limitation: a partial blend retains
+some baseline fold/call probability even where sampled range equity gives a
+confident preference. Terminal decisions cannot precede another action, so
+changing only this blend leaves earlier action probabilities and the range
+likelihood calculation unchanged. Against an identical frozen opponent,
+conditional payoff is affine in the blend weight. A deterministic paired
+test verifies that moving from 0.25 to 1.0 gives exactly three times the
+per-hand payoff change of moving from 0.25 to 0.50, with unchanged controls
+and at least one exercised correction. The test failed under the old weight
+limit before the implementation change. Bounds tests reject invalid and
+nonfinite probabilities and keep full-weight saved nonterminal patches invalid.
+
+This is **not a minimax guarantee**: equity uses a frozen opponent profile,
+and an adapting opponent can change which terminal calls/folds are profitable.
+After the terminal-50 response pair finishes, a short 1,024-hand per
+seat/opponent comparison may test weight 1.0 against weight 0.50 and the new
+attacks. Any larger run or research-candidate selection must follow that
+screen, not the fixed-opponent linearity calculation alone. No full-weight
+pilot has started yet.
+
+Verification: 226 Rust release library tests, 7 CLI tests, 34 Python
+runner/resource tests, release build, and whitespace checks pass. New native
+binary SHA-256:
+`804d9f83fc7d99ee49f1f90087b8a45ee3f28a31b01dff722324be38c82fff7e`.
+The ongoing terminal-50 response run continues using its original frozen
+`991db6c...` executable and unchanged configuration.

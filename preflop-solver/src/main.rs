@@ -3774,7 +3774,7 @@ Full-game learned-response options:
   --tabular-turn-max-rows <N>     Complete-subtree row limit; default 20000, fail closed
   --terminal-flop-samples <N>    Optional experimental all-in range correction;
                                   128..16384 equity samples, tabular checkpoints only
-  --terminal-flop-weight <0..0.5> Correction blend; default 0.25 when enabled
+  --terminal-flop-weight <0..1>   Terminal-only correction blend; default 0.25
   --training-deals <integer>      Default: 10000 response-training deals
   --response-workers <integer>    Default: 1; 1..=4 shared-table CPU workers (tabular only)
   --calibration-deals <integer>   Default: 2000 disjoint response-selection deals

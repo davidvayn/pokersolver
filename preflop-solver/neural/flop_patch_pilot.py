@@ -19,6 +19,10 @@ def matching_reports(paths, checkpoint_sha):
             if json.loads(path.read_text())['policy_sha256'] == checkpoint_sha]
 
 
+def valid_patch_weight(weight, terminal_only):
+    return math.isfinite(weight) and 0 <= weight <= (1.0 if terminal_only else 0.5)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
@@ -38,8 +42,8 @@ def main():
     parser.add_argument('--max-worker-minutes', type=float, default=30)
     parser.add_argument('--max-worker-memory-gib', type=float, default=7.5)
     args = parser.parse_args()
-    if not math.isfinite(args.weight) or not 0 <= args.weight <= 0.5:
-        parser.error('weight must be 0..0.5')
+    if not valid_patch_weight(args.weight, args.all_in_samples is not None):
+        parser.error('weight must be 0..1 for terminal-only corrections, 0..0.5 otherwise')
     if not 2 <= args.evaluation_deals <= 1_000_000:
         parser.error('evaluation hands must be 2..1000000')
     if args.all_in_samples is not None and not 128 <= args.all_in_samples <= 16384:

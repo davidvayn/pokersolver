@@ -71,8 +71,8 @@ def main():
         parser.error('flop pooling requires positive support and weight 0..1')
     if args.terminal_flop_samples is not None and not 128 <= args.terminal_flop_samples <= 16384:
         parser.error('terminal flop equity samples must be 128..16384')
-    if not math.isfinite(args.terminal_flop_weight) or not 0 <= args.terminal_flop_weight <= 0.5:
-        parser.error('terminal flop weight must be 0..0.5')
+    if not math.isfinite(args.terminal_flop_weight) or not 0 <= args.terminal_flop_weight <= 1:
+        parser.error('terminal flop weight must be 0..1')
     if min(args.training_deals, args.calibration_deals, args.evaluation_deals, args.rollouts_per_action, args.minimum_range_particles) < 2:
         parser.error('all sample budgets must be at least two')
     if any(not math.isfinite(value) or value <= 0 for value in (args.max_worker_minutes,args.max_worker_memory_gib)):

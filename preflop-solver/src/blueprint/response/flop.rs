@@ -320,7 +320,7 @@ pub fn evaluate_flop_patch(
     config: FlopPatchEvaluationConfig,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     if !config.weight.is_finite()
-        || !(0.0..=0.5).contains(&config.weight)
+        || !(0.0..=if config.all_in_samples.is_some() { 1.0 } else { 0.5 }).contains(&config.weight)
         || config.evaluation_deals < 2
         || config.evaluation_deals > 1_000_000
         || !(1..=4).contains(&config.workers)
@@ -332,7 +332,7 @@ pub fn evaluate_flop_patch(
         || (config.flop_backoff.is_some()
             && (config.integrate_terminal || config.all_in_samples.is_some()))
     {
-        return Err("flop pilot requires weight 0..0.5, 2..1000000 hands, 1..4 workers and retained opponents".into());
+        return Err("flop pilot requires weight 0..1 for terminal-only corrections (0..0.5 otherwise), 2..1000000 hands, 1..4 workers and retained opponents".into());
     }
     if let Some(options) = &config.flop_backoff {
         options.validate()?;
@@ -845,6 +845,32 @@ mod tests {
                 assert_eq!(pair[0], pair[1], "zero saved-action weight must preserve the control policy");
             }
         }
+        // Terminal-only interpolation changes no upstream decisions or range
+        // likelihoods. Its exact conditional payoff is affine in blend weight.
+        let mut terminal_curve = pooling.clone();
+        terminal_curve.flop_backoff = None;
+        terminal_curve.all_in_samples = Some(128);
+        terminal_curve.integrate_terminal = true;
+        terminal_curve.weight = 0.5;
+        let half = evaluate_flop_patch(terminal_curve.clone()).unwrap();
+        terminal_curve.weight = 1.0;
+        let full = evaluate_flop_patch(terminal_curve.clone()).unwrap();
+        let mut changed = 0;
+        for (a, b) in half["results"].as_array().unwrap().iter().zip(full["results"].as_array().unwrap()) {
+            let samples = "paired_samples_control_candidate_and_attack_flags";
+            for (a, b) in a[samples].as_array().unwrap().iter().zip(b[samples].as_array().unwrap()) {
+                assert_eq!(a[0], b[0]);
+                let half_gain = a[1].as_f64().unwrap() - a[0].as_f64().unwrap();
+                let full_gain = b[1].as_f64().unwrap() - b[0].as_f64().unwrap();
+                // Control is weight .25: .25 -> 1 is three times .25 -> .5.
+                assert!((full_gain - 3.0 * half_gain).abs() < 1e-10);
+                changed += usize::from(half_gain.abs() > 1e-10);
+            }
+        }
+        assert!(changed > 0, "linearity check must exercise changed terminal decisions");
+        terminal_curve.all_in_samples = None;
+        terminal_curve.integrate_terminal = false;
+        assert!(evaluate_flop_patch(terminal_curve).is_err(), "saved nonterminal corrections remain capped at .5");
         pooling.integrate_terminal = true;
         assert!(evaluate_flop_patch(pooling).is_err());
         config.all_in_samples = None;

@@ -17,10 +17,10 @@ impl TerminalFlopOptions {
     pub(super) fn validate(&self) -> Result<(), String> {
         if !(128..=16384).contains(&self.equity_samples)
             || !self.weight.is_finite()
-            || !(0.0..=0.5).contains(&self.weight)
+            || !(0.0..=1.0).contains(&self.weight)
         {
             return Err(
-                "terminal flop correction requires 128..16384 equity samples and weight 0..0.5"
+                "terminal flop correction requires 128..16384 equity samples and weight 0..1"
                     .to_owned(),
             );
         }
@@ -167,6 +167,16 @@ fn opponent_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_blend_allows_the_full_best_response_but_no_invalid_probability() {
+        for weight in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert!(TerminalFlopOptions { equity_samples: 2048, weight }.validate().is_ok());
+        }
+        for weight in [-0.01, 1.0001, f64::NAN, f64::INFINITY] {
+            assert!(TerminalFlopOptions { equity_samples: 2048, weight }.validate().is_err());
+        }
+    }
 
     #[test]
     fn terminal_response_uses_ranges_and_visible_cards_not_realized_runout() {

@@ -1,12 +1,24 @@
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
 
-from flop_patch_pilot import matching_reports
+from flop_patch_pilot import matching_reports, valid_patch_weight
 
 
 class FrozenPanelTests(unittest.TestCase):
+    def test_full_weight_is_allowed_only_for_terminal_correction(self):
+        for weight in [0, .25, .5]:
+            self.assertTrue(valid_patch_weight(weight, False))
+            self.assertTrue(valid_patch_weight(weight, True))
+        for weight in [.75, 1]:
+            self.assertFalse(valid_patch_weight(weight, False))
+            self.assertTrue(valid_patch_weight(weight, True))
+        for weight in [-.01, 1.0001, math.nan, math.inf]:
+            self.assertFalse(valid_patch_weight(weight, True))
+            self.assertFalse(valid_patch_weight(weight, False))
+
     def test_reports_cannot_cross_checkpoint_seeds(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = [Path(directory) / f'{i}.json' for i in range(3)]
