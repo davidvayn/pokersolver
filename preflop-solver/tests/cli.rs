@@ -246,6 +246,23 @@ fn solve_command_writes_versioned_artifact() {
 }
 
 #[test]
+fn response_recheck_rejects_profile_overrides_and_missing_values_before_io() {
+    for args in [
+        vec!["full-game-response-check", "--response-workers"],
+        vec!["full-game-response-check", "--training-deals", "100"],
+        vec!["full-game-response-check", "--seed", "1", "--seed", "2"],
+        vec!["full-game-response-check", "--terminal-flop-samples", "2048"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(args).output().unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!error.contains("No such file"), "{error}");
+        assert!(error.contains("requires a value") || error.contains("rejects"), "{error}");
+    }
+}
+
+#[test]
 fn blueprint_command_writes_explicit_approximate_artifact() {
     let output_path = std::env::temp_dir().join(format!(
         "preflop-blueprint-cli-{}-{}.json",

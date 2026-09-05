@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
         "preflop-export-neural-policy" => run_preflop_export_neural_policy(&args[1..]),
         "full-game-lbr" => run_full_game_lbr(&args[1..]),
+        "full-game-response-check" => run_full_game_response_check(&args[1..]),
         "tabular-flop-pilot" => run_tabular_flop_pilot(&args[1..]),
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
@@ -2072,6 +2073,46 @@ fn run_tabular_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_full_game_response_check(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let allowed = ["--tabular-checkpoint", "--retained-response", "--calibration-deals",
+        "--evaluation-deals", "--seed", "--response-workers", "--output"];
+    let mut seen = std::collections::BTreeSet::new();
+    if args.len() % 2 != 0 {
+        return Err("every response-check option requires a value".into());
+    }
+    for pair in args.chunks_exact(2) {
+        if !allowed.contains(&pair[0].as_str()) || !seen.insert(&pair[0])
+            || pair[1].starts_with("--")
+        {
+            return Err("response-check rejects unknown/duplicate options and profile or training overrides".into());
+        }
+    }
+    let output = PathBuf::from(value(args, "--output").ok_or("--output is required")?);
+    if output.exists() {
+        return Err("refusing to overwrite a response check".into());
+    }
+    let report = blueprint::response::recheck_full_game_response(
+        blueprint::response::ResponseRecheckConfig {
+            checkpoint: value(args, "--tabular-checkpoint").ok_or("--tabular-checkpoint is required")?.into(),
+            retained_response: value(args, "--retained-response").ok_or("--retained-response is required")?.into(),
+            seed: value(args, "--seed").ok_or("--seed is required")?.parse()?,
+            calibration_deals: parse_or(args, "--calibration-deals", 8000u64)?,
+            evaluation_deals: parse_or(args, "--evaluation-deals", 8000u64)?,
+            workers: parse_or(args, "--response-workers", 1usize)?,
+        },
+    )?;
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&output, serde_json::to_vec_pretty(&report)?)?;
+    println!("{}", serde_json::json!({
+        "retainedTraining": report.retained_training,
+        "responseDeployed": report.response_deployed,
+        "totalResponseGainBbPerHand": report.total_response_gain_bb_per_hand,
+    }));
+    Ok(())
+}
+
 fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
     for flag in [
         "--tabular-turn-iterations",
@@ -3746,6 +3787,14 @@ Full-game learned-response options:
   --output <path>                 Optional full resolver/evaluation JSON
                                   Reports total seat-summed response gain separately
                                   from legacy seat-average fields; no upper certificate
+
+Frozen response recheck:
+  full-game-response-check --tabular-checkpoint <path> --retained-response <json>
+    --seed <fresh integer> --output <new path> [--calibration-deals 8000]
+    [--evaluation-deals 8000] [--response-workers 1]
+  Reuses exact original response rows; inherits the entire pinned profile.
+  No training/profile overrides, old seed reuse, or output overwriting.
+  Fresh diagnostic calibration/holdout, not an upper-bound certificate.
 
 Tabular flop pilot options:
   --all-in-samples <N>            Use terminal range correction instead of saved actions

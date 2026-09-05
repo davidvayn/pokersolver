@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 
 from cloud_blueprint_run import atomic_json, file_sha256
@@ -28,12 +29,26 @@ def response_comparison_eligible(report):
             and len(report.get('players', [])) == 2)
 
 
+def load_recheck_reports(paths):
+    pinned = {}
+    for path in paths:
+        path = Path(path).resolve()
+        report = json.loads(path.read_text())
+        digest = report['policy_sha256']
+        if (digest in pinned or report.get('retained_training') is not None
+                or report.get('schema') != 'hu-tabular-checkpoint-information-set-response-v1'):
+            raise ValueError('recheck needs exactly one original training report per checkpoint')
+        pinned[digest] = (path, file_sha256(path), report['seed'])
+    return pinned
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--checkpoint-stage', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--arms', default='baseline,joint:8,safe:8')
+    parser.add_argument('--recheck-responses', help='comma-separated original response reports; requires --arms recheck')
     parser.add_argument('--seeds', default='26001,26002')
     parser.add_argument('--seed-offset', type=int, default=700000)
     parser.add_argument('--training-deals', type=int, default=256)
@@ -63,10 +78,23 @@ def main():
     if any(not math.isfinite(value) or value <= 0 for value in (args.max_worker_minutes,args.max_worker_memory_gib)):
         parser.error('positive worker stops required')
     arms = args.arms.split(',')
+    rechecks = {}
+    if args.recheck_responses:
+        overrides = ['--training-deals', '--rollouts-per-action', '--minimum-range-particles',
+                     '--terminal-flop-samples', '--terminal-flop-weight', '--flop-backoff-minimum-visits',
+                     '--flop-backoff-weight', '--response-terminal-expectations', '--postflop-response-only']
+        if arms != ['recheck'] or any(arg.split('=', 1)[0] in overrides for arg in sys.argv[1:]):
+            parser.error('recheck requires --arms recheck and inherits all training/profile settings')
+        try:
+            rechecks = load_recheck_reports(args.recheck_responses.split(','))
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            parser.error(str(error))
+    elif 'recheck' in arms:
+        parser.error('--arms recheck requires --recheck-responses')
     if len(set(arms)) != len(arms):
         parser.error('duplicate arms would overwrite a result')
     for arm in arms:
-        if arm != 'baseline':
+        if arm not in ('baseline', 'recheck'):
             name, separator, count = arm.partition(':')
             if not separator or name not in ('joint', 'safe') or not count.isdigit() or int(count) < 2:
                 parser.error('arms must be baseline, joint:N or safe:N, N >= 2')
@@ -78,6 +106,11 @@ def main():
         parser.error('checkpoint stage must be complete')
     if any(str(seed) not in parent['seeds'] for seed in seeds):
         parser.error('requested seed is absent from checkpoint stage')
+    if rechecks:
+        for seed in seeds:
+            pinned = rechecks.get(parent['seeds'][str(seed)]['checkpointSha256'])
+            if pinned is None or seed + args.seed_offset == pinned[2]:
+                parser.error('recheck needs a matching report and fresh seed for every checkpoint')
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = args.output_dir / 'cohort.json'
     if manifest.exists():
@@ -130,7 +163,7 @@ def main():
                 command += ['--response-terminal-expectations']
             if args.postflop_response_only:
                 command += ['--postflop-response-only']
-            if arm != 'baseline':
+            if arm not in ('baseline', 'recheck'):
                 name,count=arm.split(':'); command += ['--tabular-turn-iterations',count]
                 if name == 'joint': command += ['--tabular-turn-unconstrained']
                 if args.terminal_flop_samples is not None:
@@ -140,6 +173,13 @@ def main():
                     command += ['--flop-backoff-minimum-visits', str(args.flop_backoff_minimum_visits),
                                 '--flop-backoff-weight', str(args.flop_backoff_weight)]
             record = {'seed':seed,'arm':arm,'command':command,'checkpointSha256':source['checkpointSha256'],'status':'running'}
+            if arm == 'recheck':
+                retained, retained_digest, _ = rechecks[source['checkpointSha256']]
+                command = [str(binary), 'full-game-response-check', '--tabular-checkpoint', str(checkpoint),
+                           '--retained-response', str(retained), '--calibration-deals', str(args.calibration_deals),
+                           '--evaluation-deals', str(args.evaluation_deals), '--seed', str(seed + args.seed_offset),
+                           '--response-workers', str(args.response_workers), '--output', str(output)]
+                record.update(command=command, retainedResponseSha256=retained_digest)
             state['runs'].append(record); atomic_json(manifest,state)
             print(f'Starting {arm} seed {seed}',flush=True)
             with output.with_suffix('.log').open('wb') as log:
@@ -162,6 +202,8 @@ def main():
                 report=json.loads(output.read_text())
                 if report['policy_sha256'] != source['checkpointSha256']:
                     raise ValueError('candidate used a different source policy')
+                if arm == 'recheck' and report.get('retained_training', {}).get('report_sha256') != record['retainedResponseSha256']:
+                    raise ValueError('recheck used different response rows')
                 if not math.isfinite(report['total_response_gain_bb_per_hand']):
                     raise ValueError('nonfinite response result')
                 eligible = response_comparison_eligible(report)

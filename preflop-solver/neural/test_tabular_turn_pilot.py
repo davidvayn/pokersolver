@@ -1,7 +1,10 @@
 import math
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
-from tabular_turn_pilot import response_comparison_eligible
+from tabular_turn_pilot import load_recheck_reports, response_comparison_eligible
 
 
 class ResponseComparisonTests(unittest.TestCase):
@@ -44,6 +47,23 @@ class ResponseComparisonTests(unittest.TestCase):
         report = self.report()
         report['players'][0]['estimated_gain_bb'] = -.01
         self.assertTrue(response_comparison_eligible(report))
+
+    def test_recheck_pins_original_reports_and_rejects_ambiguous_or_chained_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'response.json'
+            report = {'schema': 'hu-tabular-checkpoint-information-set-response-v1',
+                      'policy_sha256': 'a' * 64, 'seed': 123}
+            path.write_text(json.dumps(report))
+            pinned = load_recheck_reports([path])['a' * 64]
+            self.assertEqual(pinned[0], path.resolve())
+            self.assertEqual(len(pinned[1]), 64)
+            self.assertEqual(pinned[2], 123)
+            with self.assertRaises(ValueError):
+                load_recheck_reports([path, path])
+            report['retained_training'] = {'seed': 122}
+            path.write_text(json.dumps(report))
+            with self.assertRaises(ValueError):
+                load_recheck_reports([path])
 
 
 if __name__ == '__main__':

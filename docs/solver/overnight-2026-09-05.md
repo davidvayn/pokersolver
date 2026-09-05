@@ -263,7 +263,7 @@ The regression confirms unchanged authentic trajectories and identical
 postflop labels versus the full training pass. All 223 Rust library tests,
 6 CLI tests, and 32 Python runner/resource tests pass; release build passes.
 
-## Completed focused postflop pair and active density pilot
+## Completed focused postflop and density pairs
 
 `preflop-solver/neural/runs/local-postflop-response-20260905-pair1/cohort.json`
 is **complete**. It retains joint-four turn/river, 25% terminal correction, and
@@ -321,11 +321,31 @@ implementation of their clustering algorithm. Use the same 4,000 held-out /
 64 root-deviation-per-class / 1,000 action-value budgets as the control,
 sequential workers, 6GiB / 20-minute stops and 20GiB disk reserve. A longer
 stage requires an actual promising policy/resource screen; no such stage is
-authorized by a node-count decrease alone. The density pilot is **active** at
+authorized by a node-count decrease alone. The density pilot is **complete** at
 `preflop-solver/neural/runs/local-potential1-20260905-pair400/run-manifest.json`.
 It uses the focused response pair's frozen executable (`96bf53f...`), not
 the subsequently rebuilt mutable target. Its fingerprint matches the prior
 dry run: `1084a493c2423dc83fc05d161d2743b83054dbf3b548442a50d572570ca17e04`.
+
+| Seed | Information sets | Root deviation gain (SE), bb | Held-out unknown | Held-out untrained |
+| --- | ---: | ---: | ---: | ---: |
+| 27001 | 8,100,626 | 0.8517721 (0.0539517) | 12.0083% | 1.1575% |
+| 27002 | 8,757,278 | 0.8216679 (0.0556972) | 11.6714% | 1.7701% |
+
+Compared with the same-seed 400-round control, node counts fall 10.633% /
+11.072%, but mean root-deviation gain worsens from 0.7836192 to 0.8367200bb.
+Cross-seed per-action MAE improves from 9.7002% to 8.0784%, while aggregate
+action delta worsens from 6.8545% to 7.0348% and primary agreement falls
+from 50.8876% to 49.1124% (unweighted). These remain failed stability gates.
+Minimum source action-EV precision coverage improves only from 18.3825%
+to 19.5257%, far below 95%; this is not a routed-profile precision result.
+The noisy two-seed screen does not establish a policy improvement, so
+**potential-bins=1 is not selected and gets no longer run**.
+
+Runtimes 256.389 / 238.232 seconds; sampled peak footprints 2,650,802,408 /
+2,858,502,544 bytes. No resource stop fired. Checkpoint hashes:
+A `d9a922c2ad53befe2d6d21e2d44c02bd55312f31857322e220c087e443fb4d48`;
+B `adff4649e77077c7c30fbc08af3fa6e0c050856544f2375b96abbadf233032b4`.
 
 ## Saved flop correction composition regression
 
@@ -346,3 +366,126 @@ The zero-weight end-to-end regression and direct terminal/nonzero-weight
 tests cover this seam. All 224 Rust release library tests, 6 CLI tests, and
 32 Python runner/resource tests pass. The release build and whitespace check
 pass. No saved-action policy has been selected or activated.
+
+The fix and completed postflop response milestone were pushed as `a865cef`;
+CI passed (33962503664).
+`preflop-solver/neural/runs/local-saved-flop-20260905-pair1/cohort.json`
+was **resource-stopped**: calibrated-seat saved flop decisions, 25% blend, inherited
+terminal correction, original 800-round sources, 1,024 fresh hands per seat
+per opponent, offset 2600000, four shared-table workers, sequential seeds,
+30-minute / 7.5GiB stops. Opponents are the retained `local-turn-20260904-pair2`
+baseline and today's focused postflop responses. Binary:
+`e58db45601509c3ed6d82d7e33d03f770f61f283cef1e1b270109810a05fb4e8`.
+Only BTN/SB proposal seats calibrated, so this pilot does not directly change
+BB's action rule or claim to repair the BB leak detected by BTN/SB attacks.
+It tests whether those supported BTN/SB actions improve the joint profile's
+other seat against existing BB challenges. Raw paired rollouts are used,
+not the terminal-only conditional estimator.
+
+Seed A's four-worker run hit the unchanged 7.5GiB sampled memory stop after
+144.530 seconds, at 8,060,131,376 bytes (limit 8,053,063,680). Exit -15;
+seed B did not start and no policy-quality outcome was selected from this
+failed run. A retry is **complete** at
+`preflop-solver/neural/runs/local-saved-flop-20260905-pair1-two-workers`.
+It uses the failed cohort's identical frozen executable, candidate, opponents,
+and chance seeds, but **two** workers. This is a resource-only retry, not a
+fresh statistical confirmation. Keep the memory guard unchanged and use
+two workers for this full-size multi-policy panel unless measured headroom
+supports more.
+
+Two-worker runtimes were 225.597 / 270.861 seconds; sampled peak footprints
+6,675,862,736 / 6,666,835,272 bytes. Both completed without stops. Saved
+proposal rows were 16 / 17 for BTN/SB and zero for BB. Payoff improvements
+(bb/hand), in panel order: old opponent versus BB, old opponent versus BTN/SB,
+focused opponent versus BB, focused raw BB opponent versus BTN/SB:
+
+| Seed | Old / BB | Old / BTN-SB | Focused / BB | Focused / BTN-SB |
+| --- | ---: | ---: | ---: | ---: |
+| 26001 | 0.00976563 | 0.00537109 | 0 | 0.09326172 |
+| 26002 | 0.01220703 | -0.01513672 | 0 | -0.01367188 |
+
+Every nonzero comparison's 99% interval includes zero. No payoff changed
+against either seed's accepted focused BTN/SB attack. Changes against old
+BTN/SB opponents can arise from the changed action-conditioned range rule;
+the direct saved decisions are only for BTN/SB. **No saved-action correction
+is selected and this pair gets no larger confirmation run.** Verified outputs:
+A `0c0aa1922f55317e08af2220450c9f07022cbf8fda667b4b1bef58e7bec8daac`;
+B `cab2d50984854fc27d921904c7d42076a98b3bd328ee5ef66ebdcc129eead12f`.
+
+The next separate density hypothesis is the existing compact serving grid,
+removing only 4bb/5bb opens while restoring three potential bins. This follows
+the original project plan and requires no new solver mechanism. Use the same
+400-round paired control budgets before considering any longer training.
+[Sandholm's abstraction survey](https://cdn.aaai.org/ojs/9757/9757-13-13285-1-2-20201228.pdf)
+explains why smaller abstractions can aid computation but neither finer nor
+coarser abstractions guarantee better original-game play. A compact-grid
+deviation metric excludes the removed opens and cannot by itself demonstrate
+lower exploitability in the wider game. No off-grid action mapping or silent
+fallback is added. This pilot is **complete** at
+`preflop-solver/neural/runs/local-compact-20260905-pair400/run-manifest.json`,
+using frozen binary `96bf53f...`, 6GiB/20-minute stops, and sequential seeds.
+
+Compact-grid results:
+
+| Seed | Information sets | Root deviation gain (SE), bb | Held-out unknown | Held-out untrained |
+| --- | ---: | ---: | ---: | ---: |
+| 27001 | 8,360,930 | 0.6418617 (0.0486548) | 13.5986% | 1.6727% |
+| 27002 | 8,745,571 | 0.7802392 (0.0520759) | 12.2339% | 1.7532% |
+
+Mean restricted-grid root gain is 0.7110505bb, but it excludes the removed
+deviations. Cross-seed aggregate action delta is 8.8618%, per-action MAE
+12.0859%, and primary agreement 54.4379% (59.1252% combo weighted): all
+stability gates still fail. Per-action MAE also averages over fewer actions
+than the wide grid, so its absolute change is not an apples-to-apples policy
+comparison. Minimum action-EV precision coverage is 21.7575%. The coverage and
+stability screen does not justify a larger compact-grid run; **not selected**.
+Runtimes 232.163 / 258.446 seconds; sampled peak footprints 2,742,946,096 /
+2,865,875,344 bytes; no stops. Checkpoint hashes:
+A `76e5bf653174267a61f7f5e59b7683c2c0c6e694adbff6f6f2f930a5e6b2dda7`;
+B `02564eb27d39f1e7b7a7afb96aa5c12783fb518b50d568db32eed032140dd5fa`.
+Fingerprint: `3b9fd05a2de785fdcb14b2cfd8dd67a42d2a6e170c1b31d05e42864934616a50`.
+
+## Frozen-response recheck without retraining
+
+The focused pair's BB calibration lower bounds were -0.00238 / -0.00489bb
+despite positive point estimates. Repeating its expensive training pass would
+produce the same frozen response; a bounded new assessment can instead test
+whether those unchanged choices generalize. A new native command,
+`full-game-response-check`, reuses the original report's exact learned rows
+and inherits every profile/training setting. It verifies the checkpoint,
+depth, iteration count, response method, actor identities, finite row values,
+and source profile. It rejects old seed reuse, chained recheck inputs,
+training/profile overrides, and overwriting an output. New calibration and
+holdout phase domains remain disjoint. Old payoffs are not pooled in, no
+training coverage is fabricated, and report provenance records both the
+original report hash/training seed and the new assessment seed. Flop panels
+also reject reuse of either seed.
+
+The existing guarded runner accepts `--arms recheck --recheck-responses <csv>`;
+input hashes are checked again against returned provenance. This is a compute
+reuse feature, **not a stronger response algorithm or policy improvement**.
+Because the experiment is chosen after inspecting prior results, it is an
+adaptive diagnostic, not a multiple-testing-adjusted release certificate.
+Keep all earlier failed calibration results. Do not keep rechecking until a
+favorable sample happens to pass.
+
+Verification: all 225 Rust release library tests, 7 CLI tests, and 33 Python
+runner/resource tests pass. Tests cover exact learned-row preservation,
+profile inheritance, worker determinism, seed and method rejection, checkpoint
+mismatch, and ambiguous/chained runner inputs. Planned one-time follow-up:
+the original focused responses, **8,000 fresh calibration / 8,000 fresh holdout
+hands per seat**, offset 2800000, four shared-table workers, 30-minute/7.5GiB
+stops, sequential seeds. It is **active** at
+`preflop-solver/neural/runs/local-postflop-recheck-20260905-pair1/cohort.json`.
+No second recheck is scheduled. Release build and whitespace checks also pass.
+
+The next direct policy pilot is the already-supported **50% terminal-flop
+range correction versus the retained 25% correction**, leaving every other
+setting and the original full open grid unchanged. This directly changes BB
+call/fold decisions targeted by the newly accepted BTN/SB attack, unlike the
+unselected saved-action patch. Compare against both old and focused retained
+opponents with 1,024 fresh hands per seat/opponent, offset 3000000, two
+workers, exact terminal-action/runout payoff integration, and unchanged
+30-minute/7.5GiB stops. A larger confirmation requires consistent promising
+results. The range calculation is still against a frozen profile, not a
+minimax safety guarantee. This pilot has **not started**.

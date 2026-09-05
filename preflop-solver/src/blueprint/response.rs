@@ -33,6 +33,8 @@ pub use backoff::FlopBackoffOptions;
 mod flop_allin;
 pub use flop_allin::TerminalFlopOptions;
 mod parallel;
+mod recheck;
+pub use recheck::{recheck_full_game_response, ResponseRecheckConfig};
 pub use flop::{evaluate_flop_patch, FlopPatchEvaluationConfig};
 mod table;
 mod terminal;
@@ -398,6 +400,8 @@ pub struct FullGameResponseEvaluation {
     pub exact_terminal_training_values: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub postflop_only_response: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_training: Option<RetainedResponseTraining>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resolution_diagnostics: BTreeMap<String, serde_json::Value>,
     /// Sum across seats, not the legacy seat-average/NashConv-over-two scale.
@@ -425,6 +429,18 @@ pub struct FullGameResponseEvaluation {
     pub interpretation: String,
     pub preflop_responses: [Vec<ResolverDecision>; 2],
     pub resolvers: [RangeConditionedResolver; 2],
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetainedResponseTraining {
+    pub report_sha256: String,
+    pub seed: u64,
+}
+
+impl FullGameResponseEvaluation {
+    fn uses_seed(&self, seed: u64) -> bool {
+        self.seed == seed || self.retained_training.as_ref().is_some_and(|p| p.seed == seed)
+    }
 }
 
 #[derive(Clone)]
@@ -646,7 +662,20 @@ impl ResolverLookup {
 }
 
 pub fn evaluate_full_game_response(
+    config: ResponseEvaluationConfig,
+) -> Result<FullGameResponseEvaluation, Box<dyn Error>> {
+    evaluate_full_game_response_inner(config, None)
+}
+
+fn response_method(config: &ResponseEvaluationConfig) -> String {
+    "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws_and_paired_baseline_advantages"
+        .to_owned() + if config.exact_terminal_training_values { "_with_exact_postflop_terminal_training_values" } else { "" }
+        + if config.postflop_only_response { "_postflop_response_only" } else { "" }
+}
+
+fn evaluate_full_game_response_inner(
     mut config: ResponseEvaluationConfig,
+    retained: Option<(FullGameResponseEvaluation, String)>,
 ) -> Result<FullGameResponseEvaluation, Box<dyn Error>> {
     if let Some(options) = &config.flop_backoff {
         options.validate()?;
@@ -748,6 +777,15 @@ pub fn evaluate_full_game_response(
     } else {
         policy_source_kind
     };
+    if let Some((report, _)) = &retained {
+        flop::validate_report(report, &policy_sha256, config.game.effective_stack_bb)?;
+        if report.checkpoint_training_iterations != checkpoint_training_iterations
+            || report.policy_source_kind != policy_source_kind
+            || report.method != response_method(&config)
+        {
+            return Err("retained response must match the frozen profile, iterations, and response method".into());
+        }
+    }
     let policy = policy.as_ref();
     let network_sha256 = if checkpoint_training_iterations.is_none() {
         policy_sha256.clone()
@@ -756,16 +794,22 @@ pub fn evaluate_full_game_response(
     };
     let mut source_policy_coverage = BTreeMap::new();
     let mut resolution_diagnostics = BTreeMap::new();
-    let [first, second] = [
-        train_learned_response(policy, &config, 0),
-        train_learned_response(policy, &config, 1),
-    ];
-    source_policy_coverage.insert("response_training".to_owned(), policy.take_coverage());
-    if let Some(value) = policy.take_resolution_diagnostics() {
-        resolution_diagnostics.insert("response_training".to_owned(), value);
-    }
-    let preflop_responses = [first.0, second.0];
-    let resolvers = [first.1, second.1];
+    let (preflop_responses, resolvers, retained_training) = if let Some((report, digest)) = retained {
+        // Freeze the exact trained rows, including rejected seats. Only fresh
+        // calibration may admit them. No old calibration payoff is pooled in.
+        let provenance = RetainedResponseTraining { report_sha256: digest, seed: report.seed };
+        (report.preflop_responses, report.resolvers, Some(provenance))
+    } else {
+        let [first, second] = [
+            train_learned_response(policy, &config, 0),
+            train_learned_response(policy, &config, 1),
+        ];
+        source_policy_coverage.insert("response_training".to_owned(), policy.take_coverage());
+        if let Some(value) = policy.take_resolution_diagnostics() {
+            resolution_diagnostics.insert("response_training".to_owned(), value);
+        }
+        ([first.0, second.0], [first.1, second.1], None)
+    };
     let calibration_players = [
         evaluate_resolver(
             policy,
@@ -837,9 +881,7 @@ pub fn evaluate_full_game_response(
         / 2.0;
     Ok(FullGameResponseEvaluation {
         schema: if checkpoint_training_iterations.is_some() { "hu-tabular-checkpoint-information-set-response-v1" } else { RESPONSE_SCHEMA }.to_owned(),
-        method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws_and_paired_baseline_advantages"
-            .to_owned() + if config.exact_terminal_training_values { "_with_exact_postflop_terminal_training_values" } else { "" }
-            + if config.postflop_only_response { "_postflop_response_only" } else { "" },
+        method: response_method(&config),
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
         policy_sha256,
@@ -851,6 +893,7 @@ pub fn evaluate_full_game_response(
         flop_backoff: config.flop_backoff,
         exact_terminal_training_values: config.exact_terminal_training_values,
         postflop_only_response: config.postflop_only_response,
+        retained_training,
         resolution_diagnostics,
         total_response_gain_bb_per_hand: players.iter().map(|player| player.estimated_gain_bb).sum(),
         total_response_gain_lower_confidence_bound_99_percent_bb_per_hand: 2.0 * confidence_lower_bound,

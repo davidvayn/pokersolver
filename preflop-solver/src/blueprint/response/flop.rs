@@ -203,7 +203,7 @@ pub struct FlopPatchEvaluationConfig {
     pub flop_backoff: Option<FlopBackoffOptions>,
 }
 
-fn validate_report(
+pub(super) fn validate_report(
     report: &FullGameResponseEvaluation,
     digest: &str,
     depth: f64,
@@ -232,6 +232,10 @@ fn validate_report(
         {
             return Err("retained response seat mismatch".to_owned());
         }
+        DecisionBank::from_decisions(
+            report.preflop_responses[seat].iter().chain(&report.resolvers[seat].decisions),
+            report.maximum_granularity,
+        )?;
     }
     Ok(())
 }
@@ -340,12 +344,12 @@ pub fn evaluate_flop_patch(
     let mut opponents = Vec::new();
     for path in &config.opponent_responses {
         let report: FullGameResponseEvaluation = serde_json::from_slice(&fs::read(path)?)?;
-        if report.seed == config.seed {
+        if report.uses_seed(config.seed) {
             return Err("fresh evaluation seed must differ from opponent training seed".into());
         }
         opponents.push((sha256_file(path)?, report));
     }
-    if proposal.seed == config.seed {
+    if proposal.uses_seed(config.seed) {
         return Err("fresh evaluation seed must differ from proposal training seed".into());
     }
     let table = Arc::new(InferenceTable::read(&config.checkpoint)?);
