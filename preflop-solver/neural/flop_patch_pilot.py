@@ -33,6 +33,8 @@ def main():
     parser.add_argument('--response-workers', type=int, choices=range(1, 5), default=2)
     parser.add_argument('--all-in-samples', type=int)
     parser.add_argument('--integrate-terminal', action='store_true')
+    parser.add_argument('--flop-backoff-minimum-visits', type=int)
+    parser.add_argument('--flop-backoff-weight', type=float, default=1.0)
     parser.add_argument('--max-worker-minutes', type=float, default=30)
     parser.add_argument('--max-worker-memory-gib', type=float, default=7.5)
     args = parser.parse_args()
@@ -44,6 +46,11 @@ def main():
         parser.error('all-in samples must be 128..16384')
     if args.integrate_terminal and args.all_in_samples is None:
         parser.error('terminal integration requires the terminal-only all-in correction')
+    if args.flop_backoff_minimum_visits is not None:
+        if args.flop_backoff_minimum_visits < 1 or not math.isfinite(args.flop_backoff_weight) or not 0 <= args.flop_backoff_weight <= 1:
+            parser.error('flop pooling requires positive support and weight 0..1')
+        if args.all_in_samples is not None or args.integrate_terminal:
+            parser.error('flop pooling is a separate candidate from terminal-only correction')
     if any(not math.isfinite(v) or v <= 0 for v in
            (args.max_worker_minutes, args.max_worker_memory_gib)):
         parser.error('positive finite resource stops required')
@@ -100,6 +107,9 @@ def main():
             command += ['--all-in-samples', str(args.all_in_samples)]
         if args.integrate_terminal:
             command += ['--integrate-terminal']
+        if args.flop_backoff_minimum_visits is not None:
+            command += ['--flop-backoff-minimum-visits', str(args.flop_backoff_minimum_visits),
+                        '--flop-backoff-weight', str(args.flop_backoff_weight)]
         record = {'seed': seed, 'status': 'running', 'command': command, 'checkpointSha256': digest,
                   'inputReportSha256': {str(p): file_sha256(p) for p in [proposal, *panel]}}
         state['runs'].append(record); atomic_json(manifest, state)

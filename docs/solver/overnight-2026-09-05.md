@@ -98,11 +98,85 @@ and 32 Python runner/resource tests. The preserved milestone's remote CI also
 passed (GitHub Actions run 33955548073).
 
 `preflop-solver/neural/runs/local-advantage-20260905-pair1/cohort.json` is
-**active**, using the retained 800-round seeds 26001/26002, joint turn/river
+**complete**, using the retained 800-round seeds 26001/26002, joint turn/river
 four iterations, and the 25% terminal-flop correction with 2,048 equity samples.
 Response budgets per seat: 512 training / 2,000 calibration / 2,000 independent
 holdout hands, four action rollouts, minimum four particles, offset 2000000.
 Two shared-table workers; sequential seeds; 45-minute / 7.5GiB sampled-footprint
 stop per seed and 20GiB disk reserve. The runner froze the executable and pins
-source/output hashes. Do not launch a second full-size 800-round table
-alongside it. Next policy changes must target the leaks actually found.
+source/output hashes. Neither seed hit a resource stop. All four responses
+were rejected by calibration; reported deployed zeros remain inconclusive.
+
+| Seed | Responder | Calibration gain, bb | SE | One-sided 99.5% lower bound |
+| --- | --- | ---: | ---: | ---: |
+| 26001 | BTN/SB | 0.0764165 | 0.0743797 | -0.1151730 |
+| 26001 | BB | -0.0091250 | 0.0553080 | -0.1515889 |
+| 26002 | BTN/SB | 0.1360420 | 0.0758490 | -0.0593322 |
+| 26002 | BB | -0.0248330 | 0.0523568 | -0.1596953 |
+
+On seed A's saved flop rows, seven actions pass the new local advantage test
+versus four under the old runner-up test. This did not establish a profitable
+full-hand response. Do not trigger a longer identical run from these results.
+Held-out source flop unknown/untrained fractions are 30.933% / 8.976% for A
+and 26.576% / 9.014% for B. Preflop source lookup is complete; zero source
+lookups on routed turn/river are not an independent coverage certificate.
+
+Runtime: 773.911 / 1,222.049 seconds. Sampled physical footprint:
+6,693,573,744 / 6,632,494,144 bytes. Concurrent builds/tests affect runtime.
+Frozen executable SHA-256:
+`606e6bb50d5f77a8286a2bf47c560127cccb08c6ca4e3d4474c24c9f6148a9f3`.
+Output A: `f0749d040873ac658450b9403e87c66bf1afa2b9bb243910dbdf3307db7dad37`;
+B: `8ad9c8ccf3dce635d122a6bdb17db2018452db39af13c954f2a872c6006feed5`.
+Output hashes were independently rechecked. Commit `e123bad` is pushed and
+its remote CI passed (run 33957223213).
+
+## Pilot 3: frozen average-mass completion for missing flop rows
+
+Implemented opt-in `--flop-backoff-minimum-visits N` and
+`--flop-backoff-weight W`. Pool trained flop average-policy accumulators by
+current hand bucket, board bucket, actor, and exact public betting history;
+forget only the private preflop bucket for this experimental completion.
+Keep the original DCFR average mass weights, not equal weights per row.
+Exact trained entries retain precedence. Insufficient support retains the
+explicit baseline completion. Borrowed matches are counted separately and
+never relabeled as newly trained exact coverage. The support count is averaging
+contributions, not independent effective samples or an EV-confidence bound.
+
+This is a generalization hypothesis, not a new perfect-recall solve or a
+safe-resolving theorem. [Waugh et al.'s primary imperfect-recall study](https://www.cs.cmu.edu/~waugh/publications/sara09.pdf)
+motivates empirical testing of reduced private-history dependence, while
+explicitly warning that the standard theoretical guarantees do not transfer.
+We do not change the original training abstraction or its checkpoint.
+
+`preflop-solver/neural/runs/local-pooling-20260905-pair1/cohort.json` is
+**active**. Minimum eight averaging contributions, full pooled weight only
+at missing/untrained supported flop rows; joint-four turn/river and the
+25% terminal-flop correction are preserved. Two retained opponents per seed:
+the earlier baseline attack and Pilot 2's raw diagnostic attack. Each opponent
+keeps its original continuation and calibration status. Use 1,024 fresh hands
+per seat/opponent, seed offset 2200000, sequential seeds, two shared-table
+workers, 45-minute / 7.5GiB footprint stop and 20GiB disk reserve. This uses
+paired realized rollouts, not the terminal-only exact estimator, because the
+candidate can change nonterminal flop decisions. No second full-size table
+may run alongside it.
+
+## Next attack pilot: remove redundant terminal-runout noise
+
+Inspection showed that four action rollouts after a terminal flop call repeat
+the same dealt runout. They do not add four independent boards. New optional
+`--response-terminal-expectations` computes offline terminal action labels over
+all 990 legal flop runouts or 44 turn rivers. Nonterminal actions and preflop
+all-ins retain the existing rollout path. This averages chance, not hidden
+opponent information: the learner still aggregates hidden hands at observable
+response keys; the defender never sees the offline evaluator's cards.
+Calibration and independent evaluation are unchanged. The report explicitly
+records the changed training-label method. This is conditional-expectation
+variance reduction, not a full AIVAT implementation or equilibrium proof.
+
+A test demonstrates that the old four-rollout call label is -20bb on one
+sampled runout and +20bb on another; the new exact label is identical across
+those future-card replacements. Other tests check exact payout means, zero sum,
+legal card removal, trained-row precedence, terminal-correction preservation,
+and deterministic shared-worker completion counts. All 222 Rust release
+library tests, 6 CLI tests, and 32 Python resource/runner tests pass; release
+build and whitespace checks pass. Neither new option is a website activation.

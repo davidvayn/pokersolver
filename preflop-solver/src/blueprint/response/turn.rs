@@ -409,6 +409,9 @@ impl ResponsePolicy for TabularTurnPolicy {
     fn take_raw_coverage(&self) -> [CoverageCounter; 4] {
         self.base.take_raw_coverage()
     }
+    fn take_completion_coverage(&self) -> backoff::CompletionCoverage {
+        self.base.take_completion_coverage()
+    }
     fn absorb_worker(&self, worker: &dyn ResponsePolicy) {
         self.base.absorb_worker(worker);
         let incoming: Diagnostics = serde_json::from_value(

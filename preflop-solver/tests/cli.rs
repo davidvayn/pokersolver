@@ -4,7 +4,13 @@ use std::process::Command;
 
 #[test]
 fn flop_pilot_rejects_missing_budget_values_before_artifact_io() {
-    for flag in ["--weight", "--evaluation-deals", "--response-workers"] {
+    for flag in [
+        "--weight",
+        "--evaluation-deals",
+        "--response-workers",
+        "--flop-backoff-minimum-visits",
+        "--flop-backoff-weight",
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
             .args(["tabular-flop-pilot", flag])
             .output()
@@ -17,6 +23,36 @@ fn flop_pilot_rejects_missing_budget_values_before_artifact_io() {
 #[test]
 fn tabular_turn_options_reject_silent_noops_and_neural_sources() {
     for args in [
+        vec![
+            "full-game-lbr",
+            "--networks",
+            "unused",
+            "--flop-backoff-minimum-visits",
+            "8",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--flop-backoff-minimum-visits",
+            "0",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--flop-backoff-weight",
+            "0.5",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--flop-backoff-minimum-visits",
+            "8",
+            "--flop-backoff-weight",
+            "NaN",
+        ],
         vec![
             "full-game-lbr",
             "--networks",

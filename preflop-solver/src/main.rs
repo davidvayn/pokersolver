@@ -1993,12 +1993,36 @@ fn run_preflop_cache_compare(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn parse_flop_backoff(
+    args: &[String],
+) -> Result<Option<blueprint::response::FlopBackoffOptions>, Box<dyn Error>> {
+    for flag in ["--flop-backoff-minimum-visits", "--flop-backoff-weight"] {
+        if args.iter().any(|a| a == flag) && value(args, flag).is_none() {
+            return Err(format!("{flag} requires a numeric value").into());
+        }
+    }
+    let minimum = value(args, "--flop-backoff-minimum-visits");
+    if minimum.is_none() && value(args, "--flop-backoff-weight").is_some() {
+        return Err("flop pooling weight requires --flop-backoff-minimum-visits".into());
+    }
+    minimum
+        .map(|v| {
+            Ok(blueprint::response::FlopBackoffOptions {
+                minimum_average_visits: v.parse()?,
+                weight: parse_or(args, "--flop-backoff-weight", 1.0f64)?,
+            })
+        })
+        .transpose()
+}
+
 fn run_tabular_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
     for flag in [
         "--weight",
         "--evaluation-deals",
         "--response-workers",
         "--all-in-samples",
+        "--flop-backoff-minimum-visits",
+        "--flop-backoff-weight",
     ] {
         if args.iter().any(|arg| arg == flag) && value(args, flag).is_none() {
             return Err(format!("{flag} requires a numeric value").into());
@@ -2025,6 +2049,7 @@ fn run_tabular_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .map(|v| v.parse())
                 .transpose()?,
             integrate_terminal: args.iter().any(|a| a == "--integrate-terminal"),
+            flop_backoff: parse_flop_backoff(args)?,
         })?;
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
@@ -2124,6 +2149,10 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
             seed: parse_or(args, "--seed", 0x1B12_E5A1u64)?,
             response_workers: parse_or(args, "--response-workers", 1usize)?,
             source,
+            exact_terminal_training_values: args
+                .iter()
+                .any(|a| a == "--response-terminal-expectations"),
+            flop_backoff: parse_flop_backoff(args)?,
             terminal_flop: value(args, "--terminal-flop-samples")
                 .map(|samples| {
                     Ok::<_, Box<dyn Error>>(blueprint::response::TerminalFlopOptions {
@@ -2158,6 +2187,8 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
                 "policySourceKind": evaluation.policy_source_kind,
                 "policySha256": evaluation.policy_sha256,
                 "terminalFlop": evaluation.terminal_flop,
+                "flopBackoff": evaluation.flop_backoff,
+                "exactTerminalTrainingValues": evaluation.exact_terminal_training_values,
                 "checkpointTrainingIterations": evaluation.checkpoint_training_iterations,
                 "sourcePolicyCoverage": evaluation.source_policy_coverage,
                 "totalResponseGainBbPerHand": evaluation.total_response_gain_bb_per_hand,

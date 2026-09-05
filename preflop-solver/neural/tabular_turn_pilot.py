@@ -40,6 +40,9 @@ def main():
     parser.add_argument('--response-workers', type=int, choices=range(1,5), default=1)
     parser.add_argument('--terminal-flop-samples', type=int)
     parser.add_argument('--terminal-flop-weight', type=float, default=0.25)
+    parser.add_argument('--flop-backoff-minimum-visits', type=int)
+    parser.add_argument('--flop-backoff-weight', type=float, default=1.0)
+    parser.add_argument('--response-terminal-expectations', action='store_true')
     parser.add_argument('--calibration-deals', type=int, default=256)
     parser.add_argument('--evaluation-deals', type=int, default=1024)
     parser.add_argument('--rollouts-per-action', type=int, default=4)
@@ -47,6 +50,9 @@ def main():
     parser.add_argument('--max-worker-minutes', type=float, default=30)
     parser.add_argument('--max-worker-memory-gib', type=float, default=7.5)
     args = parser.parse_args()
+    if args.flop_backoff_minimum_visits is not None and (args.flop_backoff_minimum_visits < 1
+            or not math.isfinite(args.flop_backoff_weight) or not 0 <= args.flop_backoff_weight <= 1):
+        parser.error('flop pooling requires positive support and weight 0..1')
     if args.terminal_flop_samples is not None and not 128 <= args.terminal_flop_samples <= 16384:
         parser.error('terminal flop equity samples must be 128..16384')
     if not math.isfinite(args.terminal_flop_weight) or not 0 <= args.terminal_flop_weight <= 0.5:
@@ -119,12 +125,17 @@ def main():
                        '--minimum-range-particles',str(args.minimum_range_particles),'--maximum-response-granularity','strategic',
                        '--seed',str(seed+args.seed_offset),'--output',str(output)]
             command += ['--response-workers',str(args.response_workers)]
+            if args.response_terminal_expectations:
+                command += ['--response-terminal-expectations']
             if arm != 'baseline':
                 name,count=arm.split(':'); command += ['--tabular-turn-iterations',count]
                 if name == 'joint': command += ['--tabular-turn-unconstrained']
                 if args.terminal_flop_samples is not None:
                     command += ['--terminal-flop-samples', str(args.terminal_flop_samples),
                                 '--terminal-flop-weight', str(args.terminal_flop_weight)]
+                if args.flop_backoff_minimum_visits is not None:
+                    command += ['--flop-backoff-minimum-visits', str(args.flop_backoff_minimum_visits),
+                                '--flop-backoff-weight', str(args.flop_backoff_weight)]
             record = {'seed':seed,'arm':arm,'command':command,'checkpointSha256':source['checkpointSha256'],'status':'running'}
             state['runs'].append(record); atomic_json(manifest,state)
             print(f'Starting {arm} seed {seed}',flush=True)

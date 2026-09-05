@@ -27,12 +27,15 @@ fn serial_response_workers(workers: &usize) -> bool {
     *workers == 1
 }
 
+mod backoff;
 mod flop;
+pub use backoff::FlopBackoffOptions;
 mod flop_allin;
 pub use flop_allin::TerminalFlopOptions;
 mod parallel;
 pub use flop::{evaluate_flop_patch, FlopPatchEvaluationConfig};
 mod table;
+mod terminal;
 mod turn;
 #[cfg(test)]
 use table::AverageNode;
@@ -70,6 +73,8 @@ pub struct ResponseEvaluationConfig {
     pub source: ResponsePolicySource,
     pub turn_resolver: Option<TurnResolveOptions>,
     pub terminal_flop: Option<TerminalFlopOptions>,
+    pub flop_backoff: Option<FlopBackoffOptions>,
+    pub exact_terminal_training_values: bool,
     pub response_workers: usize,
 }
 
@@ -99,6 +104,9 @@ trait ResponsePolicy {
     fn take_raw_coverage(&self) -> [CoverageCounter; 4] {
         std::array::from_fn(|_| CoverageCounter::default())
     }
+    fn take_completion_coverage(&self) -> backoff::CompletionCoverage {
+        backoff::CompletionCoverage::default()
+    }
     fn absorb_worker(&self, _worker: &dyn ResponsePolicy) {}
 }
 
@@ -118,12 +126,16 @@ impl ResponsePolicy for FrozenPolicy {
 pub struct StreetPolicyCoverage {
     pub street: Street,
     pub coverage: PolicyCoverage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion: Option<backoff::CompletionCoverage>,
 }
 
 struct TabularResponsePolicy {
     table: Arc<InferenceTable>,
     coverage: RefCell<[CoverageCounter; 4]>,
     flop_patch: Option<Arc<flop::FlopPatch>>,
+    flop_backoff: Option<Arc<backoff::FlopBackoff>>,
+    completion_coverage: RefCell<backoff::CompletionCoverage>,
 }
 
 impl TabularResponsePolicy {
@@ -132,6 +144,8 @@ impl TabularResponsePolicy {
             table: Arc::clone(&self.table),
             coverage: RefCell::default(),
             flop_patch: self.flop_patch.clone(),
+            flop_backoff: self.flop_backoff.clone(),
+            completion_coverage: RefCell::default(),
         }
     }
     fn frozen_strategy(
@@ -142,7 +156,8 @@ impl TabularResponsePolicy {
         game: &BlueprintConfig,
     ) -> Vec<f64> {
         let (key, descriptor, _) = information_set(state, deal, game);
-        let strategy = match self.table.nodes.get(&key) {
+        let node = self.table.nodes.get(&key);
+        let mut strategy = match node {
             Some(node) => {
                 assert_eq!(
                     node.descriptor, descriptor,
@@ -159,6 +174,11 @@ impl TabularResponsePolicy {
             }
             None => vec![1.0 / actions.len() as f64; actions.len()],
         };
+        if node.is_none_or(|n| n.average_visits == 0) {
+            if let Some(backoff) = &self.flop_backoff {
+                backoff.complete(&descriptor, actions, &mut strategy);
+            }
+        }
         self.apply_flop_patch(state, deal, actions, game, strategy)
     }
 
@@ -186,7 +206,14 @@ impl ResponsePolicy for TabularResponsePolicy {
         std::mem::take(&mut *self.coverage.borrow_mut())
     }
 
+    fn take_completion_coverage(&self) -> backoff::CompletionCoverage {
+        std::mem::take(&mut *self.completion_coverage.borrow_mut())
+    }
+
     fn absorb_worker(&self, worker: &dyn ResponsePolicy) {
+        self.completion_coverage
+            .borrow_mut()
+            .add(worker.take_completion_coverage());
         for (counter, incoming) in self
             .coverage
             .borrow_mut()
@@ -213,7 +240,8 @@ impl ResponsePolicy for TabularResponsePolicy {
         let mut counters = self.coverage.borrow_mut();
         let counter = &mut counters[street];
         counter.decisions += 1;
-        let strategy = match self.table.nodes.get(&key) {
+        let node = self.table.nodes.get(&key);
+        let mut strategy = match node {
             Some(node) => {
                 assert_eq!(
                     node.descriptor, descriptor,
@@ -238,17 +266,28 @@ impl ResponsePolicy for TabularResponsePolicy {
                 vec![1.0 / actions.len() as f64; actions.len()]
             }
         };
+        if state.street == Street::Flop && node.is_none_or(|n| n.average_visits == 0) {
+            if let Some(backoff) = &self.flop_backoff {
+                let mut counts = self.completion_coverage.borrow_mut();
+                counts.eligible_missing_or_untrained_queries += 1;
+                counts.matched_queries +=
+                    u64::from(backoff.complete(&descriptor, actions, &mut strategy));
+            }
+        }
         self.apply_flop_patch(state, deal, actions, game, strategy)
     }
 
     fn take_coverage(&self) -> Vec<StreetPolicyCoverage> {
         let counters = self.take_raw_coverage();
+        let completion = self.take_completion_coverage();
         [Street::Preflop, Street::Flop, Street::Turn, Street::River]
             .into_iter()
             .zip(counters)
             .map(|(street, counter)| StreetPolicyCoverage {
                 street,
                 coverage: counter.report(),
+                completion: (street == Street::Flop && self.flop_backoff.is_some())
+                    .then(|| completion.clone()),
             })
             .collect()
     }
@@ -352,6 +391,10 @@ pub struct FullGameResponseEvaluation {
     pub turn_resolver: Option<TurnResolveOptions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_flop: Option<TerminalFlopOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flop_backoff: Option<FlopBackoffOptions>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact_terminal_training_values: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resolution_diagnostics: BTreeMap<String, serde_json::Value>,
     /// Sum across seats, not the legacy seat-average/NashConv-over-two scale.
@@ -602,6 +645,12 @@ impl ResolverLookup {
 pub fn evaluate_full_game_response(
     mut config: ResponseEvaluationConfig,
 ) -> Result<FullGameResponseEvaluation, Box<dyn Error>> {
+    if let Some(options) = &config.flop_backoff {
+        options.validate()?;
+        if !matches!(&config.source, ResponsePolicySource::TabularCheckpoint(_)) {
+            return Err("flop pooling requires a frozen tabular checkpoint".into());
+        }
+    }
     if let Some(options) = &config.terminal_flop {
         options.validate()?;
         if !matches!(&config.source, ResponsePolicySource::TabularCheckpoint(_)) {
@@ -648,9 +697,19 @@ pub fn evaluate_full_game_response(
             let table = InferenceTable::read(path)?;
             config.game = table.config.clone();
             let rounds = table.rounds;
+            let flop_backoff = config
+                .flop_backoff
+                .clone()
+                .map(|o| backoff::FlopBackoff::build(&table, o).map(Arc::new))
+                .transpose()?;
+            if let Some(pooled) = &flop_backoff {
+                eprintln!("flop-pooling {}", pooled.summary());
+            }
             let base = TabularResponsePolicy {
                 table: Arc::new(table),
                 coverage: RefCell::default(),
+                flop_backoff,
+                completion_coverage: RefCell::default(),
                 flop_patch: config
                     .terminal_flop
                     .as_ref()
@@ -676,6 +735,11 @@ pub fn evaluate_full_game_response(
         }
     };
     config.game.validate()?;
+    let policy_source_kind = if config.flop_backoff.is_some() {
+        format!("{policy_source_kind}_with_frozen_flop_mass_backoff")
+    } else {
+        policy_source_kind
+    };
     let policy_source_kind = if config.terminal_flop.is_some() {
         format!("{policy_source_kind}_with_terminal_flop_range_correction")
     } else {
@@ -771,7 +835,7 @@ pub fn evaluate_full_game_response(
     Ok(FullGameResponseEvaluation {
         schema: if checkpoint_training_iterations.is_some() { "hu-tabular-checkpoint-information-set-response-v1" } else { RESPONSE_SCHEMA }.to_owned(),
         method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws_and_paired_baseline_advantages"
-            .to_owned(),
+            .to_owned() + if config.exact_terminal_training_values { "_with_exact_postflop_terminal_training_values" } else { "" },
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
         policy_sha256,
@@ -780,6 +844,8 @@ pub fn evaluate_full_game_response(
         source_policy_coverage,
         turn_resolver: config.turn_resolver,
         terminal_flop: config.terminal_flop,
+        flop_backoff: config.flop_backoff,
+        exact_terminal_training_values: config.exact_terminal_training_values,
         resolution_diagnostics,
         total_response_gain_bb_per_hand: players.iter().map(|player| player.estimated_gain_bb).sum(),
         total_response_gain_lower_confidence_bound_99_percent_bb_per_hand: 2.0 * confidence_lower_bound,
@@ -797,7 +863,7 @@ pub fn evaluate_full_game_response(
         approximate_exploitability_lower_bound_bb_per_hand: lower_bound,
         approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand:
             confidence_lower_bound,
-        interpretation: "a fixed legal imperfect-information learned response is trained, accepted only when a disjoint calibration corpus has a positive one-sided 99.5% gain lower bound, and measured on a third independent corpus; rejected players deploy the frozen baseline with zero claimed gain; total_response_gain sums the seats (legacy approximate_exploitability fields use half that scale and clamp negative estimates); tabular missing/untrained lookups use the trainer's uniform profile completion and are disclosed by street and phase, never silently treated as trained; expected response gain is a lower bound, not an exploitability upper-bound certificate; low response coverage can miss leaks"
+        interpretation: "a fixed legal imperfect-information learned response is trained, accepted only when a disjoint calibration corpus has a positive one-sided 99.5% gain lower bound, and measured on a third independent corpus; rejected players deploy the frozen baseline with zero claimed gain; total_response_gain sums the seats (legacy approximate_exploitability fields use half that scale and clamp negative estimates); tabular missing/untrained lookups are disclosed by street and phase, never silently treated as trained; optional flop pooling borrows frozen average mass and reports matches separately, otherwise retaining the trainer's explicit uniform completion; expected response gain is a lower bound, not an exploitability upper-bound certificate; low response coverage can miss leaks"
             .to_owned(),
         preflop_responses,
         resolvers,
@@ -840,6 +906,7 @@ fn train_learned_response(
                 &config.game,
                 responder,
                 config.rollouts_per_action,
+                config.exact_terminal_training_values,
                 config.seed,
                 deal_index,
                 &mut trajectory_rng,
@@ -963,6 +1030,7 @@ fn collect_trajectory_decisions(
     game: &BlueprintConfig,
     responder: usize,
     rollouts_per_action: u32,
+    exact_terminal_training_values: bool,
     response_seed: u64,
     deal_index: u64,
     trajectory_rng: &mut SplitMix64,
@@ -987,6 +1055,12 @@ fn collect_trajectory_decisions(
         let values = actions
             .iter()
             .map(|action| {
+                let next = state.apply(action, game);
+                if exact_terminal_training_values {
+                    if let Some(utility) = terminal::expectation(&next, deal) {
+                        return if responder == 0 { utility } else { -utility };
+                    }
+                }
                 (0..rollouts_per_action)
                     .map(|rollout| {
                         let mut rng = SplitMix64::new(derived_seed(
@@ -994,13 +1068,7 @@ fn collect_trajectory_decisions(
                             deal_index ^ key,
                             rollout as u64,
                         ));
-                        let utility = baseline_rollout(
-                            policy,
-                            state.apply(action, game),
-                            deal,
-                            game,
-                            &mut rng,
-                        );
+                        let utility = baseline_rollout(policy, next.clone(), deal, game, &mut rng);
                         if responder == 0 {
                             utility
                         } else {
@@ -1032,6 +1100,7 @@ fn collect_trajectory_decisions(
         game,
         responder,
         rollouts_per_action,
+        exact_terminal_training_values,
         response_seed,
         deal_index,
         trajectory_rng,
@@ -1817,6 +1886,8 @@ mod tests {
                 table: Arc::new(InferenceTable::from_trainer(trainer)),
                 coverage: RefCell::default(),
                 flop_patch: None,
+                flop_backoff: None,
+                completion_coverage: RefCell::default(),
             },
             deal,
         )
@@ -1962,6 +2033,8 @@ mod tests {
             source: ResponsePolicySource::TabularCheckpoint(path.clone()),
             turn_resolver: None,
             terminal_flop: None,
+            flop_backoff: None,
+            exact_terminal_training_values: false,
         };
         let first = evaluate_full_game_response(config.clone()).unwrap();
         let second = evaluate_full_game_response(config.clone()).unwrap();
@@ -1988,6 +2061,11 @@ mod tests {
         }
         assert_eq!(first.depth_bb, 20.0);
         let mut corrected = config.clone();
+        corrected.exact_terminal_training_values = true;
+        corrected.flop_backoff = Some(FlopBackoffOptions {
+            minimum_average_visits: 1,
+            weight: 1.0,
+        });
         corrected.terminal_flop = Some(TerminalFlopOptions {
             equity_samples: 128,
             weight: 0.25,

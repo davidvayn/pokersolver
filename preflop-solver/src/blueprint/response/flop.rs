@@ -186,6 +186,7 @@ pub struct FlopPatchEvaluationConfig {
     pub workers: usize,
     pub all_in_samples: Option<u32>,
     pub integrate_terminal: bool,
+    pub flop_backoff: Option<FlopBackoffOptions>,
 }
 
 fn validate_report(
@@ -205,6 +206,9 @@ fn validate_report(
     if let Some(options) = &report.terminal_flop {
         options.validate()?;
     }
+    if let Some(options) = &report.flop_backoff {
+        options.validate()?;
+    }
     for seat in 0..2 {
         if report.resolvers[seat].responder != seat
             || report.preflop_responses[seat]
@@ -222,11 +226,14 @@ fn make_policy(
     table: Arc<InferenceTable>,
     options: Option<TurnResolveOptions>,
     patch: Option<Arc<FlopPatch>>,
+    flop_backoff: Option<Arc<backoff::FlopBackoff>>,
 ) -> Box<dyn ResponsePolicy> {
     let base = TabularResponsePolicy {
         table,
         coverage: RefCell::default(),
         flop_patch: patch,
+        flop_backoff,
+        completion_coverage: RefCell::default(),
     };
     match options {
         Some(options) => Box::new(turn::TabularTurnPolicy::new(base, options)),
@@ -304,8 +311,13 @@ pub fn evaluate_flop_patch(
             .all_in_samples
             .is_some_and(|samples| !(128..=16384).contains(&samples))
         || (config.integrate_terminal && config.all_in_samples.is_none())
+        || (config.flop_backoff.is_some()
+            && (config.integrate_terminal || config.all_in_samples.is_some()))
     {
         return Err("flop pilot requires weight 0..0.5, 2..1000000 hands, 1..4 workers and retained opponents".into());
+    }
+    if let Some(options) = &config.flop_backoff {
+        options.validate()?;
     }
     let digest = sha256_file(&config.checkpoint)?;
     let proposal: FullGameResponseEvaluation =
@@ -330,7 +342,7 @@ pub fn evaluate_flop_patch(
     }
     // A rejected seat is not sufficient evidence for a policy correction.
     let patch = Arc::new(FlopPatch {
-        bank: if config.all_in_samples.is_some() {
+        bank: if config.all_in_samples.is_some() || config.flop_backoff.is_some() {
             DecisionBank::default()
         } else {
             DecisionBank::from_decisions(
@@ -347,7 +359,7 @@ pub fn evaluate_flop_patch(
         weight: config.weight,
         all_in_samples: config.all_in_samples,
     });
-    if patch.bank.len() == 0 && config.all_in_samples.is_none() {
+    if patch.bank.len() == 0 && config.all_in_samples.is_none() && config.flop_backoff.is_none() {
         return Err("no calibrated confident flop decisions for this proposal".into());
     }
     let patch_counts: Vec<_> = (0..2)
@@ -362,7 +374,27 @@ pub fn evaluate_flop_patch(
         })
         .collect();
     let mut results = Vec::new();
+    let build_backoff =
+        |options: Option<FlopBackoffOptions>| -> Result<Option<Arc<backoff::FlopBackoff>>, String> {
+            options
+                .map(|o| backoff::FlopBackoff::build(&table, o).map(Arc::new))
+                .transpose()
+        };
+    let control_backoff = build_backoff(proposal.flop_backoff.clone())?;
+    let candidate_backoff = if config.flop_backoff.is_some() {
+        build_backoff(config.flop_backoff.clone())?
+    } else {
+        control_backoff.clone()
+    };
+    if let Some(pooled) = &candidate_backoff {
+        eprintln!("flop-pooling {}", pooled.summary());
+    }
     for (opponent_index, (opponent_digest, opponent)) in opponents.iter().enumerate() {
+        let opponent_backoff = if opponent.flop_backoff == proposal.flop_backoff {
+            control_backoff.clone()
+        } else {
+            build_backoff(opponent.flop_backoff.clone())?
+        };
         for responder in 0..2 {
             let bank = DecisionBank::from_decisions(
                 opponent.preflop_responses[responder]
@@ -383,8 +415,9 @@ pub fn evaluate_flop_patch(
                 })
                 .collect();
             let chunk_size = cards.len().div_ceil(config.workers);
-            let samples: Vec<[f64; 4]> = std::thread::scope(|scope| {
-                let handles: Vec<_> = cards.chunks(chunk_size).map(|chunk| {
+            let (samples, completion): (Vec<[f64; 4]>, backoff::CompletionCoverage) =
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = cards.chunks(chunk_size).map(|chunk| {
                     let table = Arc::clone(&table);
                     let patch = Arc::clone(&patch);
                     let bank = &bank;
@@ -392,11 +425,15 @@ pub fn evaluate_flop_patch(
                     let attacker_options = opponent.turn_resolver.clone();
                     let control_patch = proposal.terminal_flop.as_ref().map(|o| Arc::new(FlopPatch::terminal(o)));
                     let attacker_patch = opponent.terminal_flop.as_ref().map(|o| Arc::new(FlopPatch::terminal(o)));
+                    let candidate_patch = if config.flop_backoff.is_some() { control_patch.clone() } else { Some(patch) };
+                    let control_backoff = control_backoff.clone();
+                    let candidate_backoff = candidate_backoff.clone();
+                    let opponent_backoff = opponent_backoff.clone();
                     scope.spawn(move || {
-                        let control = make_policy(Arc::clone(&table), defender_options.clone(), control_patch);
-                        let candidate = make_policy(Arc::clone(&table), defender_options, Some(patch));
-                        let attacker = make_policy(Arc::clone(&table), attacker_options, attacker_patch);
-                        chunk.iter().map(|(index, holes, board)| {
+                        let control = make_policy(Arc::clone(&table), defender_options.clone(), control_patch, control_backoff);
+                        let candidate = make_policy(Arc::clone(&table), defender_options, candidate_patch, candidate_backoff);
+                        let attacker = make_policy(Arc::clone(&table), attacker_options, attacker_patch, opponent_backoff);
+                        let samples = chunk.iter().map(|(index, holes, board)| {
                             if index % 128 == 0 { eprintln!("flop-panel opponent={opponent_index} responder={responder} hand={index}/{}", config.evaluation_deals); }
                             let deal = Deal::from_sampled_cards(*holes, *board);
                             let seed = derived_seed(phase_seed, *index, 11);
@@ -407,20 +444,29 @@ pub fn evaluate_flop_patch(
                             let a = panel_rollout(control.as_ref(), attacker.as_ref(), bank, GameState::initial(&table.config), &deal, &table.config, responder, SplitMix64::new(seed));
                             let b = panel_rollout(candidate.as_ref(), attacker.as_ref(), bank, GameState::initial(&table.config), &deal, &table.config, responder, SplitMix64::new(seed));
                             [a.0, b.0, u8::from(a.1) as f64, u8::from(b.1) as f64]
-                        }).collect::<Vec<_>>()
+                        }).collect::<Vec<_>>();
+                        (samples, candidate.take_completion_coverage())
                     })
                 }).collect();
-                handles
-                    .into_iter()
-                    .flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-                    .collect()
-            });
+                    let mut samples = Vec::new();
+                    let mut completion = backoff::CompletionCoverage::default();
+                    for handle in handles {
+                        let (local, counts) = handle
+                            .join()
+                            .unwrap_or_else(|e| std::panic::resume_unwind(e));
+                        samples.extend(local);
+                        completion.add(counts);
+                    }
+                    (samples, completion)
+                });
             results.push(serde_json::json!({
                 "opponent_report_sha256":opponent_digest, "opponent_turn_resolver":opponent.turn_resolver,
                 "opponent_terminal_flop":opponent.terminal_flop,
+                "opponent_flop_backoff":opponent.flop_backoff,
                 "opponent_originally_calibrated":opponent.response_deployed[responder],
                 "responder":responder, "defender":1-responder, "confident_opponent_decisions":bank.len(),
                 "evaluation_seed":phase_seed, "summary":summarize(&samples),
+                "candidate_flop_completion":completion,
                 "paired_samples_control_candidate_and_attack_flags":samples,
             }));
         }
@@ -431,13 +477,16 @@ pub fn evaluate_flop_patch(
         "checkpoint_training_iterations":table.rounds, "depth_bb":game.effective_stack_bb,
         "defender_turn_resolver":proposal.turn_resolver, "patch_weight":config.weight,
         "defender_control_terminal_flop":proposal.terminal_flop,
-        "patch_rule":if config.all_in_samples.is_some() { "range_conditioned_terminal_flop" } else { "first_confident_saved_flop_action" },
+        "defender_control_flop_backoff":proposal.flop_backoff,
+        "defender_candidate_flop_backoff":config.flop_backoff.as_ref().or(proposal.flop_backoff.as_ref()),
+        "flop_backoff_summary":candidate_backoff.as_ref().map(|b| b.summary()),
+        "patch_rule":if config.flop_backoff.is_some() { "missing_flop_frozen_strategy_mass_pooling" } else if config.all_in_samples.is_some() { "range_conditioned_terminal_flop" } else { "first_confident_saved_flop_action" },
         "all_in_equity_samples":config.all_in_samples,
         "payoff_assessment":if config.integrate_terminal { "exact_terminal_action_and_runout_conditional_mean" } else { "paired_realized_actions_and_runouts" },
         "patch_decisions_by_seat":patch_counts, "seed":config.seed,
         "evaluation_deals_per_seat_per_opponent":config.evaluation_deals, "workers":config.workers,
         "results":results,
-        "interpretation":"Positive paired values mean the candidate defender earns more against the identical frozen opponent on fresh hands. Opponent actions use only observable information; its original continuation never changes with the defender. Saved-action mode blends the first confident flop opportunity from calibrated proposal seats. Terminal-range mode instead conditions on exact hero cards and opponent action likelihoods, samples legal runouts and requires a 99.5% Hoeffding equity margin before blending a call/fold correction; zero-reach or uncertain lines retain the unchanged baseline. Neither mode guarantees safety against arbitrary opponents. Rejected retained opponents remain disclosed raw diagnostic challenges, never certified responses. Per-comparison normal-approximation intervals are not multiple-comparison-corrected or exploitability upper bounds. This experiment does not promote a policy or modify the source checkpoint."
+        "interpretation":"Positive paired values mean the candidate defender earns more against the identical frozen opponent on fresh hands. Opponent actions use only observable information; its original continuation never changes with the defender. Saved-action mode blends the first confident flop opportunity from calibrated proposal seats. Terminal-range mode conditions on exact hero cards and opponent action likelihoods, samples legal runouts and requires a 99.5% Hoeffding equity margin before blending a call/fold correction. Pooling mode changes only missing/untrained flop rows using frozen strategy mass matched by current hand/board buckets and public betting history, while preserving the control terminal correction; borrowed rows are not newly trained exact coverage. No mode guarantees safety against arbitrary opponents. Rejected retained opponents remain disclosed raw diagnostic challenges, never certified responses. Per-comparison normal-approximation intervals are not multiple-comparison-corrected or exploitability upper bounds. This experiment does not promote a policy or modify the source checkpoint."
     }))
 }
 
@@ -650,6 +699,8 @@ mod tests {
             response_workers: 1,
             turn_resolver: None,
             terminal_flop: None,
+            flop_backoff: None,
+            exact_terminal_training_values: false,
         })
         .unwrap();
         // Synthetic unit-test proposal; never used by a training pilot.
@@ -667,6 +718,7 @@ mod tests {
             workers: 1,
             all_in_samples: None,
             integrate_terminal: false,
+            flop_backoff: None,
         };
         let reference = evaluate_flop_patch(config.clone()).unwrap();
         for workers in [2, 4] {
@@ -689,6 +741,35 @@ mod tests {
             serde_json::to_vec(&integrated).unwrap(),
             serde_json::to_vec(&parallel).unwrap()
         );
+        let mut pooling = config.clone();
+        pooling.all_in_samples = None;
+        pooling.integrate_terminal = false;
+        pooling.flop_backoff = Some(FlopBackoffOptions {
+            minimum_average_visits: 1,
+            weight: 1.0,
+        });
+        report.terminal_flop = Some(TerminalFlopOptions {
+            equity_samples: 128,
+            weight: 0.25,
+        });
+        fs::write(
+            &pooling.proposal_response,
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        let unchanged = evaluate_flop_patch(pooling.clone()).unwrap();
+        // This checkpoint fixture has no trained flop rows to borrow. The
+        // candidate must therefore retain the entire terminal-corrected control.
+        for row in unchanged["results"].as_array().unwrap() {
+            for pair in row["paired_samples_control_candidate_and_attack_flags"]
+                .as_array()
+                .unwrap()
+            {
+                assert_eq!(pair[0], pair[1]);
+            }
+        }
+        pooling.integrate_terminal = true;
+        assert!(evaluate_flop_patch(pooling).is_err());
         config.all_in_samples = None;
         assert!(evaluate_flop_patch(config.clone()).is_err());
         config.all_in_samples = Some(2048);

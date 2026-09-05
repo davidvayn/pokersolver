@@ -81,30 +81,12 @@ fn terminal_values(
     actions: &[LegalAction],
     game: &BlueprintConfig,
 ) -> Vec<f64> {
-    let mut board = deal.board;
-    let remaining: Vec<_> = (0..52u8)
-        .filter(|c| !deal.holes.iter().flatten().any(|h| h == c) && !board[..3].contains(c))
-        .collect();
-    let mut equity = 0.0;
-    let mut runouts = 0;
-    for i in 0..remaining.len() {
-        board[3] = remaining[i];
-        for card in &remaining[i + 1..] {
-            board[4] = *card;
-            equity += showdown_result(&deal.holes, &board);
-            runouts += 1;
-        }
-    }
-    assert_eq!(runouts, 990);
-    equity /= runouts as f64;
+    assert_eq!(state.street, Street::Flop);
     actions
         .iter()
         .map(|action| {
-            let next = state.apply(action, game);
-            match next.terminal.as_ref().expect("all terminal actions") {
-                Terminal::Fold { .. } => realized_utility_p0(&next, deal),
-                Terminal::Showdown => equity * next.invested[1] - (1.0 - equity) * next.invested[0],
-            }
+            super::super::terminal::expectation(&state.apply(action, game), deal)
+                .expect("postflop terminal action")
         })
         .collect()
 }
@@ -157,6 +139,7 @@ mod tests {
                 weight: 0.25,
                 all_in_samples: Some(2048),
             })),
+            None,
         );
         let a = rollout(
             &policy,
