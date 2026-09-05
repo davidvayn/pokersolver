@@ -46,6 +46,7 @@ const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
 // Version 5 rejects training state accumulated under the old absolute
 // probability/regret cutoff. A deterministic new run must use one recurrence.
 const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 5;
+const BLUEPRINT_STREETWISE_CHECKPOINT_SCHEMA_VERSION: u32 = 6;
 const MAX_HS_DCFR_HORIZON: u64 = 10_000_000;
 
 fn model_binary_path(path: &Path) -> PathBuf {
@@ -236,6 +237,10 @@ pub struct BlueprintConfig {
     /// opponent proposal, retaining its stopping frequency. Research-only.
     #[serde(default, skip_serializing_if = "is_false")]
     pub opponent_checkdown_baseline: bool,
+    /// Integrate opponent terminals through flop, then use the stateless
+    /// checkdown control variate on turn/river. Fresh research training only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub streetwise_opponent_estimator: bool,
     pub export_postflop_strategies: bool,
     pub recall_mode: RecallMode,
     pub dcfr: DcfrParameters,
@@ -267,6 +272,13 @@ fn is_default_blueprint_traversal(traversal: &BlueprintTraversal) -> bool {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpponentEstimator {
+    Sampling,
+    TerminalIntegration,
+    CheckdownBaseline,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -387,6 +399,7 @@ impl Default for BlueprintConfig {
             traversal: BlueprintTraversal::ExternalSampling,
             integrate_terminal_actions: false,
             opponent_checkdown_baseline: false,
+            streetwise_opponent_estimator: false,
             export_postflop_strategies: false,
             recall_mode: RecallMode::Trajectory,
             dcfr: DcfrParameters::default(),
@@ -401,6 +414,29 @@ impl Default for BlueprintConfig {
 }
 
 impl BlueprintConfig {
+    fn checkpoint_schema_version(&self) -> u32 {
+        if self.streetwise_opponent_estimator {
+            BLUEPRINT_STREETWISE_CHECKPOINT_SCHEMA_VERSION
+        } else {
+            BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
+        }
+    }
+
+    fn opponent_estimator(&self, street: Street) -> OpponentEstimator {
+        if self.streetwise_opponent_estimator {
+            match street {
+                Street::Preflop | Street::Flop => OpponentEstimator::TerminalIntegration,
+                Street::Turn | Street::River => OpponentEstimator::CheckdownBaseline,
+            }
+        } else if self.integrate_terminal_actions {
+            OpponentEstimator::TerminalIntegration
+        } else if self.opponent_checkdown_baseline {
+            OpponentEstimator::CheckdownBaseline
+        } else {
+            OpponentEstimator::Sampling
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !(self.small_blind_bb > 0.0
             && self.big_blind_bb > self.small_blind_bb
@@ -414,14 +450,16 @@ impl BlueprintConfig {
         if self.max_information_sets == 0 {
             return Err("max information sets must be positive".to_owned());
         }
-        if (self.integrate_terminal_actions || self.opponent_checkdown_baseline)
+        if (self.integrate_terminal_actions || self.opponent_checkdown_baseline
+            || self.streetwise_opponent_estimator)
             && self.traversal != BlueprintTraversal::PublicChanceSampling
         {
             return Err("opponent variance reduction requires public-chance sampling".to_owned());
         }
-        if self.integrate_terminal_actions && self.opponent_checkdown_baseline {
+        if [self.integrate_terminal_actions, self.opponent_checkdown_baseline,
+            self.streetwise_opponent_estimator].into_iter().filter(|enabled| *enabled).count() > 1 {
             return Err(
-                "choose terminal integration or the checkdown baseline, not both".to_owned(),
+                "choose only one opponent variance-reduction mode".to_owned(),
             );
         }
         if self.averaging_delay >= self.iterations {
@@ -1682,10 +1720,10 @@ impl Trainer {
         mut checkpoint: BlueprintCheckpoint,
         target: &BlueprintConfig,
     ) -> Result<Self, String> {
-        if checkpoint.schema_version != BLUEPRINT_CHECKPOINT_SCHEMA_VERSION {
+        if checkpoint.schema_version != target.checkpoint_schema_version() {
             return Err(format!(
                 "unsupported checkpoint schema {}; expected {} for this solver binary",
-                checkpoint.schema_version, BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
+                checkpoint.schema_version, target.checkpoint_schema_version()
             ));
         }
         let mut comparable = target.clone();
@@ -1775,7 +1813,7 @@ impl Trainer {
 
     fn write_checkpoint(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let checkpoint = BlueprintCheckpointRef {
-            schema_version: BLUEPRINT_CHECKPOINT_SCHEMA_VERSION,
+            schema_version: self.config.checkpoint_schema_version(),
             model: MODEL,
             approximate: true,
             config: &self.config,
@@ -2170,7 +2208,8 @@ impl Trainer {
         // traverser CFV unbiased while avoiding one recursive branch per
         // opponent information set.
         let proposal = range_vector::opponent_action_proposal(&ranges[actor], &probabilities)?;
-        if self.config.opponent_checkdown_baseline {
+        let estimator = self.config.opponent_estimator(state.street);
+        if estimator == OpponentEstimator::CheckdownBaseline {
             let children = actions
                 .iter()
                 .map(|action| state.apply(action, &self.config))
@@ -2244,7 +2283,7 @@ impl Trainer {
             // A selected terminal has an exact baseline and zero residual.
             return Ok(values);
         }
-        if self.config.integrate_terminal_actions {
+        if estimator == OpponentEstimator::TerminalIntegration {
             let children = actions
                 .iter()
                 .map(|action| state.apply(action, &self.config))
@@ -2571,6 +2610,10 @@ impl Trainer {
                         .expect("serializable blueprint traversal"),
                 );
         }
+        if self.config.streetwise_opponent_estimator {
+            training_config.as_object_mut().expect("training config object")
+                .insert("streetwise_opponent_estimator".to_owned(), true.into());
+        }
         let training_hash_input =
             serde_json::to_vec(&training_config).expect("serializable training configuration");
         let training_config_hash = stable_hash(&training_hash_input);
@@ -2710,6 +2753,9 @@ impl Trainer {
         }
         if self.config.opponent_checkdown_baseline {
             provenance.push("Research stateless check/call-to-showdown opponent control variates use the original public-action proposal and importance-corrected residuals. Baselines use the sampled board only during training, do not replace policy values, and do not create persistent nodes. Baseline accuracy affects variance, not the estimator expectation.".to_owned());
+        }
+        if self.config.streetwise_opponent_estimator {
+            provenance.push("Research streetwise opponent estimator: exact terminal integration with a conditional continuation proposal on preflop/flop; stateless checkdown baselines with the original proposal and corrected residuals on turn/river. Selection depends only on the public street. This preserves each local estimator expectation; lower variance, better policy quality and exploitability are not guaranteed.".to_owned());
         }
         if self.config.dcfr_schedule != DcfrSchedule::Fixed {
             provenance.push(format!(
@@ -4583,8 +4629,85 @@ mod tests {
     }
 
     #[test]
+    fn streetwise_configuration_is_explicit_exclusive_and_legacy_compatible() {
+        let mut config = tiny_config();
+        let legacy = serde_json::to_value(&config).unwrap();
+        assert!(legacy.get("streetwise_opponent_estimator").is_none());
+        assert_eq!(serde_json::from_value::<BlueprintConfig>(legacy).unwrap(), config);
+        for street in [Street::Preflop, Street::Flop, Street::Turn, Street::River] {
+            assert_eq!(config.opponent_estimator(street), OpponentEstimator::Sampling);
+        }
+        config.streetwise_opponent_estimator = true;
+        assert!(config.validate().is_err());
+        config.traversal = BlueprintTraversal::PublicChanceSampling;
+        assert!(config.validate().is_ok());
+        assert_eq!(serde_json::to_value(&config).unwrap()["streetwise_opponent_estimator"], true);
+        assert_eq!(config.checkpoint_schema_version(), 6);
+        config.integrate_terminal_actions = true;
+        assert!(config.validate().is_err());
+        config.integrate_terminal_actions = false;
+        config.opponent_checkdown_baseline = true;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn streetwise_estimator_routes_actual_terminal_branches_on_every_street() {
+        let mut config = tiny_config();
+        config.traversal = BlueprintTraversal::PublicChanceSampling;
+        config.streetwise_opponent_estimator = true;
+        let board = [0, 5, 10, 27, 28];
+        let private: Vec<_> = all_combos().iter().map(|combo| {
+            if combo.cards().iter().any(|c| board.contains(c)) { 0.0 } else { 1.0 / 1081.0 }
+        }).collect();
+        let ranges = [private.clone(), private.clone()];
+        for street in [Street::Preflop, Street::Flop, Street::Turn, Street::River] {
+            let mut state = GameState::initial(&config);
+            while state.street != street {
+                let action = state.legal_actions(&config).into_iter()
+                    .find(|a| matches!(a.kind, ActionKind::Check | ActionKind::Call)).unwrap();
+                state = state.apply(&action, &config);
+            }
+            let shove = state.legal_actions(&config).into_iter()
+                .find(|a| a.label.contains("all_in")).unwrap();
+            let response = state.apply(&shove, &config);
+            let traverser = 1 - response.actor;
+            let actions = response.legal_actions(&config);
+            assert_eq!(actions.len(), 2);
+            let mut expected = vec![0.0; range_vector::EXACT_COMBO_COUNT];
+            for action in &actions {
+                let child = response.apply(action, &config);
+                let kind = match child.terminal.unwrap() {
+                    Terminal::Fold { winner } => range_vector::RangeTerminalKind::Fold { winner },
+                    Terminal::Showdown => range_vector::RangeTerminalKind::Showdown,
+                };
+                let reference = range_vector::evaluate_terminal_ranges(board, child.invested, &ranges, kind).unwrap();
+                for (value, cfv) in expected.iter_mut().zip(&reference.counterfactual_values_bb[traverser]) {
+                    *value += 0.5 * cfv;
+                }
+            }
+            for seed in [29, 47] {
+                let mut trainer = Trainer::fresh(config.clone());
+                trainer.discounts.advance(1);
+                let mut rng = SplitMix64::new(seed);
+                let before = rng.state();
+                let mut cache = range_vector::PublicInformationSetCache::new(board).unwrap();
+                let actual = trainer.public_chance_external_sampling(
+                    response.clone(), board, &ranges, &private, traverser, &mut rng, &mut cache,
+                ).unwrap();
+                assert_eq!(rng.state() == before, matches!(street, Street::Preflop | Street::Flop),
+                    "early streets integrate; late streets sample the original proposal: {street:?}");
+                for (key, mass) in private.iter().enumerate() {
+                    if *mass > 0.0 {
+                        assert!((actual[key] - expected[key]).abs() < 1e-10, "terminal CFV on {street:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn public_chance_checkpoint_resume_matches_uninterrupted_training() {
-        for mode in 0..3 {
+        for mode in 0..4 {
             let path = std::env::temp_dir().join(format!(
                 "blueprint-public-chance-checkpoint-{}-{}-{mode}.msgpack.gz",
                 std::process::id(),
@@ -4594,6 +4717,7 @@ mod tests {
             target.traversal = BlueprintTraversal::PublicChanceSampling;
             target.integrate_terminal_actions = mode == 1;
             target.opponent_checkdown_baseline = mode == 2;
+            target.streetwise_opponent_estimator = mode == 3;
             target.max_information_sets = 500_000;
             let mut partial = target.clone();
             partial.iterations = 1;
@@ -4607,7 +4731,8 @@ mod tests {
             )
             .expect("write public-chance partial checkpoint");
             let mut old_schema = read_checkpoint(&path).expect("read partial checkpoint");
-            old_schema.schema_version = BLUEPRINT_CHECKPOINT_SCHEMA_VERSION - 1;
+            assert_eq!(old_schema.schema_version, target.checkpoint_schema_version());
+            old_schema.schema_version -= 1;
             assert!(Trainer::from_checkpoint(old_schema, &target).is_err());
             let resumed = solve_controlled(
                 target.clone(),
@@ -4621,6 +4746,8 @@ mod tests {
             let mut changed_mode = target.clone();
             changed_mode.integrate_terminal_actions = mode != 1;
             changed_mode.opponent_checkdown_baseline = false;
+            changed_mode.streetwise_opponent_estimator = false;
+            assert!(changed_mode.validate().is_ok());
             assert!(
                 solve_controlled(
                     changed_mode,

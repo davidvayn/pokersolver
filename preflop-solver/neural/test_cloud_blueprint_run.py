@@ -94,6 +94,7 @@ def arguments(root: Path) -> argparse.Namespace:
         potential_bins=3,
         integrate_terminal_actions=False,
         opponent_checkdown_baseline=False,
+        streetwise_opponent_estimator=False,
         export_postflop_strategies=True,
         bytes_per_information_set=2_300,
         minimum_free_disk_gb=20.0,
@@ -206,7 +207,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             command = build_command(args, seed_run(Path(directory)))
             self.assertEqual(command[command.index("--potential-bins") + 1], "1")
             args.potential_bins = 3
-            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline", "canonical_suit_buckets"):
+            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline", "streetwise_opponent_estimator", "canonical_suit_buckets"):
                 setattr(args, field, True)
                 self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
                 setattr(args, field, False)
@@ -241,6 +242,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             for field, flag in (
                 ("integrate_terminal_actions", "--integrate-terminal-actions"),
                 ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
+                ("streetwise_opponent_estimator", "--streetwise-opponent-estimator"),
                 ("canonical_suit_buckets", "--canonical-suit-buckets"),
             ):
                 setattr(args, field, True)
@@ -250,7 +252,8 @@ class CloudBlueprintRunTests(unittest.TestCase):
     def test_opponent_variance_modes_require_pcs_and_are_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             args = arguments(Path(directory))
-            for field in ("integrate_terminal_actions", "opponent_checkdown_baseline"):
+            fields = ("integrate_terminal_actions", "opponent_checkdown_baseline", "streetwise_opponent_estimator")
+            for field in fields:
                 setattr(args, field, True)
                 with self.assertRaisesRegex(SystemExit, "requires public-chance"):
                     validate_numeric_options(args)
@@ -259,9 +262,16 @@ class CloudBlueprintRunTests(unittest.TestCase):
                 setattr(args, field, False)
                 args.public_chance_sampling = False
             args.public_chance_sampling = True
-            args.integrate_terminal_actions = args.opponent_checkdown_baseline = True
-            with self.assertRaisesRegex(SystemExit, "choose only one"):
-                validate_numeric_options(args)
+            for first in fields:
+                for second in fields:
+                    if first == second:
+                        continue
+                    setattr(args, first, True)
+                    setattr(args, second, True)
+                    with self.assertRaisesRegex(SystemExit, "choose only one"):
+                        validate_numeric_options(args)
+                    setattr(args, first, False)
+                    setattr(args, second, False)
 
     def test_extension_pins_parent_checkpoint_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -324,6 +334,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             for field, flag in (
                 ("integrate_terminal_actions", "--integrate-terminal-actions"),
                 ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
+                ("streetwise_opponent_estimator", "--streetwise-opponent-estimator"),
                 ("canonical_suit_buckets", "--canonical-suit-buckets"),
             ):
                 setattr(args, field, True)
@@ -592,6 +603,7 @@ class CloudBlueprintRunTests(unittest.TestCase):
             for field, summary_field in (
                 ("integrate_terminal_actions", "integrateTerminalActions"),
                 ("opponent_checkdown_baseline", "opponentCheckdownBaseline"),
+                ("streetwise_opponent_estimator", "streetwiseOpponentEstimator"),
                 ("canonical_suit_buckets", "canonicalSuitBuckets"),
             ):
                 setattr(args, field, True)

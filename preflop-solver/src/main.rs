@@ -3085,6 +3085,9 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
     config.opponent_checkdown_baseline = args
         .iter()
         .any(|argument| argument == "--opponent-checkdown-baseline");
+    config.streetwise_opponent_estimator = args
+        .iter()
+        .any(|argument| argument == "--streetwise-opponent-estimator");
     config.evaluation_controls.held_out_deals = parse_or(
         args,
         "--held-out-deals",
@@ -3393,6 +3396,10 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .expect("blueprint summary object")
                 .insert(field.to_owned(), enabled.into());
         }
+        if artifact.config.streetwise_opponent_estimator {
+            summary_value.as_object_mut().expect("blueprint summary object")
+                .insert("streetwiseOpponentEstimator".to_owned(), true.into());
+        }
         blueprint::write_json_atomic(&summary, &summary_value)?;
     }
     eprintln!(
@@ -3581,6 +3588,7 @@ Blueprint options:
   --public-chance-sampling        Research: update all board-compatible hands
   --integrate-terminal-actions   Research: integrate terminal opponent actions
   --opponent-checkdown-baseline   Research: stateless opponent control variate
+  --streetwise-opponent-estimator Research: integrate through flop; checkdown baseline on turn/river
   --action-value-seed <integer>   Fixed per-action evaluation seed
   --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)
   --dcfr-beta <number>            Negative-regret exponent (default: 0)

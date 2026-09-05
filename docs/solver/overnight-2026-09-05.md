@@ -988,10 +988,54 @@ Do not change the game, default estimator, current 800-round checkpoints,
 serving model, or validation gates.
 
 After verification, use a short paired 400-round screen against the preserved
-integration-400 controls before any larger run. This implementation and pilot
-have **not started yet**. Disk free is now about 22GiB. Permission was asked
+integration-400 controls before any larger run. Disk free is about 22GiB. Permission was asked
 asynchronously to delete only the two newly generated rejected-checkdown
 checkpoints (about 2.4GB), preserving reports, exports, frozen executable and
 all original/best checkpoints. No files have been deleted; do not treat the
 unanswered question as approval. Coding/tests can proceed independently of
 that retention choice, and the 20GiB disk reserve remains enforced.
+
+## Streetwise estimator implementation
+
+Implemented opt-in `--streetwise-opponent-estimator`. The opponent estimator
+selects the unchanged terminal-integration branch on preflop/flop and the
+unchanged checkdown-control-variate branch on turn/river. Traverser enumeration,
+regret updates, average-policy weighting and the game abstraction stay unchanged.
+Selection depends only on public street. The expectation-preserving composition
+is our design inference from the existing estimator identities, not a published
+claim that this particular hybrid has lower variance or exploitability.
+
+The mode requires public-chance sampling and is exclusive with the two older
+variance options. Config, CLI summary, runner fingerprint and artifact training
+identity pin it. Its checkpoints use schema 6 so older readers cannot silently
+ignore the new flag; existing modes still write schema 5. The inference-only
+reader validates both schema/mode combinations and rejects mismatches. Do not
+resume a schema-5 training run into this mode.
+
+Verification: 232 release library tests and 9 CLI tests pass, including the
+previously failing all-street branch/terminal-CFV regression, deterministic
+interrupted/uninterrupted training and checkpoint reader rejection. The relevant
+32 Python runner/resource/pilot tests pass. An additional, unrelated neural
+release test module could not import under system Python because NumPy is absent;
+no dependency was installed and it is not counted as passing.
+
+Actual two-round old/new executable comparisons preserve both artifact and
+summary bytes for every older PCS mode. Artifact SHA-256 values:
+
+- Ordinary sampling: `0dbd2fa30b6f2f6023e5eab9ebab1f8af4d843224737c6554bf873659f38689c`.
+- Terminal integration: `c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`.
+- Checkdown baseline: `c160cf62c61b85085ee9d382ede30964c98af338f7a2fcd28541aa644105377a`.
+
+Temporary fixtures are at `/tmp/poker-streetwise-check.0CSwdE`. The real new-mode
+checkpoint has schema 6; the old frozen `2f023b5...` executable rejects it as
+unsupported. This is a small correctness replay, not policy qualification.
+The preceding rejected-pilot milestone `f7fb41e` passed CI 33987662104.
+
+To proceed without deleting any checkpoint, the paired 400-round screen will
+omit only **new resumable checkpoint writes**. It still trains all streets and
+performs the same internal held-out/root/action-EV evaluation, retaining summaries,
+diagnostic preflop exports, command/configuration hashes and a frozen executable.
+Use the existing resource guard and summary/artifact validators. If promising,
+reproduce the deterministic run before saving a full checkpoint for later routed
+evaluation; the diagnostic preflop export cannot serve the full-hand model.
+This saves disk, not training memory, and no completed policy result is claimed yet.

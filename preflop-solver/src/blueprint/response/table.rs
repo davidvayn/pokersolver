@@ -1,5 +1,6 @@
-//! Inference-only view of schema-5 checkpoints. Deserialize frozen average
-//! accumulators directly; never allocate regrets, resumable state, or a second
+//! Inference-only view of legacy schema-5 and streetwise schema-6 checkpoints.
+//! Deserialize frozen average accumulators directly; never allocate regrets,
+//! resumable state, or a second
 //! expanded table. This reader cannot produce a training checkpoint.
 use super::*;
 
@@ -74,7 +75,7 @@ impl InferenceTable {
         } else {
             serde_json::from_reader(reader)?
         };
-        if checkpoint.schema_version != BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
+        if checkpoint.schema_version != checkpoint.config.checkpoint_schema_version()
             || checkpoint.model != MODEL
             || !checkpoint.approximate
             || checkpoint.completed_iterations > checkpoint.config.iterations
@@ -149,4 +150,42 @@ fn average_nodes<'de, D: serde::Deserializer<'de>>(
         }
     }
     deserializer.deserialize_map(Visitor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inference_reader_pins_streetwise_checkpoint_schema_and_mode() {
+        let path = std::env::temp_dir().join(format!(
+            "streetwise-inference-schema-{}.json", std::process::id()
+        ));
+        for streetwise in [false, true] {
+            let config = BlueprintConfig {
+                traversal: BlueprintTraversal::PublicChanceSampling,
+                streetwise_opponent_estimator: streetwise,
+                ..BlueprintConfig::default()
+            };
+            let trainer = Trainer::fresh(config.clone());
+            trainer.write_checkpoint(&path).unwrap();
+            let loaded = InferenceTable::read(&path).unwrap();
+            assert_eq!(loaded.config, config);
+            assert_eq!(loaded.rounds, 0);
+            let mut payload: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(payload["schema_version"], if streetwise { 6 } else { 5 });
+            for wrong_schema in [4, if streetwise { 5 } else { 6 }, 7] {
+                payload["schema_version"] = wrong_schema.into();
+                write_json_atomic(&path, &payload).unwrap();
+                assert!(InferenceTable::read(&path).is_err());
+            }
+            payload["schema_version"] = config.checkpoint_schema_version().into();
+            payload["config"]["opponent_checkdown_baseline"] = true.into();
+            payload["config"]["integrate_terminal_actions"] = true.into();
+            write_json_atomic(&path, &payload).unwrap();
+            assert!(InferenceTable::read(&path).is_err());
+        }
+        fs::remove_file(path).unwrap();
+    }
 }

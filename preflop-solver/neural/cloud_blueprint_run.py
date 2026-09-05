@@ -4,7 +4,8 @@
 The trainer itself is intentionally single-worker and deterministic. This
 orchestrator uses cloud cores only for independent seeds; it never merges
 incompatible regret tables or changes the sampled game. Internal resumable
-checkpoints use schema 5; frozen policy artifacts remain model schema v3.
+checkpoints use schema 5 (schema 6 for the opt-in streetwise estimator);
+frozen policy artifacts remain model schema v3.
 New checkpoints use lossless named MessagePack inside streaming gzip. Both
 MessagePack and JSON-gzip codecs are readable for schema 5; older training
 schemas require their original binary and cannot be resumed here. Final
@@ -453,6 +454,7 @@ def validate_summary(
         ("canonicalSuitBuckets", args.canonical_suit_buckets),
         ("integrateTerminalActions", args.integrate_terminal_actions),
         ("opponentCheckdownBaseline", args.opponent_checkdown_baseline),
+        ("streetwiseOpponentEstimator", args.streetwise_opponent_estimator),
     ):
         if summary.get(field, False) is not enabled:
             raise ValueError(f"blueprint summary {field} does not match the run")
@@ -634,6 +636,8 @@ def run_fingerprint(
     }
     if args.canonical_suit_buckets:
         settings["canonicalSuitBuckets"] = True
+    if args.streetwise_opponent_estimator:
+        settings["streetwiseOpponentEstimator"] = True
     if args.potential_bins != 3:
         settings["potentialBins"] = args.potential_bins
     canonical = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode()
@@ -696,6 +700,8 @@ def build_command(args: argparse.Namespace, run: SeedRun) -> list[str]:
         command.append("--integrate-terminal-actions")
     if args.opponent_checkdown_baseline:
         command.append("--opponent-checkdown-baseline")
+    if args.streetwise_opponent_estimator:
+        command.append("--streetwise-opponent-estimator")
     _, schedule_horizon, schedule_flag = selected_dcfr_schedule(args)
     if schedule_flag is not None:
         command.extend([schedule_flag, str(schedule_horizon)])
@@ -785,6 +791,7 @@ def parse_args() -> argparse.Namespace:
     variance_mode = parser.add_mutually_exclusive_group()
     variance_mode.add_argument("--integrate-terminal-actions", action="store_true")
     variance_mode.add_argument("--opponent-checkdown-baseline", action="store_true")
+    variance_mode.add_argument("--streetwise-opponent-estimator", action="store_true")
     parser.add_argument("--allow-resource-oversubscription", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -793,10 +800,12 @@ def parse_args() -> argparse.Namespace:
 def validate_numeric_options(args: argparse.Namespace) -> None:
     if args.verify_checkpoint_reader_upgrade and not args.evaluation_only:
         raise SystemExit("checkpoint reader upgrade requires evaluation-only")
-    if args.integrate_terminal_actions and args.opponent_checkdown_baseline:
+    if sum((args.integrate_terminal_actions, args.opponent_checkdown_baseline,
+            args.streetwise_opponent_estimator)) > 1:
         raise SystemExit("choose only one opponent variance-reduction mode")
     if (
         args.integrate_terminal_actions or args.opponent_checkdown_baseline
+        or args.streetwise_opponent_estimator
     ) and not args.public_chance_sampling:
         raise SystemExit("opponent variance reduction requires public-chance sampling")
     if not math.isfinite(args.depth) or args.depth <= 1.0:
@@ -1018,6 +1027,7 @@ def load_parent_stage(
             ("--canonical-suit-buckets", args.canonical_suit_buckets),
             ("--integrate-terminal-actions", args.integrate_terminal_actions),
             ("--opponent-checkdown-baseline", args.opponent_checkdown_baseline),
+            ("--streetwise-opponent-estimator", args.streetwise_opponent_estimator),
         ):
             if (isinstance(command, list) and flag in command) != enabled:
                 raise SystemExit(f"resume source changes immutable setting {flag}")

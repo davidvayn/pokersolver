@@ -3,6 +3,27 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn streetwise_blueprint_rejects_incompatible_modes_before_artifact_io() {
+    let path = std::env::temp_dir().join(format!(
+        "streetwise-cli-invalid-{}.json", std::process::id()
+    ));
+    for (options, message) in [
+        (vec![], "requires public-chance sampling"),
+        (vec!["--public-chance-sampling", "--integrate-terminal-actions"], "choose only one"),
+        (vec!["--public-chance-sampling", "--opponent-checkdown-baseline"], "choose only one"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["blueprint", "--streetwise-opponent-estimator", "--iterations", "2",
+                "--averaging-delay", "0", "--output", path.to_str().unwrap()])
+            .args(options).output().unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{stderr}");
+        assert!(!path.exists(), "invalid mode must not create an artifact");
+    }
+}
+
+#[test]
 fn preflop_runouts_reject_noops_and_unbounded_allocations_before_io() {
     for (options, message) in [
         (vec!["--postflop-response-only"], "require preflop response training"),
