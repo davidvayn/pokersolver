@@ -660,7 +660,7 @@ The terminal-50 response run completed using its original frozen `991db6c...`
 executable and unchanged configuration. Implementation commit `25f00c5`
 was pushed and passed CI (33968621983).
 
-The full-weight short comparison is now **active** at
+The full-weight short comparison is now **complete** at
 `preflop-solver/neural/runs/local-terminal100-20260905-pair1/cohort.json`:
 weight 1.0 versus the terminal-50 control pinned by the new proposal reports;
 1,024 hands per seat/opponent, offset 3600000, 2 workers, 2,048 equity
@@ -669,3 +669,37 @@ samples, exact terminal payoff integration, sequential checkpoint seeds,
 focused responses, and newly trained terminal-50 responses. The uncalibrated
 A/BB attacker remains explicitly a raw diagnostic challenge, not a certified
 response. No gate is relaxed and no full-weight profile is selected yet.
+
+All twelve comparisons have positive individual 99% intervals:
+
+| Seed | Old / BB | Old / BTN-SB | Terminal-25 / BB | Terminal-25 / BTN-SB | Terminal-50 / BB | Terminal-50 / BTN-SB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 26001 | 0.18945161 | 0.09655398 | 0.08379444 | 0.14159263 | 0.16038898 | 0.13617210 |
+| 26002 | 0.15734316 | 0.10453812 | 0.11675794 | 0.11972231 | 0.07066245 | 0.08514126 |
+
+Units are paired defender payoff improvement in bb/hand over terminal-50,
+not exploitability reduction. The smallest individual 99% lower endpoint
+is 0.01321501bb. These intervals are not family-adjusted. The final A
+comparison uses the explicitly uncalibrated raw diagnostic opponent.
+Runtimes 207.132 / 293.361 seconds; sampled peak footprints
+6,785,045,664 / 6,760,600,712 bytes; no stops. Both hashes verified:
+A `f83bec143dc851c9212f4456445c15922d9750c0c6494419fe622f8a93d19f0d`;
+B `7dedfda64707e1a7c1929ec252a8f83a1725c4d9b4175869d3e65c5c914157eb`.
+
+The full-weight candidate has earned a genuinely fresh **all-street** response
+pair, now **active** at
+`preflop-solver/neural/runs/local-terminal100-full-response-20260905-pair1`.
+This deliberately includes preflop deviations rather than treating the focused
+postflop critic as a full-game qualification. It uses the verified frozen
+`804d9f8...` binary, original 800-round checkpoints, joint-four turn/river,
+terminal 1.0 / 2,048 samples, 4,000 training / 8,000 calibration / 8,000
+holdout hands per seat, four action rollouts, minimum four particles, exact
+postflop terminal labels, and fresh offset 3800000. Three shared-table workers
+leave more memory headroom than the previous four-worker training pair;
+seeds remain sequential. Memory/disk stops remain 7.5GiB / 20GiB. The time
+stop is 90 minutes per seed to allow the additional preflop continuation
+labels; this is a compute budget change, not a validation-gate change.
+Postflop training hands are not replaced by preflop hands: the same authentic
+trajectories now also receive preflop action labels. Terminal-50 remains the
+previously confirmed fallback; full weight is under fresh attack assessment,
+not activated or labeled Approximate GTO. No distillation is running.
