@@ -2161,6 +2161,7 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
                     })
                 })
                 .transpose()?,
+            postflop_only_response: args.iter().any(|a| a == "--postflop-response-only"),
             turn_resolver: value(args, "--tabular-turn-iterations")
                 .map(|value| {
                     Ok::<_, Box<dyn Error>>(blueprint::response::TurnResolveOptions {
@@ -2189,6 +2190,7 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
                 "terminalFlop": evaluation.terminal_flop,
                 "flopBackoff": evaluation.flop_backoff,
                 "exactTerminalTrainingValues": evaluation.exact_terminal_training_values,
+                "postflopOnlyResponse": evaluation.postflop_only_response,
                 "checkpointTrainingIterations": evaluation.checkpoint_training_iterations,
                 "sourcePolicyCoverage": evaluation.source_policy_coverage,
                 "totalResponseGainBbPerHand": evaluation.total_response_gain_bb_per_hand,
@@ -3311,6 +3313,15 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .insert(
                     "opponentHandBatchSize".to_owned(),
                     artifact.config.opponent_hand_batch_size.into(),
+                );
+        }
+        if artifact.config.hand_abstraction.potential_bins != 3 {
+            summary_value
+                .as_object_mut()
+                .expect("blueprint summary object")
+                .insert(
+                    "potentialBins".to_owned(),
+                    artifact.config.hand_abstraction.potential_bins.into(),
                 );
         }
         summary_value

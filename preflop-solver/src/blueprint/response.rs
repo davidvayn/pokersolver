@@ -75,6 +75,7 @@ pub struct ResponseEvaluationConfig {
     pub terminal_flop: Option<TerminalFlopOptions>,
     pub flop_backoff: Option<FlopBackoffOptions>,
     pub exact_terminal_training_values: bool,
+    pub postflop_only_response: bool,
     pub response_workers: usize,
 }
 
@@ -395,6 +396,8 @@ pub struct FullGameResponseEvaluation {
     pub flop_backoff: Option<FlopBackoffOptions>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exact_terminal_training_values: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub postflop_only_response: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resolution_diagnostics: BTreeMap<String, serde_json::Value>,
     /// Sum across seats, not the legacy seat-average/NashConv-over-two scale.
@@ -835,7 +838,8 @@ pub fn evaluate_full_game_response(
     Ok(FullGameResponseEvaluation {
         schema: if checkpoint_training_iterations.is_some() { "hu-tabular-checkpoint-information-set-response-v1" } else { RESPONSE_SCHEMA }.to_owned(),
         method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws_and_paired_baseline_advantages"
-            .to_owned() + if config.exact_terminal_training_values { "_with_exact_postflop_terminal_training_values" } else { "" },
+            .to_owned() + if config.exact_terminal_training_values { "_with_exact_postflop_terminal_training_values" } else { "" }
+            + if config.postflop_only_response { "_postflop_response_only" } else { "" },
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
         policy_sha256,
@@ -846,6 +850,7 @@ pub fn evaluate_full_game_response(
         terminal_flop: config.terminal_flop,
         flop_backoff: config.flop_backoff,
         exact_terminal_training_values: config.exact_terminal_training_values,
+        postflop_only_response: config.postflop_only_response,
         resolution_diagnostics,
         total_response_gain_bb_per_hand: players.iter().map(|player| player.estimated_gain_bb).sum(),
         total_response_gain_lower_confidence_bound_99_percent_bb_per_hand: 2.0 * confidence_lower_bound,
@@ -907,6 +912,7 @@ fn train_learned_response(
                 responder,
                 config.rollouts_per_action,
                 config.exact_terminal_training_values,
+                config.postflop_only_response,
                 config.seed,
                 deal_index,
                 &mut trajectory_rng,
@@ -1031,6 +1037,7 @@ fn collect_trajectory_decisions(
     responder: usize,
     rollouts_per_action: u32,
     exact_terminal_training_values: bool,
+    postflop_only_response: bool,
     response_seed: u64,
     deal_index: u64,
     trajectory_rng: &mut SplitMix64,
@@ -1044,7 +1051,7 @@ fn collect_trajectory_decisions(
     // distinctions forgotten by coarser response keys. Average Q-values alone
     // cannot establish that a coarser response beats that informed profile.
     let strategy = policy.strategy(&state, deal, &actions, game);
-    if state.actor == responder {
+    if state.actor == responder && (!postflop_only_response || state.street != Street::Preflop) {
         let (key, descriptor, history) = information_set(&state, deal, game);
         let (backoff_key, backoff_descriptor, backoff_history) =
             observable_backoff_information_set(&state, deal, game, &actions);
@@ -1101,6 +1108,7 @@ fn collect_trajectory_decisions(
         responder,
         rollouts_per_action,
         exact_terminal_training_values,
+        postflop_only_response,
         response_seed,
         deal_index,
         trajectory_rng,
@@ -2035,6 +2043,7 @@ mod tests {
             terminal_flop: None,
             flop_backoff: None,
             exact_terminal_training_values: false,
+            postflop_only_response: false,
         };
         let first = evaluate_full_game_response(config.clone()).unwrap();
         let second = evaluate_full_game_response(config.clone()).unwrap();
@@ -2062,6 +2071,7 @@ mod tests {
         assert_eq!(first.depth_bb, 20.0);
         let mut corrected = config.clone();
         corrected.exact_terminal_training_values = true;
+        corrected.postflop_only_response = true;
         corrected.flop_backoff = Some(FlopBackoffOptions {
             minimum_average_visits: 1,
             weight: 1.0,
@@ -2082,6 +2092,11 @@ mod tests {
             .policy_source_kind
             .contains("terminal_flop"));
         assert_eq!(serial_correction.terminal_flop.unwrap().weight, 0.25);
+        assert!(serial_correction
+            .preflop_responses
+            .iter()
+            .all(Vec::is_empty));
+        assert!(serial_correction.postflop_only_response);
         assert!(first.network_sha256.is_empty());
         assert_eq!(first.policy_sha256, sha256_file(&path).unwrap());
         assert_eq!(first.source_policy_coverage.len(), 3);

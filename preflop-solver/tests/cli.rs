@@ -272,6 +272,8 @@ fn blueprint_command_writes_explicit_approximate_artifact() {
             "2",
             "--opponent-hand-batch-size",
             "2",
+            "--potential-bins",
+            "1",
             "--max-information-sets",
             "100000",
             "--output",
@@ -297,6 +299,7 @@ fn blueprint_command_writes_explicit_approximate_artifact() {
     assert_eq!(payload["metrics"]["training_iterations"], 2);
     assert_eq!(payload["metrics"]["sampled_deals"], 4);
     assert_eq!(payload["config"]["opponent_hand_batch_size"], 2);
+    assert_eq!(payload["config"]["hand_abstraction"]["potential_bins"], 1);
     assert_eq!(payload["config"]["dcfr_schedule"], "hs30");
     assert_eq!(payload["config"]["dcfr_schedule_horizon"], 2);
     assert_eq!(payload["validation"]["status"], "advisory_only");
@@ -307,6 +310,7 @@ fn blueprint_command_writes_explicit_approximate_artifact() {
     assert_eq!(summary["dcfrScheduleHorizon"], 2);
     assert_eq!(summary["dcfr"]["strategy_exponent"], 2.0);
     assert_eq!(summary["opponentHandBatchSize"], 2);
+    assert_eq!(summary["potentialBins"], 1);
     let root_strategies = summary["rootStrategies"]
         .as_array()
         .expect("compact root strategies");

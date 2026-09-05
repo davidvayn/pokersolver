@@ -43,6 +43,7 @@ def main():
     parser.add_argument('--flop-backoff-minimum-visits', type=int)
     parser.add_argument('--flop-backoff-weight', type=float, default=1.0)
     parser.add_argument('--response-terminal-expectations', action='store_true')
+    parser.add_argument('--postflop-response-only', action='store_true')
     parser.add_argument('--calibration-deals', type=int, default=256)
     parser.add_argument('--evaluation-deals', type=int, default=1024)
     parser.add_argument('--rollouts-per-action', type=int, default=4)
@@ -127,6 +128,8 @@ def main():
             command += ['--response-workers',str(args.response_workers)]
             if args.response_terminal_expectations:
                 command += ['--response-terminal-expectations']
+            if args.postflop_response_only:
+                command += ['--postflop-response-only']
             if arm != 'baseline':
                 name,count=arm.split(':'); command += ['--tabular-turn-iterations',count]
                 if name == 'joint': command += ['--tabular-turn-unconstrained']

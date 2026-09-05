@@ -91,6 +91,7 @@ def arguments(root: Path) -> argparse.Namespace:
         compact_serving_grid=False,
         public_chance_sampling=False,
         canonical_suit_buckets=False,
+        potential_bins=3,
         integrate_terminal_actions=False,
         opponent_checkdown_baseline=False,
         export_postflop_strategies=True,
@@ -200,6 +201,11 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args.public_chance_sampling = True
             self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
             args.public_chance_sampling = False
+            args.potential_bins = 1
+            self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
+            command = build_command(args, seed_run(Path(directory)))
+            self.assertEqual(command[command.index("--potential-bins") + 1], "1")
+            args.potential_bins = 3
             for field in ("integrate_terminal_actions", "opponent_checkdown_baseline", "canonical_suit_buckets"):
                 setattr(args, field, True)
                 self.assertNotEqual(run_fingerprint(args, "a" * 64), expected)
@@ -311,6 +317,10 @@ class CloudBlueprintRunTests(unittest.TestCase):
             fingerprint, checkpoints = load_parent_stage(args, binary_hash)
             self.assertEqual(fingerprint, "f" * 64)
             self.assertEqual(set(checkpoints), set(args.seeds))
+            args.potential_bins = 1
+            with self.assertRaisesRegex(SystemExit, "potential-bins"):
+                load_parent_stage(args, binary_hash)
+            args.potential_bins = 3
             for field, flag in (
                 ("integrate_terminal_actions", "--integrate-terminal-actions"),
                 ("opponent_checkdown_baseline", "--opponent-checkdown-baseline"),
@@ -572,6 +582,13 @@ class CloudBlueprintRunTests(unittest.TestCase):
                 "validationReasons": ["independent validation still required"],
             }
             self.assertIs(validate_summary(summary, args, 26_001), summary)
+            args.potential_bins = 1
+            with self.assertRaisesRegex(ValueError, "potentialBins"):
+                validate_summary(summary, args, 26_001)
+            summary["potentialBins"] = 1
+            self.assertIs(validate_summary(summary, args, 26_001), summary)
+            args.potential_bins = 3
+            summary["potentialBins"] = 3
             for field, summary_field in (
                 ("integrate_terminal_actions", "integrateTerminalActions"),
                 ("opponent_checkdown_baseline", "opponentCheckdownBaseline"),

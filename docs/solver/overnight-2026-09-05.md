@@ -149,7 +149,7 @@ explicitly warning that the standard theoretical guarantees do not transfer.
 We do not change the original training abstraction or its checkpoint.
 
 `preflop-solver/neural/runs/local-pooling-20260905-pair1/cohort.json` is
-**active**. Minimum eight averaging contributions, full pooled weight only
+**complete**. Minimum eight averaging contributions, full pooled weight only
 at missing/untrained supported flop rows; joint-four turn/river and the
 25% terminal-flop correction are preserved. Two retained opponents per seed:
 the earlier baseline attack and Pilot 2's raw diagnostic attack. Each opponent
@@ -158,7 +158,29 @@ per seat/opponent, seed offset 2200000, sequential seeds, two shared-table
 workers, 45-minute / 7.5GiB footprint stop and 20GiB disk reserve. This uses
 paired realized rollouts, not the terminal-only exact estimator, because the
 candidate can change nonterminal flop decisions. No second full-size table
-may run alongside it.
+may run alongside another full-size worker.
+
+The policy screen was mixed: four positive and four negative point estimates;
+every individual 99% interval crosses zero. Only 2–6 of 1,024 hand payoffs
+changed per comparison. **Do not select the pooled policy or extend this arm.**
+The unchanged terminal-corrected candidate remains the retained policy.
+
+| Seed | Older opponent BB/SB defender gains, bb/hand | New raw opponent BB/SB defender gains |
+| --- | --- | --- |
+| 26001 | -0.015625 / +0.012939 | -0.018555 / +0.064290 |
+| 26002 | +0.006673 / -0.054851 | +0.024902 / -0.023926 |
+
+The labels denote defender seats, in report responder order 0 then 1. The
+underlying report preserves every comparison's standard error, interval, and
+opponent calibration status. Seed A had 154,046 pooled rows with the required
+support. Pooled matches accounted for 182/415 eligible source-missing queries
+on A and 175/399 on B; matching a borrowed row did not establish useful policy
+improvement. Runs took 197.862 / 245.291 seconds, peaking at 7,100,568,976 /
+7,135,237,520 sampled physical-footprint bytes without resource stops.
+Frozen binary:
+`4aa263d088218d50a95edc96ee9fc9a3a1bc4016c09b104f64cc4584d7f6839c`.
+Output A: `d8cf739c4ec67d49456857cb053255a919792e23794dd3bc8349ee37ac279606`;
+B: `5ab6da8e798d69a1d7d28f578e56f40827ae914c6fc7b2c8c244c26804618bea`.
 
 ## Next attack pilot: remove redundant terminal-runout noise
 
@@ -180,3 +202,79 @@ legal card removal, trained-row precedence, terminal-correction preservation,
 and deterministic shared-worker completion counts. All 222 Rust release
 library tests, 6 CLI tests, and 32 Python resource/runner tests pass; release
 build and whitespace checks pass. Neither new option is a website activation.
+These changes were committed/pushed as `45424d7`, whose CI passed (33958864025).
+
+`preflop-solver/neural/runs/local-exact-terminal-20260905-pair1/cohort.json`
+is **complete**, against the retained non-pooled 800-round profile. It used
+Pilot 2's identical 512/2,000/2,000 sample budgets, rollout/particle settings,
+and offset 2000000, but exact terminal training values and four shared-table
+workers. The frozen binary is `4aa263d...` above. This intentionally reuses the
+pilot's random corpora for a controlled training-label comparison; it is not
+an untouched final qualification set. Normal independent phase domains and
+calibration acceptance still apply within the experiment. Both seeds are
+sequential with 45-minute / 7.5GiB footprint stops and a 20GiB disk reserve.
+No stop fired. All four responses again failed calibration:
+
+| Seed | Responder | Calibration gain, bb | SE | One-sided 99.5% lower bound |
+| --- | --- | ---: | ---: | ---: |
+| 26001 | BTN/SB | 0.0372915 | 0.0588113 | -0.1141963 |
+| 26001 | BB | 0.0542500 | 0.0355190 | -0.0372408 |
+| 26002 | BTN/SB | 0.1360420 | 0.0758490 | -0.0593322 |
+| 26002 | BB | -0.0095830 | 0.0653927 | -0.1780235 |
+
+Exact terminal labels remove a demonstrated source of terminal-label noise,
+but this pair does not demonstrate stronger overall attacks or a better
+defender. It does not justify a longer identical run. Runtimes were 582.207 /
+590.919 seconds; sampled peak footprints 7,399,298,640 / 7,542,953,648 bytes.
+Four shared-table workers therefore completed these full-size pilots within
+the existing 7.5GiB sampled stop, not a guarantee about future peaks.
+Output A: `a689feb7cf4380261ada92ef2130f6b5b07d5690088263dc517df6d1b68140a9`;
+B: `e7dd9f33a6faf3f730af54270a169ccd3f0a2ff7e4d23a702b11ea69aafc6de4`.
+Both this pair's and the pooling pair's output hashes were independently
+rechecked against their manifests.
+
+A subsequent postflop-only training option is implemented and verified. It keeps authentic
+preflop sampling but skips expensive preflop counterfactual-label generation,
+allocating the training budget to the remaining streets. In Pilot 2, A's
+postflop response lookup coverage was only 16.081% / 9.659% by seat. BB had
+no accepted preflop rows at all, despite spending computation generating them.
+This motivates a more focused critic, not a claim that preflop explains every
+calibration failure or that a postflop-only attack certifies full-game play.
+The regression confirms unchanged authentic trajectories and identical
+postflop labels versus the full training pass. All 223 Rust library tests,
+6 CLI tests, and 32 Python runner/resource tests pass; release build passes.
+
+## Active focused postflop pair and next density pilot
+
+`preflop-solver/neural/runs/local-postflop-response-20260905-pair1/cohort.json`
+is **active**. It retains joint-four turn/river, 25% terminal correction, and
+the non-pooled 800-round source. New offset 2400000; per-seat budgets are
+4,000 training / 4,000 calibration / 4,000 evaluation hands, four rollouts,
+minimum four particles, exact terminal labels, and `--postflop-response-only`.
+Four shared-table workers, sequential seeds, 45-minute / 7.5GiB sampled stop,
+20GiB disk reserve. Frozen binary:
+`96bf53f14de9978de117b64bcc4f9c3ed5fc503fd6a8137c41a086c2ebb6a127`.
+This reallocates label-generation work toward postflop; it is not a complete
+best-response algorithm or a claimed exploitability upper bound.
+
+The resource-guarded blueprint runner now supports `--potential-bins`, with
+default three retaining the legacy fingerprint and command identity. The
+setting is pinned in new fingerprints, resume checks, and native summaries.
+Tests first failed on all three missing checks, then passed after implementation.
+Native CLI tests verify the actual non-default artifact and summary values.
+
+After the active full-size worker is done, the planned separate policy-density
+screen is a fresh 400-round pair, seeds 27001/27002, `--potential-bins 1`,
+against the retained 400-round control pair. Keep the full betting grid,
+trajectory recall, 10 equity bins, draw features, future category, and legacy
+suit mode unchanged. Only the coarse improvement-probability dimension changes.
+This does lose some information; it is a hypothesis about the memory/learning
+density tradeoff, not a claim that potential information is useless.
+[Ganzfried and Sandholm's primary abstraction paper](https://www.cs.cmu.edu/~sandholm/potential-aware_imperfect-recall.aaai14.pdf)
+motivates measuring such tradeoffs and warns that finer abstraction does not
+monotonically guarantee better full-game play. Do not call this pilot an
+implementation of their clustering algorithm. Use the same 4,000 held-out /
+64 root-deviation-per-class / 1,000 action-value budgets as the control,
+sequential workers, 6GiB / 20-minute stops and 20GiB disk reserve. A longer
+stage requires an actual promising policy/resource screen; no such stage is
+authorized by a node-count decrease alone. The density pilot has **not started**.

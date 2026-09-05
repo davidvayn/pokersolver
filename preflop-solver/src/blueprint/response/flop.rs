@@ -701,6 +701,7 @@ mod tests {
             terminal_flop: None,
             flop_backoff: None,
             exact_terminal_training_values: false,
+            postflop_only_response: false,
         })
         .unwrap();
         // Synthetic unit-test proposal; never used by a training pilot.

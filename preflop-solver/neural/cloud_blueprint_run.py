@@ -447,6 +447,8 @@ def validate_summary(
                 f"blueprint summary {field} does not match the run: "
                 f"expected {value!r}, found {summary.get(field)!r}"
             )
+    if summary.get("potentialBins", 3) != args.potential_bins:
+        raise ValueError("blueprint summary potentialBins does not match the run")
     for field, enabled in (
         ("canonicalSuitBuckets", args.canonical_suit_buckets),
         ("integrateTerminalActions", args.integrate_terminal_actions),
@@ -632,6 +634,8 @@ def run_fingerprint(
     }
     if args.canonical_suit_buckets:
         settings["canonicalSuitBuckets"] = True
+    if args.potential_bins != 3:
+        settings["potentialBins"] = args.potential_bins
     canonical = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
 
@@ -686,6 +690,8 @@ def build_command(args: argparse.Namespace, run: SeedRun) -> list[str]:
         command.append("--public-chance-sampling")
     if args.canonical_suit_buckets:
         command.append("--canonical-suit-buckets")
+    if args.potential_bins != 3:
+        command.extend(["--potential-bins", str(args.potential_bins)])
     if args.integrate_terminal_actions:
         command.append("--integrate-terminal-actions")
     if args.opponent_checkdown_baseline:
@@ -749,6 +755,8 @@ def parse_args() -> argparse.Namespace:
         help="wall-clock limit per seed including reload/export; 0 disables",
     )
     parser.add_argument("--compact-serving-grid", action="store_true")
+    parser.add_argument("--potential-bins", type=int, default=3, choices=range(1, 256),
+                        help="new card abstraction; non-default values require fresh training")
     parser.add_argument(
         "--canonical-suit-buckets", action="store_true",
         help="new suit-invariant bucket identity; incompatible with legacy checkpoints",
@@ -996,6 +1004,8 @@ def load_parent_stage(
         for flag, expected in expected_immutable.items():
             if command_value(command, flag) != expected:
                 raise SystemExit(f"resume source changes immutable setting {flag}")
+        if command_value(command, "--potential-bins") != (None if args.potential_bins == 3 else str(args.potential_bins)):
+            raise SystemExit("resume source changes immutable setting --potential-bins")
         if bool(
             isinstance(command, list) and "--compact-serving-grid" in command
         ) != bool(args.compact_serving_grid):

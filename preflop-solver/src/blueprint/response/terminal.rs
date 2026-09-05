@@ -54,6 +54,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn postflop_only_budget_preserves_the_authentic_line_and_postflop_labels() {
+        let (policy, deal) = super::super::tests::tabular_fixture();
+        let game = &policy.table.config;
+        let mut compared = 0;
+        for seed in 0..32 {
+            let observe = |only| {
+                let mut records = Vec::new();
+                collect_trajectory_decisions(
+                    &policy,
+                    GameState::initial(game),
+                    &deal,
+                    game,
+                    0,
+                    2,
+                    true,
+                    only,
+                    17,
+                    0,
+                    &mut SplitMix64::new(seed),
+                    &mut records,
+                );
+                records
+                    .into_iter()
+                    .filter(|r| r.keys[0].1.street != Street::Preflop)
+                    .map(|r| (r.keys, r.strategic_labels, r.values, r.baseline_strategy))
+                    .collect::<Vec<_>>()
+            };
+            let full = observe(false);
+            compared += full.len();
+            assert_eq!(full, observe(true));
+        }
+        assert!(compared > 0, "fixture must reach actual postflop decisions");
+    }
+
+    #[test]
     fn terminal_action_training_no_longer_repeats_one_lucky_or_unlucky_runout() {
         let (policy, _) = super::super::tests::tabular_fixture();
         let game = &policy.table.config;
@@ -77,6 +112,7 @@ mod tests {
                 facing.actor,
                 4,
                 integrated,
+                false,
                 17,
                 0,
                 &mut SplitMix64::new(3),
