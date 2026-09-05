@@ -6,6 +6,7 @@ use crate::blueprint::neural::{
 };
 use crate::blueprint::public_belief::{sampled_flop, PublicBeliefState, PublicBeliefStrategy};
 use std::time::Instant;
+mod cache;
 
 fn public_ranges(
     base: &TabularResponsePolicy,
@@ -335,4 +336,225 @@ fn paired_root_screen() {
             })
         );
     }
+}
+
+// Build fresh development samples once. All paths are mandatory and files use
+// create_new: an interrupted or completed artifact can never be overwritten.
+#[test]
+#[ignore = "explicit frozen checkpoint, new output directory and external resource guard required"]
+fn build_root_action_caches() {
+    use std::io::Write;
+    let path =
+        PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").expect("explicit checkpoint"));
+    let output = PathBuf::from(
+        std::env::var("POKER_FLOP_PILOT_OUTPUT_DIR").expect("explicit output directory"),
+    );
+    assert!(output.is_dir());
+    let digest = sha256_file(&path).unwrap();
+    let table = Arc::new(InferenceTable::read(&path).unwrap());
+    assert_eq!(table.rounds, 800);
+    assert_eq!(table.config.effective_stack_bb, 20.0);
+    let game = table.config.clone();
+    let terminal = TerminalFlopOptions {
+        equity_samples: 2048,
+        weight: 0.5,
+    };
+    let turns = TurnResolveOptions {
+        iterations: 4,
+        safe_bilateral: false,
+        maximum_policy_rows: 20000,
+    };
+    let base = TabularResponsePolicy {
+        table,
+        coverage: RefCell::default(),
+        flop_patch: Some(Arc::new(flop::FlopPatch::terminal(&terminal))),
+        flop_backoff: None,
+        completion_coverage: RefCell::default(),
+    };
+    let policy = turn::TabularTurnPolicy::new(base.isolated_copy(), turns.clone());
+    let mut rng = SplitMix64::new(85003);
+    let mut roots: [Vec<(GameState, Vec<u8>)>; 4] = std::array::from_fn(|_| Vec::new());
+    let mut boards: [BTreeSet<Vec<u8>>; 4] = std::array::from_fn(|_| BTreeSet::new());
+    for _ in 0..10000 {
+        let deal = Deal::sample(&mut rng);
+        let mut state = GameState::initial(&game);
+        while state.terminal.is_none() && matches!(state.street, Street::Preflop | Street::Flop) {
+            let actions = state.legal_actions(&game);
+            let group = state.actor * 2 + usize::from(state.to_call() > 0.0);
+            let mut board_key = deal.board[..3].to_vec();
+            board_key.sort_unstable();
+            if state.street == Street::Flop
+                && roots[group].len() < 2
+                && !boards[group].contains(&board_key)
+                && actions
+                    .iter()
+                    .any(|a| state.apply(a, &game).terminal.is_none())
+            {
+                boards[group].insert(board_key);
+                roots[group].push((state.clone(), deal.board[..3].to_vec()));
+            }
+            let mix = base.frozen_strategy(&state, &deal, &actions, &game);
+            state = state.apply(&actions[sample_index(&mix, &mut rng)], &game);
+        }
+        if roots.iter().all(|group| group.len() == 2) {
+            break;
+        }
+    }
+    assert!(
+        roots.iter().all(|group| group.len() == 2),
+        "incomplete authentic root strata"
+    );
+    for (group, roots) in roots.into_iter().enumerate() {
+        for (index, (root, board)) in roots.into_iter().enumerate() {
+            let ranges = public_ranges(&base, &root, &board).unwrap();
+            let context = cache::Context {
+                checkpoint_sha256: digest.clone(),
+                game: game.clone(),
+                public: PublicBeliefState::from_game_state(board.clone(), &root, ranges),
+                turn_resolver: turns.clone(),
+                terminal_flop: terminal.clone(),
+                evaluation_seed: 85004 + group as u64 * 100 + index as u64,
+            };
+            let start = Instant::now();
+            let (data, _) = cache::RootActionCache::collect_grouped(&policy, context, 128).unwrap();
+            let bytes = data.encode().unwrap();
+            assert_eq!(data, cache::RootActionCache::decode(&bytes).unwrap());
+            let name = format!("root-{group}-{index}.msgpack");
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output.join(&name))
+                .unwrap();
+            file.write_all(&bytes).unwrap();
+            file.sync_all().unwrap();
+            println!(
+                "{}",
+                serde_json::json!({ "stage": "root_cache", "file": name,
+                    "sha256": format!("{:x}", Sha256::digest(&bytes)), "bytes": bytes.len(),
+                    "seat": root.actor, "facingBet": root.to_call() > 0.0, "group": group, "index": index,
+                    "board": board, "history": root.public_history, "potBb": root.pot(),
+                    "samples": 128, "seconds": start.elapsed().as_secs_f64(),
+                    "rootCollectionSeed": 85003, "evaluationSeed": data.context.evaluation_seed,
+                    "checkpointSha256": digest, "validation": "reusable_development_samples_not_fresh_validation",
+                })
+            );
+        }
+    }
+}
+
+fn score_summary(value: &ValueAccumulator) -> serde_json::Value {
+    serde_json::json!({ "meanBb": value.mean(), "standardErrorBb": value.standard_error(),
+        "normalApproxIndividual99LowerBb": value.mean() - 2.5758293035489004 * value.standard_error(),
+        "normalApproxIndividual99UpperBb": value.mean() + 2.5758293035489004 * value.standard_error() })
+}
+
+#[test]
+#[ignore = "explicit frozen root cache and new output directory; no checkpoint loading or new evaluation"]
+fn compare_cached_short_pair() {
+    use std::io::Write;
+    let path = PathBuf::from(std::env::var("POKER_FLOP_PILOT_CACHE").expect("explicit cache"));
+    let output = PathBuf::from(
+        std::env::var("POKER_FLOP_PILOT_OUTPUT_DIR").expect("explicit output directory"),
+    );
+    assert!(output.is_dir());
+    let bytes = fs::read(&path).unwrap();
+    let data = cache::RootActionCache::decode(&bytes).unwrap();
+    let cache_sha = format!("{:x}", Sha256::digest(&bytes));
+    for seed in [85001, 85002] {
+        let mut rows = Vec::new();
+        let mut descriptions = Vec::new();
+        for iterations in [32, 128] {
+            let start = Instant::now();
+            let result = sampled_flop::solve(sampled_flop::SampledFlopConfig {
+                game: data.context.game.clone(),
+                state: data.context.public.clone(),
+                iterations,
+                seed,
+                maximum_information_sets: 2_000_000,
+            });
+            match result {
+                Ok(solution) => {
+                    let encoded = rmp_serde::to_vec_named(&solution).unwrap();
+                    let name = format!("seed{seed}-round{iterations}.msgpack");
+                    let mut file = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(output.join(&name))
+                        .unwrap();
+                    file.write_all(&encoded).unwrap();
+                    file.sync_all().unwrap();
+                    descriptions.push(serde_json::json!({ "iterations": iterations,
+                        "seconds": start.elapsed().as_secs_f64(), "informationSets": solution.information_sets,
+                        "trainedRootCombos": solution.trained_root_combos,
+                        "file": name, "sha256": format!("{:x}", Sha256::digest(&encoded)) }));
+                    rows.push(solution.root);
+                }
+                Err(error) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "stage": "proposal_failed", "seed": seed,
+                        "iterations": iterations, "error": error, "cacheSha256": cache_sha })
+                    );
+                    break;
+                }
+            }
+        }
+        if rows.len() != 2 {
+            continue;
+        }
+        let (gains, differences) = data.score(&rows).unwrap();
+        println!(
+            "{}",
+            serde_json::json!({ "stage": "cached_short_pair", "seed": seed,
+            "cacheSha256": cache_sha, "proposals": descriptions,
+            "gainOverFrozenContinuation": gains.iter().map(score_summary).collect::<Vec<_>>(),
+            "paired128Minus32": score_summary(&differences[1]),
+            "validation": "conditional_development_payoff_not_full_game_exploitability" })
+        );
+    }
+}
+
+#[test]
+#[ignore = "full-size frozen-cache parity/cost check; explicit inputs and external guard required"]
+fn verify_grouped_frozen_cache() {
+    let path =
+        PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").expect("explicit checkpoint"));
+    let cache_path =
+        PathBuf::from(std::env::var("POKER_FLOP_PILOT_CACHE").expect("explicit cache"));
+    let bytes = fs::read(&cache_path).unwrap();
+    let expected = cache::RootActionCache::decode(&bytes).unwrap();
+    assert_eq!(
+        sha256_file(&path).unwrap(),
+        expected.context.checkpoint_sha256
+    );
+    let table = Arc::new(InferenceTable::read(&path).unwrap());
+    assert_eq!(table.config, expected.context.game);
+    let base = TabularResponsePolicy {
+        table,
+        coverage: RefCell::default(),
+        flop_patch: Some(Arc::new(flop::FlopPatch::terminal(
+            &expected.context.terminal_flop,
+        ))),
+        flop_backoff: None,
+        completion_coverage: RefCell::default(),
+    };
+    let policy = turn::TabularTurnPolicy::new(base, expected.context.turn_resolver.clone());
+    let start = Instant::now();
+    let (grouped, unique) = cache::RootActionCache::collect_grouped(
+        &policy,
+        expected.context.clone(),
+        expected.sample_count(),
+    )
+    .unwrap();
+    let seconds = start.elapsed().as_secs_f64();
+    assert_eq!(expected, grouped);
+    assert_eq!(bytes, grouped.encode().unwrap());
+    let diagnostics = policy.take_resolution_diagnostics().unwrap();
+    assert_eq!(diagnostics["solved_roots"].as_u64().unwrap(), unique as u64);
+    println!(
+        "{}",
+        serde_json::json!({ "stage": "grouped_cache_parity", "byteIdentical": true,
+        "cacheSha256": format!("{:x}", Sha256::digest(&bytes)), "seconds": seconds,
+        "uniqueTurnRoots": unique, "resolutionDiagnostics": diagnostics })
+    );
 }

@@ -1360,3 +1360,187 @@ facing bets. Development reuse is not independent validation; any selected
 policy still needs a genuinely fresh full-hand challenge. Do not start a long
 run from this one-texture result, rewrite the neural oracle, or change serving
 behavior or gates. All quality gaps at the top of this document remain open.
+
+## Frozen root-action samples and short training comparison
+
+Milestone `ed40290` passed remote CI 33991800881, including native release,
+TypeScript/application build and existing production-resolver checks. This is
+implementation verification, not policy qualification.
+
+The test-only root pilot now separates expensive conditional action sampling
+from inexpensive scoring of new root policies. A MessagePack cache retains the
+exact public state/ranges, source checkpoint hash and continuation settings,
+evaluation seed, sampled acting-hand combo, baseline mix and every action's
+realized continuation payoff. It contains no neural value predictions and is
+not read by serving. The existing direct rollout comparison remains an
+independent regression reference: cached means and SEs match it exactly for
+several distinct root policies. MessagePack round-trip preserves all floats;
+validation rejects illegal line/accounting, malformed probabilities, nonfinite
+or out-of-bounds payoffs, invalid combos and truncated data. A new proposal's
+paired difference against the first proposal is accumulated per sample, retaining
+their covariance rather than combining unrelated standard errors.
+
+Cache collection and proposal export require explicit directories and use
+`create_new`; existing or interrupted output files cannot be overwritten.
+Each cache/proposal is hash-pinned by the external supervisor. The original
+800-round checkpoints, default solver and serving model remain unchanged.
+
+`local-sampled-flop-20260905-cachepair1` is running. It collects two distinct
+flop boards within each of four strata (seat SB/BB crossed with facing a bet /
+not facing a bet), eight roots per original checkpoint. Roots come from the
+retained profile's authentic public lines with fresh collection seed 85003;
+all-terminal decisions are excluded because the experiment targets nonterminal
+flop play. Different strata may share a board, so eight roots do not imply
+eight independent textures. Cache evaluation uses 128 conditional deals/root,
+seeds `85004 + 100*stratum + index`. This is a stratified **development** sample,
+not reach-weighted full-game validation.
+
+The two checkpoints are processed sequentially under 7.5GiB/30-minute sampled
+stops and the unchanged 20GiB disk reserve. Once both caches are complete and
+verified, the full tables are no longer needed: two small workers compare
+32 versus 128 iterations using independent training seeds 85001/85002 and the
+same frozen cache for every comparison. Each worker has a 2GiB/180-second stop;
+each proposal retains the 2M-information-set cap. A cap failure is explicitly
+recorded as an incomplete comparison, never a uniform fallback or a winning
+zero. Policies and exact inputs are retained for later inspection/reproduction.
+No additional sampling run is performed for the longer proposal. Any later
+selection from this cache still needs independent fresh evaluation; cache reuse
+must not be presented as a new holdout or exploitability evidence.
+
+Research cross-check while collecting the cache:
+[Brown/Sandholm 2017](https://papers.neurips.cc/paper/6671-safe-and-nested-subgame-solving-for-imperfect-information-games.pdf)
+explains why conditional subgame gains do not alone protect the full game;
+counterfactual best-response values include unreached opponent information sets.
+This supports keeping our root-action diagnostic separate from full-game claims.
+
+A newer [Kubíček/Lisý/Sandholm preprint (January 2026)](https://arxiv.org/html/2601.17131v1#S7.SS2)
+identifies another possible issue in **gadget-based** solving: different gadget
+equilibria can perform differently in the original game, particularly where the
+gadget opponent never enters. Its CFR modification perturbs auxiliary gadget
+choices toward a positive prior and transforms the regrets consistently; it is
+not a floor on every poker action. The paper tests small benchmark games and
+thousands of CFR iterations, not our sampled 20bb solver. Our current candidate
+uses unconstrained joint-turn solving and the sampled flop has no gadget, so
+this is **not an established explanation or immediate fix for the current
+results**. Do not add blanket probability floors, claim its reported improvement
+for this model, or interrupt the paired experiment to build a new resolver.
+
+### Avoiding repeated continuation solves without changing samples
+
+Source A finished all eight caches in 813.146 seconds, with a sampled peak of
+6,200,840,944 bytes and no stop; source B is still collecting. A's logs contain
+1,394 turn solve calls for 635 distinct public roots across all caches. Within
+each cache separately the distinct counts sum to 731, showing repeated solves
+can be removed without retaining a large multi-root policy table.
+
+Implemented a separate test-only grouped collector. It samples the same deals
+and traverses the same flop actions, stops each nonterminal request at turn
+entry, groups by visible turn board/public history, and carries each request's
+unchanged RNG into the existing rollout. The resulting action values are put
+back in their original sample/action slots. It still uses the existing single-
+generation turn cache; no unbounded policy cache or changed strategy is added.
+A real small turn/river regression verifies identical cache bytes, positive
+solve counts and strictly fewer actual solves. The original direct collector
+remains available as a reference.
+
+The ongoing paired run stays on its immutable `d8d769a...` test executable and
+does not use grouping. A separate, not-yet-run full-size check is prepared at
+`local-sampled-flop-20260905-grouped1`: reconstruct A's first frozen cache and
+require exact equality of every sample and all serialized bytes. Its supervisor
+refuses to overlap the earlier pipeline. Frozen check executable:
+`e0c11c4b01b50860a373838d8ead16158075a7cfb82a476047e3f5da767e9f64`.
+Until that check runs, no full-size speedup or parity result is claimed.
+
+Current verification: 241 release library tests, nine CLI tests and the release
+build pass; five expensive development probes are explicitly ignored by the
+default suite. The production executable remains byte-identical to `1f44c0c...`.
+
+### Completed cached pair and full-size grouping check
+
+The preceding pipeline is now **complete**, not still collecting. All 16 roots
+finished both independent training seeds at both 32 and 128 iterations: 64
+retained proposal artifacts, with no node-cap failures or resource stops.
+All 80 cache/policy hashes and all 18 worker-log hashes were independently
+rechecked. Manifest SHA:
+`248fd69318bf2b7353e5e8c6667cafe3fcc5b32ce19dd14de801e6eefefc529d`.
+Source A/B cache workers took 813.146 / 866.275 seconds, sampled peaks
+6,200,840,944 / 6,130,635,456 bytes. Their log hashes are
+`83b556821816bd46c74011c82914741c717aed112fd2a621ca1a78a5d78436fc` /
+`d07fe077d6eaa63af0dc044421dfee74fb36f60d8814d1e315f4650445dd14ef`.
+Offline proposal training summed to 293.227 worker-seconds using two workers;
+maximum sampled footprint per worker was 490,865,456 bytes. Whole-pipeline
+wall time was 1,835.936 seconds. Those timings are not isolated throughput
+benchmarks.
+
+Conditional gains at 128 iterations and paired changes versus 32 are below
+(training seeds 85001 / 85002). These are bb per sampled root decision, **not
+bb per full hand**, and are not reach-weighted. Strata 0/1 are SB not-facing /
+facing; 2/3 are BB not-facing / facing. Indices distinguish the two roots.
+
+| Source / stratum / index | 128 gain over retained, seed 1 / 2 | 128 minus 32, seed 1 / 2 |
+| --- | ---: | ---: |
+| A / 0 / 0 | +0.252 / +0.220 | +0.199 / -0.084 |
+| A / 0 / 1 | +0.232 / +0.490 | +0.089 / -0.153 |
+| A / 1 / 0 | +1.330 / +1.488 | +0.392 / +1.242 |
+| A / 1 / 1 | +4.396 / +4.394 | +0.009 / +0.209 |
+| A / 2 / 0 | +1.168 / +1.311 | +0.137 / +0.608 |
+| A / 2 / 1 | -0.252 / -0.160 | +0.063 / +0.410 |
+| A / 3 / 0 | +0.071 / +0.491 | -0.024 / +0.370 |
+| A / 3 / 1 | +2.158 / +2.074 | +0.004 / +0.735 |
+| B / 0 / 0 | +0.440 / +0.805 | +0.055 / +0.436 |
+| B / 0 / 1 | +0.336 / +0.467 | +0.673 / -0.517 |
+| B / 1 / 0 | +0.441 / +0.532 | +0.082 / -0.005 |
+| B / 1 / 1 | -0.271 / -0.132 | -0.045 / +0.070 |
+| B / 2 / 0 | +0.037 / -0.269 | -0.443 / +0.088 |
+| B / 2 / 1 | +0.537 / +0.438 | +0.132 / +0.758 |
+| B / 3 / 0 | +2.434 / +2.516 | -0.292 / +0.910 |
+| B / 3 / 1 | -0.671 / -0.179 | -0.887 / -0.035 |
+
+Three roots (A/1/1, A/3/1, B/3/0) have positive individual normal-approximation
+99% intervals against the retained policy for both seeds at both lengths.
+These intervals are not family-adjusted. Increasing iterations improves the
+point estimate in 22/32 comparisons, but only two paired individual 99%
+intervals are positive and one negative; the other 29 cross zero. The seeds
+share each root's frozen action samples, so do not pool them as independent
+evaluation evidence. **No broad winner, longer identical run, model activation,
+or new full-game exploitability claim follows.**
+
+`local-sampled-flop-20260905-grouped1` also completed without a stop. Every
+sample and serialized byte of A/0/0 matched the frozen original cache. Actual
+turn solves decreased from 215 to 115 (46.5% fewer); evaluation time was
+85.083 seconds versus the earlier 198.133 seconds. The measured wall-time
+comparison was not isolated from other host work; byte parity and solve-count
+reduction are the stronger evidence. Whole worker: 154.380 seconds, sampled
+peak 6,200,742,640 bytes. Log SHA:
+`1e84a676a8031f799fd4296c56156bb1ab047a3a0a813ad26bd921fdf850b9e4`.
+Future development-cache collection now uses grouping; the completed pipeline
+and original direct regression reference remain unchanged. No serving code
+or probability changed.
+
+### Action-level diagnosis before another policy change
+
+Read-only inspection of the preserved MessagePack rows and samples used
+`uv run --no-project --with msgpack==1.2.2 python`; no project dependency was
+added. Reconstructed gains and paired changes match every inspected manifest
+value within 1e-10. Attribution centers each sample's Q vector on the reference
+policy value before multiplying by the probability change; it is a diagnostic
+decomposition, not a new action-EV accuracy estimate.
+
+The negative B/3/1 comparison (85001) is reproducible from the frozen manifest:
+128-minus-32 = -0.887024bb, individual 99% interval [-1.719393, -0.054656].
+Its sampled call frequency rises 20.4% -> 36.9%, while ordinary raises fall
+18.7% -> 5.9%. The call component accounts for -0.805bb of the paired change.
+The other training seed's paired change is -0.034696bb and inconclusive. This
+identifies the action shift, not yet why training chose it; a fresh conditional
+sample is needed before attributing a persistent model defect.
+
+The largest positive root A/1/1 starts with a 50/50 fold/call baseline on the
+sampled hands; the 128 proposals call 98.5% / 97.9%. A/3/1 instead improves
+mainly by folding more and reducing all-in raises. B/3/0 improves hand-dependent
+fold/call allocation despite only modest aggregate frequency change. There
+is **no single blanket fold/call correction** supported across these roots.
+
+Next action work should distinguish evaluation noise from the known training /
+deployed-continuation mismatch at the negative call root before integrating or
+lengthening this proposal. The existing cache makes action inspection cheap;
+do not rerun the complete cache collection merely to inspect the same rows.
