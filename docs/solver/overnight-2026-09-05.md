@@ -923,7 +923,7 @@ predictive-baseline zero-variance guarantee. At 800 rounds this implementation
 used 32–35% fewer states but had weaker root diagnostics; additional rounds
 within similar storage are a hypothesis to test, not a promised win.
 
-Selected short test, now active at
+Selected short test, now complete at
 `preflop-solver/neural/runs/local-checkdown-20260905-pair600`:
 fresh training with the existing checkdown-baseline option, 600 rounds per
 seed 26001/26002, versus the preserved 400-round terminal-integration
@@ -942,3 +942,56 @@ verified `2f023b5...` binary is copied to immutable
 `runs/local-checkdown-20260905-solver`. No new training math, model interface,
 abstraction, or gate is added. Require a useful policy-quality result before
 considering further scaling; earlier equal-round evidence was not a win.
+
+Both 600-round seeds finished without a stop. Checkpoint hashes were
+independently verified. The measured comparison is:
+
+| Metric | Integration 400 control | Checkdown 600 candidate |
+| --- | ---: | ---: |
+| Infosets A / B, million | 10.014 / 9.391 | 10.171 / 9.535 |
+| Root local gain A / B, bb | 0.463259 / 0.486139 | 0.514125 / 0.505366 |
+| Mean root local gain, bb | 0.474699 | 0.509745 |
+| Maximum action MAE | 8.902% | 9.806% |
+| Primary agreement, unweighted | 61.538% | 56.213% |
+| Primary agreement, combo-weighted | 63.952% | 58.824% |
+| Maximum aggregate action delta | 5.633% | 3.983% |
+| Maximum held-out unknown fraction | 14.354% | 13.900% |
+| Minimum action-EV SE coverage | 20.932% | 17.835% |
+
+The apparent aggregate coverage improvement is not a matched fixed-trajectory
+coverage test; seed B's unknown fraction actually rises 12.649% -> 13.482%.
+Root local gain is not full-game exploitability. Both candidate root point
+estimates worsen; no paired per-deal significance claim is made. Aggregate
+action delta improves but remains above 3%; other stability and precision
+checks worsen. **Reject this candidate; no larger pure-checkdown run follows.**
+All 169 classes, compatible legal actions and probability sums still pass.
+
+Candidate runtimes A/B: 276.363 / 269.204 seconds. Sampled footprints:
+3,350,547,192 / 3,146,451,536 bytes. Checkpoints:
+A `53e90dee4bf8d7d02e3725eb3aa587cf943e02ff6e324d599a365c88105ce7fb`;
+B `236683e627b1bd6e2725590417c07760aa8278bcc275502a39fab1708e4faffd`.
+Canonical artifact hashes:
+A `d3129b28e855c588097a18faf7d7994aca57608338287884e9d4e3d1c3708111`;
+B `2b5215fc2bbda99f31072fd5af3374074613ff85b7a36fe94138ffcda5c62976`.
+The frozen binary and full reports remain unchanged. No solver process from
+these completed cohorts remains running.
+
+Next selected implementation: an explicit opt-in **streetwise estimator**,
+using the existing exact terminal-integration branch through preflop/flop and
+the existing checkdown-baseline branch on turn/river. Both components already
+have unbiased-estimator tests; composing them by public street still needs
+dedicated tests, resume/configuration pinning and legacy replay verification.
+The hypothesis is to preserve early-street accuracy while spending fewer
+states in late streets, which the retained research profile already resolves
+online. It is not a demonstrated policy improvement or zero-variance method.
+Do not change the game, default estimator, current 800-round checkpoints,
+serving model, or validation gates.
+
+After verification, use a short paired 400-round screen against the preserved
+integration-400 controls before any larger run. This implementation and pilot
+have **not started yet**. Disk free is now about 22GiB. Permission was asked
+asynchronously to delete only the two newly generated rejected-checkdown
+checkpoints (about 2.4GB), preserving reports, exports, frozen executable and
+all original/best checkpoints. No files have been deleted; do not treat the
+unanswered question as approval. Coding/tests can proceed independently of
+that retention choice, and the 20GiB disk reserve remains enforced.
