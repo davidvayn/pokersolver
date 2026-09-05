@@ -1,5 +1,16 @@
 # Connected tabular turn/river pilot
 
+> **September 5 update:** the ongoing overnight sequence now retains a **50%
+> terminal-flop range correction**, with 2,048 equity samples, the original
+> full-grid 800-round pair, and joint-four turn/river solving. A fresh
+> 4,096-hand-per-seat/opponent confirmation improved payoff by 0.054–0.093bb
+> in all eight comparisons, each with a positive individual 99% interval.
+> This is an improved native research candidate, **not Approximate GTO or a
+> website activation**. Fresh postflop response training is active. See the
+> [live overnight record](overnight-2026-09-05.md) for pinned artifacts,
+> rejected alternatives, remaining gates, and current processes. The dated
+> sequence below is historical, including its terminal-25 stopping point.
+
 Research sequence started September 4, 2026; **bounded sequence complete;
 full-hand quality comparison inconclusive**. The frozen
 800-round pair and its existing response audit remain the baseline. No website

@@ -515,12 +515,49 @@ opponents with 1,024 fresh hands per seat/opponent, offset 3000000, two
 workers, exact terminal-action/runout payoff integration, and unchanged
 30-minute/7.5GiB stops. A larger confirmation requires consistent promising
 results. The range calculation is still against a frozen profile, not a
-minimax safety guarantee. This pilot is **active** at
+minimax safety guarantee. This pilot is **complete** at
 `preflop-solver/neural/runs/local-terminal50-20260905-pair1/cohort.json`,
 using the recheck cohort's frozen `991db6c...` executable and the rechecked
 reports as proposals/focused opponents. Their underlying learned opponents
 are unchanged from the original focused reports, not additional diverse
 opponents; do not include both copies in a panel.
+
+All eight comparisons improved with individual (not family-adjusted) 99%
+intervals above zero:
+
+| Seed | Old / BB | Old / BTN-SB | Focused / BB | Focused / BTN-SB |
+| --- | ---: | ---: | ---: | ---: |
+| 26001 | 0.08114156 | 0.03789919 | 0.06866995 | 0.07953758 |
+| 26002 | 0.09082556 | 0.05555198 | 0.08465559 | 0.05519603 |
+
+These are paired defender payoff improvements in bb/hand, **not measured
+full-game exploitability reductions**. Runtimes 162.036 / 187.770 seconds;
+sampled peak footprints 6,577,755,128 / 6,728,586,352 bytes; no stops.
+Verified outputs:
+A `2249daf10c5284724e55500d48450f11e8179ee4f17fe5bb659ec8333a9b7080`;
+B `088fe9abb2ae9692c9f1b6e0dcea5d7361e75839bf9432c5b2a1d81e4cbd6cb4`.
+The terminal-50 candidate has earned a fresh **4,096-hand per seat/opponent
+confirmation**, offset 3200000, otherwise identical settings. This is now
+**complete** at `preflop-solver/neural/runs/local-terminal50-20260905-confirm2`,
+after the short both-seat saved-action comparison completed. The best
+retained native research profile now uses **terminal weight 0.50**, with the
+original full-grid 800-round checkpoints and joint-four turn/river solver.
+This does not activate a website model or label it Approximate GTO.
+
+Fresh confirmation gains (bb/hand; 4,096 hands per seat/opponent):
+
+| Seed | Old / BB | Old / BTN-SB | Focused / BB | Focused / BTN-SB |
+| --- | ---: | ---: | ---: | ---: |
+| 26001 | 0.08422201 | 0.05816696 | 0.07594549 | 0.07276139 |
+| 26002 | 0.07582034 | 0.05444097 | 0.09253297 | 0.06316029 |
+
+Every individual 99% interval is positive; the smallest lower endpoint is
+0.03815890bb. These remain fixed-opponent payoff gains, not an exploitability
+upper bound or proof of lower optimal-response exploitability. Runtimes
+374.918 / 521.747 seconds; sampled peak footprints 6,901,896,400 /
+6,859,068,600 bytes; no stops. Both outputs were hash-verified:
+A `192642ae1a9227845886f4db531d6ca122cd1c3deb1c06d964cc6a4e5718507f`;
+B `bbfb7fbdc1c11357ccfaf3888aa5bbf5e46861ddbd03bf0838af30fddaeb28c9`.
 
 Now both proposal seats pass calibration, a separate 25% **both-seat** saved
 flop pilot is also warranted against the same retained 25% terminal control.
@@ -528,5 +565,38 @@ It is a different candidate from the rejected BTN/SB-only patch: BB has 16 /
 31 supported flop rows across the seeds, most nonterminal. Use 1,024 fresh
 hands per seat/opponent, offset 3100000, raw paired rollout payoffs, two workers,
 and unchanged resource stops. Seed B's BB holdout uncertainty stays disclosed.
-This comparison has **not started**. Do not combine these two policy changes
+This comparison is **complete** at
+`preflop-solver/neural/runs/local-saved-both-20260905-pair1/cohort.json`, frozen
+binary `991db6c...`. Do not combine these two policy changes
 or allocate longer confirmation runs before the short pilots justify it.
+
+Both-seat saved-action results, same panel order as above:
+
+| Seed | Old / BB | Old / BTN-SB | Focused / BB | Focused / BTN-SB |
+| --- | ---: | ---: | ---: | ---: |
+| 26001 | 0.02539063 | 0.00903125 | 0.05257031 | 0.02327441 |
+| 26002 | -0.02669238 | -0.02718164 | -0.04736426 | -0.02514648 |
+
+All eight 99% intervals include zero. Opposite directions across seeds do
+not justify a larger run; **not selected**, with no new confidence-estimator
+or resampling effort scheduled to rescue this result. Runtimes 218.448 /
+275.013 seconds; sampled peak footprints 6,782,243,976 / 6,992,172,336 bytes;
+no stops. Verified outputs:
+A `b3799d7aff552d72b0477469948703505e3daf0d8162139a034855ad738e9e5f`;
+B `30d14a781c79c3793f5219f0f4076abb432e34f9f98a76c9ec6c9fe76c6cc9f5`.
+The prior benchmark documentation commit `aa11300` also passed CI (33964920732).
+
+Following the successful confirmation, genuinely fresh postflop-only
+responses are now training against terminal-50: 4,000 training / 8,000
+calibration / 8,000 holdout hands per seat, four rollouts, minimum four
+particles, exact terminal labels, offset 3400000, four shared-table workers,
+45-minute/7.5GiB stops, sequential seeds. This keeps the focused critic's
+training budget instead of weakening it to manufacture lower measured gain.
+It is **active** at
+`preflop-solver/neural/runs/local-terminal50-response-20260905-pair1/cohort.json`,
+using frozen binary `991db6c...`. Calibration rejection is still inconclusive,
+not a low-exploitability win. The later all-street qualification must include
+preflop deviations too; this focused critic alone cannot qualify the full game.
+No additional
+memory rewrite, abstraction variant, new response-key layer, or neural
+distillation is currently selected; finish these concrete policy pilots first.
