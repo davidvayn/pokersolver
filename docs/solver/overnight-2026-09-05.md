@@ -807,3 +807,52 @@ stops and a 20GiB disk reserve. Compare runtime, preflop label uncertainty
 and independent response gains; more admitted rows alone is not success.
 Small-sample rejected responses remain inconclusive, and this pilot alone
 will not qualify or activate the defender.
+
+The control arm is active at
+`preflop-solver/neural/runs/local-preflop-runouts-20260905-control1`.
+Seed A completed in 1,123.372 seconds, sampled footprint 7,145,854,400 bytes,
+without a resource stop. Both calibration responses were rejected:
+SB gain 0.1175835bb, SE 0.072647709, lower -0.069544598bb;
+BB gain 0.01925bb, SE 0.013600357, lower -0.015782197bb.
+These zeros are inconclusive. Seed B is running. The resampled arm has not
+started; it must use the control's frozen `0c66f00...` executable, even if
+`target/release` is rebuilt. Concurrent native builds mean these wall times
+are not isolated performance benchmarks. Commit `02798b7`, recording the
+preceding full-weight assessment, was pushed and passed CI 33982696003.
+
+## Bounded response-worker load balancing
+
+While the control ran, live CPU readings repeatedly moved between roughly
+100% and 300% utilization with three configured workers. A production-seam
+test held hand zero busy and checked whether an idle worker could process
+hand one. It failed in 1.01 seconds on a full 32-hand wave, then failed after
+minimization to two hands. The same test passes with dynamic assignment.
+
+The cause is static 16-hand worker chunks: an idle worker cannot take a hand
+behind another worker's expensive solve. Replace only chunk assignment with
+an atomic next-hand index inside the existing bounded wave (at most
+16 * workers hands). Each worker still owns its resolver cache and shares
+the immutable table; sampled deals and per-hand seeds remain fixed. Sort
+completed hand results by their original index before any accumulation.
+No unbounded queue, extra table, new policy, or new dependency is introduced.
+
+The reproduced idle-worker test passes, and all 229 release library tests
+pass. The joint turn/river test now includes three workers and still requires
+byte-identical policies, decision/coverage counts and protection diagnostics.
+Its artificial repeated-board fixture can cause duplicate cache solves under
+dynamic assignment: the real solve count remains reported, is bounded in
+the test, and is excluded alongside wall time from policy-parity comparison.
+This is operational cache work, not a changed coverage or quality gate.
+Full `cargo test --release` passes: 229 library tests and 8 CLI tests.
+Old/new executable comparison on the two-round/245-node fixture also passes:
+32 training / 16 calibration / 16 holdout hands, three workers, conditional
+preflop runouts enabled, same seed 452. Five independent new-process reports
+are byte-identical to the old frozen executable's report, SHA-256
+`183ff8c220714067e8777c49122adcbd9ea393535a37ab9eef4257e685d8576c`.
+These small replay artifacts remain at `/tmp/poker-work-queue.EHFOlN`;
+the joint-resolver regression separately checks policy/coverage parity.
+Verified new executable:
+`2f023b53fe61fdcba4bd3efc02389650dcab063a11804300fde7bb637b4be370`.
+No full-size training speedup is claimed yet; the running sampling experiment
+remains on its frozen scheduler. No debug instrumentation or dependencies
+were added, and no model or release gate was changed.

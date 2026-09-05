@@ -565,7 +565,7 @@ mod tests {
         });
         for safe_bilateral in [false, true] {
             let mut reference = None;
-            for workers in [1, 2, 4] {
+            for workers in [1, 2, 3, 4] {
                 let (mut policy, _, _) = fixture();
                 let table = Arc::get_mut(&mut policy.base.table).unwrap();
                 table.config.effective_stack_bb = 2.0;
@@ -601,7 +601,11 @@ mod tests {
                     |row| rows.push(row),
                 );
                 let mut diagnostics = policy.take_resolution_diagnostics().unwrap();
-                assert_eq!(diagnostics["solved_roots"], 3);
+                // Queue assignment can spread each repeated root over more
+                // than one private worker cache. Count the real solves, not
+                // unique roots; the last root occurs in just one hand.
+                let solves = diagnostics["solved_roots"].as_u64().unwrap();
+                assert!((3..=(2 * workers + 1) as u64).contains(&solves));
                 assert!(diagnostics["resolved_turn_decisions"].as_u64().unwrap() > 0);
                 assert!(diagnostics["resolved_river_decisions"].as_u64().unwrap() > 0);
                 if safe_bilateral {
@@ -612,9 +616,10 @@ mod tests {
                             <= belief::SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB
                     );
                 }
-                // Wall time is the only nondeterministic field for these
-                // unique roots. Exact integer counts and policy bytes agree.
+                // Cache work and wall time depend on worker assignment.
+                // Decision/coverage counts, policies and protection do not.
                 diagnostics.as_object_mut().unwrap().remove("solve_seconds");
+                diagnostics.as_object_mut().unwrap().remove("solved_roots");
                 let actual =
                     serde_json::to_vec(&(rows, policy.take_coverage(), diagnostics)).unwrap();
                 if let Some(expected) = &reference {
