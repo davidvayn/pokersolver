@@ -592,7 +592,7 @@ calibration / 8,000 holdout hands per seat, four rollouts, minimum four
 particles, exact terminal labels, offset 3400000, four shared-table workers,
 45-minute/7.5GiB stops, sequential seeds. This keeps the focused critic's
 training budget instead of weakening it to manufacture lower measured gain.
-It is **active** at
+It is **complete** at
 `preflop-solver/neural/runs/local-terminal50-response-20260905-pair1/cohort.json`,
 using frozen binary `991db6c...`. Calibration rejection is still inconclusive,
 not a low-exploitability win. The later all-street qualification must include
@@ -600,6 +600,30 @@ preflop deviations too; this focused critic alone cannot qualify the full game.
 No additional
 memory rewrite, abstraction variant, new response-key layer, or neural
 distillation is currently selected; finish these concrete policy pilots first.
+
+Fresh terminal-50 responses completed with unchanged training/sample budgets:
+
+| Seed / response seat | Calibration gain (SE), bb | Calibration 99.5% lower | Holdout gain (SE), bb | Holdout 99.5% lower |
+| --- | ---: | ---: | ---: | ---: |
+| 26001 / BTN-SB | 0.19389575 (0.03397279) | 0.10638763 | 0.12553100 (0.03557697) | 0.03389079 |
+| 26001 / BB | 0.01659325 (0.02738971) | -0.05395796 | Not deployed | Inconclusive |
+| 26002 / BTN-SB | 0.17308325 (0.03485985) | 0.08329023 | 0.12979163 (0.03252198) | 0.04602054 |
+| 26002 / BB | 0.11820925 (0.03274050) | 0.03387531 | 0.10661550 (0.03491093) | 0.01669091 |
+
+Seed B's two accepted responses have seat-summed holdout gain **0.236407125
+bb/hand**. Seed A's report sums to 0.125531, but its rejected BB response's
+zero is not a quality result. Both accepted BTN/SB attacks still show positive
+held-out leakage. Freshly trained responses and fresh samples are not a
+paired comparison with the earlier terminal-25 benchmark; do not subtract
+the headline totals and claim a certified exploitability decrease. No
+repeated calibration retry is scheduled. Postflop holdout response coverage:
+29.3762% for A's accepted seat, and 27.8395% / 29.5429% for B. These remain
+restricted critics, with no full-game upper-bound qualification.
+
+Runtimes 1,667.424 / 2,054.331 seconds; sampled peak footprints
+7,596,807,880 / 7,748,900,672 bytes; no resource stops. Both hashes verified:
+A `c8079b4ef8d748c07f1306670b65f7de20ccd0d8cd319d065e33f76b452c52d7`;
+B `0c7d6c1ad3088ad8075903bef23a58a8c895174d3ca21879d3704439a26fbcb7`.
 
 ## Full terminal-weight experiment support
 
@@ -626,11 +650,22 @@ After the terminal-50 response pair finishes, a short 1,024-hand per
 seat/opponent comparison may test weight 1.0 against weight 0.50 and the new
 attacks. Any larger run or research-candidate selection must follow that
 screen, not the fixed-opponent linearity calculation alone. No full-weight
-pilot has started yet.
+pilot had started when this implementation was committed.
 
 Verification: 226 Rust release library tests, 7 CLI tests, 34 Python
 runner/resource tests, release build, and whitespace checks pass. New native
 binary SHA-256:
 `804d9f83fc7d99ee49f1f90087b8a45ee3f28a31b01dff722324be38c82fff7e`.
-The ongoing terminal-50 response run continues using its original frozen
-`991db6c...` executable and unchanged configuration.
+The terminal-50 response run completed using its original frozen `991db6c...`
+executable and unchanged configuration. Implementation commit `25f00c5`
+was pushed and passed CI (33968621983).
+
+The full-weight short comparison is now **active** at
+`preflop-solver/neural/runs/local-terminal100-20260905-pair1/cohort.json`:
+weight 1.0 versus the terminal-50 control pinned by the new proposal reports;
+1,024 hands per seat/opponent, offset 3600000, 2 workers, 2,048 equity
+samples, exact terminal payoff integration, sequential checkpoint seeds,
+30-minute/7.5GiB stops. Opponents are the old baseline, rechecked terminal-25
+focused responses, and newly trained terminal-50 responses. The uncalibrated
+A/BB attacker remains explicitly a raw diagnostic challenge, not a certified
+response. No gate is relaxed and no full-weight profile is selected yet.
