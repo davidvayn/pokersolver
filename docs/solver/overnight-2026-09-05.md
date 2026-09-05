@@ -1672,3 +1672,104 @@ policies from fixed-opponent payoff gains or fitting a call/fold rule to these
 without interpreting their deployed zero as an exploitability upper bound.
 The original preflop consistency, precision, coverage and full-game quality
 requirements remain open. The managed goal remains active.
+
+### Completed connected-policy response cost probe
+
+`local-sampled-flop-20260905-responseprobe1` completed successfully in 401.755
+seconds, peak sampled physical footprint 6,413,128,552 bytes, without a
+resource stop. It attacked the actual experimental source-A / resolve-seed
+87001 profile, not the legacy checkpoint factory's unpatched policy. Budgets
+were 16 training, 32 calibration and 32 fresh raw holdout hands per seat,
+two action rollouts and minimum four observations per response group.
+
+Both saved critics contain **zero supported decisions**. Both calibration
+and raw independent holdout consequently report identity gains of zero;
+neither qualified. This is an unsuccessful critic budget, not an exploitability
+pass, nor evidence that the connected policy fixed the previous weaknesses.
+Do not repeat another 16/32 probe or hide rejected critics behind zero totals.
+Frozen executable SHA:
+`b1f9ff4b6e298a2eb33fa2bfb904d852ea227327ecc4ad65fe586042f8a27291`;
+log SHA `c0391f0797fce4f3aa0977b4cccc144a0b446c2a2125562403599bc34d5d5dad`.
+Saved seat-0/seat-1 response hashes:
+`df94739e235c3452a91d6bd73d76713b4bdc4c1a05e7680dd4adcaee3503baa1` /
+`5d890af571d93ee294ea0a70a1ef09defb8329ea7008dc28e39bd4f0ee04db60`.
+Neither worker remains live. Previous milestone `67aad96` passed CI
+33995739284.
+
+The diagnosing-bugs loop first reproduced the empty-critic symptom directly
+from the frozen report. A cheap authentic-trajectory replay then counted the
+same four layers of response keys without generating counterfactual action
+labels. A deterministic regression compares those keys against the real
+collector, for both seats and all-street/postflop-only settings. This is
+sampling-support diagnosis, not a change to the response confidence rules.
+No permanent dependency, grouping coarsening or reduced particle minimum was
+introduced. Initial source-A / SB counts reproduce zero qualifying groups at
+16 hands (maximum support two); 128 hands support only one preflop group per
+layer and no postflop groups. At 512 hands the strategic layer supports
+70 preflop / 8 flop / 4 turn / 0 river groups. Finer postflop layers still have
+no supported groups. The full bounded census is recorded separately below
+when terminal; these prefix observations are not a completed-census claim.
+
+The census `local-sampled-flop-20260905-support1` was subsequently stopped
+intentionally after the diagnostic had changed the next action. It completed
+the above 16/128/512-hand SB prefixes, not 1,024 hands or the BB census. Its
+immutable supervisor manifest correctly says `failed`, exit -15, rather than
+complete; the parent saved all completed events before its completion
+assertion failed. Runtime 741.625 seconds, peak 6,400,938,880 bytes, no
+memory/disk/time guard violation. Binary SHA:
+`bf06cfee89778664d4005bbc8a8dc63b51001580815d50142445deb2abc0fe6b`;
+log SHA `b3a253ac963f25697880fa4255983724051de3c8ea5564ed29e703ec975d49ad`.
+No larger learned-response budget was launched from these sparse counts.
+
+### Direct endgame response experiment
+
+The old joint-16 endgame run was stopped for rollout-evaluator cost, not
+because joint-four converged (`tabular-turn-pilot.md`, pair2/pair3). Instead
+of training another sparse critic at an inadequate budget, the next paired
+policy experiment uses the existing exact turn/river best-response traversal.
+It loads the **actual exported f32 policy**, validates the complete tree, and
+computes information-set-consistent responses over every compatible private
+holding, remaining river and abstract betting continuation. No retraining,
+regrets or neural value estimates enter the frozen-policy evaluation.
+
+The intended comparison is four versus 16 versus 64 joint iterations at
+identical authentic turn roots, reached through the experimental sampled-flop
+profile. It counts hands ending before a live turn as zero, rather than
+reporting a conditional root average as bb per full hand. Both individual
+seat gains and their sum/half-sum are explicitly distinguished. A response
+limited to the turn/river cannot establish a full-game upper bound: earlier
+deviations remain untested, and lower tail leakage need not mean lower
+unrestricted exploitability.
+
+This follows the distinction in the [primary LBR study](https://arxiv.org/html/1612.07547v2):
+a legal restricted attack supplies lower-bound evidence, and delaying attacks
+can expose weaknesses missed by greedy earlier deviations. Here the existing
+exact endgame traversal replaces that paper's heuristic continuation in this
+limited suffix; it does not make our evaluator an unrestricted best response.
+No extra release gate or model activation follows from this experiment.
+
+The bounded exact-tail pair is now launched at
+`local-sampled-flop-20260905-tailpair1`: sequential original A/B sources,
+sampled-flop seeds 87001/87002, common fresh prefix seed 89004, 128 full-hand
+prefixes per source/solve seed. Each live turn root compares 4/16/64 joint
+iterations, preserving the preflop/flop prefix policy. Source guards are
+7.5GiB physical footprint, 20GiB disk reserve and 30 minutes. Frozen public
+root/range snapshots and each policy hash are recorded for reuse without
+another expensive prefix replay. This paragraph records a running experiment,
+not completed comparisons. Both exact-response and actual-policy snapshot
+regressions passed before launch. The audit takes ownership of the one-root
+cache and drops each evaluated policy before allocating the next, avoiding
+retention of duplicate complete endgame tables.
+
+Pre-pilot verification: 247 release library tests and nine CLI tests pass;
+ten explicit development experiments are ignored by the ordinary suite.
+The release build also passes. A new explicit-path two-round production
+replay in `/tmp/poker-tail-response-replay.5cN1gG` matches both previous
+artifact and summary bytes. Artifact SHA remains
+`c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`;
+production executable SHA:
+`8e52135289bd07c31c43678b532908a3fa1d6bee2202a5f5ee6fc462a9d4c787`.
+Frozen exact-tail experiment executable:
+`9d7aa81af625b8fd27867da79e45c46c6752810bcacce5fe48380ef07aa23cea`.
+All new experiment entry points and the policy snapshot helper are test-only;
+no production action mix, serving artifact, browser UI or release gate changed.

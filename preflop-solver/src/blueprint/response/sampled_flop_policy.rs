@@ -6,6 +6,7 @@ use super::*;
 use crate::blueprint::public_belief::{sampled_flop, PublicBeliefState, PublicBeliefStrategy};
 use std::sync::Mutex;
 use std::time::Instant;
+mod response_pilot;
 
 #[derive(Default)]
 struct Cache {

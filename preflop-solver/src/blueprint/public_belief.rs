@@ -23,6 +23,8 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 pub mod sampled_flop;
+#[cfg(test)]
+pub(super) mod frozen_turn_response;
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
