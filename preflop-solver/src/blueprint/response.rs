@@ -42,6 +42,8 @@ mod turn;
 #[cfg(test)]
 mod sampled_flop_pilot;
 #[cfg(test)]
+mod sampled_flop_policy;
+#[cfg(test)]
 use table::AverageNode;
 use table::InferenceTable;
 pub use turn::TurnResolveOptions;

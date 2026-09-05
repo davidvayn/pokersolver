@@ -553,6 +553,56 @@ mod tests {
     }
 
     #[test]
+    fn sampled_flop_actions_feed_the_actual_turn_range_reconstruction() {
+        let (mut base, deal) = super::super::tests::tabular_fixture();
+        let table = Arc::get_mut(&mut base.table).unwrap();
+        table.config.effective_stack_bb = 2.0;
+        table.nodes.clear();
+        let game = base.table.config.clone();
+        let mut patch = flop::FlopPatch::terminal(&TerminalFlopOptions { equity_samples: 128, weight: 0.5 });
+        patch.sampled = Some(super::super::sampled_flop_policy::FlopResolve::new(32, 87001, 300_000));
+        base.flop_patch = Some(Arc::new(patch));
+        let policy = TabularTurnPolicy::new(base, TurnResolveOptions {
+            iterations: 2, safe_bilateral: false, maximum_policy_rows: 20000,
+        });
+        let mut root = GameState::initial(&game);
+        while root.street == Street::Preflop {
+            let action = root.legal_actions(&game).into_iter()
+                .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check)).unwrap();
+            root = root.apply(&action, &game);
+        }
+        let mut expected = [vec![1.0 / COMBOS as f64; COMBOS], vec![1.0 / COMBOS as f64; COMBOS]];
+        normalize_ranges_for_board(&mut expected, &deal.board[..3]).unwrap();
+        while root.street == Street::Flop {
+            let actions = root.legal_actions(&game);
+            let chosen = actions.iter().position(|a| a.kind == ActionKind::Check).unwrap();
+            // Multiply exactly the action probabilities used to play, for all
+            // compatible holdings, then condition on the next observed card.
+            for combo in all_combos() {
+                if expected[root.actor][combo.key()] > 0.0 {
+                    let synthetic = deal_for_policy_combo_on_board(combo, root.actor, &deal.board[..3]).unwrap();
+                    expected[root.actor][combo.key()] *=
+                        policy.strategy(&root, &synthetic, &actions, &game)[chosen];
+                }
+            }
+            root = root.apply(&actions[chosen], &game);
+            normalize_ranges_for_board(&mut expected, &deal.board[..root.street.board_len()]).unwrap();
+        }
+        let actual = policy.ranges_at_root(&root, &deal.board[..4]).unwrap();
+        let mut changed_from_uniform = false;
+        for (got, want) in actual.iter().zip(&expected) {
+            for (a, b) in got.iter().zip(want) {
+                assert!((a - b).abs() < 1e-12);
+                changed_from_uniform |= *b > 0.0 && (b - 1.0 / 1128.0).abs() > 1e-6;
+            }
+        }
+        assert!(changed_from_uniform, "test must detect reverting to the old uniform flop policy");
+        let mix = policy.resolved_strategy(&root, &deal, &root.legal_actions(&game)).unwrap();
+        assert!((mix.iter().sum::<f64>() - 1.0).abs() < 1e-10);
+        assert_eq!(policy.diagnostics.borrow().solved_roots, 1);
+    }
+
+    #[test]
     fn parallel_resolvers_preserve_policies_coverage_and_protection() {
         // Force every hand through a complete turn/river continuation. 33
         // deals crosses the two-worker wave boundary and leaves a partial wave.

@@ -1,5 +1,5 @@
-//! Explicit development pilot: change one flop decision, freeze everything else.
-//! This measures conditional root payoff, not a complete policy or exploitability.
+//! Explicit development pilots: conditional one-decision comparisons and an
+//! opt-in full-hand flop-routing experiment. Neither certifies exploitability.
 use super::*;
 use crate::blueprint::neural::{
     deal_for_policy_combo_on_board, normalize_ranges_for_board, trajectory_action_matches,
@@ -8,7 +8,7 @@ use crate::blueprint::public_belief::{sampled_flop, PublicBeliefState, PublicBel
 use std::time::Instant;
 mod cache;
 
-fn public_ranges(
+pub(super) fn public_ranges(
     base: &TabularResponsePolicy,
     root: &GameState,
     board: &[u8],
@@ -64,7 +64,7 @@ fn conditional_deal(board: &[u8], ranges: &[Vec<f64>; 2], rng: &mut SplitMix64) 
     panic!("flop pilot cannot sample a compatible pair; no fallback deal");
 }
 
-fn row_mix(
+pub(super) fn row_mix(
     row: &PublicBeliefStrategy,
     combo: Combo,
     state: &GameState,
@@ -557,4 +557,210 @@ fn verify_grouped_frozen_cache() {
         "cacheSha256": format!("{:x}", Sha256::digest(&bytes)), "seconds": seconds,
         "uniqueTurnRoots": unique, "resolutionDiagnostics": diagnostics })
     );
+}
+
+#[test]
+#[ignore = "fresh conditional recheck of frozen proposals; explicit inputs and external guard required"]
+fn recheck_frozen_proposals() {
+    use std::io::Write;
+    let path =
+        PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").expect("explicit checkpoint"));
+    let cache_path =
+        PathBuf::from(std::env::var("POKER_FLOP_PILOT_CACHE").expect("explicit cache"));
+    let proposals = PathBuf::from(
+        std::env::var("POKER_FLOP_PILOT_POLICY_DIR").expect("explicit frozen policy directory"),
+    );
+    let output = PathBuf::from(
+        std::env::var("POKER_FLOP_PILOT_OUTPUT_DIR").expect("explicit new output directory"),
+    );
+    assert!(output.is_dir());
+    let original = cache::RootActionCache::decode(&fs::read(&cache_path).unwrap()).unwrap();
+    assert_eq!(
+        sha256_file(&path).unwrap(),
+        original.context.checkpoint_sha256
+    );
+    let mut context = original.context.clone();
+    context.evaluation_seed = std::env::var("POKER_FLOP_PILOT_EVAL_SEED")
+        .expect("explicit fresh evaluation seed")
+        .parse()
+        .unwrap();
+    assert_ne!(context.evaluation_seed, original.context.evaluation_seed);
+    let samples: u64 = std::env::var("POKER_FLOP_PILOT_EVAL_SAMPLES")
+        .expect("explicit evaluation sample count")
+        .parse()
+        .unwrap();
+    assert!((2..=4096).contains(&samples));
+    let mut rows = Vec::new();
+    let mut identities = Vec::new();
+    for seed in [85001, 85002] {
+        for iterations in [32, 128] {
+            let name = format!("seed{seed}-round{iterations}.msgpack");
+            let encoded = fs::read(proposals.join(&name)).unwrap();
+            let solution: sampled_flop::SampledFlopSolution =
+                rmp_serde::from_slice(&encoded).unwrap();
+            assert_eq!(solution.seed, seed);
+            assert_eq!(solution.iterations, iterations);
+            identities.push(serde_json::json!({ "file": name,
+                "sha256": format!("{:x}", Sha256::digest(&encoded)) }));
+            rows.push(solution.root);
+        }
+    }
+    // Validate all supplied root rows before loading the large checkpoint.
+    original.score(&rows).unwrap();
+    let table = Arc::new(InferenceTable::read(&path).unwrap());
+    assert_eq!(table.config, context.game);
+    let base = TabularResponsePolicy {
+        table,
+        coverage: RefCell::default(),
+        flop_patch: Some(Arc::new(flop::FlopPatch::terminal(&context.terminal_flop))),
+        flop_backoff: None,
+        completion_coverage: RefCell::default(),
+    };
+    let policy = turn::TabularTurnPolicy::new(base, context.turn_resolver.clone());
+    let start = Instant::now();
+    let (fresh, unique) =
+        cache::RootActionCache::collect_grouped(&policy, context, samples).unwrap();
+    let encoded = fresh.encode().unwrap();
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output.join("fresh-cache.msgpack"))
+        .unwrap();
+    file.write_all(&encoded).unwrap();
+    file.sync_all().unwrap();
+    let comparisons: Vec<_> = rows
+        .chunks_exact(2)
+        .zip([85001, 85002])
+        .map(|(pair, seed)| {
+            let (gains, differences) = fresh.score(pair).unwrap();
+            serde_json::json!({ "seed": seed,
+                "gainOverFrozenContinuation": gains.iter().map(score_summary).collect::<Vec<_>>(),
+                "paired128Minus32": score_summary(&differences[1]) })
+        })
+        .collect();
+    println!(
+        "{}",
+        serde_json::json!({ "stage": "frozen_proposal_recheck", "samples": samples,
+            "evaluationSeed": fresh.context.evaluation_seed, "seconds": start.elapsed().as_secs_f64(),
+            "freshCacheSha256": format!("{:x}", Sha256::digest(&encoded)),
+            "originalCacheSha256": sha256_file(&cache_path).unwrap(),
+            "checkpointSha256": fresh.context.checkpoint_sha256,
+            "proposals": identities, "comparisons": comparisons, "uniqueTurnRoots": unique,
+            "validation": "fresh_samples_at_selected_development_root_not_full_game_validation" })
+    );
+}
+
+#[test]
+#[ignore = "full-hand routing pilot; explicit checkpoint, hand budget and external resource guard required"]
+fn full_hand_routed_pair() {
+    let path =
+        PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").expect("explicit checkpoint"));
+    let hands: u64 = std::env::var("POKER_FLOP_PILOT_FULL_HANDS")
+        .expect("explicit full-hand budget per seat")
+        .parse()
+        .unwrap();
+    assert!((16..=256).contains(&hands));
+    let digest = sha256_file(&path).unwrap();
+    let table = Arc::new(InferenceTable::read(&path).unwrap());
+    assert_eq!(table.rounds, 800);
+    assert_eq!(table.config.effective_stack_bb, 20.0);
+    let game = table.config.clone();
+    let terminal = TerminalFlopOptions {
+        equity_samples: 2048,
+        weight: 0.5,
+    };
+    let turns = TurnResolveOptions {
+        iterations: 4,
+        safe_bilateral: false,
+        maximum_policy_rows: 20000,
+    };
+    let control_base = TabularResponsePolicy {
+        table,
+        coverage: RefCell::default(),
+        flop_patch: Some(Arc::new(flop::FlopPatch::terminal(&terminal))),
+        flop_backoff: None,
+        completion_coverage: RefCell::default(),
+    };
+    let control = turn::TabularTurnPolicy::new(control_base.isolated_copy(), turns.clone());
+    fn play(
+        profiles: [&dyn ResponsePolicy; 2],
+        deal: &Deal,
+        game: &BlueprintConfig,
+        mut rng: SplitMix64,
+        visits: &mut [u64; 4],
+    ) -> f64 {
+        let mut state = GameState::initial(game);
+        while state.terminal.is_none() {
+            visits[match state.street {
+                Street::Preflop => 0,
+                Street::Flop => 1,
+                Street::Turn => 2,
+                Street::River => 3,
+            }] += 1;
+            let actions = state.legal_actions(game);
+            let mix = profiles[state.actor].strategy(&state, deal, &actions, game);
+            state = state.apply(&actions[sample_index(&mix, &mut rng)], game);
+        }
+        realized_utility_p0(&state, deal)
+    }
+    for seed in [87001, 87002] {
+        let mut patch = flop::FlopPatch::terminal(&terminal);
+        patch.sampled = Some(super::sampled_flop_policy::FlopResolve::new(
+            32, seed, 2_000_000,
+        ));
+        let patch = Arc::new(patch);
+        let mut candidate_base = control_base.isolated_copy();
+        candidate_base.flop_patch = Some(patch.clone());
+        let candidate = turn::TabularTurnPolicy::new(candidate_base, turns.clone());
+        for seat in 0..2 {
+            let start = Instant::now();
+            let mut chance = SplitMix64::new(derived_seed(87004, 0x6465616c, seat as u64));
+            let mut gains = ValueAccumulator::default();
+            let mut visits = [0; 4];
+            for index in 0..hands {
+                let deal = Deal::sample(&mut chance);
+                let action_seed = derived_seed(87004, seat as u64, index);
+                let old = play(
+                    [&control, &control],
+                    &deal,
+                    &game,
+                    SplitMix64::new(action_seed),
+                    &mut [0; 4],
+                );
+                let profiles: [&dyn ResponsePolicy; 2] = if seat == 0 {
+                    [&candidate, &control]
+                } else {
+                    [&control, &candidate]
+                };
+                let new = play(
+                    profiles,
+                    &deal,
+                    &game,
+                    SplitMix64::new(action_seed),
+                    &mut visits,
+                );
+                gains.observe(
+                    if seat == 0 { new - old } else { old - new },
+                    &CoverageCounter::default(),
+                );
+                if (index + 1) % 16 == 0 {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "stage": "full_hand_progress", "seed": seed,
+                        "seat": seat, "hands": index + 1, "seconds": start.elapsed().as_secs_f64(),
+                        "flopDiagnostics": patch.sampled.as_ref().unwrap().diagnostics() })
+                    );
+                }
+            }
+            println!(
+                "{}",
+                serde_json::json!({ "stage": "full_hand_routed_pair", "checkpointSha256": digest,
+                "seed": seed, "seat": seat, "hands": hands, "evaluationSeed": 87004,
+                "pairedPayoffGainBbPerHand": score_summary(&gains), "candidateStreetDecisionVisits": visits,
+                "seconds": start.elapsed().as_secs_f64(), "flopDiagnostics": patch.sampled.as_ref().unwrap().diagnostics(),
+                "turnDiagnostics": candidate.take_resolution_diagnostics(),
+                "validation": "full_hand_fixed_opponent_development_payoff_not_exploitability" })
+            );
+        }
+    }
 }

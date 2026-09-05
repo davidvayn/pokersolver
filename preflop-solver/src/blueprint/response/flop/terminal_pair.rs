@@ -135,6 +135,8 @@ mod tests {
             Arc::clone(&policy.table),
             None,
             Some(Arc::new(FlopPatch {
+                #[cfg(test)]
+                sampled: None,
                 bank: DecisionBank::default(),
                 weight: 0.25,
                 all_in_samples: Some(2048),

@@ -108,6 +108,8 @@ impl DecisionBank {
 }
 
 pub(super) struct FlopPatch {
+    #[cfg(test)]
+    pub(super) sampled: Option<super::sampled_flop_policy::FlopResolve>,
     bank: DecisionBank,
     weight: f64,
     all_in_samples: Option<u32>,
@@ -119,6 +121,8 @@ pub(super) struct FlopPatch {
 impl FlopPatch {
     pub(super) fn terminal(options: &TerminalFlopOptions) -> Self {
         Self {
+            #[cfg(test)]
+            sampled: None,
             bank: DecisionBank::default(),
             weight: options.weight,
             all_in_samples: Some(options.equity_samples),
@@ -136,6 +140,13 @@ impl FlopPatch {
     ) -> Vec<f64> {
         if state.street != Street::Flop {
             return baseline;
+        }
+        #[cfg(test)]
+        if let Some(sampled) = &self.sampled {
+            if actions.iter().any(|action| state.apply(action, game).terminal.is_none()) {
+                return sampled.strategy(base, state, deal, actions)
+                    .expect("experimental sampled flop resolution failed; no fallback policy");
+            }
         }
         if let Some(prior) = &self.prior_terminal {
             if actions.iter().all(|action| state.apply(action, game).terminal.is_some()) {
@@ -360,6 +371,8 @@ pub fn evaluate_flop_patch(
     }
     // A rejected seat is not sufficient evidence for a policy correction.
     let patch = Arc::new(FlopPatch {
+        #[cfg(test)]
+        sampled: None,
         bank: if config.all_in_samples.is_some() || config.flop_backoff.is_some() {
             DecisionBank::default()
         } else {
@@ -564,6 +577,7 @@ mod tests {
                     .strategy(&policy, &facing, &deal, &actions, game, baseline.clone());
                 for weight in [0.0, 0.25] {
                     let saved = FlopPatch {
+                        sampled: None,
                         bank: DecisionBank::from_decisions(
                             std::iter::once(&decision), ResolverGranularity::ExactTrajectory,
                         ).unwrap(),
@@ -586,6 +600,7 @@ mod tests {
         let actions = flop.legal_actions(&game);
         let baseline = policy.frozen_strategy(&flop, &deal, &actions, &game);
         policy.flop_patch = Some(Arc::new(FlopPatch {
+            sampled: None,
             bank: DecisionBank::from_decisions(
                 std::iter::once(&decision),
                 ResolverGranularity::ExactTrajectory,
@@ -654,6 +669,7 @@ mod tests {
         let second = accumulator.finish(key, ResolverGranularity::ExactTrajectory, 20.0);
         let baseline = policy.frozen_strategy(&facing_bet, &deal, &actions, &game);
         policy.flop_patch = Some(Arc::new(FlopPatch {
+            sampled: None,
             bank: DecisionBank::from_decisions(
                 [&first, &second].into_iter(),
                 ResolverGranularity::ExactTrajectory,

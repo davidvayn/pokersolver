@@ -1544,3 +1544,131 @@ Next action work should distinguish evaluation noise from the known training /
 deployed-continuation mismatch at the negative call root before integrating or
 lengthening this proposal. The existing cache makes action inspection cheap;
 do not rerun the complete cache collection merely to inspect the same rows.
+
+### Fresh recheck changes the apparent call-regression diagnosis
+
+Milestone `920bd049358f5f44e596bb34b8b9eb9d812e3f56` is pushed; remote CI
+33994258109 passed. It includes the completed cached pair and exact grouping
+optimization, not a newly activated poker model.
+
+`local-sampled-flop-20260905-recheck1` is complete. It re-evaluated the four
+already-frozen B/3/1 proposals on 1,024 fresh conditional deals, seed 86004;
+no retraining or action-frequency adjustment occurred. The root was selected
+from development results, so this is fresh sampling at a selected root, **not
+an untouched-root or full-game validation**.
+
+| Training seed | 32 gain over retained (SE), bb | 128 gain over retained (SE), bb | 128 minus 32, individual 99% interval |
+| --- | ---: | ---: | --- |
+| 85001 | +0.915863 (0.167384) | +0.678016 (0.218439) | -0.237848 [-0.524300, +0.048604] |
+| 85002 | +0.728138 (0.171197) | +1.015516 (0.202552) | +0.287378 [+0.066131, +0.508624] |
+
+All four gains against the retained policy have positive individual 99%
+intervals. The earlier negative 128-vs-32 interval does not reproduce in the
+fresh sample; the other training seed now favors 128. Thus the earlier
+call-attribution decomposition described that particular sample correctly,
+but did **not** establish a persistent harmful-call defect. Do not hard-code
+a call reduction, claim that the defect was fixed, or select a universal
+training length from these results. This is why the diagnostic stopped short
+of a policy mutation until the fresh recheck.
+
+Whole worker: 131.753 seconds, sampled peak 5,896,229,400 bytes, no stop.
+Grouped evaluation: 58.095 seconds / 98 unique turn roots. Binary SHA:
+`a0eba1aa35645eb76cd8a4ef581c3dc9d69e27d62b8db06d3512c936485f0d68`;
+fresh cache SHA:
+`4c44bb25c7c8046033e544cfa3fb4eac90f2a2fa3407015b5e6717377dd89aaf`;
+log SHA `2ccdd75da8ef1de2e59dc3522581644c2481f9d7eb3842150fd893505b2a5b54`.
+The read-only recheck driver validates each proposal hash against the frozen
+earlier manifest and creates a new cache; it cannot overwrite the old one.
+
+### Full-hand integration experiment, not another isolated action correction
+
+The next experiment routes every nonterminal flop decision through a bounded
+32-iteration sampled solve. The existing terminal-flop rule and joint-four
+turn/river solver remain in place. A test-only adapter at `FlopPatch` makes
+actual play and all later public-range reconstruction call the **same** new
+flop probabilities. The optional adapter is excluded from production builds.
+There is no website activation, new training export, permanent policy table,
+or baseline fallback after a failed sampled solve.
+
+The policy is a deterministic function of the original checkpoint, training
+seed, visible flop and public action history. Earlier flop prefixes can be
+resolved recursively during range reconstruction; no actual opponent holding
+or future community card enters those solves. Cached rows are bounded to one
+flop board and 64 public histories. Cache eviction changes computation only.
+The source model remains shared read-only; each local training table is dropped
+after exporting its root average policy.
+
+Research cross-check: [DeepStack's continual-resolving description](https://arxiv.org/html/1701.01724v2)
+updates its own range with the probabilities it actually played, and separately
+maintains opponent counterfactual-value constraints. The new adapter addresses
+the probability/range consistency part, **not** that full safety construction.
+[Brown, Sandholm and Amos 2018](https://noambrown.github.io/papers/18-NIPS-Depth.pdf)
+also explain why fixed continuation values are insufficient for equilibrium
+robustness and study opponent continuation choices at depth limits. Our cached
+Q samples are not that construction or a substitute for its requirements.
+
+The known mismatch between local sampled self-play training and the retained
+turn/river continuation is not fully removed by consistent posterior updates.
+The full-hand pilot therefore tests the combined behavior empirically rather
+than assuming safe composition from the local-root gains. It uses 64 paired
+hands per seat and independent solve seeds 87001/87002 for each retained source,
+fresh evaluation seed 87004, sequential checkpoint workers and the unchanged
+7.5GiB / 20GiB guards (30-minute cap per source). This is a bounded integration
+and fixed-opponent payoff screen, not a full-game exploitability certificate.
+
+### Completed full-hand routing result
+
+`local-sampled-flop-20260905-fullhand1` is complete: 512 paired hand comparisons
+across two source checkpoints, two independent resolve seeds and both seats.
+All eight cases completed without resource stops or missing-policy fallbacks.
+The sample exercised every street overall, but not every seat/seed case reached
+the river. `candidateStreetDecisionVisits` counts both players' decisions in
+the candidate-versus-control game, not only the candidate's decisions.
+
+| Source / solve seed | SB payoff gain (SE), bb/hand | BB payoff gain (SE), bb/hand |
+| --- | ---: | ---: |
+| A / 87001 | -0.062500 (0.456368) | -0.364578 (0.364578) |
+| A / 87002 | +0.039063 (0.626615) | -0.419266 (0.367797) |
+| B / 87001 | +0.445313 (0.474958) | -0.046875 (0.046875) |
+| B / 87002 | +0.070313 (0.062863) | -0.164063 (0.095181) |
+
+Every individual 99% interval crosses zero. BB point estimates are negative
+in all four cases, but these are only 64 hands per case and share their chance
+streams across resolve seeds; no pooled significance or causal strategy defect
+is established. The earlier local-root gains have **not** established a
+full-hand strength improvement. Do not promote this experiment, claim lower
+exploitability, or increase training iterations on the assumption it won.
+
+Source A/B worker times were 193.079 / 206.215 seconds, sampled peak physical
+footprints 6,432,838,600 / 6,380,835,736 bytes. Maximum observed local solve was
+654,909 information sets under the 2M cap. Whole-pipeline wall time was
+400.998 seconds. Frozen executable SHA:
+`3e3095e82b824f1b4d16e3d90bfd86077d93b710f2aec3b40730c654fe92c73e`;
+manifest SHA:
+`d59ca540710abcbc27446e356cc10ec955a7ac2fbcf8dc5272e9c9509142ffb4`.
+Worker logs independently verified:
+A `f486a21ca8a5a01562e3828b578a5838f65c5bd59fb1b30dcdb600afeaf7ae07`;
+B `311bf098d901dfa2f6d13392e1c8afc432c28c83bf856f22752e656160cf5fb3`.
+No worker remains live.
+
+Final native verification passes 243 release library tests and nine CLI tests;
+seven explicit development probes are ignored by the ordinary suite. The new
+regressions test hidden-card/future-card independence, deterministic cache
+eviction, serving/replay probability parity, and the actual turn solver's range
+reconstruction after resolved flop actions. `cargo build --release` passes.
+Production binary SHA is now
+`3076ab8fbfe56cce996a3b1054429df7fbe1251919d5baafa57087e32f6ccb39`;
+the test adapter is excluded from it. A fresh explicit-path two-round native
+replay matches both the prior artifact and summary bytes, artifact SHA
+`c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`.
+Replay directory: `/tmp/poker-flop-routing-replay.oQIaFA`. This is not an
+unperformed full-size replay. No browser-facing change was made.
+
+Next policy work: use the fully specified experimental full-hand policy in
+the existing full-game response evaluator, starting with a bounded interface /
+cost check before a larger independent challenge. Do not keep selecting
+policies from fixed-opponent payoff gains or fitting a call/fold rule to these
+64-hand samples. Response calibration must still reject unprofitable critics
+without interpreting their deployed zero as an exploitability upper bound.
+The original preflop consistency, precision, coverage and full-game quality
+requirements remain open. The managed goal remains active.
