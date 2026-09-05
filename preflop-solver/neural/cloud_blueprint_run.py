@@ -27,9 +27,12 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from worker_resources import WorkerResourceGuard, process_memory_bytes
 
 
 RANKS = "23456789TJQKA"
@@ -187,6 +190,12 @@ def file_sha256(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_reader_upgrade_digest(actual: str, parent_record: dict[str, object]) -> None:
+    expected = parent_record.get("canonicalJsonSha256")
+    if not isinstance(expected, str) or len(expected) != 64 or actual != expected:
+        raise ValueError("checkpoint reader upgrade changed canonical policy/evaluation output")
 
 
 def missing_run_outputs(run: SeedRun) -> list[Path]:
@@ -617,6 +626,7 @@ def run_fingerprint(
         "opponentCheckdownBaseline": args.opponent_checkdown_baseline,
         "exportPostflopStrategies": args.export_postflop_strategies,
         "evaluationOnly": args.evaluation_only,
+        "verifyCheckpointReaderUpgrade": args.verify_checkpoint_reader_upgrade,
         "parentRunFingerprint": parent_run_fingerprint,
     }
     canonical = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode()
@@ -700,6 +710,10 @@ def parse_args() -> argparse.Namespace:
             "with new evaluation/export controls"
         ),
     )
+    parser.add_argument(
+        "--verify-checkpoint-reader-upgrade", action="store_true",
+        help="evaluation-only reader migration; requires identical canonical output to parent",
+    )
     parser.add_argument("--depth", type=float, default=20.0)
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--seeds", type=parse_seeds, default=parse_seeds("26001,26002"))
@@ -721,6 +735,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--bytes-per-information-set", type=int, default=2_300)
     parser.add_argument("--minimum-free-disk-gb", type=float, default=20.0)
+    parser.add_argument(
+        "--max-worker-memory-gib", type=float, default=0.0,
+        help="sampled live worker memory stop; 0 disables",
+    )
+    parser.add_argument(
+        "--max-worker-minutes", type=float, default=0.0,
+        help="wall-clock limit per seed including reload/export; 0 disables",
+    )
     parser.add_argument("--compact-serving-grid", action="store_true")
     parser.add_argument(
         "--public-chance-sampling",
@@ -752,6 +774,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_numeric_options(args: argparse.Namespace) -> None:
+    if args.verify_checkpoint_reader_upgrade and not args.evaluation_only:
+        raise SystemExit("checkpoint reader upgrade requires evaluation-only")
     if args.integrate_terminal_actions and args.opponent_checkdown_baseline:
         raise SystemExit("choose only one opponent variance-reduction mode")
     if (
@@ -793,6 +817,9 @@ def validate_numeric_options(args: argparse.Namespace) -> None:
         raise SystemExit("evaluation counts must fit Rust's positive u64 domain")
     if not math.isfinite(args.minimum_free_disk_gb) or args.minimum_free_disk_gb < 0:
         raise SystemExit("minimum free disk must be finite and non-negative")
+    for name in ("max_worker_memory_gib", "max_worker_minutes"):
+        if not math.isfinite(getattr(args, name)) or getattr(args, name) < 0:
+            raise SystemExit(f"{name} must be finite and non-negative")
     if not all(
         math.isfinite(value)
         for value in (args.dcfr_alpha, args.dcfr_beta, args.dcfr_gamma)
@@ -820,6 +847,13 @@ def validate_numeric_options(args: argparse.Namespace) -> None:
 
 def validate(args: argparse.Namespace) -> None:
     validate_numeric_options(args)
+    if args.max_worker_memory_gib or args.max_worker_minutes:
+        try:
+            measured, _ = process_memory_bytes(os.getpid())
+            if measured <= 0:
+                raise OSError("empty process memory reading")
+        except OSError as error:
+            raise SystemExit(f"resource guard unavailable: {error}") from error
     if not args.binary.is_file() or not os.access(args.binary, os.X_OK):
         raise SystemExit(f"solver binary is missing or not executable: {args.binary}")
     if args.resume_from_dir is not None:
@@ -869,6 +903,8 @@ def command_value(command: object, flag: str) -> str | None:
 def load_parent_stage(
     args: argparse.Namespace, binary_sha256: str
 ) -> tuple[str | None, dict[int, Path]]:
+    if args.verify_checkpoint_reader_upgrade and not args.evaluation_only:
+        raise SystemExit("checkpoint reader upgrade requires evaluation-only")
     if args.resume_from_dir is None:
         return None, {}
     manifest_path = args.resume_from_dir / "run-manifest.json"
@@ -881,7 +917,8 @@ def load_parent_stage(
         or parent.get("status") != "complete"
     ):
         raise SystemExit("resume source is not a completed schema-v3 cloud stage")
-    if parent.get("binarySha256") != binary_sha256:
+    if (parent.get("binarySha256") != binary_sha256
+            and not args.verify_checkpoint_reader_upgrade):
         raise SystemExit("resume source was produced by a different solver binary")
     if parent.get("depthBb") != args.depth:
         raise SystemExit("resume source depth differs from the requested extension")
@@ -915,6 +952,15 @@ def load_parent_stage(
             else None
         ),
     }
+    if args.verify_checkpoint_reader_upgrade:
+        # Only the reader binary may change. This mode cannot train, change
+        # export coverage, or quietly change the evaluator's sample budget.
+        expected_immutable.update({
+            "--max-information-sets": str(args.max_information_sets),
+            "--held-out-deals": str(args.held_out_deals),
+            "--root-deviation-samples": str(args.root_deviation_samples),
+            "--action-value-deals": str(args.action_value_deals),
+        })
     parent_commands = parent.get("commands")
     parent_seeds = parent.get("seeds")
     if not isinstance(parent_commands, dict) or not isinstance(parent_seeds, dict):
@@ -924,6 +970,18 @@ def load_parent_stage(
     checkpoints: dict[int, Path] = {}
     for seed in args.seeds:
         command = parent_commands.get(str(seed))
+        if args.verify_checkpoint_reader_upgrade:
+            if not isinstance(command, list):
+                raise SystemExit("checkpoint reader upgrade requires parent command records")
+            if ("--export-postflop-strategies" in command) != args.export_postflop_strategies:
+                raise SystemExit("checkpoint reader upgrade changes export coverage")
+            for flag, expected in (
+                ("--held-out-seed", seed + 100_000),
+                ("--root-deviation-seed", seed + 200_000),
+                ("--action-value-seed", seed + 300_000),
+            ):
+                if command_value(command, flag) != str(expected):
+                    raise SystemExit(f"checkpoint reader upgrade changes {flag}")
         if command_value(command, "--seed") != str(seed):
             raise SystemExit(f"resume source command seed differs for seed {seed}")
         for flag, expected in expected_immutable.items():
@@ -947,10 +1005,18 @@ def load_parent_stage(
         if not isinstance(record, dict) or record.get("status") != "complete":
             raise SystemExit(f"resume source seed {seed} is not complete")
         prefix = f"hu-{args.depth:g}bb-schema-v3-seed{seed}"
-        candidates = (
+        candidates = [
             args.resume_from_dir / f"{prefix}{CHECKPOINT_SUFFIX}",
             args.resume_from_dir / f"{prefix}{LEGACY_CHECKPOINT_SUFFIX}",
-        )
+        ]
+        # Evaluation-only stages deliberately reuse their parent's immutable
+        # checkpoint instead of duplicating gigabytes. Resolve that recorded
+        # source, still requiring the exact size and SHA-256 below.
+        recorded_source = record.get("checkpoint")
+        if isinstance(recorded_source, str):
+            source = Path(recorded_source)
+            if source.is_absolute() and source.name in {path.name for path in candidates}:
+                candidates.append(source)
         expected_size = record.get("checkpointCompressedBytes")
         expected_hash = record.get("checkpointSha256")
         existing = [path for path in candidates if path.is_file()]
@@ -978,6 +1044,10 @@ def main() -> int:
     validate(args)
     binary_sha256 = file_sha256(args.binary)
     parent_fingerprint, parent_checkpoints = load_parent_stage(args, binary_sha256)
+    parent_records = (
+        json.loads((args.resume_from_dir / "run-manifest.json").read_text())["seeds"]
+        if args.verify_checkpoint_reader_upgrade else {}
+    )
     runs = []
     for seed in args.seeds:
         prefix = f"hu-{args.depth:g}bb-schema-v3-seed{seed}"
@@ -1022,6 +1092,7 @@ def main() -> int:
             str(args.resume_from_dir) if args.resume_from_dir is not None else None
         ),
         "evaluationOnly": args.evaluation_only,
+        "verifyCheckpointReaderUpgrade": args.verify_checkpoint_reader_upgrade,
         "binarySha256": binary_sha256,
         "firstStartedAtUnix": first_started_at,
         "startedAtUnix": int(time.time()),
@@ -1038,6 +1109,13 @@ def main() -> int:
         "iterations": args.iterations,
         "maxInformationSets": args.max_information_sets,
         "maxConcurrent": args.max_concurrent,
+        "resourceLimits": {
+            "maxWorkerMemoryGiB": args.max_worker_memory_gib,
+            "maxWorkerMinutes": args.max_worker_minutes,
+            "minimumFreeDiskGiB": args.minimum_free_disk_gb,
+            "sampleIntervalSeconds": 0.25,
+            "note": "Sampled stop, not a kernel memory cap; macOS preflight reports installed RAM.",
+        },
         "commands": {str(seed): command for seed, command in commands.items()},
         "seeds": {},
     }
@@ -1051,19 +1129,26 @@ def main() -> int:
         int, tuple[SeedRun, subprocess.Popen[bytes], object, Path | None, int]
     ] = {}
     failures = 0
+    validation_stopped = False
     interrupted = False
+    resource_stop = threading.Event()
+    guards: dict[int, WorkerResourceGuard] = {}
 
     def stop_children(_signal: int, _frame: object) -> None:
         nonlocal interrupted
         interrupted = True
-        for _, process, _, _, _ in active.values():
-            process.terminate()
+        resource_stop.set()
+        for guard in guards.values():
+            guard.request_stop("operator interrupt")
 
     signal.signal(signal.SIGINT, stop_children)
     signal.signal(signal.SIGTERM, stop_children)
 
     while pending or active:
-        while pending and len(active) < args.max_concurrent and not interrupted:
+        while (
+            pending and len(active) < args.max_concurrent
+            and not interrupted and not resource_stop.is_set()
+        ):
             run = pending.pop(0)
             resume_source = (
                 run.checkpoint if run.checkpoint.exists() else run.resume_source
@@ -1077,6 +1162,13 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+            guards[run.seed] = WorkerResourceGuard(
+                process, args.output_dir,
+                max_memory_bytes=int(args.max_worker_memory_gib * 1024**3),
+                max_seconds=args.max_worker_minutes * 60,
+                minimum_free_disk_bytes=int(args.minimum_free_disk_gb * 1024**3),
+                stop_event=resource_stop,
+            ).start()
             active[run.seed] = (
                 run,
                 process,
@@ -1114,6 +1206,7 @@ def main() -> int:
                 else run.checkpoint
             )
             record: dict[str, object] = {
+                **guards.pop(seed).finish(),
                 "status": "complete" if return_code == 0 else "failed",
                 "returnCode": return_code,
                 "finishedAtUnix": int(time.time()),
@@ -1137,6 +1230,13 @@ def main() -> int:
                     decompressed_bytes, canonical_sha256 = stream_gzip_and_sha256(
                         run.output
                     )
+                    if args.verify_checkpoint_reader_upgrade:
+                        try:
+                            validate_reader_upgrade_digest(canonical_sha256, parent_records[str(seed)])
+                        except ValueError:
+                            validation_stopped = True
+                            resource_stop.set()
+                            raise
                     summary = validate_summary(
                         json.loads(run.summary.read_text()), args, seed
                     )
@@ -1175,20 +1275,28 @@ def main() -> int:
                             + ", ".join(str(path) for path in stale_outputs)
                         )
                     record["integrityError"] = "; ".join(problems)
+            if record["resourceStopReason"] is not None:
+                record["status"] = "interrupted" if interrupted else "resource_stopped"
             state["seeds"][str(seed)] = record
             del active[seed]
             atomic_json(manifest_path, state)
-        if interrupted and not active:
+        if (interrupted or resource_stop.is_set()) and not active:
             break
 
     state["finishedAtUnix"] = int(time.time())
     state["status"] = (
-        "interrupted" if interrupted else ("failed" if failures else "complete")
+        "interrupted" if interrupted else (
+            "validation_stopped" if validation_stopped else (
+                "resource_stopped" if resource_stop.is_set() else ("failed" if failures else "complete")
+            )
+        )
     )
+    for run in pending:
+        state["seeds"][str(run.seed)] = {"status": "not_started"}
     if state["status"] == "complete":
         state["aggregateSummary"] = aggregate_validated_summaries(state["seeds"])
     atomic_json(manifest_path, state)
-    return 130 if interrupted else (1 if failures else 0)
+    return 130 if interrupted else (1 if failures or resource_stop.is_set() else 0)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,842 @@
+{
+  "schema": "local-checkpoint-response-audit-v1",
+  "date": "2026-09-04",
+  "baseCommit": "697a8db",
+  "sequenceStatus": "complete",
+  "releaseStatus": "research_only_not_promoted",
+  "scope": "Bounded local resource safety, 400-to-800 paired continuation, exact replay, and tabular frozen-average full-game response cohort; not completion of all release gates.",
+  "host": {
+    "availableMemoryBytes": 17179869184,
+    "freeDiskBytesAtStart": 46821806080,
+    "node": "MacBook-Air",
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "python": "3.13.5"
+  },
+  "samplingLimits": {
+    "maximumConcurrentWorkers": 1,
+    "workerMemoryGiB": 7.5,
+    "workerMinutes": 20,
+    "minimumFreeDiskGiB": 20,
+    "intervalSeconds": 0.25,
+    "kernelEnforced": false
+  },
+  "checkpointSchema": 5,
+  "training": {
+    "depthBb": 20,
+    "seeds": [
+      26001,
+      26002
+    ],
+    "rounds": [
+      400,
+      800
+    ],
+    "dcfr": [
+      1.5,
+      0,
+      2
+    ],
+    "schedule": "fixed",
+    "averagingDelay": 0,
+    "traversal": "public_chance_sampling",
+    "integrateTerminalActions": true,
+    "actionGrid": "full_default",
+    "recall": "trajectory",
+    "exportPostflopStrategies": false,
+    "heldOutDeals": 2000,
+    "rootDeviationSamplesPerClass": 256,
+    "actionValueDeals": 2000
+  },
+  "binaries": {
+    "originalTrainingSha256": "44e4a236ca30acd9b035d771ae0e4dfe351b1eab86234b95bbf69d51993258ce",
+    "streamingReaderTrainingSha256": "08f335f1e1de18e4908fa9907342f83c5746b17eeb4390dd0d5ef3af44bed9b7",
+    "tabularResponseSha256": "245329edda5cbd350be4f0cfda3bf5fc0d86c929966b99916a3b900438fae065"
+  },
+  "historicalFailures": [
+    {
+      "stage": "local-pcs-20260904-checkpoint800",
+      "cause": "Old reader duplicated node metadata until full decode completed.",
+      "sampledPeakMemoryBytes": 8093947904,
+      "resolution": "Intern each node while decoding; numeric state and disk schema unchanged."
+    },
+    {
+      "stage": "local-pcs-20260904-streamed800/attempt-1",
+      "cause": "Seed B exited 0 with valid outputs but transient zero footprint and process-group exit race caused false resource stop.",
+      "resolution": "Three consecutive failed polls required; owned-child signal fallback; replayed both saved checkpoints without additional rounds."
+    },
+    {
+      "stage": "local-pcs-20260904-streamed-reload800",
+      "cause": "Redundant replay started after recovery had already completed exact replay.",
+      "resolution": "Stopped redundant evaluation; completed attempt-2 checkpoint/artifact hashes are the replay evidence."
+    }
+  ],
+  "checkpoints": [
+    {
+      "seed": 26001,
+      "rounds": 400,
+      "checkpointSha256": "9acbca27ddd492d34c637273895784c4cd47353479fd9f03490f5b26f0fff32e",
+      "checkpointCompressedBytes": 1223208123,
+      "canonicalJsonSha256": "0eb0d0675277092606fbde62f5a540ad7c8a1bb6e899f62e82fd215d8ae0380b",
+      "sampledPeakMemoryBytes": 3269659288,
+      "workerElapsedSeconds": 274.26,
+      "returnCode": 0,
+      "status": "complete",
+      "path": "preflop-solver/neural/runs/local-pcs-20260904-checkpoint400/hu-20bb-schema-v3-seed26001.checkpoint.msgpack.gz",
+      "diagnostics": {
+        "trainingIterations": 400,
+        "informationSets": 10013901,
+        "trainedInformationSets": 5318060,
+        "preflopInformationSets": 16900,
+        "postflopInformationSets": 9997001,
+        "rootLocalDeviationGainBb": 0.46325903226310783,
+        "heldOutUnknownInformationSetFraction": 0.14353813559322035,
+        "heldOutUntrainedInformationSetFraction": 0.017478813559322032,
+        "rootContinuationUnknownInformationSetFraction": 0.20675708794384426,
+        "rootContinuationUntrainedInformationSetFraction": 0.026142137634481883,
+        "actionValueStandardErrorCoverage": 0.21395461441444058,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "validationStatus": "advisory_only"
+      }
+    },
+    {
+      "seed": 26001,
+      "rounds": 800,
+      "checkpointSha256": "8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa",
+      "checkpointCompressedBytes": 2377933072,
+      "canonicalJsonSha256": "f74c52892ead5b5cf544cab7f161df6408ce966997d89a4938af05d0328e9699",
+      "sampledPeakMemoryBytes": 6128194216,
+      "workerElapsedSeconds": 528.476,
+      "returnCode": 0,
+      "status": "complete",
+      "path": "preflop-solver/neural/runs/local-pcs-20260904-streamed800/hu-20bb-schema-v3-seed26001.checkpoint.msgpack.gz",
+      "diagnostics": {
+        "trainingIterations": 800,
+        "informationSets": 19064302,
+        "trainedInformationSets": 10040116,
+        "preflopInformationSets": 16900,
+        "postflopInformationSets": 19047402,
+        "rootLocalDeviationGainBb": 0.40709294996420764,
+        "heldOutUnknownInformationSetFraction": 0.11514253980007405,
+        "heldOutUntrainedInformationSetFraction": 0.018696778970751574,
+        "rootContinuationUnknownInformationSetFraction": 0.16839602159890127,
+        "rootContinuationUntrainedInformationSetFraction": 0.02801269146429607,
+        "actionValueStandardErrorCoverage": 0.2341085011887672,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "validationStatus": "advisory_only"
+      }
+    },
+    {
+      "seed": 26002,
+      "rounds": 400,
+      "checkpointSha256": "1c011e3b5e38ec03416c521034903b8886d53308c31bc6984d60340e09a5cde9",
+      "checkpointCompressedBytes": 1149944973,
+      "canonicalJsonSha256": "ff91377b7228c635221a7af62b8915cacffade1029576412e262897df11db979",
+      "sampledPeakMemoryBytes": 3076590136,
+      "workerElapsedSeconds": 261.238,
+      "returnCode": 0,
+      "status": "complete",
+      "path": "preflop-solver/neural/runs/local-pcs-20260904-checkpoint400/hu-20bb-schema-v3-seed26002.checkpoint.msgpack.gz",
+      "diagnostics": {
+        "trainingIterations": 400,
+        "informationSets": 9390665,
+        "trainedInformationSets": 5031603,
+        "preflopInformationSets": 16900,
+        "postflopInformationSets": 9373765,
+        "rootLocalDeviationGainBb": 0.486139187466938,
+        "heldOutUnknownInformationSetFraction": 0.1264903129657228,
+        "heldOutUntrainedInformationSetFraction": 0.01732488822652757,
+        "rootContinuationUnknownInformationSetFraction": 0.19834298517428958,
+        "rootContinuationUntrainedInformationSetFraction": 0.024927627953376177,
+        "actionValueStandardErrorCoverage": 0.20931803577307243,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "validationStatus": "advisory_only"
+      }
+    },
+    {
+      "seed": 26002,
+      "rounds": 800,
+      "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+      "checkpointCompressedBytes": 2364587801,
+      "canonicalJsonSha256": "7f4848a3d074a0c93281a43ca2480a855b82ff21ee161520c59759d6fe12aa99",
+      "sampledPeakMemoryBytes": 6121362088,
+      "workerElapsedSeconds": 505.422,
+      "returnCode": 0,
+      "status": "resource_stopped",
+      "path": "preflop-solver/neural/runs/local-pcs-20260904-streamed800/hu-20bb-schema-v3-seed26002.checkpoint.msgpack.gz",
+      "diagnostics": {
+        "trainingIterations": 800,
+        "informationSets": 18871516,
+        "trainedInformationSets": 9998313,
+        "preflopInformationSets": 16900,
+        "postflopInformationSets": 18854616,
+        "rootLocalDeviationGainBb": 0.3843531037938767,
+        "heldOutUnknownInformationSetFraction": 0.1168002915451895,
+        "heldOutUntrainedInformationSetFraction": 0.018403790087463557,
+        "rootContinuationUnknownInformationSetFraction": 0.1681341298399846,
+        "rootContinuationUntrainedInformationSetFraction": 0.02862976812545251,
+        "actionValueStandardErrorCoverage": 0.21529569154339787,
+        "rootTrainedComboFraction": 0.9999999999999983,
+        "validationStatus": "advisory_only"
+      }
+    }
+  ],
+  "exactReaderMigration400": [
+    {
+      "seed": 26001,
+      "checkpointSha256": "9acbca27ddd492d34c637273895784c4cd47353479fd9f03490f5b26f0fff32e",
+      "checkpointCompressedBytes": 1223208123,
+      "canonicalJsonSha256": "0eb0d0675277092606fbde62f5a540ad7c8a1bb6e899f62e82fd215d8ae0380b",
+      "sampledPeakMemoryBytes": 3955756200,
+      "workerElapsedSeconds": 43.196,
+      "returnCode": 0,
+      "status": "complete",
+      "canonicalOutputIdentical": true,
+      "checkpointIdentical": true
+    },
+    {
+      "seed": 26002,
+      "checkpointSha256": "1c011e3b5e38ec03416c521034903b8886d53308c31bc6984d60340e09a5cde9",
+      "checkpointCompressedBytes": 1149944973,
+      "canonicalJsonSha256": "ff91377b7228c635221a7af62b8915cacffade1029576412e262897df11db979",
+      "sampledPeakMemoryBytes": 3720760320,
+      "workerElapsedSeconds": 38.185,
+      "returnCode": 0,
+      "status": "complete",
+      "canonicalOutputIdentical": true,
+      "checkpointIdentical": true
+    }
+  ],
+  "exactReplay800": [
+    {
+      "seed": 26001,
+      "checkpointSha256": "8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa",
+      "checkpointCompressedBytes": 2377933072,
+      "canonicalJsonSha256": "f74c52892ead5b5cf544cab7f161df6408ce966997d89a4938af05d0328e9699",
+      "sampledPeakMemoryBytes": 7518049920,
+      "workerElapsedSeconds": 98.447,
+      "returnCode": 0,
+      "status": "complete",
+      "canonicalOutputIdentical": true,
+      "checkpointIdentical": true,
+      "additionalTrainingRounds": 0
+    },
+    {
+      "seed": 26002,
+      "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+      "checkpointCompressedBytes": 2364587801,
+      "canonicalJsonSha256": "7f4848a3d074a0c93281a43ca2480a855b82ff21ee161520c59759d6fe12aa99",
+      "sampledPeakMemoryBytes": 7453496912,
+      "workerElapsedSeconds": 101.421,
+      "returnCode": 0,
+      "status": "complete",
+      "canonicalOutputIdentical": true,
+      "checkpointIdentical": true,
+      "additionalTrainingRounds": 0
+    }
+  ],
+  "aggregateDiagnostics": {
+    "rounds400": {
+      "crossSeedRootPolicyStability": {
+        "available": true,
+        "gates": {
+          "aggregateActionFrequencyDelta": false,
+          "comboWeightedPerActionMae": false,
+          "compatibleActionSets": true,
+          "completeRootCoverage": true,
+          "primaryActionAgreement": false,
+          "validProbabilitySums": true
+        },
+        "maximumAggregateActionFrequencyDelta": 0.05632848711469439,
+        "maximumComboWeightedPerActionMae": 0.08901875731025179,
+        "maximumProbabilitySumError": 3.3306690738754696e-16,
+        "minimumComboWeightedPrimaryActionAgreement": 0.6395173453996983,
+        "minimumPrimaryActionAgreement": 0.6153846153846154,
+        "passed": false,
+        "rootHandClassesPerSeed": [
+          169,
+          169
+        ],
+        "thresholds": {
+          "maximumAggregateActionFrequencyDelta": 0.03,
+          "maximumComboWeightedPerActionMae": 0.05,
+          "maximumProbabilitySumError": 0.000001,
+          "minimumPrimaryActionAgreement": 0.85
+        }
+      },
+      "maximumHeldOutUnknownInformationSetFraction": 0.14353813559322035,
+      "maximumHeldOutUntrainedInformationSetFraction": 0.017478813559322032,
+      "maximumInformationSets": 10013901,
+      "maximumRootContinuationUnknownInformationSetFraction": 0.20675708794384426,
+      "maximumRootContinuationUntrainedInformationSetFraction": 0.026142137634481883,
+      "minimumActionValueStandardErrorCoverage": 0.20931803577307243,
+      "rootLocalDeviationGainMeanBb": 0.47469910986502295,
+      "rootLocalDeviationGainSpreadBb": 0.022880155203830188,
+      "seedCount": 2
+    },
+    "rounds800": {
+      "crossSeedRootPolicyStability": {
+        "available": true,
+        "gates": {
+          "aggregateActionFrequencyDelta": false,
+          "comboWeightedPerActionMae": false,
+          "compatibleActionSets": true,
+          "completeRootCoverage": true,
+          "primaryActionAgreement": false,
+          "validProbabilitySums": true
+        },
+        "maximumAggregateActionFrequencyDelta": 0.05271874104978046,
+        "maximumComboWeightedPerActionMae": 0.08281593983678652,
+        "maximumProbabilitySumError": 3.3306690738754696e-16,
+        "minimumComboWeightedPrimaryActionAgreement": 0.6681749622926093,
+        "minimumPrimaryActionAgreement": 0.6449704142011834,
+        "passed": false,
+        "rootHandClassesPerSeed": [
+          169,
+          169
+        ],
+        "thresholds": {
+          "maximumAggregateActionFrequencyDelta": 0.03,
+          "maximumComboWeightedPerActionMae": 0.05,
+          "maximumProbabilitySumError": 0.000001,
+          "minimumPrimaryActionAgreement": 0.85
+        }
+      },
+      "maximumHeldOutUnknownInformationSetFraction": 0.1168002915451895,
+      "maximumHeldOutUntrainedInformationSetFraction": 0.018696778970751574,
+      "maximumInformationSets": 19064302,
+      "maximumRootContinuationUnknownInformationSetFraction": 0.16839602159890127,
+      "maximumRootContinuationUntrainedInformationSetFraction": 0.02862976812545251,
+      "minimumActionValueStandardErrorCoverage": 0.21529569154339787,
+      "rootLocalDeviationGainMeanBb": 0.39572302687904215,
+      "rootLocalDeviationGainSpreadBb": 0.022739846170330924,
+      "seedCount": 2
+    }
+  },
+  "fullGameResponse": {
+    "configuration": {
+      "trainingDealsPerResponder": 20000,
+      "calibrationDealsPerResponder": 5000,
+      "evaluationDealsPerResponder": 20000,
+      "rolloutsPerAction": 4,
+      "minimumRangeParticles": 4,
+      "maximumGranularity": "strategic",
+      "seeds": [
+        526001,
+        526002
+      ]
+    },
+    "interpretation": "At most one action override per hand; independent training/calibration/evaluation streams. Total is the signed sum of seat gains, not the legacy half-sum. Approximate 99% lower bounds combine two one-sided 99.5% seat bounds; never an exploitability upper bound. Missing source nodes use explicitly disclosed offline uniform profile completion, not serving rows.",
+    "runs": [
+      {
+        "checkpointSha256": "9acbca27ddd492d34c637273895784c4cd47353479fd9f03490f5b26f0fff32e",
+        "command": [
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-solver-tabular-response",
+          "full-game-lbr",
+          "--tabular-checkpoint",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-checkpoint400/hu-20bb-schema-v3-seed26001.checkpoint.msgpack.gz",
+          "--training-deals",
+          "20000",
+          "--calibration-deals",
+          "5000",
+          "--evaluation-deals",
+          "20000",
+          "--rollouts-per-action",
+          "4",
+          "--minimum-range-particles",
+          "4",
+          "--maximum-response-granularity",
+          "strategic",
+          "--seed",
+          "526001",
+          "--output",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-full-game-response/rounds400-seed26001.json"
+        ],
+        "memoryMetric": "macos_phys_footprint",
+        "outputSha256": "61e4a046fa4d04d5d56ecedbc0e3eb11ea4e5ed3abef2aface36119a39261dd4",
+        "resourceStopReason": null,
+        "rounds": 400,
+        "sampledPeakMemoryBytes": 3967257744,
+        "seed": 26001,
+        "signalError": null,
+        "status": "complete",
+        "totalResponseGainBbPerHand": 0.9204287499999999,
+        "totalResponseGainLowerBound99PercentBbPerHand": 0.700836133991976,
+        "workerElapsedSeconds": 46.634,
+        "sourcePolicyIndependentEvaluationCoverage": [
+          {
+            "street": "preflop",
+            "coverage": {
+              "decisions": 169163,
+              "unknown_information_set_fraction": 0,
+              "untrained_information_set_fraction": 0.0001300520799465604
+            }
+          },
+          {
+            "street": "flop",
+            "coverage": {
+              "decisions": 37457,
+              "unknown_information_set_fraction": 0.43297647969671893,
+              "untrained_information_set_fraction": 0.09482873695170461
+            }
+          },
+          {
+            "street": "turn",
+            "coverage": {
+              "decisions": 8665,
+              "unknown_information_set_fraction": 0.9593768032313906,
+              "untrained_information_set_fraction": 0.015233698788228505
+            }
+          },
+          {
+            "street": "river",
+            "coverage": {
+              "decisions": 2190,
+              "unknown_information_set_fraction": 0.997716894977169,
+              "untrained_information_set_fraction": 0.0018264840182648401
+            }
+          }
+        ],
+        "responseDeployed": [
+          true,
+          true
+        ],
+        "players": [
+          {
+            "responder": 0,
+            "response_deployed": true,
+            "baseline_utility_bb": 0.09700750000000012,
+            "response_utility_bb": 0.6891987500000006,
+            "estimated_gain_bb": 0.59219125,
+            "gain_standard_error_bb": 0.04267170577007494,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.4822762198450242,
+            "resolver_lookup_coverage": 0.1355153422501967,
+            "exact_lookup_coverage": 0.04862313139260425,
+            "observable_backoff_lookup_coverage": 0.0037450826121164437,
+            "coarse_observable_backoff_lookup_coverage": 0.015892997639653815,
+            "strategic_observable_backoff_lookup_coverage": 0.0672541306058222,
+            "preflop_lookup_coverage": 0.06998193043216383,
+            "postflop_lookup_coverage": 0.4695835732105162,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.008827480330071004,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0756092880445212,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.385146804835924,
+            "learned_information_sets": 3698,
+            "confident_information_sets": 259
+          },
+          {
+            "responder": 1,
+            "response_deployed": true,
+            "baseline_utility_bb": -0.18200860000000008,
+            "response_utility_bb": 0.1462289,
+            "estimated_gain_bb": 0.32823749999999996,
+            "gain_standard_error_bb": 0.04257952407868708,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.2185599141469518,
+            "resolver_lookup_coverage": 0.14222861125631645,
+            "exact_lookup_coverage": 0.010629029447638962,
+            "observable_backoff_lookup_coverage": 0.013024917232967417,
+            "coarse_observable_backoff_lookup_coverage": 0.020038334204565255,
+            "strategic_observable_backoff_lookup_coverage": 0.0985363303711448,
+            "preflop_lookup_coverage": 0.049409894209013636,
+            "postflop_lookup_coverage": 0.37210358927760107,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.007117976677267908,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.06088141753748296,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.30410419506285025,
+            "learned_information_sets": 5374,
+            "confident_information_sets": 319
+          }
+        ]
+      },
+      {
+        "checkpointSha256": "1c011e3b5e38ec03416c521034903b8886d53308c31bc6984d60340e09a5cde9",
+        "command": [
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-solver-tabular-response",
+          "full-game-lbr",
+          "--tabular-checkpoint",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-checkpoint400/hu-20bb-schema-v3-seed26002.checkpoint.msgpack.gz",
+          "--training-deals",
+          "20000",
+          "--calibration-deals",
+          "5000",
+          "--evaluation-deals",
+          "20000",
+          "--rollouts-per-action",
+          "4",
+          "--minimum-range-particles",
+          "4",
+          "--maximum-response-granularity",
+          "strategic",
+          "--seed",
+          "526002",
+          "--output",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-full-game-response/rounds400-seed26002.json"
+        ],
+        "memoryMetric": "macos_phys_footprint",
+        "outputSha256": "6333add064ce8ffa70c702454533824b19629dab194c987e0a9b99f73de8ab35",
+        "resourceStopReason": null,
+        "rounds": 400,
+        "sampledPeakMemoryBytes": 3729656808,
+        "seed": 26002,
+        "signalError": null,
+        "status": "complete",
+        "totalResponseGainBbPerHand": 0.8747157000000003,
+        "totalResponseGainLowerBound99PercentBbPerHand": 0.6779845877083002,
+        "workerElapsedSeconds": 46.085,
+        "sourcePolicyIndependentEvaluationCoverage": [
+          {
+            "street": "preflop",
+            "coverage": {
+              "decisions": 161980,
+              "unknown_information_set_fraction": 0,
+              "untrained_information_set_fraction": 0.00002469440671687863
+            }
+          },
+          {
+            "street": "flop",
+            "coverage": {
+              "decisions": 31752,
+              "unknown_information_set_fraction": 0.445578231292517,
+              "untrained_information_set_fraction": 0.09552154195011338
+            }
+          },
+          {
+            "street": "turn",
+            "coverage": {
+              "decisions": 7537,
+              "unknown_information_set_fraction": 0.9615231524479235,
+              "untrained_information_set_fraction": 0.014196629958869576
+            }
+          },
+          {
+            "street": "river",
+            "coverage": {
+              "decisions": 1804,
+              "unknown_information_set_fraction": 0.9972283813747228,
+              "untrained_information_set_fraction": 0
+            }
+          }
+        ],
+        "responseDeployed": [
+          true,
+          true
+        ],
+        "players": [
+          {
+            "responder": 0,
+            "response_deployed": true,
+            "baseline_utility_bb": 0.07478735,
+            "response_utility_bb": 0.67665335,
+            "estimated_gain_bb": 0.6018660000000001,
+            "gain_standard_error_bb": 0.04014454902776735,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.49846049423652145,
+            "resolver_lookup_coverage": 0.1553183779688375,
+            "exact_lookup_coverage": 0.08103567546200217,
+            "observable_backoff_lookup_coverage": 0.006555324966235135,
+            "coarse_observable_backoff_lookup_coverage": 0.01630595908686629,
+            "strategic_observable_backoff_lookup_coverage": 0.0514214184537339,
+            "preflop_lookup_coverage": 0.11271241955993988,
+            "postflop_lookup_coverage": 0.40626418520199725,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.0020426690876078077,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.08147980027235588,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.3227417158420336,
+            "learned_information_sets": 3368,
+            "confident_information_sets": 293
+          },
+          {
+            "responder": 1,
+            "response_deployed": true,
+            "baseline_utility_bb": -0.1264044,
+            "response_utility_bb": 0.14644530000000003,
+            "estimated_gain_bb": 0.27284970000000014,
+            "gain_standard_error_bb": 0.036231285357162496,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.17952409347177878,
+            "resolver_lookup_coverage": 0.12089356110381078,
+            "exact_lookup_coverage": 0.018021400412990426,
+            "observable_backoff_lookup_coverage": 0.01351605030974282,
+            "coarse_observable_backoff_lookup_coverage": 0.02196358175333208,
+            "strategic_observable_backoff_lookup_coverage": 0.06739252862774545,
+            "preflop_lookup_coverage": 0.07213962508080154,
+            "postflop_lookup_coverage": 0.25008564576909903,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.002398081534772182,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.05841041452552244,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.18927714970880438,
+            "learned_information_sets": 5168,
+            "confident_information_sets": 357
+          }
+        ]
+      },
+      {
+        "checkpointSha256": "8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa",
+        "command": [
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-solver-tabular-response",
+          "full-game-lbr",
+          "--tabular-checkpoint",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-streamed800/hu-20bb-schema-v3-seed26001.checkpoint.msgpack.gz",
+          "--training-deals",
+          "20000",
+          "--calibration-deals",
+          "5000",
+          "--evaluation-deals",
+          "20000",
+          "--rollouts-per-action",
+          "4",
+          "--minimum-range-particles",
+          "4",
+          "--maximum-response-granularity",
+          "strategic",
+          "--seed",
+          "526001",
+          "--output",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-full-game-response/rounds800-seed26001.json"
+        ],
+        "memoryMetric": "macos_phys_footprint",
+        "outputSha256": "2450f60e3f0b6e79bbd81ccafcab77783db4ebc164d5cf714524f3d7f9f40218",
+        "resourceStopReason": null,
+        "rounds": 800,
+        "sampledPeakMemoryBytes": 7528437352,
+        "seed": 26001,
+        "signalError": null,
+        "status": "complete",
+        "totalResponseGainBbPerHand": 0.8051452,
+        "totalResponseGainLowerBound99PercentBbPerHand": 0.6134894445381309,
+        "workerElapsedSeconds": 97.246,
+        "sourcePolicyIndependentEvaluationCoverage": [
+          {
+            "street": "preflop",
+            "coverage": {
+              "decisions": 156496,
+              "unknown_information_set_fraction": 0,
+              "untrained_information_set_fraction": 0.000025559758715877723
+            }
+          },
+          {
+            "street": "flop",
+            "coverage": {
+              "decisions": 37282,
+              "unknown_information_set_fraction": 0.2892548683010568,
+              "untrained_information_set_fraction": 0.0867979185666005
+            }
+          },
+          {
+            "street": "turn",
+            "coverage": {
+              "decisions": 8946,
+              "unknown_information_set_fraction": 0.920523138832998,
+              "untrained_information_set_fraction": 0.029845741113346747
+            }
+          },
+          {
+            "street": "river",
+            "coverage": {
+              "decisions": 2204,
+              "unknown_information_set_fraction": 0.9922867513611615,
+              "untrained_information_set_fraction": 0.004083484573502722
+            }
+          }
+        ],
+        "responseDeployed": [
+          true,
+          true
+        ],
+        "players": [
+          {
+            "responder": 0,
+            "response_deployed": true,
+            "baseline_utility_bb": 0.06065400000000009,
+            "response_utility_bb": 0.5687743000000005,
+            "estimated_gain_bb": 0.5081203,
+            "gain_standard_error_bb": 0.03911540334696484,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.4073656978387532,
+            "resolver_lookup_coverage": 0.12699144173798552,
+            "exact_lookup_coverage": 0.050954575378538515,
+            "observable_backoff_lookup_coverage": 0.0017116524028966426,
+            "coarse_observable_backoff_lookup_coverage": 0.015635286372613563,
+            "strategic_observable_backoff_lookup_coverage": 0.0586899275839368,
+            "preflop_lookup_coverage": 0.0710436643157144,
+            "postflop_lookup_coverage": 0.4015947102294827,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.001750291715285881,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.06806690003889537,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.33177751847530146,
+            "learned_information_sets": 3195,
+            "confident_information_sets": 229
+          },
+          {
+            "responder": 1,
+            "response_deployed": true,
+            "baseline_utility_bb": -0.17837105,
+            "response_utility_bb": 0.11865385,
+            "estimated_gain_bb": 0.29702490000000004,
+            "gain_standard_error_bb": 0.035290053256006274,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.20612374669937777,
+            "resolver_lookup_coverage": 0.12037725329864338,
+            "exact_lookup_coverage": 0.011289723099795578,
+            "observable_backoff_lookup_coverage": 0.01245121724586508,
+            "coarse_observable_backoff_lookup_coverage": 0.025738710276900206,
+            "strategic_observable_backoff_lookup_coverage": 0.07089760267608251,
+            "preflop_lookup_coverage": 0.0537961554418476,
+            "postflop_lookup_coverage": 0.25672613990371,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.0036816765788728408,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.06669498725573492,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.18634947606910224,
+            "learned_information_sets": 4958,
+            "confident_information_sets": 280
+          }
+        ]
+      },
+      {
+        "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+        "command": [
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-solver-tabular-response",
+          "full-game-lbr",
+          "--tabular-checkpoint",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-streamed800/hu-20bb-schema-v3-seed26002.checkpoint.msgpack.gz",
+          "--training-deals",
+          "20000",
+          "--calibration-deals",
+          "5000",
+          "--evaluation-deals",
+          "20000",
+          "--rollouts-per-action",
+          "4",
+          "--minimum-range-particles",
+          "4",
+          "--maximum-response-granularity",
+          "strategic",
+          "--seed",
+          "526002",
+          "--output",
+          "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-pcs-20260904-full-game-response/rounds800-seed26002.json"
+        ],
+        "memoryMetric": "macos_phys_footprint",
+        "outputSha256": "7576bee1dc54c73bd1f3d11491ac0971f79128a43de31080868b21f566acd323",
+        "resourceStopReason": null,
+        "rounds": 800,
+        "sampledPeakMemoryBytes": 7463540304,
+        "seed": 26002,
+        "signalError": null,
+        "status": "complete",
+        "totalResponseGainBbPerHand": 0.7332197999999999,
+        "totalResponseGainLowerBound99PercentBbPerHand": 0.5361474954019771,
+        "workerElapsedSeconds": 92.507,
+        "sourcePolicyIndependentEvaluationCoverage": [
+          {
+            "street": "preflop",
+            "coverage": {
+              "decisions": 157126,
+              "unknown_information_set_fraction": 0,
+              "untrained_information_set_fraction": 0
+            }
+          },
+          {
+            "street": "flop",
+            "coverage": {
+              "decisions": 39295,
+              "unknown_information_set_fraction": 0.25794630360096704,
+              "untrained_information_set_fraction": 0.0874411502735717
+            }
+          },
+          {
+            "street": "turn",
+            "coverage": {
+              "decisions": 9798,
+              "unknown_information_set_fraction": 0.892018779342723,
+              "untrained_information_set_fraction": 0.03419065115329659
+            }
+          },
+          {
+            "street": "river",
+            "coverage": {
+              "decisions": 2236,
+              "unknown_information_set_fraction": 0.9915026833631485,
+              "untrained_information_set_fraction": 0.0026833631484794273
+            }
+          }
+        ],
+        "responseDeployed": [
+          true,
+          true
+        ],
+        "players": [
+          {
+            "responder": 0,
+            "response_deployed": true,
+            "baseline_utility_bb": 0.19361654999999997,
+            "response_utility_bb": 0.6722492999999999,
+            "estimated_gain_bb": 0.47863274999999983,
+            "gain_standard_error_bb": 0.04047606862517265,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.37437330634282384,
+            "resolver_lookup_coverage": 0.14680969356051934,
+            "exact_lookup_coverage": 0.062399843019262845,
+            "observable_backoff_lookup_coverage": 0.003662883866958825,
+            "coarse_observable_backoff_lookup_coverage": 0.013899336102299114,
+            "strategic_observable_backoff_lookup_coverage": 0.06684763057199856,
+            "preflop_lookup_coverage": 0.0885459940652819,
+            "postflop_lookup_coverage": 0.42455677102980005,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.0033949453036589967,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.06054319124858544,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.36061863447755566,
+            "learned_information_sets": 3104,
+            "confident_information_sets": 239
+          },
+          {
+            "responder": 1,
+            "response_deployed": true,
+            "baseline_utility_bb": -0.13931264999999995,
+            "response_utility_bb": 0.11527440000000004,
+            "estimated_gain_bb": 0.2545870500000001,
+            "gain_standard_error_bb": 0.036032224966527124,
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.16177418905915325,
+            "resolver_lookup_coverage": 0.11618013125141435,
+            "exact_lookup_coverage": 0.00991174473862865,
+            "observable_backoff_lookup_coverage": 0.007377234668477031,
+            "coarse_observable_backoff_lookup_coverage": 0.021407558271102058,
+            "strategic_observable_backoff_lookup_coverage": 0.07748359357320661,
+            "preflop_lookup_coverage": 0.045228864857512076,
+            "postflop_lookup_coverage": 0.2573051948051948,
+            "postflop_exact_lookup_coverage": 0,
+            "postflop_observable_backoff_lookup_coverage": 0.004464285714285714,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.058712121212121215,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.19412878787878787,
+            "learned_information_sets": 5046,
+            "confident_information_sets": 260
+          }
+        ]
+      }
+    ],
+    "pairedPointEstimateReductions": [
+      {
+        "seed": 26001,
+        "absoluteBbPerHand": 0.1152835499999999,
+        "relativeFraction": 0.1252498360139228,
+        "statisticallyConfirmedChange": false
+      },
+      {
+        "seed": 26002,
+        "absoluteBbPerHand": 0.14149590000000045,
+        "relativeFraction": 0.1617621588362943,
+        "statisticallyConfirmedChange": false
+      }
+    ]
+  },
+  "verification": {
+    "rustReleaseLibraryTestsPassed": 193,
+    "rustReleaseCliTestsPassed": 4,
+    "pythonRunnerAndGuardTestsPassed": 25,
+    "exact400ReaderMigrationSeedsPassed": 2,
+    "exact800ReplaySeedsPassed": 2,
+    "webRuntimeChanged": false,
+    "paidComputeProvisioned": false
+  },
+  "remainingLimitations": [
+    "Total restricted-response gains still exceed the roughly 0.50bb preference; true best response can be stronger.",
+    "Most turn and nearly all river lookups are unknown on the response evaluation corpus.",
+    "Cross-seed root stability and action-EV precision targets still fail.",
+    "No 99.99% serving coverage audit, full-policy quantization/storage audit, or exploitability upper certificate.",
+    "About 7GiB checkpoint reload footprint leaves limited room for a larger table on 16GiB hardware."
+  ]
+}

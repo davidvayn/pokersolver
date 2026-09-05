@@ -1,0 +1,2064 @@
+{
+  "candidates": [
+    {
+      "binarySha256": "8b69c56047b622278f64e8d567848790d34e87403fc8baed12baf9994aff39ec",
+      "calibration": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": -0.05083979918084724,
+          "baseline_utility_bb": -0.028633199999999987,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 4,
+          "estimated_gain_bb": 0.024166399999999998,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.02911924290849007,
+          "learned_information_sets": 714,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.04772902232486528,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.04772902232486528,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.00804254767155273,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": -0.004466799999999978,
+          "strategic_observable_backoff_lookup_coverage": 0.00804254767155273
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0010702996297648204,
+          "baseline_utility_bb": 0.03389979999999997,
+          "coarse_observable_backoff_lookup_coverage": 0.009699321047526674,
+          "confident_information_sets": 22,
+          "estimated_gain_bb": 0.15635,
+          "exact_lookup_coverage": 0.00019398642095053346,
+          "gain_standard_error_bb": 0.060283381416732645,
+          "learned_information_sets": 333,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0138801261829653,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.32555205047318614,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.31167192429022084,
+          "preflop_lookup_coverage": 0.008403361344537815,
+          "resolver_lookup_coverage": 0.10591658583899127,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 0.19024979999999997,
+          "strategic_observable_backoff_lookup_coverage": 0.09602327837051407
+        }
+      ],
+      "checkpointSha256": "8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa",
+      "confidentLearnedSetsByStreet": [
+        {
+          "flop": 3,
+          "preflop": 0,
+          "river": 0,
+          "turn": 1
+        },
+        {
+          "flop": 11,
+          "preflop": 9,
+          "river": 0,
+          "turn": 2
+        }
+      ],
+      "deployed": [
+        false,
+        true
+      ],
+      "outputSha256": "e711ce7c89325c82a56809e6fd810b5adc6196a7632f296254cff1fc630a6a42",
+      "path": "preflop-solver/neural/runs/local-turn-20260904-pair3/joint-4-seed26001.json",
+      "players": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 0.10976639999999997,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 714,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 0,
+          "response_deployed": false,
+          "response_utility_bb": 0.10976639999999997,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.02495185837317626,
+          "baseline_utility_bb": -0.1128328,
+          "coarse_observable_backoff_lookup_coverage": 0.006086785784409974,
+          "confident_information_sets": 22,
+          "estimated_gain_bb": 0.17616679999999998,
+          "exact_lookup_coverage": 0.0007853917141174161,
+          "gain_standard_error_bb": 0.05870534255452576,
+          "learned_information_sets": 333,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.011213720316622692,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.3397097625329815,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.32849604221635886,
+          "preflop_lookup_coverage": 0.005032149846239866,
+          "resolver_lookup_coverage": 0.10465344590614568,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 0.06333400000000002,
+          "strategic_observable_backoff_lookup_coverage": 0.0977812684076183
+        }
+      ],
+      "resolutionDiagnostics": {
+        "independent_evaluation": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 484,
+          "resolved_turn_decisions": 2530,
+          "solve_seconds": 431.0719488349998,
+          "solved_roots": 606,
+          "zero_entry_blueprint_decisions": 3
+        },
+        "response_calibration": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 531,
+          "resolved_turn_decisions": 2559,
+          "solve_seconds": 410.23047529199994,
+          "solved_roots": 606,
+          "zero_entry_blueprint_decisions": 5
+        },
+        "response_training": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 6063,
+          "resolved_turn_decisions": 27493,
+          "solve_seconds": 3419.946119476004,
+          "solved_roots": 7840,
+          "zero_entry_blueprint_decisions": 323
+        }
+      },
+      "responseComparisonEligible": false,
+      "responseWorkers": 1,
+      "sampledPeakMemoryBytes": 6220731144,
+      "sourceCoverage": {
+        "independent_evaluation": [
+          {
+            "coverage": {
+              "decisions": 39309,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 9316,
+              "unknown_information_set_fraction": 0.28027050236152856,
+              "untrained_information_set_fraction": 0.09328037784456848
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 3,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_calibration": [
+          {
+            "coverage": {
+              "decisions": 39981,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 9328,
+              "unknown_information_set_fraction": 0.2971698113207547,
+              "untrained_information_set_fraction": 0.08426243567753001
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 3,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 2,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_training": [
+          {
+            "coverage": {
+              "decisions": 126031,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.00011108378097452215
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 77651,
+              "unknown_information_set_fraction": 0.35561679823827125,
+              "untrained_information_set_fraction": 0.10262585156662503
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 277,
+              "unknown_information_set_fraction": 0.9061371841155235,
+              "untrained_information_set_fraction": 0.09386281588447654
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 46,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ]
+      },
+      "totalDeployedGainBbPerHand": 0.17616679999999998,
+      "workerElapsedSeconds": 4334.757
+    },
+    {
+      "binarySha256": "cdbabf150044c292325392b19e8e263c8bd8fbb61f2ff760bb9f1cc4742956f0",
+      "calibration": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": -0.011868710811745148,
+          "baseline_utility_bb": 0.22055039999999998,
+          "coarse_observable_backoff_lookup_coverage": 0.0019399896533885152,
+          "confident_information_sets": 17,
+          "estimated_gain_bb": 0.11529979999999998,
+          "exact_lookup_coverage": 0.006466632177961717,
+          "gain_standard_error_bb": 0.049369929380233456,
+          "learned_information_sets": 732,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.010638297872340425,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.14113475177304965,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.13049645390070921,
+          "preflop_lookup_coverage": 0.008383422967415375,
+          "resolver_lookup_coverage": 0.032591826176927054,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.3358502,
+          "strategic_observable_backoff_lookup_coverage": 0.024185204345576822
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.014090892727679508,
+          "baseline_utility_bb": -0.26770079999999996,
+          "coarse_observable_backoff_lookup_coverage": 0.012636316427211355,
+          "confident_information_sets": 23,
+          "estimated_gain_bb": 0.13721640000000002,
+          "exact_lookup_coverage": 0.002250302925393803,
+          "gain_standard_error_bb": 0.047800336420849736,
+          "learned_information_sets": 358,
+          "observable_backoff_lookup_coverage": 0.0008655011251514627,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.034769833496571985,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.12193927522037218,
+          "postflop_observable_backoff_lookup_coverage": 0.002448579823702253,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.08472086190009795,
+          "preflop_lookup_coverage": 0.004819277108433735,
+          "resolver_lookup_coverage": 0.04621776008308811,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": -0.13048439999999997,
+          "strategic_observable_backoff_lookup_coverage": 0.030465639605331486
+        }
+      ],
+      "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+      "confidentLearnedSetsByStreet": [
+        {
+          "flop": 8,
+          "preflop": 9,
+          "river": 0,
+          "turn": 0
+        },
+        {
+          "flop": 10,
+          "preflop": 12,
+          "river": 0,
+          "turn": 1
+        }
+      ],
+      "deployed": [
+        false,
+        true
+      ],
+      "outputSha256": "3b58ec408806b8837eb9687eee02107db0647e2f34956d5933d02f5a04f10a29",
+      "path": "preflop-solver/neural/runs/local-turn-20260904-pair3-parallel-b/joint-4-seed26002.json",
+      "players": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 0.06238319999999998,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 732,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 0,
+          "response_deployed": false,
+          "response_utility_bb": 0.06238319999999998,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.03660258582175799,
+          "baseline_utility_bb": -0.14751679999999998,
+          "coarse_observable_backoff_lookup_coverage": 0.011674507753964105,
+          "confident_information_sets": 23,
+          "estimated_gain_bb": 0.1592998,
+          "exact_lookup_coverage": 0.0013939710751001916,
+          "gain_standard_error_bb": 0.04763406255577319,
+          "learned_information_sets": 358,
+          "observable_backoff_lookup_coverage": 0.00017424638438752395,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.03214807598636142,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.12469556746225037,
+          "postflop_observable_backoff_lookup_coverage": 0.0004870920603994155,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.09206039941548953,
+          "preflop_lookup_coverage": 0.0024416711882799783,
+          "resolver_lookup_coverage": 0.04617529186269385,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 0.011782999999999981,
+          "strategic_observable_backoff_lookup_coverage": 0.03293256664924203
+        }
+      ],
+      "resolutionDiagnostics": {
+        "independent_evaluation": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 582,
+          "resolved_turn_decisions": 2997,
+          "solve_seconds": 338.70496984299996,
+          "solved_roots": 623,
+          "zero_entry_blueprint_decisions": 0
+        },
+        "response_calibration": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 473,
+          "resolved_turn_decisions": 2649,
+          "solve_seconds": 305.446982237,
+          "solved_roots": 567,
+          "zero_entry_blueprint_decisions": 3
+        },
+        "response_training": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 6296,
+          "resolved_turn_decisions": 28401,
+          "solve_seconds": 3377.2795239749976,
+          "solved_roots": 8117,
+          "zero_entry_blueprint_decisions": 430
+        }
+      },
+      "responseComparisonEligible": false,
+      "responseWorkers": 2,
+      "sampledPeakMemoryBytes": 6721262728,
+      "sourceCoverage": {
+        "independent_evaluation": [
+          {
+            "coverage": {
+              "decisions": 40018,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 10430,
+              "unknown_information_set_fraction": 0.2538830297219559,
+              "untrained_information_set_fraction": 0.09808245445829339
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_calibration": [
+          {
+            "coverage": {
+              "decisions": 40072,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 10345,
+              "unknown_information_set_fraction": 0.2653455775737071,
+              "untrained_information_set_fraction": 0.0873852102464959
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 3,
+              "unknown_information_set_fraction": 0.6666666666666666,
+              "untrained_information_set_fraction": 0.3333333333333333
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_training": [
+          {
+            "coverage": {
+              "decisions": 128241,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 1.55956363409518e-05
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 79078,
+              "unknown_information_set_fraction": 0.3450770125698677,
+              "untrained_information_set_fraction": 0.10919598371228408
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 351,
+              "unknown_information_set_fraction": 0.9344729344729344,
+              "untrained_information_set_fraction": 0.06552706552706553
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 79,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ]
+      },
+      "totalDeployedGainBbPerHand": 0.1592998,
+      "workerElapsedSeconds": 2622.295
+    }
+  ],
+  "checkpointRounds": 800,
+  "completedAtUtc": "2026-09-05T05:02:11.994986+00:00",
+  "conclusion": "inconclusive_two_seat_comparison_due_to_candidate_calibration_rejection",
+  "conditionalLongerPolicyTraining": "not_started_without_supported_full_hand_improvement",
+  "conditionalNeuralDistillation": "not_started_without_supported_full_hand_improvement",
+  "controls": [
+    {
+      "binarySha256": "8b69c56047b622278f64e8d567848790d34e87403fc8baed12baf9994aff39ec",
+      "calibration": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0638010072214931,
+          "baseline_utility_bb": -0.11066660000000002,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 12,
+          "estimated_gain_bb": 0.19333359999999997,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.050287723879855216,
+          "learned_information_sets": 716,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.1500789889415482,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.1500789889415482,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.024752475247524754,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.08266699999999996,
+          "strategic_observable_backoff_lookup_coverage": 0.024752475247524754
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0724992397641114,
+          "baseline_utility_bb": 0.09464980000000002,
+          "coarse_observable_backoff_lookup_coverage": 0.009307520476545048,
+          "confident_information_sets": 28,
+          "estimated_gain_bb": 0.2376334,
+          "exact_lookup_coverage": 0.0020476545048399106,
+          "gain_standard_error_bb": 0.064109124004596,
+          "learned_information_sets": 333,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.01220865704772475,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.20310765815760268,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.19089900110987792,
+          "preflop_lookup_coverage": 0.011204481792717087,
+          "resolver_lookup_coverage": 0.07557706626954579,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 0.33228320000000006,
+          "strategic_observable_backoff_lookup_coverage": 0.06422189128816083
+        }
+      ],
+      "checkpointSha256": "8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa",
+      "confidentLearnedSetsByStreet": [
+        {
+          "flop": 7,
+          "preflop": 0,
+          "river": 0,
+          "turn": 5
+        },
+        {
+          "flop": 10,
+          "preflop": 15,
+          "river": 1,
+          "turn": 2
+        }
+      ],
+      "deployed": [
+        true,
+        true
+      ],
+      "outputSha256": "13917795ce7dd8972faf48586e4ecbc8bd7d17a383ab232bcba74d4cb646d34c",
+      "path": "preflop-solver/neural/runs/local-turn-20260904-pair2/baseline-seed26001.json",
+      "players": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.13482578354682728,
+          "baseline_utility_bb": -0.0426828,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 12,
+          "estimated_gain_bb": 0.2468995999999999,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0435097994648794,
+          "learned_information_sets": 716,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.13074484944532488,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.13074484944532488,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.02196485623003195,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.20421679999999992,
+          "strategic_observable_backoff_lookup_coverage": 0.02196485623003195
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.04069161809122179,
+          "baseline_utility_bb": -0.028649999999999953,
+          "coarse_observable_backoff_lookup_coverage": 0.006565372350403302,
+          "confident_information_sets": 28,
+          "estimated_gain_bb": 0.1949834,
+          "exact_lookup_coverage": 0.0024385668730069407,
+          "gain_standard_error_bb": 0.059899847282659464,
+          "learned_information_sets": 333,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.011972633979475485,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.18814139110604333,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.17616875712656785,
+          "preflop_lookup_coverage": 0.007548224769359799,
+          "resolver_lookup_coverage": 0.06696679797411367,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 0.16633340000000002,
+          "strategic_observable_backoff_lookup_coverage": 0.057962858750703436
+        }
+      ],
+      "resolutionDiagnostics": {},
+      "responseComparisonEligible": true,
+      "responseWorkers": 1,
+      "sampledPeakMemoryBytes": 5738271112,
+      "sourceCoverage": {
+        "independent_evaluation": [
+          {
+            "coverage": {
+              "decisions": 39297,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 9392,
+              "unknown_information_set_fraction": 0.27597955706984667,
+              "untrained_information_set_fraction": 0.09167376490630323
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 2256,
+              "unknown_information_set_fraction": 0.9038120567375887,
+              "untrained_information_set_fraction": 0.03945035460992908
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 473,
+              "unknown_information_set_fraction": 0.9894291754756871,
+              "untrained_information_set_fraction": 0.006342494714587738
+            },
+            "street": "river"
+          }
+        ],
+        "response_calibration": [
+          {
+            "coverage": {
+              "decisions": 39967,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 9417,
+              "unknown_information_set_fraction": 0.2942550706169693,
+              "untrained_information_set_fraction": 0.08134225337156206
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 2308,
+              "unknown_information_set_fraction": 0.9220103986135182,
+              "untrained_information_set_fraction": 0.026863084922010397
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 550,
+              "unknown_information_set_fraction": 0.990909090909091,
+              "untrained_information_set_fraction": 0.005454545454545455
+            },
+            "street": "river"
+          }
+        ],
+        "response_training": [
+          {
+            "coverage": {
+              "decisions": 126031,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.00011108378097452215
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 77651,
+              "unknown_information_set_fraction": 0.35561679823827125,
+              "untrained_information_set_fraction": 0.10262585156662503
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 27186,
+              "unknown_information_set_fraction": 0.9295961156477599,
+              "untrained_information_set_fraction": 0.024902523357610534
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 8939,
+              "unknown_information_set_fraction": 0.9967557892381698,
+              "untrained_information_set_fraction": 0.0019017787224521758
+            },
+            "street": "river"
+          }
+        ]
+      },
+      "totalDeployedGainBbPerHand": 0.4418829999999999,
+      "workerElapsedSeconds": 66.113
+    },
+    {
+      "binarySha256": "8b69c56047b622278f64e8d567848790d34e87403fc8baed12baf9994aff39ec",
+      "calibration": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.06263532984412035,
+          "baseline_utility_bb": 0.11833400000000004,
+          "coarse_observable_backoff_lookup_coverage": 0.0019513464290360349,
+          "confident_information_sets": 22,
+          "estimated_gain_bb": 0.226333,
+          "exact_lookup_coverage": 0.006504488096786783,
+          "gain_standard_error_bb": 0.06355144338576392,
+          "learned_information_sets": 735,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.01098901098901099,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.25934065934065936,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.24835164835164836,
+          "preflop_lookup_coverage": 0.008383422967415375,
+          "resolver_lookup_coverage": 0.05294653310784441,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.3446670000000001,
+          "strategic_observable_backoff_lookup_coverage": 0.04449069858202159
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.025233043985495973,
+          "baseline_utility_bb": -0.17799940000000006,
+          "coarse_observable_backoff_lookup_coverage": 0.012358572671888599,
+          "confident_information_sets": 23,
+          "estimated_gain_bb": 0.1734162,
+          "exact_lookup_coverage": 0.0010443864229765013,
+          "gain_standard_error_bb": 0.057528329152223605,
+          "learned_information_sets": 362,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0353409656545545,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.16127426580388252,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.12593330014932802,
+          "preflop_lookup_coverage": 0.0024089935760171306,
+          "resolver_lookup_coverage": 0.05796344647519582,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": -0.004583199999999959,
+          "strategic_observable_backoff_lookup_coverage": 0.04456048738033072
+        }
+      ],
+      "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+      "confidentLearnedSetsByStreet": [
+        {
+          "flop": 10,
+          "preflop": 9,
+          "river": 2,
+          "turn": 1
+        },
+        {
+          "flop": 10,
+          "preflop": 8,
+          "river": 1,
+          "turn": 4
+        }
+      ],
+      "deployed": [
+        true,
+        true
+      ],
+      "outputSha256": "53da6080fe0684354474667043170518caac037d1d2ff61345ff233c93b5f37d",
+      "path": "preflop-solver/neural/runs/local-turn-20260904-pair2/baseline-seed26002.json",
+      "players": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.10496876027758345,
+          "baseline_utility_bb": 0.02354939999999998,
+          "coarse_observable_backoff_lookup_coverage": 0.001164294954721863,
+          "confident_information_sets": 22,
+          "estimated_gain_bb": 0.26173300000000005,
+          "exact_lookup_coverage": 0.008279430789133247,
+          "gain_standard_error_bb": 0.06085971593941863,
+          "learned_information_sets": 735,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.006488824801730353,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.2487382840663302,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.24224945926459984,
+          "preflop_lookup_coverage": 0.010720479268484944,
+          "resolver_lookup_coverage": 0.05342820181112549,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.2852824,
+          "strategic_observable_backoff_lookup_coverage": 0.04398447606727038
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0690513940997691,
+          "baseline_utility_bb": -0.05913260000000009,
+          "coarse_observable_backoff_lookup_coverage": 0.011566771819137749,
+          "confident_information_sets": 23,
+          "estimated_gain_bb": 0.2188664,
+          "exact_lookup_coverage": 0.0005257623554153522,
+          "gain_standard_error_bb": 0.05816185323065479,
+          "learned_information_sets": 362,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.032673267326732675,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.16435643564356436,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.1316831683168317,
+          "preflop_lookup_coverage": 0.0008138903960933261,
+          "resolver_lookup_coverage": 0.05871012968804767,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 0.1597338,
+          "strategic_observable_backoff_lookup_coverage": 0.046617595513494564
+        }
+      ],
+      "resolutionDiagnostics": {},
+      "responseComparisonEligible": true,
+      "responseWorkers": 1,
+      "sampledPeakMemoryBytes": 5694722368,
+      "sourceCoverage": {
+        "independent_evaluation": [
+          {
+            "coverage": {
+              "decisions": 39882,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 10145,
+              "unknown_information_set_fraction": 0.2539181862986693,
+              "untrained_information_set_fraction": 0.09699359290290784
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 2661,
+              "unknown_information_set_fraction": 0.8921458098459226,
+              "untrained_information_set_fraction": 0.03494926719278467
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 607,
+              "unknown_information_set_fraction": 0.9967051070840197,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_calibration": [
+          {
+            "coverage": {
+              "decisions": 40084,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 10260,
+              "unknown_information_set_fraction": 0.2657894736842105,
+              "untrained_information_set_fraction": 0.08820662768031189
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 2355,
+              "unknown_information_set_fraction": 0.9002123142250531,
+              "untrained_information_set_fraction": 0.03821656050955414
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 604,
+              "unknown_information_set_fraction": 0.9966887417218543,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_training": [
+          {
+            "coverage": {
+              "decisions": 128241,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 1.55956363409518e-05
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 79078,
+              "unknown_information_set_fraction": 0.3450770125698677,
+              "untrained_information_set_fraction": 0.10919598371228408
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 28155,
+              "unknown_information_set_fraction": 0.9227845853312022,
+              "untrained_information_set_fraction": 0.029870360504350914
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 9341,
+              "unknown_information_set_fraction": 0.9958248581522321,
+              "untrained_information_set_fraction": 0.0023552082218177926
+            },
+            "street": "river"
+          }
+        ]
+      },
+      "totalDeployedGainBbPerHand": 0.4805994,
+      "workerElapsedSeconds": 65.333
+    }
+  ],
+  "depthBb": 20,
+  "evaluationSeedOffset": 900000,
+  "limits": [
+    "Restricted legal responses provide lower-bound probes, not full-game exploitability upper certificates.",
+    "Rejected-response zero gains must not be ranked as policy wins.",
+    "The 2000-hand responder budget is not comparable to the older 20000-hand response audit.",
+    "The full-hand arm is unconstrained. Protected integration and local CFV checks are not a protected full-hand quality win.",
+    "Frozen preflop/flop sparse completion and zero-entry forced-deviation completion remain explicitly counted.",
+    "Independent seed policies, responder deal streams, and different resolver continuations prevent treating raw cross-seed wall-time ratios as isolated speedups.",
+    "Four-worker unit parity is not a full-size four-worker memory guarantee.",
+    "The conditional continuation student and longer training stages were not triggered by a qualified quality win."
+  ],
+  "paidComputeUsed": false,
+  "pairedQualityComparisonEligible": false,
+  "parallelCostProbe": [
+    {
+      "binarySha256": "cdbabf150044c292325392b19e8e263c8bd8fbb61f2ff760bb9f1cc4742956f0",
+      "calibration": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 0.25,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.25,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 2.4479375,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 2.4479375,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        }
+      ],
+      "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+      "confidentLearnedSetsByStreet": [
+        {
+          "flop": 0,
+          "preflop": 0,
+          "river": 0,
+          "turn": 0
+        },
+        {
+          "flop": 0,
+          "preflop": 0,
+          "river": 0,
+          "turn": 0
+        }
+      ],
+      "deployed": [
+        false,
+        false
+      ],
+      "outputSha256": "bf825f4e24bfd67675440293e8ba5e176c5494d034a5431ac4ff87e54c09c3b1",
+      "path": "preflop-solver/neural/runs/local-turn-20260904-parallel-cost1/joint-4-seed26002.json",
+      "players": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 3.34375,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 0,
+          "response_deployed": false,
+          "response_utility_bb": 3.34375,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 1.828125,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 1,
+          "response_deployed": false,
+          "response_utility_bb": 1.828125,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        }
+      ],
+      "resolutionDiagnostics": {
+        "independent_evaluation": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 9271392,
+          "maximum_policy_rows": 776,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 0,
+          "resolved_turn_decisions": 6,
+          "solve_seconds": 0.186219584,
+          "solved_roots": 1,
+          "zero_entry_blueprint_decisions": 0
+        },
+        "response_calibration": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 8,
+          "resolved_turn_decisions": 22,
+          "solve_seconds": 2.058436043,
+          "solved_roots": 4,
+          "zero_entry_blueprint_decisions": 0
+        },
+        "response_training": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 107,
+          "resolved_turn_decisions": 422,
+          "solve_seconds": 42.448911461,
+          "solved_roots": 113,
+          "zero_entry_blueprint_decisions": 2
+        }
+      },
+      "responseComparisonEligible": false,
+      "responseWorkers": 1,
+      "sampledPeakMemoryBytes": 6131143360,
+      "sourceCoverage": {
+        "independent_evaluation": [
+          {
+            "coverage": {
+              "decisions": 136,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 28,
+              "unknown_information_set_fraction": 0.2857142857142857,
+              "untrained_information_set_fraction": 0.07142857142857142
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_calibration": [
+          {
+            "coverage": {
+              "decisions": 140,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 38,
+              "unknown_information_set_fraction": 0.3684210526315789,
+              "untrained_information_set_fraction": 0.10526315789473684
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_training": [
+          {
+            "coverage": {
+              "decisions": 1906,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 1242,
+              "unknown_information_set_fraction": 0.3140096618357488,
+              "untrained_information_set_fraction": 0.08454106280193237
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 1,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 1,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ]
+      },
+      "totalDeployedGainBbPerHand": 0.0,
+      "workerElapsedSeconds": 110.333
+    },
+    {
+      "binarySha256": "cdbabf150044c292325392b19e8e263c8bd8fbb61f2ff760bb9f1cc4742956f0",
+      "calibration": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 0.25,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 0,
+          "response_deployed": true,
+          "response_utility_bb": 0.25,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 2.4479375,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 1,
+          "response_deployed": true,
+          "response_utility_bb": 2.4479375,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        }
+      ],
+      "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+      "confidentLearnedSetsByStreet": [
+        {
+          "flop": 0,
+          "preflop": 0,
+          "river": 0,
+          "turn": 0
+        },
+        {
+          "flop": 0,
+          "preflop": 0,
+          "river": 0,
+          "turn": 0
+        }
+      ],
+      "deployed": [
+        false,
+        false
+      ],
+      "outputSha256": "98a8e36638ce9874e6a15f76d433cebbe6ff0d4d4b953bef69e420839dd7b647",
+      "path": "preflop-solver/neural/runs/local-turn-20260904-parallel-cost2/joint-4-seed26002.json",
+      "players": [
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 3.34375,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 0,
+          "response_deployed": false,
+          "response_utility_bb": 3.34375,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        },
+        {
+          "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+          "baseline_utility_bb": 1.828125,
+          "coarse_observable_backoff_lookup_coverage": 0.0,
+          "confident_information_sets": 0,
+          "estimated_gain_bb": 0.0,
+          "exact_lookup_coverage": 0.0,
+          "gain_standard_error_bb": 0.0,
+          "learned_information_sets": 0,
+          "observable_backoff_lookup_coverage": 0.0,
+          "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+          "postflop_exact_lookup_coverage": 0.0,
+          "postflop_lookup_coverage": 0.0,
+          "postflop_observable_backoff_lookup_coverage": 0.0,
+          "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+          "preflop_lookup_coverage": 0.0,
+          "resolver_lookup_coverage": 0.0,
+          "responder": 1,
+          "response_deployed": false,
+          "response_utility_bb": 1.828125,
+          "strategic_observable_backoff_lookup_coverage": 0.0
+        }
+      ],
+      "resolutionDiagnostics": {
+        "independent_evaluation": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 9271392,
+          "maximum_policy_rows": 776,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 0,
+          "resolved_turn_decisions": 6,
+          "solve_seconds": 0.201950541,
+          "solved_roots": 1,
+          "zero_entry_blueprint_decisions": 0
+        },
+        "response_calibration": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 8,
+          "resolved_turn_decisions": 22,
+          "solve_seconds": 2.091750708,
+          "solved_roots": 4,
+          "zero_entry_blueprint_decisions": 0
+        },
+        "response_training": {
+          "maximum_opponent_cfv_excess_bb": 0.0,
+          "maximum_policy_probability_bytes": 79666080,
+          "maximum_policy_rows": 5584,
+          "minimum_deployed_weight": null,
+          "resolved_river_decisions": 107,
+          "resolved_turn_decisions": 422,
+          "solve_seconds": 46.521992540999996,
+          "solved_roots": 113,
+          "zero_entry_blueprint_decisions": 2
+        }
+      },
+      "responseComparisonEligible": false,
+      "responseWorkers": 2,
+      "sampledPeakMemoryBytes": 6306599736,
+      "sourceCoverage": {
+        "independent_evaluation": [
+          {
+            "coverage": {
+              "decisions": 136,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 28,
+              "unknown_information_set_fraction": 0.2857142857142857,
+              "untrained_information_set_fraction": 0.07142857142857142
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_calibration": [
+          {
+            "coverage": {
+              "decisions": 140,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 38,
+              "unknown_information_set_fraction": 0.3684210526315789,
+              "untrained_information_set_fraction": 0.10526315789473684
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 0,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ],
+        "response_training": [
+          {
+            "coverage": {
+              "decisions": 1906,
+              "unknown_information_set_fraction": 0.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "preflop"
+          },
+          {
+            "coverage": {
+              "decisions": 1242,
+              "unknown_information_set_fraction": 0.3140096618357488,
+              "untrained_information_set_fraction": 0.08454106280193237
+            },
+            "street": "flop"
+          },
+          {
+            "coverage": {
+              "decisions": 1,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "turn"
+          },
+          {
+            "coverage": {
+              "decisions": 1,
+              "unknown_information_set_fraction": 1.0,
+              "untrained_information_set_fraction": 0.0
+            },
+            "street": "river"
+          }
+        ]
+      },
+      "totalDeployedGainBbPerHand": 0.0,
+      "workerElapsedSeconds": 95.814
+    }
+  ],
+  "parallelCostProbeWallTimeReductionPercent": 13.159254257565733,
+  "protectedIntegrationProbe": {
+    "purpose": "bounded_integration_cost_and_local_CFV_check_not_a_quality_comparison",
+    "runs": [
+      {
+        "binarySha256": "cdbabf150044c292325392b19e8e263c8bd8fbb61f2ff760bb9f1cc4742956f0",
+        "calibration": [
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": 20.0,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 0,
+            "response_deployed": true,
+            "response_utility_bb": 20.0,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          },
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": 10.25,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 1,
+            "response_deployed": true,
+            "response_utility_bb": 10.25,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          }
+        ],
+        "checkpointSha256": "8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa",
+        "confidentLearnedSetsByStreet": [
+          {
+            "flop": 0,
+            "preflop": 0,
+            "river": 0,
+            "turn": 0
+          },
+          {
+            "flop": 0,
+            "preflop": 0,
+            "river": 0,
+            "turn": 0
+          }
+        ],
+        "deployed": [
+          false,
+          false
+        ],
+        "outputSha256": "a8b4407707413e96ee56219fc8463ec9a18a738761097d88b9ed7c062ac31485",
+        "path": "preflop-solver/neural/runs/local-turn-20260904-protected-pair/safe-2-seed26001.json",
+        "players": [
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": 0.375,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 0,
+            "response_deployed": false,
+            "response_utility_bb": 0.375,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          },
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": -2.25,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 1,
+            "response_deployed": false,
+            "response_utility_bb": -2.25,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          }
+        ],
+        "resolutionDiagnostics": {
+          "independent_evaluation": {
+            "maximum_opponent_cfv_excess_bb": 0.0,
+            "maximum_policy_probability_bytes": 0,
+            "maximum_policy_rows": 0,
+            "minimum_deployed_weight": null,
+            "resolved_river_decisions": 0,
+            "resolved_turn_decisions": 0,
+            "solve_seconds": 0.0,
+            "solved_roots": 0,
+            "zero_entry_blueprint_decisions": 0
+          },
+          "response_calibration": {
+            "maximum_opponent_cfv_excess_bb": 0.0,
+            "maximum_policy_probability_bytes": 0,
+            "maximum_policy_rows": 0,
+            "minimum_deployed_weight": null,
+            "resolved_river_decisions": 0,
+            "resolved_turn_decisions": 0,
+            "solve_seconds": 0.0,
+            "solved_roots": 0,
+            "zero_entry_blueprint_decisions": 0
+          },
+          "response_training": {
+            "maximum_opponent_cfv_excess_bb": 0.048828124999992895,
+            "maximum_policy_probability_bytes": 79666080,
+            "maximum_policy_rows": 5584,
+            "minimum_deployed_weight": 0.015625,
+            "resolved_river_decisions": 0,
+            "resolved_turn_decisions": 14,
+            "solve_seconds": 61.171846916999996,
+            "solved_roots": 4,
+            "zero_entry_blueprint_decisions": 0
+          }
+        },
+        "responseComparisonEligible": false,
+        "responseWorkers": 1,
+        "sampledPeakMemoryBytes": 6279123792,
+        "sourceCoverage": {
+          "independent_evaluation": [
+            {
+              "coverage": {
+                "decisions": 56,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "preflop"
+            },
+            {
+              "coverage": {
+                "decisions": 6,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "flop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "turn"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "river"
+            }
+          ],
+          "response_calibration": [
+            {
+              "coverage": {
+                "decisions": 20,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "preflop"
+            },
+            {
+              "coverage": {
+                "decisions": 6,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "flop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "turn"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "river"
+            }
+          ],
+          "response_training": [
+            {
+              "coverage": {
+                "decisions": 82,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "preflop"
+            },
+            {
+              "coverage": {
+                "decisions": 51,
+                "unknown_information_set_fraction": 0.29411764705882354,
+                "untrained_information_set_fraction": 0.1568627450980392
+              },
+              "street": "flop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "turn"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "river"
+            }
+          ]
+        },
+        "totalDeployedGainBbPerHand": 0.0,
+        "workerElapsedSeconds": 133.606
+      },
+      {
+        "binarySha256": "cdbabf150044c292325392b19e8e263c8bd8fbb61f2ff760bb9f1cc4742956f0",
+        "calibration": [
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": 0.25,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 0,
+            "response_deployed": true,
+            "response_utility_bb": 0.25,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          },
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": -1.0,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 1,
+            "response_deployed": true,
+            "response_utility_bb": -1.0,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          }
+        ],
+        "checkpointSha256": "7a71a1b13975173af32aed3c610ae62a7c0fb25680ddf4397efef0bde220893d",
+        "confidentLearnedSetsByStreet": [
+          {
+            "flop": 0,
+            "preflop": 0,
+            "river": 0,
+            "turn": 0
+          },
+          {
+            "flop": 0,
+            "preflop": 0,
+            "river": 0,
+            "turn": 0
+          }
+        ],
+        "deployed": [
+          false,
+          false
+        ],
+        "outputSha256": "6a1069468ceddf4e78a3d06d03b51b255fe76c11e5d1ec3ee647ba7447a4b4e6",
+        "path": "preflop-solver/neural/runs/local-turn-20260904-protected-pair/safe-2-seed26002.json",
+        "players": [
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": 2.375,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 0,
+            "response_deployed": false,
+            "response_utility_bb": 2.375,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          },
+          {
+            "approximate_one_sided_99_5_percent_gain_lower_bound_bb": 0.0,
+            "baseline_utility_bb": 0.1875,
+            "coarse_observable_backoff_lookup_coverage": 0.0,
+            "confident_information_sets": 0,
+            "estimated_gain_bb": 0.0,
+            "exact_lookup_coverage": 0.0,
+            "gain_standard_error_bb": 0.0,
+            "learned_information_sets": 0,
+            "observable_backoff_lookup_coverage": 0.0,
+            "postflop_coarse_observable_backoff_lookup_coverage": 0.0,
+            "postflop_exact_lookup_coverage": 0.0,
+            "postflop_lookup_coverage": 0.0,
+            "postflop_observable_backoff_lookup_coverage": 0.0,
+            "postflop_strategic_observable_backoff_lookup_coverage": 0.0,
+            "preflop_lookup_coverage": 0.0,
+            "resolver_lookup_coverage": 0.0,
+            "responder": 1,
+            "response_deployed": false,
+            "response_utility_bb": 0.1875,
+            "strategic_observable_backoff_lookup_coverage": 0.0
+          }
+        ],
+        "resolutionDiagnostics": {
+          "independent_evaluation": {
+            "maximum_opponent_cfv_excess_bb": 0.0,
+            "maximum_policy_probability_bytes": 0,
+            "maximum_policy_rows": 0,
+            "minimum_deployed_weight": null,
+            "resolved_river_decisions": 0,
+            "resolved_turn_decisions": 0,
+            "solve_seconds": 0.0,
+            "solved_roots": 0,
+            "zero_entry_blueprint_decisions": 0
+          },
+          "response_calibration": {
+            "maximum_opponent_cfv_excess_bb": 0.0,
+            "maximum_policy_probability_bytes": 0,
+            "maximum_policy_rows": 0,
+            "minimum_deployed_weight": null,
+            "resolved_river_decisions": 0,
+            "resolved_turn_decisions": 0,
+            "solve_seconds": 0.0,
+            "solved_roots": 0,
+            "zero_entry_blueprint_decisions": 0
+          },
+          "response_training": {
+            "maximum_opponent_cfv_excess_bb": 0.04950916158724006,
+            "maximum_policy_probability_bytes": 40427088,
+            "maximum_policy_rows": 2990,
+            "minimum_deployed_weight": 0.015625,
+            "resolved_river_decisions": 4,
+            "resolved_turn_decisions": 29,
+            "solve_seconds": 77.10108504,
+            "solved_roots": 11,
+            "zero_entry_blueprint_decisions": 0
+          }
+        },
+        "responseComparisonEligible": false,
+        "responseWorkers": 1,
+        "sampledPeakMemoryBytes": 6116774568,
+        "sourceCoverage": {
+          "independent_evaluation": [
+            {
+              "coverage": {
+                "decisions": 64,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "preflop"
+            },
+            {
+              "coverage": {
+                "decisions": 12,
+                "unknown_information_set_fraction": 0.5,
+                "untrained_information_set_fraction": 0.16666666666666666
+              },
+              "street": "flop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "turn"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "river"
+            }
+          ],
+          "response_calibration": [
+            {
+              "coverage": {
+                "decisions": 14,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "preflop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "flop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "turn"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "river"
+            }
+          ],
+          "response_training": [
+            {
+              "coverage": {
+                "decisions": 123,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "preflop"
+            },
+            {
+              "coverage": {
+                "decisions": 64,
+                "unknown_information_set_fraction": 0.234375,
+                "untrained_information_set_fraction": 0.09375
+              },
+              "street": "flop"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "turn"
+            },
+            {
+              "coverage": {
+                "decisions": 0,
+                "unknown_information_set_fraction": 0.0,
+                "untrained_information_set_fraction": 0.0
+              },
+              "street": "river"
+            }
+          ]
+        },
+        "totalDeployedGainBbPerHand": 0.0,
+        "workerElapsedSeconds": 146.107
+      }
+    ],
+    "status": "complete"
+  },
+  "resolverIterations": 4,
+  "responderBudgetPerSeat": {
+    "calibration": 5000,
+    "holdout": 5000,
+    "minimumParticles": 4,
+    "rolloutsPerAction": 4,
+    "training": 2000
+  },
+  "schema": "connected-tabular-turn-pilot-audit-v1",
+  "status": "completed_bounded_pair",
+  "verification": {
+    "connectedFullSizeParity": true,
+    "pythonTests": 30,
+    "rustCliTests": 5,
+    "rustLibraryTests": 201,
+    "twoSeedFullSizeBaselineParity": true
+  },
+  "websitePolicyChanged": false
+}

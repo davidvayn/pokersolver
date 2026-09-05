@@ -3,6 +3,155 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn flop_pilot_rejects_missing_budget_values_before_artifact_io() {
+    for flag in ["--weight", "--evaluation-deals", "--response-workers"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["tabular-flop-pilot", flag])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("requires a numeric value"));
+    }
+}
+
+#[test]
+fn tabular_turn_options_reject_silent_noops_and_neural_sources() {
+    for args in [
+        vec![
+            "full-game-lbr",
+            "--networks",
+            "unused",
+            "--terminal-flop-samples",
+            "2048",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--terminal-flop-samples",
+            "127",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--terminal-flop-weight",
+            "0.25",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--terminal-flop-samples",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--response-workers",
+            "0",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--response-workers",
+            "5",
+        ],
+        vec![
+            "full-game-lbr",
+            "--networks",
+            "unused",
+            "--response-workers",
+            "2",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--response-workers",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--tabular-turn-iterations",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--tabular-turn-max-rows",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--tabular-turn-unconstrained",
+        ],
+        vec![
+            "full-game-lbr",
+            "--networks",
+            "unused",
+            "--tabular-turn-iterations",
+            "2",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--tabular-turn-iterations",
+            "1",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.contains("require"), "{message}");
+    }
+}
+
+#[test]
+fn tabular_lbr_rejects_ambiguous_sources_and_game_overrides() {
+    for args in [
+        vec![
+            "full-game-lbr",
+            "--networks",
+            "unused",
+            "--tabular-checkpoint",
+            "unused",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--effective-stack-bb",
+            "50",
+        ],
+        vec![
+            "full-game-lbr",
+            "--tabular-checkpoint",
+            "unused",
+            "--compact-serving-grid",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            message.contains("exactly one") || message.contains("omit depth/grid overrides"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
 fn kuhn_command_prints_machine_readable_validation() {
     let output = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
         .args(["kuhn", "--iterations", "5000"])

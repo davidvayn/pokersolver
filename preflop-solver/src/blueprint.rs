@@ -1389,6 +1389,7 @@ struct BlueprintCheckpoint {
     sampled_deals: u64,
     terminal_evaluations: u64,
     public_histories: BTreeMap<u64, Vec<String>>,
+    #[serde(deserialize_with = "deserialize_checkpoint_nodes")]
     nodes: BTreeMap<u64, Node>,
 }
 
@@ -1563,6 +1564,14 @@ struct NodeStorageInterner {
 }
 
 impl NodeStorageInterner {
+    fn intern_node(&mut self, node: &mut Node) {
+        node.descriptor.hand_bucket_trajectory =
+            self.intern_slice(&node.descriptor.hand_bucket_trajectory);
+        node.descriptor.public_bucket_trajectory =
+            self.intern_slice(&node.descriptor.public_bucket_trajectory);
+        node.action_labels = self.intern_slice(&node.action_labels);
+    }
+
     fn intern_slice(&mut self, values: &[Arc<str>]) -> Arc<[Arc<str>]> {
         if let Some(canonical) = self.slices.get(values) {
             return canonical.clone();
@@ -1585,13 +1594,44 @@ impl NodeStorageInterner {
 fn rebuild_string_interner(nodes: &mut BTreeMap<u64, Node>) -> NodeStorageInterner {
     let mut interner = NodeStorageInterner::default();
     for node in nodes.values_mut() {
-        node.descriptor.hand_bucket_trajectory =
-            interner.intern_slice(&node.descriptor.hand_bucket_trajectory);
-        node.descriptor.public_bucket_trajectory =
-            interner.intern_slice(&node.descriptor.public_bucket_trajectory);
-        node.action_labels = interner.intern_slice(&node.action_labels);
+        interner.intern_node(node);
     }
     interner
+}
+
+/// Rebuild sharing *while* decoding, not after allocating an expanded copy of
+/// every descriptor. The on-disk schema and every numeric learning value are
+/// unchanged. Only one uninterned node is alive at a time, for either codec.
+fn deserialize_checkpoint_nodes<'de, D>(deserializer: D) -> Result<BTreeMap<u64, Node>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct NodesVisitor;
+    impl<'de> serde::de::Visitor<'de> for NodesVisitor {
+        type Value = BTreeMap<u64, Node>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a map of unique checkpoint information sets")
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: serde::de::MapAccess<'de>,
+        {
+            let mut nodes = BTreeMap::new();
+            let mut interner = NodeStorageInterner::default();
+            while let Some((key, mut node)) = map.next_entry::<u64, Node>()? {
+                interner.intern_node(&mut node);
+                if nodes.insert(key, node).is_some() {
+                    return Err(serde::de::Error::custom(
+                        "duplicate checkpoint information set",
+                    ));
+                }
+            }
+            Ok(nodes)
+        }
+    }
+    deserializer.deserialize_map(NodesVisitor)
 }
 
 struct Trainer {
@@ -4362,6 +4402,54 @@ mod tests {
         }
         assert_eq!(normalize_or_uniform(vec![0.0, 0.0]), vec![0.5, 0.5]);
         assert_eq!(normalize_or_uniform(vec![1e308, 1e308]), vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn checkpoint_decoder_shares_storage_before_trainer_construction() {
+        let config = tiny_config();
+        let deal = Deal::from_cards([[51, 50], [45, 44]], [0, 5, 10, 27, 28]);
+        let state = GameState::initial(&config);
+        let (_, descriptor, _) = information_set(&state, &deal, &config);
+        let actions = state.legal_actions(&config);
+        let mut trainer = Trainer::fresh(config);
+        for key in [1, 2, 3] {
+            trainer.nodes.insert(
+                key,
+                Node::new(descriptor.clone(), &actions, &mut trainer.string_interner),
+            );
+        }
+        for codec in ["msgpack.gz", "json.gz"] {
+            let path = std::env::temp_dir().join(format!(
+                "blueprint-streaming-intern-{}.{codec}",
+                std::process::id()
+            ));
+            trainer.write_checkpoint(&path).unwrap();
+            let mut decoded = read_checkpoint(&path).unwrap();
+            fs::remove_file(path).unwrap();
+            // This must hold *before* from_checkpoint and its final interner
+            // rebuild: otherwise the whole expanded table must first fit RAM.
+            assert!(
+                Arc::ptr_eq(
+                    &decoded.nodes[&1].descriptor.hand_bucket_trajectory,
+                    &decoded.nodes[&2].descriptor.hand_bucket_trajectory,
+                ),
+                "private trajectory not shared during {codec} decode"
+            );
+            assert!(Arc::ptr_eq(
+                &decoded.nodes[&1].descriptor.public_bucket_trajectory,
+                &decoded.nodes[&2].descriptor.public_bucket_trajectory,
+            ));
+            assert!(Arc::ptr_eq(
+                &decoded.nodes[&1].action_labels,
+                &decoded.nodes[&2].action_labels
+            ));
+            assert_eq!(
+                rmp_serde::to_vec_named(&decoded.nodes).unwrap(),
+                rmp_serde::to_vec_named(&trainer.nodes).unwrap(),
+            );
+            decoded.nodes.get_mut(&1).unwrap().regrets[0] = 7.0;
+            assert_eq!(decoded.nodes[&2].regrets[0], 0.0);
+        }
     }
 
     #[test]

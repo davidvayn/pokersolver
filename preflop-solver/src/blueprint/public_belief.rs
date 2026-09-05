@@ -8454,6 +8454,8 @@ struct TurnRiverSolver {
     nodes: BTreeMap<Vec<String>, RangeNode>,
     safe_root: Option<SafeResolveRoot>,
     training_round_offset: u64,
+    #[cfg(test)]
+    reference_both_value_players: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8543,6 +8545,8 @@ impl TurnRiverSolver {
             nodes: BTreeMap::new(),
             safe_root: None,
             training_round_offset: 0,
+            #[cfg(test)]
+            reference_both_value_players: false,
         })
     }
 
@@ -9110,7 +9114,7 @@ impl TurnRiverSolver {
         mode: TurnRiverTrainingMode,
     ) -> [Vec<f64>; 2] {
         if state.terminal.is_some() {
-            return self.terminal_values(&state, &reaches, river);
+            return self.player_terminal_values(&state, &reaches, river, traverser);
         }
         if state.street == Street::River && river.is_none() {
             return self.chance_walk(state, reaches, traverser, round, accumulate_average, mode);
@@ -9226,6 +9230,69 @@ impl TurnRiverSolver {
         values
     }
 
+    /// An alternating training traversal updates only `traverser`'s regrets.
+    /// Average accumulation uses reaches, not the other player's payoff.
+    /// A best-response measurement likewise uses only the responding player's
+    /// value. Ordinary profile measurements still evaluate both players.
+    fn player_terminal_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        river: Option<u8>,
+        traverser: usize,
+    ) -> [Vec<f64>; 2] {
+        #[cfg(test)]
+        if self.reference_both_value_players {
+            return self.terminal_values(state, reaches, river);
+        }
+        std::array::from_fn(|player| {
+            if player != traverser {
+                return vec![0.0; COMBO_COUNT];
+            }
+            let opponent = 1 - player;
+            match state.terminal.as_ref().expect("terminal training state") {
+                Terminal::Fold { winner } => {
+                    let utility_p0 = if *winner == 0 {
+                        state.invested[1]
+                    } else {
+                        -state.invested[0]
+                    };
+                    self.constant_terminal_values(
+                        &reaches[opponent],
+                        if player == 0 { utility_p0 } else { -utility_p0 },
+                    )
+                }
+                Terminal::Showdown => {
+                    let win = state.invested[opponent];
+                    let loss = -state.invested[player];
+                    let tie = (state.invested[opponent] - state.invested[player]) / 2.0;
+                    if let Some(card) = river {
+                        return self.river_player_showdown_values(
+                            &reaches[opponent],
+                            card,
+                            win,
+                            loss,
+                            tie,
+                        );
+                    }
+                    let mut values = vec![0.0; COMBO_COUNT];
+                    for card in &self.river_cards {
+                        let mut masked = reaches[opponent].clone();
+                        for combo in &self.river_blocked_combos[*card as usize] {
+                            masked[*combo] = 0.0;
+                        }
+                        let child =
+                            self.river_player_showdown_values(&masked, *card, win, loss, tie);
+                        for combo in 0..COMBO_COUNT {
+                            values[combo] += child[combo] / 44.0;
+                        }
+                    }
+                    values
+                }
+            }
+        })
+    }
+
     fn terminal_values(
         &self,
         state: &GameState,
@@ -9339,7 +9406,10 @@ impl TurnRiverSolver {
         average_strategy: bool,
     ) -> [Vec<f64>; 2] {
         if state.terminal.is_some() {
-            return self.terminal_values(&state, &reaches, river);
+            return match best_responder {
+                Some(player) => self.player_terminal_values(&state, &reaches, river, player),
+                None => self.terminal_values(&state, &reaches, river),
+            };
         }
         if state.street == Street::River && river.is_none() {
             let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
@@ -9998,12 +10068,26 @@ pub(super) fn solve_turn_river_policy_probabilities_with_prior(
 /// anchor policy. Only the resolving player's strategy is returned. A final exact
 /// best response checks the hard CFV bound after finite-iteration projection.
 pub(super) fn solve_turn_river_safe_policy(
-    mut config: TurnRiverSolveConfig,
+    config: TurnRiverSolveConfig,
     blueprint_strategies: &[PublicBeliefStrategy],
     resolving_player: usize,
 ) -> Result<SafeTurnRiverPolicy, String> {
     if resolving_player > 1 || resolving_player != config.state.actor {
         return Err("safe turn resolving must target the acting player".to_owned());
+    }
+    solve_turn_river_safe_policy_for_seat(config, blueprint_strategies, resolving_player)
+}
+
+/// The opt-out gadget precedes the subgame, so either seat can be protected
+/// without changing who acts at the actual turn root. Used for sequential
+/// bilateral replacement of one complete anchored policy, never row grafting.
+pub(super) fn solve_turn_river_safe_policy_for_seat(
+    mut config: TurnRiverSolveConfig,
+    blueprint_strategies: &[PublicBeliefStrategy],
+    resolving_player: usize,
+) -> Result<SafeTurnRiverPolicy, String> {
+    if resolving_player > 1 {
+        return Err("safe turn resolving requires a valid seat".to_owned());
     }
     if config.river_refinement_iterations > 0 {
         return Err("safe turn resolving does not support detached river refinement".to_owned());
@@ -10031,6 +10115,7 @@ pub(super) fn solve_turn_river_safe_policy(
     let mut blueprint = TurnRiverSolver::new(config.clone())?;
     blueprint.load_frozen_average_strategies(blueprint_strategies)?;
     let opponent_alternative_values_bb = blueprint.exact_best_response_conditional_values(opponent);
+    drop(blueprint);
 
     let mut solver = TurnRiverSolver::new(config)?;
     solver.install_safe_root(resolving_player, opponent_alternative_values_bb)?;
@@ -14593,6 +14678,87 @@ mod tests {
                 > 1e-6,
             "aggregate deployment scoring must retain the authentic reached range"
         );
+    }
+
+    #[test]
+    fn traverser_only_terminal_work_preserves_every_training_accumulator() {
+        fn same_node(left: &RangeNode, right: &RangeNode) {
+            assert_eq!(left.actor, right.actor);
+            assert_eq!(left.action_labels, right.action_labels);
+            assert_eq!(left.regrets, right.regrets);
+            assert_eq!(left.strategy_sum, right.strategy_sum);
+            assert_eq!(
+                left.last_regret_discount_round,
+                right.last_regret_discount_round
+            );
+            assert_eq!(
+                left.last_strategy_discount_round,
+                right.last_strategy_discount_round
+            );
+        }
+        for (depth, refinement, safe_seat, plus) in [
+            (2.0, 0, None, false),
+            (20.0, 0, None, false),
+            (2.0, 2, None, true),
+            (2.0, 0, Some(0), false),
+            (2.0, 0, Some(1), false),
+        ] {
+            let board = [0, 5, 10, 15];
+            let mut game = if depth == 20.0 {
+                BlueprintConfig::default()
+            } else {
+                tiny_game()
+            };
+            game.effective_stack_bb = depth;
+            let mut ranges = std::array::from_fn(|_| uniform_range(&board));
+            for combo in 0..COMBO_COUNT {
+                ranges[0][combo] *= (combo % 9 + 1) as f64;
+                if combo % 7 == 0 {
+                    ranges[1][combo] = 0.0;
+                }
+            }
+            let config = TurnRiverSolveConfig {
+                game,
+                state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges),
+                iterations: 4,
+                averaging_delay: 0,
+                river_refinement_iterations: refinement,
+                regret_matching_plus: plus,
+            };
+            let mut fast = TurnRiverSolver::new(config.clone()).unwrap();
+            let mut reference = TurnRiverSolver::new(config).unwrap();
+            reference.reference_both_value_players = true;
+            if let Some(seat) = safe_seat {
+                fast.install_safe_root(seat, vec![0.5; COMBO_COUNT])
+                    .unwrap();
+                reference
+                    .install_safe_root(seat, vec![0.5; COMBO_COUNT])
+                    .unwrap();
+            }
+            fast.train();
+            reference.train();
+            assert_eq!(fast.nodes.len(), reference.nodes.len());
+            for (key, node) in &fast.nodes {
+                same_node(node, &reference.nodes[key]);
+            }
+            if let Some(safe) = fast.safe_root.as_ref() {
+                same_node(&safe.node, &reference.safe_root.as_ref().unwrap().node);
+            }
+            assert_eq!(
+                serde_json::to_vec(&fast.policy_strategies()).unwrap(),
+                serde_json::to_vec(&reference.policy_strategies()).unwrap(),
+            );
+            for player in 0..2 {
+                assert_eq!(
+                    fast.exact_best_response_conditional_values(player),
+                    reference.exact_best_response_conditional_values(player),
+                );
+            }
+            assert_eq!(
+                fast.safe_opponent_cfv_excess(),
+                reference.safe_opponent_cfv_excess()
+            );
+        }
     }
 
     #[test]

@@ -3269,7 +3269,7 @@ fn blend_resolved_with_anchor(
     stabilize_resolved_policy(blended, action_count)
 }
 
-fn trajectory_action_matches(
+pub(super) fn trajectory_action_matches(
     state: &GameState,
     action: &LegalAction,
     observed: &TrajectoryAction,
@@ -3295,7 +3295,7 @@ fn deal_for_policy_combo(combo: Combo, actor: usize) -> Deal {
         .expect("an empty public board always has enough remaining cards")
 }
 
-fn deal_for_policy_combo_on_board(
+pub(super) fn deal_for_policy_combo_on_board(
     combo: Combo,
     actor: usize,
     visible_board: &[u8],
@@ -3325,7 +3325,10 @@ fn deal_for_policy_combo_on_board(
     Ok(Deal::from_sampled_cards(holes, board))
 }
 
-fn normalize_ranges_for_board(ranges: &mut [Vec<f64>; 2], board: &[u8]) -> Result<(), String> {
+pub(super) fn normalize_ranges_for_board(
+    ranges: &mut [Vec<f64>; 2],
+    board: &[u8],
+) -> Result<(), String> {
     for player in 0..2 {
         for combo in all_combos() {
             if combo.cards().iter().any(|card| board.contains(card)) {

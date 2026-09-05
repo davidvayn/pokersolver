@@ -3,6 +3,8 @@ import gzip
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -23,6 +25,7 @@ from cloud_blueprint_run import (
     stream_gzip_and_sha256,
     validate_artifact_summary_identity,
     validate_numeric_options,
+    validate_reader_upgrade_digest,
     validate_summary,
 )
 
@@ -70,6 +73,7 @@ def arguments(root: Path) -> argparse.Namespace:
         binary=root / "preflop-solver",
         resume_from_dir=None,
         evaluation_only=False,
+        verify_checkpoint_reader_upgrade=False,
         depth=20.0,
         iterations=400_000,
         seeds=[26_001, 26_002],
@@ -91,6 +95,8 @@ def arguments(root: Path) -> argparse.Namespace:
         export_postflop_strategies=True,
         bytes_per_information_set=2_300,
         minimum_free_disk_gb=20.0,
+        max_worker_memory_gib=0.0,
+        max_worker_minutes=0.0,
     )
 
 
@@ -108,6 +114,31 @@ def seed_run(root: Path) -> SeedRun:
 
 
 class CloudBlueprintRunTests(unittest.TestCase):
+    def test_live_resource_stop_prevents_queued_seed_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "fake-solver"
+            binary.write_text(
+                f"#!{sys.executable}\n"
+                "import time\ntime.sleep(30)\n"
+            )
+            binary.chmod(0o755)
+            output = root / "run"
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("cloud_blueprint_run.py")),
+                 "--binary", str(binary), "--output-dir", str(output),
+                 "--iterations", "2", "--averaging-delay", "0",
+                 "--max-information-sets", "10", "--max-concurrent", "1",
+                 "--minimum-free-disk-gb", "0", "--max-worker-memory-gib", "0.000001"],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            manifest = json.loads((output / "run-manifest.json").read_text())
+            self.assertEqual(manifest["status"], "resource_stopped")
+            self.assertEqual(manifest["seeds"]["26001"]["status"], "resource_stopped")
+            self.assertEqual(manifest["seeds"]["26002"]["status"], "not_started")
+            self.assertFalse((output / "hu-20bb-schema-v3-seed26002.log").exists())
+
     def test_seed_parser_requires_independent_seeds(self) -> None:
         self.assertEqual(parse_seeds("26001, 26002"), [26_001, 26_002])
         with self.assertRaises(argparse.ArgumentTypeError):
@@ -135,6 +166,8 @@ class CloudBlueprintRunTests(unittest.TestCase):
                 ("held_out_deals", 2**64, "u64 domain"),
                 ("bytes_per_information_set", 0, "evaluation counts"),
                 ("minimum_free_disk_gb", -1.0, "minimum free disk"),
+                ("max_worker_memory_gib", float("nan"), "max_worker_memory_gib"),
+                ("max_worker_minutes", -1, "max_worker_minutes"),
                 ("dcfr_gamma", float("inf"), "DCFR exponents"),
                 ("dcfr_beta", -1.0, "non-negative"),
             ):
@@ -361,6 +394,58 @@ class CloudBlueprintRunTests(unittest.TestCase):
             args.evaluation_only = False
             with self.assertRaisesRegex(SystemExit, "target must exceed"):
                 load_parent_stage(args, binary_hash)
+
+    def test_reader_upgrade_is_read_only_and_pins_evaluation_and_export(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = arguments(root)
+            args.resume_from_dir = root
+            args.evaluation_only = True
+            commands, records = {}, {}
+            for seed in args.seeds:
+                checkpoint = root / f"hu-20bb-schema-v3-seed{seed}.checkpoint.msgpack.gz"
+                checkpoint.write_bytes(b"immutable checkpoint")
+                run = replace(seed_run(root), seed=seed, checkpoint=checkpoint,
+                              held_out_seed=seed+100_000, root_deviation_seed=seed+200_000,
+                              action_value_seed=seed+300_000)
+                commands[str(seed)] = build_command(args, run)
+                records[str(seed)] = {"status":"complete", "checkpointCompressedBytes":checkpoint.stat().st_size,
+                                      "checkpointSha256":file_sha256(checkpoint), "canonicalJsonSha256":"d"*64}
+            (root / 'run-manifest.json').write_text(json.dumps({
+                "schema":"hu-schema-v3-cloud-blueprint-run-v1", "status":"complete",
+                "binarySha256":"a"*64, "depthBb":20.0, "iterations":args.iterations,
+                "runFingerprint":"f"*64, "commands":commands, "seeds":records,
+            }))
+            with self.assertRaisesRegex(SystemExit, "different solver binary"):
+                load_parent_stage(args, "b"*64)
+            args.verify_checkpoint_reader_upgrade = True
+            self.assertEqual(len(load_parent_stage(args, "b"*64)[1]), 2)
+            # A successful reader revalidation keeps checkpoints in the prior
+            # directory; the next stage must follow those immutable references.
+            saved = json.loads((root / 'run-manifest.json').read_text())
+            archive = root / 'original'
+            archive.mkdir()
+            for seed in args.seeds:
+                checkpoint = root / f"hu-20bb-schema-v3-seed{seed}.checkpoint.msgpack.gz"
+                moved = archive / checkpoint.name
+                checkpoint.rename(moved)
+                saved['seeds'][str(seed)]['checkpoint'] = str(moved)
+            (root / 'run-manifest.json').write_text(json.dumps(saved))
+            self.assertTrue(all(p.parent == archive for p in load_parent_stage(args, "b"*64)[1].values()))
+            args.held_out_deals += 1
+            with self.assertRaisesRegex(SystemExit, "immutable setting"):
+                load_parent_stage(args, "b"*64)
+            args.held_out_deals -= 1
+            args.export_postflop_strategies = False
+            with self.assertRaisesRegex(SystemExit, "export coverage"):
+                load_parent_stage(args, "b"*64)
+            args.evaluation_only = False
+            with self.assertRaisesRegex(SystemExit, "requires evaluation-only"):
+                load_parent_stage(args, "b"*64)
+            validate_reader_upgrade_digest("d"*64, records[str(args.seeds[0])])
+            for actual, parent in [("e"*64, records[str(args.seeds[0])]), ("d"*64, {})]:
+                with self.assertRaisesRegex(ValueError, "changed canonical"):
+                    validate_reader_upgrade_digest(actual, parent)
 
     def test_streaming_integrity_hashes_decompressed_canonical_json(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

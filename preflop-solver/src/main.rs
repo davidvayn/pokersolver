@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preflop-evaluate-neural" => run_preflop_evaluate_neural(&args[1..]),
         "preflop-export-neural-policy" => run_preflop_export_neural_policy(&args[1..]),
         "full-game-lbr" => run_full_game_lbr(&args[1..]),
+        "tabular-flop-pilot" => run_tabular_flop_pilot(&args[1..]),
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
@@ -1992,7 +1993,83 @@ fn run_preflop_cache_compare(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_tabular_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
+    for flag in [
+        "--weight",
+        "--evaluation-deals",
+        "--response-workers",
+        "--all-in-samples",
+    ] {
+        if args.iter().any(|arg| arg == flag) && value(args, flag).is_none() {
+            return Err(format!("{flag} requires a numeric value").into());
+        }
+    }
+    let required = |flag: &str| value(args, flag).ok_or_else(|| format!("{flag} is required"));
+    let output = PathBuf::from(required("--output")?);
+    if output.exists() {
+        return Err("refusing to overwrite flop pilot output".into());
+    }
+    let report =
+        blueprint::response::evaluate_flop_patch(blueprint::response::FlopPatchEvaluationConfig {
+            checkpoint: required("--tabular-checkpoint")?.into(),
+            proposal_response: required("--proposal-response")?.into(),
+            opponent_responses: required("--opponent-responses")?
+                .split(',')
+                .map(PathBuf::from)
+                .collect(),
+            weight: parse_or(args, "--weight", 0.25f64)?,
+            evaluation_deals: parse_or(args, "--evaluation-deals", 2048u64)?,
+            seed: required("--seed")?.parse()?,
+            workers: parse_or(args, "--response-workers", 2usize)?,
+            all_in_samples: value(args, "--all-in-samples")
+                .map(|v| v.parse())
+                .transpose()?,
+            integrate_terminal: args.iter().any(|a| a == "--integrate-terminal"),
+        })?;
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(output)?;
+    serde_json::to_writer_pretty(&mut file, &report)?;
+    file.write_all(b"\n")?;
+    for result in report["results"]
+        .as_array()
+        .ok_or("missing flop comparisons")?
+    {
+        println!(
+            "{}",
+            serde_json::json!({"responder":result["responder"], "opponent":result["opponent_report_sha256"], "summary":result["summary"]})
+        );
+    }
+    Ok(())
+}
+
 fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
+    for flag in [
+        "--tabular-turn-iterations",
+        "--tabular-turn-max-rows",
+        "--response-workers",
+        "--terminal-flop-samples",
+        "--terminal-flop-weight",
+    ] {
+        if args.iter().any(|arg| arg == flag) && value(args, flag).is_none() {
+            return Err(format!("{flag} requires a numeric value").into());
+        }
+    }
+    if value(args, "--terminal-flop-samples").is_none()
+        && args.iter().any(|a| a == "--terminal-flop-weight")
+    {
+        return Err("--terminal-flop-weight requires --terminal-flop-samples".into());
+    }
+    if value(args, "--tabular-turn-iterations").is_none()
+        && (args.iter().any(|a| a == "--tabular-turn-unconstrained")
+            || args.iter().any(|a| a == "--tabular-turn-max-rows"))
+    {
+        return Err("tabular turn options require --tabular-turn-iterations".into());
+    }
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     if args
@@ -2001,9 +2078,25 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
-    let network_path = value(args, "--networks")
-        .map(PathBuf::from)
-        .ok_or("--networks is required for full-game LBR")?;
+    let source = match (
+        value(args, "--networks"),
+        value(args, "--tabular-checkpoint"),
+    ) {
+        (Some(path), None) => blueprint::response::ResponsePolicySource::Neural(path.into()),
+        (None, Some(path)) => {
+            if value(args, "--effective-stack-bb").is_some()
+                || args.iter().any(|a| a == "--compact-serving-grid")
+            {
+                return Err("tabular LBR loads game settings from its checkpoint; omit depth/grid overrides".into());
+            }
+            blueprint::response::ResponsePolicySource::TabularCheckpoint(path.into())
+        }
+        _ => {
+            return Err(
+                "choose exactly one of --networks or --tabular-checkpoint for full-game LBR".into(),
+            )
+        }
+    };
     let maximum_granularity = match value(args, "--maximum-response-granularity")
         .as_deref()
         .unwrap_or("exact")
@@ -2029,7 +2122,25 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
             minimum_range_particles: parse_or(args, "--minimum-range-particles", 4u64)?,
             maximum_granularity,
             seed: parse_or(args, "--seed", 0x1B12_E5A1u64)?,
-            network_path,
+            response_workers: parse_or(args, "--response-workers", 1usize)?,
+            source,
+            terminal_flop: value(args, "--terminal-flop-samples")
+                .map(|samples| {
+                    Ok::<_, Box<dyn Error>>(blueprint::response::TerminalFlopOptions {
+                        equity_samples: samples.parse()?,
+                        weight: parse_or(args, "--terminal-flop-weight", 0.25f64)?,
+                    })
+                })
+                .transpose()?,
+            turn_resolver: value(args, "--tabular-turn-iterations")
+                .map(|value| {
+                    Ok::<_, Box<dyn Error>>(blueprint::response::TurnResolveOptions {
+                        iterations: value.parse()?,
+                        safe_bilateral: !args.iter().any(|a| a == "--tabular-turn-unconstrained"),
+                        maximum_policy_rows: parse_or(args, "--tabular-turn-max-rows", 20000usize)?,
+                    })
+                })
+                .transpose()?,
         },
     )?;
     let output = serde_json::to_string_pretty(&evaluation)?;
@@ -2044,6 +2155,13 @@ fn run_full_game_lbr(args: &[String]) -> Result<(), Box<dyn Error>> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema": evaluation.schema,
+                "policySourceKind": evaluation.policy_source_kind,
+                "policySha256": evaluation.policy_sha256,
+                "terminalFlop": evaluation.terminal_flop,
+                "checkpointTrainingIterations": evaluation.checkpoint_training_iterations,
+                "sourcePolicyCoverage": evaluation.source_policy_coverage,
+                "totalResponseGainBbPerHand": evaluation.total_response_gain_bb_per_hand,
+                "totalResponseGainLowerConfidenceBound99PercentBbPerHand": evaluation.total_response_gain_lower_confidence_bound_99_percent_bb_per_hand,
                 "approximateExploitabilityLowerBoundBbPerHand": evaluation.approximate_exploitability_lower_bound_bb_per_hand,
                 "approximateExploitabilityLowerConfidenceBound99PercentBbPerHand": evaluation.approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand,
                 "calibrationPlayers": evaluation.calibration_players,
@@ -3323,7 +3441,8 @@ Usage:
   preflop-solver preflop-range-continuation-precision --cache <json.gz> --policy <json> [options]
   preflop-solver preflop-range-action-values --cache <json.gz> --policy <json> [--output <json>]
   preflop-solver preflop-leaf-reach --policy <json> [--output <json>]
-  preflop-solver full-game-lbr [options]
+  preflop-solver full-game-lbr (--networks <json> | --tabular-checkpoint <msgpack.gz>) [options]
+  preflop-solver tabular-flop-pilot --tabular-checkpoint <msgpack.gz> --proposal-response <json> --opponent-responses <json,json> --seed <integer> --output <new.json> [--weight 0.25] [--evaluation-deals 2048] [--response-workers 2]
   preflop-solver river-pbs-solve [options]
   preflop-solver turn-river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
@@ -3555,8 +3674,18 @@ Preflop continuation/solve options:
 
 Full-game learned-response options:
   --effective-stack-bb <number>   Default: 20
-  --networks <path>               Required frozen routed policy JSON
+  --networks <path>               Frozen routed neural policy JSON
+  --tabular-checkpoint <path>     Or frozen tabular average from schema-5 checkpoint;
+                                  loads its game settings, forbids depth/grid overrides
+  --tabular-turn-iterations <N>   Experimental connected turn/river resolver, N >= 2
+  --tabular-turn-unconstrained    Diagnostic unconstrained comparator; default is
+                                  bilateral opponent-CFV-protected replacement
+  --tabular-turn-max-rows <N>     Complete-subtree row limit; default 20000, fail closed
+  --terminal-flop-samples <N>    Optional experimental all-in range correction;
+                                  128..16384 equity samples, tabular checkpoints only
+  --terminal-flop-weight <0..0.5> Correction blend; default 0.25 when enabled
   --training-deals <integer>      Default: 10000 response-training deals
+  --response-workers <integer>    Default: 1; 1..=4 shared-table CPU workers (tabular only)
   --calibration-deals <integer>   Default: 2000 disjoint response-selection deals
   --evaluation-deals <integer>    Default: 10000 independent paired deals
   --rollouts-per-action <integer> Default: 8 common-random action rollouts
@@ -3565,6 +3694,13 @@ Full-game learned-response options:
                                   Default: exact; broader layers require calibration
   --seed <integer>                Deterministic training/evaluation root seed
   --output <path>                 Optional full resolver/evaluation JSON
+                                  Reports total seat-summed response gain separately
+                                  from legacy seat-average fields; no upper certificate
+
+Tabular flop pilot options:
+  --all-in-samples <N>            Use terminal range correction instead of saved actions
+  --integrate-terminal            Average terminal actions/runouts for payout assessment;
+                                  requires --all-in-samples, does not change the policy
 
 Neural exploitability-certificate options:
   --dcfr-alpha <number>           Positive-regret exponent (default: 1.5)

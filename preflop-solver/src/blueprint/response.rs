@@ -20,6 +20,25 @@ use std::path::{Path, PathBuf};
 const RESPONSE_SCHEMA: &str = "hu-full-game-information-set-lbr-v5";
 const RESOLVER_SCHEMA: &str = "hu-range-conditioned-postflop-resolver-v5";
 
+fn default_response_workers() -> usize {
+    1
+}
+fn serial_response_workers(workers: &usize) -> bool {
+    *workers == 1
+}
+
+mod flop;
+mod flop_allin;
+pub use flop_allin::TerminalFlopOptions;
+mod parallel;
+pub use flop::{evaluate_flop_patch, FlopPatchEvaluationConfig};
+mod table;
+mod turn;
+#[cfg(test)]
+use table::AverageNode;
+use table::InferenceTable;
+pub use turn::TurnResolveOptions;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolverGranularity {
@@ -48,7 +67,191 @@ pub struct ResponseEvaluationConfig {
     pub minimum_range_particles: u64,
     pub maximum_granularity: ResolverGranularity,
     pub seed: u64,
-    pub network_path: PathBuf,
+    pub source: ResponsePolicySource,
+    pub turn_resolver: Option<TurnResolveOptions>,
+    pub terminal_flop: Option<TerminalFlopOptions>,
+    pub response_workers: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum ResponsePolicySource {
+    Neural(PathBuf),
+    TabularCheckpoint(PathBuf),
+}
+
+trait ResponsePolicy {
+    fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        game: &BlueprintConfig,
+    ) -> Vec<f64>;
+    fn take_coverage(&self) -> Vec<StreetPolicyCoverage> {
+        Vec::new()
+    }
+    fn take_resolution_diagnostics(&self) -> Option<serde_json::Value> {
+        None
+    }
+    fn parallel_copy(&self) -> Option<Box<dyn ResponsePolicy + Send>> {
+        None
+    }
+    fn take_raw_coverage(&self) -> [CoverageCounter; 4] {
+        std::array::from_fn(|_| CoverageCounter::default())
+    }
+    fn absorb_worker(&self, _worker: &dyn ResponsePolicy) {}
+}
+
+impl ResponsePolicy for FrozenPolicy {
+    fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        game: &BlueprintConfig,
+    ) -> Vec<f64> {
+        FrozenPolicy::strategy(self, state, deal, actions, game)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StreetPolicyCoverage {
+    pub street: Street,
+    pub coverage: PolicyCoverage,
+}
+
+struct TabularResponsePolicy {
+    table: Arc<InferenceTable>,
+    coverage: RefCell<[CoverageCounter; 4]>,
+    flop_patch: Option<Arc<flop::FlopPatch>>,
+}
+
+impl TabularResponsePolicy {
+    fn isolated_copy(&self) -> Self {
+        Self {
+            table: Arc::clone(&self.table),
+            coverage: RefCell::default(),
+            flop_patch: self.flop_patch.clone(),
+        }
+    }
+    fn frozen_strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        game: &BlueprintConfig,
+    ) -> Vec<f64> {
+        let (key, descriptor, _) = information_set(state, deal, game);
+        let strategy = match self.table.nodes.get(&key) {
+            Some(node) => {
+                assert_eq!(
+                    node.descriptor, descriptor,
+                    "checkpoint information-set collision"
+                );
+                assert!(
+                    node.action_labels
+                        .iter()
+                        .map(|s| s.as_ref())
+                        .eq(actions.iter().map(|a| a.label.as_str())),
+                    "checkpoint action grid mismatch"
+                );
+                node.average_strategy()
+            }
+            None => vec![1.0 / actions.len() as f64; actions.len()],
+        };
+        self.apply_flop_patch(state, deal, actions, game, strategy)
+    }
+
+    fn apply_flop_patch(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        game: &BlueprintConfig,
+        strategy: Vec<f64>,
+    ) -> Vec<f64> {
+        match &self.flop_patch {
+            Some(patch) => patch.strategy(self, state, deal, actions, game, strategy),
+            None => strategy,
+        }
+    }
+}
+
+impl ResponsePolicy for TabularResponsePolicy {
+    fn parallel_copy(&self) -> Option<Box<dyn ResponsePolicy + Send>> {
+        Some(Box::new(self.isolated_copy()))
+    }
+
+    fn take_raw_coverage(&self) -> [CoverageCounter; 4] {
+        std::mem::take(&mut *self.coverage.borrow_mut())
+    }
+
+    fn absorb_worker(&self, worker: &dyn ResponsePolicy) {
+        for (counter, incoming) in self
+            .coverage
+            .borrow_mut()
+            .iter_mut()
+            .zip(worker.take_raw_coverage())
+        {
+            counter.add(&incoming);
+        }
+    }
+    fn strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        game: &BlueprintConfig,
+    ) -> Vec<f64> {
+        let (key, descriptor, _) = information_set(state, deal, game);
+        let street = match state.street {
+            Street::Preflop => 0,
+            Street::Flop => 1,
+            Street::Turn => 2,
+            Street::River => 3,
+        };
+        let mut counters = self.coverage.borrow_mut();
+        let counter = &mut counters[street];
+        counter.decisions += 1;
+        let strategy = match self.table.nodes.get(&key) {
+            Some(node) => {
+                assert_eq!(
+                    node.descriptor, descriptor,
+                    "checkpoint information-set collision"
+                );
+                assert!(
+                    node.action_labels
+                        .iter()
+                        .map(|s| s.as_ref())
+                        .eq(actions.iter().map(|a| a.label.as_str())),
+                    "checkpoint action grid mismatch"
+                );
+                if node.average_visits == 0 {
+                    counter.untrained += 1;
+                }
+                node.average_strategy()
+            }
+            None => {
+                // The same explicit profile completion as the trainer's
+                // held-out evaluator. Never serve or hide these missing rows.
+                counter.unknown += 1;
+                vec![1.0 / actions.len() as f64; actions.len()]
+            }
+        };
+        self.apply_flop_patch(state, deal, actions, game, strategy)
+    }
+
+    fn take_coverage(&self) -> Vec<StreetPolicyCoverage> {
+        let counters = self.take_raw_coverage();
+        [Street::Preflop, Street::Flop, Street::Turn, Street::River]
+            .into_iter()
+            .zip(counters)
+            .map(|(street, counter)| StreetPolicyCoverage {
+                street,
+                coverage: counter.report(),
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -109,9 +312,34 @@ pub struct FullGameResponseEvaluation {
     pub schema: String,
     pub method: String,
     pub depth_bb: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub network_sha256: String,
+    #[serde(default)]
+    pub policy_sha256: String,
+    #[serde(default)]
+    pub policy_source_kind: String,
+    #[serde(default)]
+    pub checkpoint_training_iterations: Option<u64>,
+    #[serde(default)]
+    pub source_policy_coverage: BTreeMap<String, Vec<StreetPolicyCoverage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_resolver: Option<TurnResolveOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_flop: Option<TerminalFlopOptions>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resolution_diagnostics: BTreeMap<String, serde_json::Value>,
+    /// Sum across seats, not the legacy seat-average/NashConv-over-two scale.
+    #[serde(default)]
+    pub total_response_gain_bb_per_hand: f64,
+    #[serde(default)]
+    pub total_response_gain_lower_confidence_bound_99_percent_bb_per_hand: f64,
     pub seed: u64,
     pub training_deals: u64,
+    #[serde(
+        default = "default_response_workers",
+        skip_serializing_if = "serial_response_workers"
+    )]
+    pub response_workers: usize,
     pub calibration_deals: u64,
     pub evaluation_deals: u64,
     pub rollouts_per_action: u32,
@@ -138,6 +366,11 @@ struct DecisionAccumulator {
     count: u64,
     sums: Vec<f64>,
     squared_sums: Vec<f64>,
+    // Common-random action rollouts are paired. Track each upper-triangular
+    // difference directly with Welford's update, avoiding cancellation and
+    // the incorrect independence assumption for marginal EV errors.
+    gap_means: Vec<f64>,
+    gap_m2: Vec<f64>,
 }
 
 impl DecisionAccumulator {
@@ -163,12 +396,23 @@ impl DecisionAccumulator {
             count: 0,
             sums: vec![0.0; actions.len()],
             squared_sums: vec![0.0; actions.len()],
+            gap_means: vec![0.0; actions.len() * actions.len()],
+            gap_m2: vec![0.0; actions.len() * actions.len()],
         }
     }
 
     fn add(&mut self, values: &[f64]) {
         assert_eq!(values.len(), self.sums.len());
         self.count += 1;
+        for first in 0..values.len() {
+            for second in first + 1..values.len() {
+                let index = first * values.len() + second;
+                let difference = values[first] - values[second];
+                let delta = difference - self.gap_means[index];
+                self.gap_means[index] += delta / self.count as f64;
+                self.gap_m2[index] += delta * (difference - self.gap_means[index]);
+            }
+        }
         for ((sum, squared), value) in self.sums.iter_mut().zip(&mut self.squared_sums).zip(values)
         {
             *sum += value;
@@ -211,9 +455,14 @@ impl DecisionAccumulator {
         let (selected_action_mean_gap_bb, gap_lower_bound) = runner_up
             .map(|(runner_up_index, runner_up_value)| {
                 let gap = means[selected_action] - runner_up_value;
-                let gap_standard_error = (standard_errors[selected_action].powi(2)
-                    + standard_errors[runner_up_index].powi(2))
-                .sqrt();
+                let first = selected_action.min(runner_up_index);
+                let second = selected_action.max(runner_up_index);
+                let gap_standard_error = if self.count < 2 {
+                    unevaluated_standard_error_bb
+                } else {
+                    (self.gap_m2[first * means.len() + second].max(0.0) / ((count - 1.0) * count))
+                        .sqrt()
+                };
                 (gap, gap - 2.575_829_303_548_900_4 * gap_standard_error)
             })
             .unwrap_or((0.0, 0.0));
@@ -255,10 +504,48 @@ struct ResolverLookup {
     postflop_strategic_observable_backoff_hits: u64,
 }
 
+impl ResolverLookup {
+    fn add(&mut self, other: Self) {
+        self.queries += other.queries;
+        self.hits += other.hits;
+        self.preflop_queries += other.preflop_queries;
+        self.preflop_hits += other.preflop_hits;
+        self.postflop_queries += other.postflop_queries;
+        self.postflop_hits += other.postflop_hits;
+        self.exact_hits += other.exact_hits;
+        self.observable_backoff_hits += other.observable_backoff_hits;
+        self.coarse_observable_backoff_hits += other.coarse_observable_backoff_hits;
+        self.strategic_observable_backoff_hits += other.strategic_observable_backoff_hits;
+        self.postflop_exact_hits += other.postflop_exact_hits;
+        self.postflop_observable_backoff_hits += other.postflop_observable_backoff_hits;
+        self.postflop_coarse_observable_backoff_hits +=
+            other.postflop_coarse_observable_backoff_hits;
+        self.postflop_strategic_observable_backoff_hits +=
+            other.postflop_strategic_observable_backoff_hits;
+    }
+}
+
 pub fn evaluate_full_game_response(
-    config: ResponseEvaluationConfig,
+    mut config: ResponseEvaluationConfig,
 ) -> Result<FullGameResponseEvaluation, Box<dyn Error>> {
-    config.game.validate()?;
+    if let Some(options) = &config.terminal_flop {
+        options.validate()?;
+        if !matches!(&config.source, ResponsePolicySource::TabularCheckpoint(_)) {
+            return Err("terminal flop range correction requires a tabular checkpoint".into());
+        }
+    }
+    if let Some(options) = &config.turn_resolver {
+        options.validate()?;
+        if !matches!(&config.source, ResponsePolicySource::TabularCheckpoint(_)) {
+            return Err("tabular turn resolving requires a tabular checkpoint".into());
+        }
+    }
+    if !(1..=4).contains(&config.response_workers)
+        || (config.response_workers > 1
+            && !matches!(&config.source, ResponsePolicySource::TabularCheckpoint(_)))
+    {
+        return Err("response evaluation requires 1..=4 workers; parallel workers require a tabular checkpoint".into());
+    }
     if config.training_deals == 0
         || config.calibration_deals < 2
         || config.evaluation_deals < 2
@@ -270,17 +557,77 @@ pub fn evaluate_full_game_response(
                 .into(),
         );
     }
-    let network_sha256 = sha256_file(&config.network_path)?;
-    let policy = FrozenPolicy::load(&config.network_path)?;
+    let (policy, policy_sha256, policy_source_kind, checkpoint_training_iterations): (
+        Box<dyn ResponsePolicy>,
+        String,
+        String,
+        Option<u64>,
+    ) = match &config.source {
+        ResponsePolicySource::Neural(path) => (
+            Box::new(FrozenPolicy::load(path)?),
+            sha256_file(path)?,
+            "frozen_neural".to_owned(),
+            None,
+        ),
+        ResponsePolicySource::TabularCheckpoint(path) => {
+            let digest = sha256_file(path)?;
+            let table = InferenceTable::read(path)?;
+            config.game = table.config.clone();
+            let rounds = table.rounds;
+            let base = TabularResponsePolicy {
+                table: Arc::new(table),
+                coverage: RefCell::default(),
+                flop_patch: config
+                    .terminal_flop
+                    .as_ref()
+                    .map(|options| Arc::new(flop::FlopPatch::terminal(options))),
+            };
+            let policy: Box<dyn ResponsePolicy> =
+                if let Some(options) = config.turn_resolver.clone() {
+                    Box::new(turn::TabularTurnPolicy::new(base, options))
+                } else {
+                    Box::new(base)
+                };
+            (
+                policy,
+                digest,
+                if config.turn_resolver.is_some() {
+                    "tabular_trunk_with_joint_turn_river_resolving"
+                } else {
+                    "frozen_tabular_average_with_explicit_uniform_completion"
+                }
+                .to_owned(),
+                Some(rounds),
+            )
+        }
+    };
+    config.game.validate()?;
+    let policy_source_kind = if config.terminal_flop.is_some() {
+        format!("{policy_source_kind}_with_terminal_flop_range_correction")
+    } else {
+        policy_source_kind
+    };
+    let policy = policy.as_ref();
+    let network_sha256 = if checkpoint_training_iterations.is_none() {
+        policy_sha256.clone()
+    } else {
+        String::new()
+    };
+    let mut source_policy_coverage = BTreeMap::new();
+    let mut resolution_diagnostics = BTreeMap::new();
     let [first, second] = [
-        train_learned_response(&policy, &config, 0),
-        train_learned_response(&policy, &config, 1),
+        train_learned_response(policy, &config, 0),
+        train_learned_response(policy, &config, 1),
     ];
+    source_policy_coverage.insert("response_training".to_owned(), policy.take_coverage());
+    if let Some(value) = policy.take_resolution_diagnostics() {
+        resolution_diagnostics.insert("response_training".to_owned(), value);
+    }
     let preflop_responses = [first.0, second.0];
     let resolvers = [first.1, second.1];
     let calibration_players = [
         evaluate_resolver(
-            &policy,
+            policy,
             &preflop_responses[0],
             &resolvers[0],
             &config,
@@ -290,7 +637,7 @@ pub fn evaluate_full_game_response(
             true,
         ),
         evaluate_resolver(
-            &policy,
+            policy,
             &preflop_responses[1],
             &resolvers[1],
             &config,
@@ -300,6 +647,10 @@ pub fn evaluate_full_game_response(
             true,
         ),
     ];
+    source_policy_coverage.insert("response_calibration".to_owned(), policy.take_coverage());
+    if let Some(value) = policy.take_resolution_diagnostics() {
+        resolution_diagnostics.insert("response_calibration".to_owned(), value);
+    }
     let response_deployed = [
         response_lower_bound_passes_calibration(
             calibration_players[0].approximate_one_sided_99_5_percent_gain_lower_bound_bb,
@@ -310,7 +661,7 @@ pub fn evaluate_full_game_response(
     ];
     let players = [
         evaluate_resolver(
-            &policy,
+            policy,
             &preflop_responses[0],
             &resolvers[0],
             &config,
@@ -320,7 +671,7 @@ pub fn evaluate_full_game_response(
             response_deployed[0],
         ),
         evaluate_resolver(
-            &policy,
+            policy,
             &preflop_responses[1],
             &resolvers[1],
             &config,
@@ -330,6 +681,10 @@ pub fn evaluate_full_game_response(
             response_deployed[1],
         ),
     ];
+    source_policy_coverage.insert("independent_evaluation".to_owned(), policy.take_coverage());
+    if let Some(value) = policy.take_resolution_diagnostics() {
+        resolution_diagnostics.insert("independent_evaluation".to_owned(), value);
+    }
     let lower_bound =
         (players[0].estimated_gain_bb.max(0.0) + players[1].estimated_gain_bb.max(0.0)) / 2.0;
     let confidence_lower_bound = (players[0]
@@ -340,13 +695,23 @@ pub fn evaluate_full_game_response(
             .max(0.0))
         / 2.0;
     Ok(FullGameResponseEvaluation {
-        schema: RESPONSE_SCHEMA.to_owned(),
-        method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets"
+        schema: if checkpoint_training_iterations.is_some() { "hu-tabular-checkpoint-information-set-response-v1" } else { RESPONSE_SCHEMA }.to_owned(),
+        method: "calibrated_one_step_common_random_full_game_rollout_response_with_exact_fine_coarse_and_strategic_observable_information_sets_and_paired_action_gap_errors_and_aligned_intervention_draws"
             .to_owned(),
         depth_bb: config.game.effective_stack_bb,
         network_sha256,
+        policy_sha256,
+        policy_source_kind,
+        checkpoint_training_iterations,
+        source_policy_coverage,
+        turn_resolver: config.turn_resolver,
+        terminal_flop: config.terminal_flop,
+        resolution_diagnostics,
+        total_response_gain_bb_per_hand: players.iter().map(|player| player.estimated_gain_bb).sum(),
+        total_response_gain_lower_confidence_bound_99_percent_bb_per_hand: 2.0 * confidence_lower_bound,
         seed: config.seed,
         training_deals: config.training_deals,
+        response_workers: config.response_workers,
         calibration_deals: config.calibration_deals,
         evaluation_deals: config.evaluation_deals,
         rollouts_per_action: config.rollouts_per_action,
@@ -358,7 +723,7 @@ pub fn evaluate_full_game_response(
         approximate_exploitability_lower_bound_bb_per_hand: lower_bound,
         approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand:
             confidence_lower_bound,
-        interpretation: "a fixed legal imperfect-information learned response is trained, accepted only when a disjoint calibration corpus has a positive one-sided 99.5% gain lower bound, and measured on a third independent corpus; rejected players deploy the frozen baseline with zero claimed gain; expected gain remains a lower bound on exploitability, never a release upper-bound certificate"
+        interpretation: "a fixed legal imperfect-information learned response is trained, accepted only when a disjoint calibration corpus has a positive one-sided 99.5% gain lower bound, and measured on a third independent corpus; rejected players deploy the frozen baseline with zero claimed gain; total_response_gain sums the seats (legacy approximate_exploitability fields use half that scale and clamp negative estimates); tabular missing/untrained lookups use the trainer's uniform profile completion and are disclosed by street and phase, never silently treated as trained; expected response gain is a lower bound, not an exploitability upper-bound certificate; low response coverage can miss leaks"
             .to_owned(),
         preflop_responses,
         resolvers,
@@ -370,7 +735,7 @@ fn response_lower_bound_passes_calibration(lower_bound_bb: f64) -> bool {
 }
 
 fn train_learned_response(
-    policy: &FrozenPolicy,
+    policy: &dyn ResponsePolicy,
     config: &ResponseEvaluationConfig,
     responder: usize,
 ) -> (Vec<ResolverDecision>, RangeConditionedResolver) {
@@ -379,26 +744,70 @@ fn train_learned_response(
     let mut backoff_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
     let mut coarse_backoff_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
     let mut strategic_backoff_accumulators = BTreeMap::<u64, DecisionAccumulator>::new();
-    for deal_index in 0..config.training_deals {
-        let deal = Deal::sample(&mut chance);
-        let mut trajectory_rng =
-            SplitMix64::new(derived_seed(config.seed, responder as u64, deal_index + 1));
-        collect_trajectory_decisions(
-            policy,
-            GameState::initial(&config.game),
-            &deal,
-            &config.game,
-            responder,
-            config.rollouts_per_action,
-            config.seed,
-            deal_index,
-            &mut trajectory_rng,
-            &mut exact_accumulators,
-            &mut backoff_accumulators,
-            &mut coarse_backoff_accumulators,
-            &mut strategic_backoff_accumulators,
-        );
-    }
+    parallel::for_each_deal(
+        policy,
+        config.response_workers,
+        &mut chance,
+        config.training_deals,
+        |local, deal, deal_index| {
+            if deal_index % 128 == 0 {
+                eprintln!(
+                    "response-training player={responder} deals={deal_index}/{}",
+                    config.training_deals
+                );
+            }
+            let mut trajectory_rng =
+                SplitMix64::new(derived_seed(config.seed, responder as u64, deal_index + 1));
+            let mut observations = Vec::new();
+            collect_trajectory_decisions(
+                local,
+                GameState::initial(&config.game),
+                deal,
+                &config.game,
+                responder,
+                config.rollouts_per_action,
+                config.seed,
+                deal_index,
+                &mut trajectory_rng,
+                &mut observations,
+            );
+            observations
+        },
+        |observations| {
+            for observation in observations {
+                let labels: Vec<_> = observation
+                    .actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect();
+                for (layer, ((key, descriptor, history), bank)) in observation
+                    .keys
+                    .into_iter()
+                    .zip([
+                        &mut exact_accumulators,
+                        &mut backoff_accumulators,
+                        &mut coarse_backoff_accumulators,
+                        &mut strategic_backoff_accumulators,
+                    ])
+                    .enumerate()
+                {
+                    let expected = if layer == 3 {
+                        &observation.strategic_labels
+                    } else {
+                        &labels
+                    };
+                    let accumulator = bank.entry(key).or_insert_with(|| {
+                        let mut value =
+                            DecisionAccumulator::new(&descriptor, history, &observation.actions);
+                        value.action_labels = expected.clone();
+                        value
+                    });
+                    assert_eq!(&accumulator.action_labels, expected);
+                    accumulator.add(&observation.values);
+                }
+            }
+        },
+    );
     let exact_decisions = exact_accumulators
         .into_iter()
         .filter(|(_, accumulator)| accumulator.count >= config.minimum_range_particles)
@@ -463,9 +872,16 @@ fn train_learned_response(
     (preflop, resolver)
 }
 
+struct DecisionObservation {
+    keys: [(u64, NodeDescriptor, Vec<String>); 4],
+    strategic_labels: Vec<String>,
+    actions: Vec<LegalAction>,
+    values: Vec<f64>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_trajectory_decisions(
-    policy: &FrozenPolicy,
+    policy: &dyn ResponsePolicy,
     state: GameState,
     deal: &Deal,
     game: &BlueprintConfig,
@@ -474,10 +890,7 @@ fn collect_trajectory_decisions(
     response_seed: u64,
     deal_index: u64,
     trajectory_rng: &mut SplitMix64,
-    exact_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
-    backoff_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
-    coarse_backoff_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
-    strategic_backoff_accumulators: &mut BTreeMap<u64, DecisionAccumulator>,
+    observations: &mut Vec<DecisionObservation>,
 ) {
     if state.terminal.is_some() {
         return;
@@ -518,51 +931,17 @@ fn collect_trajectory_decisions(
                     / rollouts_per_action as f64
             })
             .collect::<Vec<_>>();
-        let accumulator = exact_accumulators
-            .entry(key)
-            .or_insert_with(|| DecisionAccumulator::new(&descriptor, history, &actions));
-        assert_eq!(
-            accumulator.action_labels,
-            actions
-                .iter()
-                .map(|action| action.label.clone())
-                .collect::<Vec<_>>()
-        );
-        accumulator.add(&values);
-        let backoff_accumulator = backoff_accumulators.entry(backoff_key).or_insert_with(|| {
-            DecisionAccumulator::new(&backoff_descriptor, backoff_history, &actions)
+        observations.push(DecisionObservation {
+            keys: [
+                (key, descriptor, history),
+                (backoff_key, backoff_descriptor, backoff_history),
+                (coarse_key, coarse_descriptor, coarse_history),
+                (strategic_key, strategic_descriptor, strategic_history),
+            ],
+            strategic_labels,
+            actions: actions.clone(),
+            values,
         });
-        assert_eq!(
-            backoff_accumulator.action_labels,
-            actions
-                .iter()
-                .map(|action| action.label.clone())
-                .collect::<Vec<_>>()
-        );
-        backoff_accumulator.add(&values);
-        let coarse_accumulator = coarse_backoff_accumulators
-            .entry(coarse_key)
-            .or_insert_with(|| {
-                DecisionAccumulator::new(&coarse_descriptor, coarse_history, &actions)
-            });
-        assert_eq!(
-            coarse_accumulator.action_labels,
-            actions
-                .iter()
-                .map(|action| action.label.clone())
-                .collect::<Vec<_>>()
-        );
-        coarse_accumulator.add(&values);
-        let strategic_accumulator = strategic_backoff_accumulators
-            .entry(strategic_key)
-            .or_insert_with(|| {
-                let mut accumulator =
-                    DecisionAccumulator::new(&strategic_descriptor, strategic_history, &actions);
-                accumulator.action_labels = strategic_labels.clone();
-                accumulator
-            });
-        assert_eq!(strategic_accumulator.action_labels, strategic_labels);
-        strategic_accumulator.add(&values);
     }
     let strategy = policy.strategy(&state, deal, &actions, game);
     let selected = sample_index(&strategy, trajectory_rng);
@@ -576,10 +955,7 @@ fn collect_trajectory_decisions(
         response_seed,
         deal_index,
         trajectory_rng,
-        exact_accumulators,
-        backoff_accumulators,
-        coarse_backoff_accumulators,
-        strategic_backoff_accumulators,
+        observations,
     );
 }
 
@@ -806,7 +1182,7 @@ fn strategic_observable_backoff_information_set(
 }
 
 fn evaluate_resolver(
-    policy: &FrozenPolicy,
+    policy: &dyn ResponsePolicy,
     preflop: &[ResolverDecision],
     resolver: &RangeConditionedResolver,
     config: &ResponseEvaluationConfig,
@@ -856,46 +1232,59 @@ fn evaluate_resolver(
     let mut baseline_total = 0.0;
     let mut response_total = 0.0;
     let mut lookup = ResolverLookup::default();
-    for deal_index in 0..deals {
-        let deal = Deal::sample(&mut chance);
-        let rollout_seed = derived_seed(phase_seed, deal_index, 11);
-        let mut baseline_rng = SplitMix64::new(rollout_seed);
-        let mut response_rng = SplitMix64::new(rollout_seed);
-        let baseline_p0 = baseline_rollout(
-            policy,
-            GameState::initial(&config.game),
-            &deal,
-            &config.game,
-            &mut baseline_rng,
-        );
-        let response_p0 = response_rollout(
-            policy,
-            &exact_decisions,
-            &backoff_decisions,
-            &coarse_backoff_decisions,
-            &strategic_backoff_decisions,
-            GameState::initial(&config.game),
-            &deal,
-            &config.game,
-            responder,
-            false,
-            &mut response_rng,
-            &mut lookup,
-        );
-        let baseline = if responder == 0 {
-            baseline_p0
-        } else {
-            -baseline_p0
-        };
-        let response = if responder == 0 {
-            response_p0
-        } else {
-            -response_p0
-        };
-        baseline_total += baseline;
-        response_total += response;
-        differences.push(response - baseline);
-    }
+    parallel::for_each_deal(
+        policy,
+        config.response_workers,
+        &mut chance,
+        deals,
+        |local, deal, deal_index| {
+            if deal_index % 512 == 0 {
+                eprintln!("response-evaluation domain={seed_domain} player={responder} deals={deal_index}/{deals} deployed={deploy_response}");
+            }
+            let mut hand_lookup = ResolverLookup::default();
+            let rollout_seed = derived_seed(phase_seed, deal_index, 11);
+            let mut baseline_rng = SplitMix64::new(rollout_seed);
+            let mut response_rng = SplitMix64::new(rollout_seed);
+            let baseline_p0 = baseline_rollout(
+                local,
+                GameState::initial(&config.game),
+                deal,
+                &config.game,
+                &mut baseline_rng,
+            );
+            let response_p0 = response_rollout(
+                local,
+                &exact_decisions,
+                &backoff_decisions,
+                &coarse_backoff_decisions,
+                &strategic_backoff_decisions,
+                GameState::initial(&config.game),
+                deal,
+                &config.game,
+                responder,
+                false,
+                &mut response_rng,
+                &mut hand_lookup,
+            );
+            let baseline = if responder == 0 {
+                baseline_p0
+            } else {
+                -baseline_p0
+            };
+            let response = if responder == 0 {
+                response_p0
+            } else {
+                -response_p0
+            };
+            (baseline, response, hand_lookup)
+        },
+        |(baseline, response, hand_lookup)| {
+            baseline_total += baseline;
+            response_total += response;
+            differences.push(response - baseline);
+            lookup.add(hand_lookup);
+        },
+    );
     let count = differences.len() as f64;
     let mean = differences.iter().sum::<f64>() / count;
     let squared = differences
@@ -950,7 +1339,7 @@ fn evaluate_resolver(
 }
 
 fn baseline_rollout(
-    policy: &FrozenPolicy,
+    policy: &dyn ResponsePolicy,
     state: GameState,
     deal: &Deal,
     game: &BlueprintConfig,
@@ -973,7 +1362,7 @@ fn baseline_rollout(
 
 #[allow(clippy::too_many_arguments)]
 fn response_rollout(
-    policy: &FrozenPolicy,
+    policy: &dyn ResponsePolicy,
     exact_decisions: &BTreeMap<u64, &ResolverDecision>,
     backoff_decisions: &BTreeMap<u64, &ResolverDecision>,
     coarse_backoff_decisions: &BTreeMap<u64, &ResolverDecision>,
@@ -1031,6 +1420,10 @@ fn response_rollout(
             });
         match selected_decision {
             Some((decision, granularity)) => {
+                // A forced action replaces a sampled action, including its
+                // random draw. Keep later common-random samples aligned when
+                // the intervention takes the same action as the baseline.
+                rng.next_f64();
                 lookup.hits += 1;
                 match granularity {
                     ResolverGranularity::ExactTrajectory => lookup.exact_hits += 1,
@@ -1137,6 +1530,332 @@ fn sha256_file(path: &Path) -> Result<String, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forcing_the_same_action_preserves_paired_continuation_draws() {
+        let (mut policy, deal) = tabular_fixture();
+        let game = policy.table.config.clone();
+        let state = GameState::initial(&game);
+        let actions = state.legal_actions(&game);
+        let (key, descriptor, history) = information_set(&state, &deal, &game);
+        let node = Arc::get_mut(&mut policy.table)
+            .unwrap()
+            .nodes
+            .get_mut(&key)
+            .unwrap();
+        node.strategy_sum.fill(0.0);
+        node.strategy_sum[1] = 1.0;
+        let mut accumulator = DecisionAccumulator::new(&descriptor, history, &actions);
+        let mut values = vec![0.0; actions.len()];
+        values[1] = 1.0;
+        for _ in 0..4 {
+            accumulator.add(&values);
+        }
+        let decision = accumulator.finish(key, ResolverGranularity::ExactTrajectory, 20.0);
+        let exact = BTreeMap::from([(key, &decision)]);
+        let empty = BTreeMap::new();
+        // Real full-hand recursion: identical initial action, stochastic later
+        // actions, folds and showdowns. An identity intervention has zero noise.
+        for seed in 0..128 {
+            let mut baseline_rng = SplitMix64::new(seed);
+            let mut response_rng = SplitMix64::new(seed);
+            let baseline =
+                baseline_rollout(&policy, state.clone(), &deal, &game, &mut baseline_rng);
+            let mut lookup = ResolverLookup::default();
+            let response = response_rollout(
+                &policy,
+                &exact,
+                &empty,
+                &empty,
+                &empty,
+                state.clone(),
+                &deal,
+                &game,
+                0,
+                false,
+                &mut response_rng,
+                &mut lookup,
+            );
+            assert_eq!(lookup.hits, 1);
+            assert_eq!(
+                baseline, response,
+                "identity response changed payoff for seed {seed}"
+            );
+            assert_eq!(baseline_rng.state(), response_rng.state());
+        }
+    }
+
+    #[test]
+    fn response_gap_uncertainty_uses_paired_samples_not_marginal_variances() {
+        let (trainer, deal) = fixture_trainer();
+        let state = GameState::initial(&trainer.config);
+        let (_, descriptor, history) = information_set(&state, &deal, &trainer.config);
+        let actions = state.legal_actions(&trainer.config);
+        let mut paired = DecisionAccumulator::new(&descriptor, history.clone(), &actions);
+        let mut anticorrelated = DecisionAccumulator::new(&descriptor, history, &actions);
+        for index in 0..100 {
+            let common = if index % 2 == 0 { 10.0 } else { -10.0 };
+            let mut values = vec![common - 5.0; actions.len()];
+            values[0] = common + 1.0;
+            values[1] = common;
+            paired.add(&values);
+            values[1] = -common;
+            anticorrelated.add(&values);
+        }
+        let paired = paired.finish(0, ResolverGranularity::ExactTrajectory, 20.0);
+        assert_eq!(paired.selected_action, 0);
+        assert_eq!(paired.selected_action_mean_gap_bb, 1.0);
+        assert!(
+            !paired.low_confidence,
+            "identical paired differences have no sampling variance"
+        );
+        assert_eq!(
+            paired.approximate_selected_action_gap_lower_bound_99_5_percent_bb,
+            1.0
+        );
+        assert!(
+            anticorrelated
+                .finish(0, ResolverGranularity::ExactTrajectory, 20.0)
+                .low_confidence
+        );
+    }
+
+    pub(super) fn fixture_trainer() -> (Trainer, Deal) {
+        let game = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            iterations: 4,
+            averaging_delay: 0,
+            ..BlueprintConfig::default()
+        };
+        let deal = Deal::from_cards([[51, 50], [45, 44]], [0, 5, 10, 27, 28]);
+        let state = GameState::initial(&game);
+        let (key, descriptor, history) = information_set(&state, &deal, &game);
+        let actions = state.legal_actions(&game);
+        let mut trainer = Trainer::fresh(game);
+        trainer
+            .public_histories
+            .insert(descriptor.public_history_id, history);
+        let mut node = Node::new(descriptor, &actions, &mut trainer.string_interner);
+        node.regrets[0] = 100.0;
+        node.strategy_sum[0] = 1.0;
+        node.strategy_sum[1] = 7.0;
+        node.average_visits = 1;
+        trainer.nodes.insert(key, node);
+        (trainer, deal)
+    }
+
+    pub(super) fn tabular_fixture() -> (TabularResponsePolicy, Deal) {
+        let (trainer, deal) = fixture_trainer();
+        (
+            TabularResponsePolicy {
+                table: Arc::new(InferenceTable::from_trainer(trainer)),
+                coverage: RefCell::default(),
+                flop_patch: None,
+            },
+            deal,
+        )
+    }
+
+    #[test]
+    fn inference_discards_training_allocations_without_changing_frozen_policy() {
+        let (mut trainer, _) = fixture_trainer();
+        let extra = trainer.nodes.first_key_value().unwrap().1.clone();
+        trainer.nodes.insert(123, extra);
+        assert!(std::mem::size_of::<AverageNode>() < std::mem::size_of::<Node>());
+        for codec in ["json.gz", "msgpack.gz"] {
+            let path = std::env::temp_dir()
+                .join(format!("inference-reader-{}.{codec}", std::process::id()));
+            trainer.write_checkpoint(&path).unwrap();
+            let table = InferenceTable::read(&path).unwrap();
+            assert_eq!(table.nodes.len(), trainer.nodes.len());
+            for (key, original) in &trainer.nodes {
+                let loaded = &table.nodes[key];
+                assert_eq!(loaded.descriptor, original.descriptor);
+                assert_eq!(loaded.strategy_sum, original.strategy_sum);
+                assert_eq!(loaded.average_strategy(), original.average_strategy());
+                assert_eq!(loaded.average_visits, original.average_visits);
+            }
+            let rows: Vec<_> = table.nodes.values().collect();
+            assert!(Arc::ptr_eq(&rows[0].action_labels, &rows[1].action_labels));
+            assert!(Arc::ptr_eq(
+                &rows[0].descriptor.hand_bucket_trajectory,
+                &rows[1].descriptor.hand_bucket_trajectory
+            ));
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn tabular_response_uses_average_not_regrets_and_no_hidden_cards() {
+        let (policy, deal) = tabular_fixture();
+        let game = &policy.table.config;
+        let state = GameState::initial(game);
+        let actions = state.legal_actions(game);
+        let mix = policy.strategy(&state, &deal, &actions, game);
+        assert_eq!(&mix[..2], &[0.125, 0.875]);
+        let other_hidden = Deal::from_cards([[51, 50], [41, 40]], [1, 6, 11, 26, 29]);
+        assert_eq!(mix, policy.strategy(&state, &other_hidden, &actions, game));
+        let mut state = state;
+        let mut visited = BTreeSet::new();
+        while state.terminal.is_none() {
+            let actions = state.legal_actions(game);
+            let strategy = policy.strategy(&state, &deal, &actions, game);
+            assert_eq!(strategy.len(), actions.len());
+            assert!((strategy.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+            visited.insert(format!("{:?}", state.street));
+            let visible = state.street.board_len();
+            let mut remaining = (0..52u8).filter(|card| {
+                !deal.holes[state.actor].contains(card) && !deal.board[..visible].contains(card)
+            });
+            let mut holes = deal.holes;
+            holes[1 - state.actor] = [remaining.next().unwrap(), remaining.next().unwrap()];
+            let mut board = deal.board;
+            for card in &mut board[visible..] {
+                *card = remaining.next().unwrap();
+            }
+            let alternative = Deal::from_cards(holes, board);
+            assert_eq!(
+                information_set(&state, &deal, game).0,
+                information_set(&state, &alternative, game).0,
+                "hidden cards changed {:?} key",
+                state.street
+            );
+            let action = actions
+                .iter()
+                .find(|a| matches!(a.kind, ActionKind::Check | ActionKind::Call))
+                .unwrap();
+            state = state.apply(action, game);
+        }
+        assert_eq!(visited.len(), 4);
+        let coverage = policy.take_coverage();
+        assert!(coverage.iter().all(|c| c.coverage.decisions > 0));
+        assert!(coverage
+            .iter()
+            .skip(1)
+            .all(|c| c.coverage.unknown_information_set_fraction == 1.0));
+        assert!(policy
+            .take_coverage()
+            .iter()
+            .all(|c| c.coverage.decisions == 0));
+    }
+
+    #[test]
+    fn tabular_full_hand_rollouts_match_frozen_action_paths_and_realized_settlement() {
+        let (policy, _) = tabular_fixture();
+        let game = &policy.table.config;
+        let mut chance = SplitMix64::new(197);
+        for seed in 0..100 {
+            let deal = Deal::sample(&mut chance);
+            let mut reference = GameState::initial(game);
+            let mut rng = SplitMix64::new(seed);
+            while reference.terminal.is_none() {
+                let actions = reference.legal_actions(game);
+                let (key, _, _) = information_set(&reference, &deal, game);
+                let mix = policy
+                    .table
+                    .nodes
+                    .get(&key)
+                    .map(AverageNode::average_strategy)
+                    .unwrap_or_else(|| vec![1.0 / actions.len() as f64; actions.len()]);
+                reference = reference.apply(&actions[sample_index(&mix, &mut rng)], game);
+            }
+            // Root diagnostics integrate early all-ins over extra runouts;
+            // full-game response evaluation settles this exact sampled board.
+            // At a terminal state, River selects the latter in the reference.
+            reference.street = Street::River;
+            let expected = reference.utility_p0(&deal, game);
+            let actual = baseline_rollout(
+                &policy,
+                GameState::initial(game),
+                &deal,
+                game,
+                &mut SplitMix64::new(seed),
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn tabular_checkpoint_response_is_deterministic_and_discloses_completion() {
+        let (trainer, _) = fixture_trainer();
+        let path = std::env::temp_dir().join(format!(
+            "tabular-response-{}.msgpack.gz",
+            std::process::id()
+        ));
+        trainer.write_checkpoint(&path).unwrap();
+        let config = ResponseEvaluationConfig {
+            game: BlueprintConfig::default(),
+            response_workers: 1,
+            training_deals: 8,
+            calibration_deals: 8,
+            evaluation_deals: 16,
+            rollouts_per_action: 2,
+            minimum_range_particles: 2,
+            maximum_granularity: ResolverGranularity::StrategicObservableBackoff,
+            seed: 915,
+            source: ResponsePolicySource::TabularCheckpoint(path.clone()),
+            turn_resolver: None,
+            terminal_flop: None,
+        };
+        let first = evaluate_full_game_response(config.clone()).unwrap();
+        let second = evaluate_full_game_response(config.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&first).unwrap(),
+            serde_json::to_vec(&second).unwrap()
+        );
+        for workers in [2, 4] {
+            let mut parallel_config = config.clone();
+            parallel_config.response_workers = workers;
+            parallel_config.training_deals = 71;
+            parallel_config.calibration_deals = 71;
+            parallel_config.evaluation_deals = 71;
+            let mut serial_config = parallel_config.clone();
+            serial_config.response_workers = 1;
+            let serial = evaluate_full_game_response(serial_config).unwrap();
+            let mut parallel = evaluate_full_game_response(parallel_config).unwrap();
+            assert_eq!(parallel.response_workers, workers);
+            parallel.response_workers = 1;
+            assert_eq!(
+                serde_json::to_vec(&serial).unwrap(),
+                serde_json::to_vec(&parallel).unwrap()
+            );
+        }
+        assert_eq!(first.depth_bb, 20.0);
+        let mut corrected = config.clone();
+        corrected.terminal_flop = Some(TerminalFlopOptions {
+            equity_samples: 128,
+            weight: 0.25,
+        });
+        let serial_correction = evaluate_full_game_response(corrected.clone()).unwrap();
+        corrected.response_workers = 2;
+        let mut parallel_correction = evaluate_full_game_response(corrected).unwrap();
+        parallel_correction.response_workers = 1;
+        assert_eq!(
+            serde_json::to_vec(&serial_correction).unwrap(),
+            serde_json::to_vec(&parallel_correction).unwrap()
+        );
+        assert!(serial_correction
+            .policy_source_kind
+            .contains("terminal_flop"));
+        assert_eq!(serial_correction.terminal_flop.unwrap().weight, 0.25);
+        assert!(first.network_sha256.is_empty());
+        assert_eq!(first.policy_sha256, sha256_file(&path).unwrap());
+        assert_eq!(first.source_policy_coverage.len(), 3);
+        assert!(first.policy_source_kind.contains("uniform_completion"));
+        assert_eq!(
+            first.total_response_gain_bb_per_hand,
+            first
+                .players
+                .iter()
+                .map(|p| p.estimated_gain_bb)
+                .sum::<f64>()
+        );
+        assert_eq!(
+            first.total_response_gain_lower_confidence_bound_99_percent_bb_per_hand,
+            2.0 * first.approximate_exploitability_lower_confidence_bound_99_percent_bb_per_hand
+        );
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn range_aggregate_selects_one_action_for_all_particles() {

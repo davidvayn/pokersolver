@@ -1,5 +1,10 @@
 # Schema-v3 full-game cloud runbook
 
+> **Local-first override (September 4):** the user chose to continue on the
+> 16GiB Mac before renting a host. Follow the bounded
+> [local runbook](local-blueprint-runbook.md); the cloud commands below remain
+> an optional later stage, not the currently authorized launch.
+
 This runbook launches the corrected trajectory-recall external-sampling DCFR
 trainer. It does not launch the older neural `long_run.py` experiment and it
 does not merge regret tables from different random seeds.

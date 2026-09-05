@@ -4,6 +4,11 @@ Date: September 4, 2026. Base: `4ef673f`. Solver: `0.3.0`; checkpoint schema: **
 
 Companion: [verified five-page research report](2026-09-04-pcs-research.pdf).
 
+Follow-up: the [local checkpoint and response audit](2026-09-04-local-checkpoint-response-audit.md)
+completes bounded local recovery and the tabular full-game response adapter.
+Its results supersede this snapshot's "unmeasured" response status; neither
+report certifies Approximate GTO or authorizes an unrestricted paid run.
+
 ## Decision
 
 Keep the policy-preserving memory/evaluator optimizations. Use opt-in
