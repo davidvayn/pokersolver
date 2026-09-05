@@ -808,15 +808,25 @@ and independent response gains; more admitted rows alone is not success.
 Small-sample rejected responses remain inconclusive, and this pilot alone
 will not qualify or activate the defender.
 
-The control arm is active at
+The control arm is complete at
 `preflop-solver/neural/runs/local-preflop-runouts-20260905-control1`.
 Seed A completed in 1,123.372 seconds, sampled footprint 7,145,854,400 bytes,
 without a resource stop. Both calibration responses were rejected:
 SB gain 0.1175835bb, SE 0.072647709, lower -0.069544598bb;
 BB gain 0.01925bb, SE 0.013600357, lower -0.015782197bb.
-These zeros are inconclusive. Seed B is running. The resampled arm has not
-started; it must use the control's frozen `0c66f00...` executable, even if
-`target/release` is rebuilt. Concurrent native builds mean these wall times
+These zeros are inconclusive. Seed B also rejected both responses:
+SB gain -0.0459585bb, SE 0.083104502, lower -0.260021510bb;
+BB gain 0.028833bb, SE 0.023525942, lower -0.031765811bb.
+B runtime 1,305.021 seconds, sampled footprint 7,210,178,032 bytes, no stop.
+Both control output hashes were independently verified:
+A `198424be03573d4a7b026aaa1170f3747dca36732776da2b76e782dbc10b91e1`;
+B `dde06e31df9a892b7a7e445546a87ea2ca134af4709f0db802f2f5d4f6612061`.
+The resampled arm is now active at
+`preflop-solver/neural/runs/local-preflop-runouts-20260905-resampled1`.
+Configuration comparison verifies identical frozen executable SHA, seeds and
+budgets: only the preflop-runout flag differs (besides input/output paths).
+It uses the control's frozen `0c66f00...` executable, not the newly rebuilt
+`target/release` binary. Concurrent native builds mean the control wall times
 are not isolated performance benchmarks. Commit `02798b7`, recording the
 preceding full-weight assessment, was pushed and passed CI 33982696003.
 
@@ -856,3 +866,6 @@ Verified new executable:
 No full-size training speedup is claimed yet; the running sampling experiment
 remains on its frozen scheduler. No debug instrumentation or dependencies
 were added, and no model or release gate was changed.
+The scheduler milestone was committed/pushed as `a9346f6`; remote CI
+33984490992 passed. Its scheduler is deliberately not used by either arm
+of the ongoing conditional-runout comparison.
