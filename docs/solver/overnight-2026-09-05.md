@@ -2042,3 +2042,146 @@ frozen delayed-attack pilot: greedy early bets can miss later exploitable
 decisions. That is a candidate next diagnostic, not evidence of a weakness
 already isolated here, and its gains would still be lower-bound evidence.
 No defender policy change or extra release gate is introduced by that option.
+
+### Prepared delayed-attack control; original pair still frozen
+
+Cache milestone `eec4b16f8ddc068617ea766b2dfe0616f8aab2aa` is pushed and
+passed CI 34001386919. The full-size cache parity runner is prepared at
+`local-sampled-flop-20260905-lbrcacheparity1/run.py`, with frozen executable
+`4aabb3880ab21c75024554c3548faf4f8852b97d96f26c4d763f3dbef8b24df6`.
+It refuses to start before the original paired workers finish, verifies the
+old cost-pilot manifest/log hashes, and compares every semantic event exactly,
+excluding only time and work-count diagnostics. This has not run yet; do not
+claim full-size parity or speedup from the prepared script.
+
+The separate delayed-attack implementation follows the baseline policy until
+the flop, then uses the same exact-card LBR rule. Unlike the cited paper's
+forced early check/call experiments, this adaptation preserves the authentic
+preflop distribution and makes preflop-terminal hands exact paired identities.
+It does not condition the opponent belief on the hero's baseline actions.
+The first public street on which attacks begin is explicitly reported for
+the new variant; archived all-street entry points retain their original
+budgets, seeds and event semantics. A disabled-attack regression verifies
+exact baseline payoffs and random-draw alignment; the delayed regression
+verifies identical preflop histories, only postflop attacks, deterministic
+replay, and unchanged all-street wrapper behavior. An initial test import-path
+compile error was corrected before the tests ran.
+
+The prepared ignored entry is
+`lbr::pilot::delayed::sampled_profile_delayed_lbr_pilot`: 32 calibration / 64
+independent raw holdout deals, fresh evaluation seed 92004, unchanged LBR seed
+90001 and defender profile. This is not launched while the original pair or
+its subsequent cache parity is outstanding. Do not tune it to partial holdout
+outcomes or treat baseline-identical preflop terminals as rejected-critic
+zeros. All 256 release library tests and nine CLI tests pass after the helper
+change (two test threads to limit local pressure); 15 research entries are
+ignored. The original full-size worker is still running its older frozen
+binary; these changes cannot alter its action rule or results.
+
+The delayed prototype's tested executable is frozen at
+`local-sampled-flop-20260905-lbrdelay1/frozen-tests`, SHA
+`9e0ed687bf9a583c00aa001069ece73272cf2e516395eb3c74d9498b7675c925`.
+There is no delayed full-size worker or result yet. Its production executable
+is byte-identical to the cache milestone (`aa6bf3c5...`); the new attack path
+is test-only.
+
+### Independent all-street challenge: source A complete, B running
+
+Source A completed 64 calibration and 128 raw holdout hands, both seats,
+in 2,070.010 seconds including load, peak physical footprint 6,378,869,608
+bytes, no resource stop. Its worker exited before source B was launched.
+Source-A immutable log SHA:
+`fff3cb2730b54c34f49a46ba6e502cb0ecf440b988eb89578c1ca796f8bd1c05`.
+Both seats remained unqualified by calibration. Raw independent holdout:
+
+| Metric | Mean bb/full hand | SE | Individual normal 99% interval |
+| --- | ---: | ---: | --- |
+| BTN/SB unilateral gain | -0.102528 | 0.648449 | [-1.772821, 1.567765] |
+| BB unilateral gain | -0.024061 | 0.697207 | [-1.819948, 1.771826] |
+| Seat sum | -0.126589 | 0.852173 | [-2.321641, 2.068464] |
+| Half-seat sum | -0.063294 | 0.426087 | [-1.160821, 1.034232] |
+
+Attacker decision counts were 171/31/4/1 (BTN/SB) and 71/48/11/1 (BB),
+ordered preflop/flop/turn/river. An independent read-only verifier checked all
+192 hands / 384 seat records, each paired sum and baseline cancellation,
+finite/bounded heuristic values, selected-action argmax, payout bounds, and
+means/SEs against the report within 1e-12. It also verified the completed log
+hash. This does not make the heuristic action values true action EVs.
+
+The small pilot's positive point estimate did not replicate on this source's
+larger independent sample. The unchanged defender has not improved or worsened
+because its evaluator received more samples. The restricted attack remains
+uninformative; no exploitability gate passes from its near-zero/negative raw
+mean, and rejected-response zeros remain prohibited. Source B is verified
+live under the original supervisor and frozen executable. Finish it before
+the cache parity replay, then assess the separately frozen delayed-attack
+pilot. The combined pair is not yet complete; the managed goal remains active.
+
+### Completed independent pair; delayed-attack preparation
+
+Source B subsequently completed its 64 calibration and 128 raw holdout hands,
+both seats, in 1,907.693 seconds including load; peak physical footprint was
+6,303,798,072 bytes. Neither source hit a resource stop. The original workers
+and supervisor have exited; the combined pair completed in 3,979.507 seconds.
+Source-B immutable log SHA:
+`f1fcdc73b94f30cd6c7cd6f447014b25a391826e16dae176313d29d14c9b1b27`;
+completed pair manifest SHA:
+`e89bb6f02d2da90c4d7597f4bd17b622880719de9f43028387fa2527e104f86d`.
+
+B calibration remains unqualified for both seats: SB -0.837521bb
+(SE 1.100612), BB 0.453238bb (SE 1.146704). Raw independent holdout:
+
+| Metric | Mean bb/full hand | SE | Individual normal 99% interval |
+| --- | ---: | ---: | --- |
+| BTN/SB unilateral gain | 1.168938 | 0.738323 | [-0.732857, 3.070733] |
+| BB unilateral gain | -0.354778 | 0.602139 | [-1.905786, 1.196230] |
+| Seat sum | 0.814160 | 0.860350 | [-1.401954, 3.030273] |
+| Half-seat sum | 0.407080 | 0.430175 | [-0.700977, 1.515137] |
+
+B holdout attack decisions were 174/32/6/1 (SB), 83/39/14/8 (BB), ordered
+preflop/flop/turn/river. An independent read-only audit verified both log
+hashes, runner/binary hashes, all 384 hands / 768 seat records, baseline
+cancellation, finite and bounded heuristic values, selected-action argmax,
+and every summary mean/SE within 1e-12. It also checked exact common deal and
+action-seed records across A/B. The shared holdout stream contains **128
+independent deals**, not 256. Both sources failed attacker calibration, and
+all individual raw gain intervals include zero. The old cost pilot's large
+positive point estimate did not become a reproducible positive lower bound.
+No exploitability gate passes and no defender policy changed in this pair.
+Do not spend another unchanged large all-street attack run on these results.
+
+The prepared full-size cache replay is now launched against the original
+8/24 cost probe, after verifying the completed pair and absence of its live
+workers. Its result is still pending; exact semantic parity and whole-run
+speedup are not yet established.
+
+The delayed pair's guarded runner is prepared and syntax-checked at
+`local-sampled-flop-20260905-lbrdelay1/run.py`, SHA
+`da12bf7f4cf74d80ada7a84bcbc627d2cf04edf9104eea6abc92ce10cacd3c59`.
+It requires completed original-pair and cache-parity manifests, refuses live
+full-size experiment workers or an existing output, pins the tested executable
+and both source checkpoints, and runs A/B sequentially. Each source has a
+1,800-second / 7.5GiB physical-footprint stop and 20GiB disk reserve. It verifies
+the delayed scope, exact configuration, unique legal deals, complete paired
+records, baseline cancellation, action argmax, absence of preflop attacks,
+unchanged payoffs without intervention, summary estimates and common A/B
+chance. Preparing this runner is not a delayed-pilot launch or quality result.
+
+### Research boundary for eventual full-game qualification
+
+The [dynamic zero-sum information-relaxation analysis](https://arxiv.org/html/1405.4347)
+explains why fixing an imperfect-information opponent produces a POMDP best
+response, and why a legal approximate response supplies the wrong bound
+direction for certifying low exploitability. Dual-feasible information
+penalties can bound the optimum from above instead. The
+[POMDP treatment](https://martin-haugh.github.io/files/Research/POMDP_IR_March_2019.pdf)
+constructs such penalties from conditional expectations and requires solving
+the relaxed inner optimization; it explicitly warns that direct belief-state
+inner problems are generally intractable beyond small cases. This is not a
+demonstrated practical Hold'em certificate. Applying it here would require
+valid conditional expectations, justified inner-solve bounds, small-game
+verification and a measured full-size cost; heuristic values cannot simply be
+subtracted from the existing clairvoyant evaluator and called a valid bound.
+No such evaluator is implemented or added as a new gate in this milestone.
+Finish cache parity and the narrowly scoped delayed pilot before considering
+a different evaluation architecture.

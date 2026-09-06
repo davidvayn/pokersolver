@@ -1,6 +1,7 @@
 //! Actual full-hand play. LBR's own input excludes the hidden deal; only the
 //! dealer/defender action sampling and final payout see the complete deal.
 use super::*;
+mod delayed;
 
 #[derive(Default, Serialize)]
 struct HandAttack {
@@ -55,6 +56,18 @@ fn play(
     seed: u64,
     lbr: &Lbr,
 ) -> Result<HandAttack, String> {
+    play_from(policy, game, deal, seat, seed, lbr, Some(Street::Preflop))
+}
+
+fn play_from(
+    policy: &dyn ResponsePolicy,
+    game: &BlueprintConfig,
+    deal: &Deal,
+    seat: usize,
+    seed: u64,
+    lbr: &Lbr,
+    first_street: Option<Street>,
+) -> Result<HandAttack, String> {
     let mut belief = Belief::new(seat, deal.holes[seat])?;
     let mut state = GameState::initial(game);
     let mut rng = SplitMix64::new(seed);
@@ -63,7 +76,9 @@ fn play(
         let board = &deal.board[..state.street.board_len()];
         belief.reveal(board)?;
         let actions = state.legal_actions(game);
-        let selected = if state.actor == seat {
+        let selected = if state.actor == seat
+            && first_street.is_some_and(|first| street_index(state.street) >= street_index(first))
+        {
             let values = lbr.values(&belief, policy, game, &state, board, &actions)?;
             let selected = best_index(&values);
             rng.next_f64(); // replaces the baseline's random action draw
@@ -86,7 +101,7 @@ fn play(
                 Combo::new(own[0], own[1]),
             )?;
             let selected = sample_index(&mix, &mut rng);
-            if state.apply(&actions[selected], game).terminal.is_none() {
+            if state.actor != seat && state.apply(&actions[selected], game).terminal.is_none() {
                 belief.observe(policy, game, &state, board, &actions, selected)?;
             }
             selected
@@ -127,6 +142,20 @@ fn sampled_profile_lbr_paired_challenge() {
 }
 
 fn run_challenge(calibration_hands: u64, holdout_hands: u64, evaluation_seed: u64) {
+    run_challenge_from(
+        calibration_hands,
+        holdout_hands,
+        evaluation_seed,
+        Street::Preflop,
+    );
+}
+
+fn run_challenge_from(
+    calibration_hands: u64,
+    holdout_hands: u64,
+    evaluation_seed: u64,
+    first_street: Street,
+) {
     let source = PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").unwrap());
     let checkpoint_sha = sha256_file(&source).unwrap();
     assert!([
@@ -144,13 +173,24 @@ fn run_challenge(calibration_hands: u64, holdout_hands: u64, evaluation_seed: u6
         early_runouts_per_combo: 16,
     };
     let started = Instant::now();
+    if first_street != Street::Preflop {
+        emit(
+            serde_json::json!({ "stage":"lbr_attack_scope", "firstAttackStreet":first_street,
+            "earlierActions":"sample the unchanged baseline policy; do not condition opponent belief on hero actions",
+            "interpretation":"restricted delayed attack, not a full-game exploitability upper bound" }),
+        );
+    }
     emit(
         serde_json::json!({ "stage":"lbr_configuration", "checkpointSha256":checkpoint_sha,
         "policySeed":87001, "flopIterations":32, "turnRiverIterations":64,
         "terminalFlopWeight":0.5, "terminalFlopEquitySamples":2048,
         "lbrSeed":lbr.seed, "earlyRunoutsPerCombo":lbr.early_runouts_per_combo,
         "evaluationSeed":evaluation_seed, "calibrationHands":calibration_hands, "rawHoldoutHands":holdout_hands,
-        "interpretation":"restricted legal all-street attack; approximate checkdown action values; not an exploitability upper bound" }),
+        "interpretation":if first_street == Street::Preflop {
+            "restricted legal all-street attack; approximate checkdown action values; not an exploitability upper bound"
+        } else {
+            "restricted legal delayed attack; approximate checkdown action values; not an exploitability upper bound"
+        } }),
     );
     let mut qualified = [false; 2];
     for (phase, count, domain) in [
@@ -179,7 +219,16 @@ fn run_challenge(calibration_hands: u64, holdout_hands: u64, evaluation_seed: u6
                 policy.clear_experiment_hand_caches();
                 emit(serde_json::json!({ "stage":"lbr_seat_start", "phase":phase,
                     "index":index, "seat":seat, "baselineP0Bb":baseline_p0 }));
-                let attack = play(&policy, &game, &deal, seat, action_seed, &lbr).unwrap();
+                let attack = play_from(
+                    &policy,
+                    &game,
+                    &deal,
+                    seat,
+                    action_seed,
+                    &lbr,
+                    Some(first_street),
+                )
+                .unwrap();
                 let gain = attack.utility - if seat == 0 { baseline_p0 } else { -baseline_p0 };
                 gains[seat].push(gain);
                 sum += gain;
