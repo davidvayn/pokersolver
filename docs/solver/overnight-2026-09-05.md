@@ -4241,3 +4241,147 @@ flop, two seeds of 128 single-turn versus 32 four-turn rounds. This tests
 transfer rather than assuming the cheap-root gain generalizes. Preserve the
 existing 32-round checkpoint artifacts and default policy path; no new
 production model is activated and no success threshold is relaxed.
+
+The diagnostic replay, pointed at the new completed subset manifest, now
+passes both seeds against the original eight-round controls (0.460 seconds).
+This closes the narrow experimental loop without rewriting old failed/mixed
+artifacts. Milestone `8ab0102` was committed and pushed with the sampler,
+focused tests and measured results.
+
+At approximately **14:32 UTC**, launched the original-flop transfer stage:
+
+```bash
+python3 neural/runs/local-native-flop-20260906-original-batch-transfer/run.py \
+  b8f681b8d7e6f7c5f60ff98cd386915ff9b0812c7fb52c20ce3253d734e8cb5d
+```
+
+Exec session 85123. Authoritative state:
+`local-native-flop-20260906-original-batch-transfer/paired128/manifest.json`.
+Runner SHA `5a80d6e9360aa18a30ba3c9a6d95548472d7679564f66a99d9931bc660064294`.
+It uses the **same tested binary** and the original hash-pinned public fixture.
+Before new training, it replays both old 32-round response aggregates and
+retrains both short two-round controls, requiring byte-identical outputs.
+The main comparison is 128 single-turn versus 32 four-turn updates for both
+seeds: 1,152 native turn queries each, 64 inner iterations, no baseline.
+Every candidate then receives all 49 frozen-turn packets and the independent
+backup; 196 packets total. Old 32-round artifacts remain untouched.
+
+Four worker slots, 2GiB each, 4.5-hour per-training cap, six-minute packet cap,
+**six-hour whole-stage cap**, 20GiB disk floor and preflight projected-artifact
+reserve. The stage cap is approximately 20:32 UTC, within the current bounded
+overnight work/sleep-prevention window. No other training or evaluation pool
+overlaps it. The successful cheap pilot supports this controlled scaling
+comparison, not automatic transfer, full-game qualification, or activation.
+
+Both original 32-round response replays and both two-round default training
+replays passed byte-for-byte before the four main jobs started. Parent PID
+64735 remains the sole training-stage controller. Its frozen binary and
+running controller are not modified during the comparison.
+
+CI **34039191051 passed** for full milestone commit
+`8ab01025133c57b9f5e3ec3d427512f12afbc0d8`. The original-root two-round
+replays took 128.657 / 128.917 seconds. Main worker PIDs at launch are
+64858–64861; all four were verified active at approximately 100% CPU each.
+
+At 15:20 UTC took one **one-second read-only CPU sample** of worker 64858,
+without changing the running binary/settings. Snapshot SHA:
+`680705b3ed3f6d9dfb94f7f8c6770802d127d6ba00203c36c9eea1fb8922c2ae`,
+file `paired128/cpu-sample-seed100101-single.txt` under this stage. The test
+harness thread was waiting normally while its solver thread ran; its semaphore
+samples must not be counted as an idle solver. Top-of-stack solver counts were
+237 in turn/river traversal, 126 in showdown strength marginals, 106 in
+card-compatible masses, and 86 in regret-matched strategy calculation. This
+single snapshot does not establish whole-run percentages, but it does not
+justify an unrelated I/O/BTree rewrite. No such change is being made.
+The OS sample reported a transient peak of 1.6G for that process; this differs
+from periodically sampled guard peaks and remains below its 2GiB cap.
+
+At approximately **17:59 UTC**, all four original-root candidates completed
+training and passed the frozen-policy structure, input, action-probability,
+and query-count checks. Each used 1,152 native turn-leaf queries, with the same
+64-iteration continuation solver. All four final policies remain local
+research artifacts; no serving policy was changed.
+
+| Seed | Turn batch | Outer updates | Training seconds | Sampled peak footprint bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 100101 | 1 | 128 | 12,264.460 | 1,772,423,040 |
+| 100102 | 1 | 128 | 12,279.496 | 1,772,341,168 |
+| 100101 | 4 | 32 | 12,296.068 | 1,709,737,808 |
+| 100102 | 4 | 32 | 12,285.948 | 1,655,670,536 |
+
+The timing does **not** show a batching speedup at matched oracle work. The
+question still being tested is policy quality per unit of work. Maximum
+exported probability-sum error was 4.94e-8, and every training job exited
+normally without a resource stop. Final policy SHAs, single 100101/100102
+then batch 100101/100102:
+`25c6f64ee8dbbdcb63edda2412f29ddba6323fe08deef687b12b2418f2ca23e1`,
+`1334b91013d9a5690bf0f71ec685292fe446d6534ed589149b96f7117c664cc1`,
+`10ffde28e4027df1825c0918ce00ef443b779550202215604e260bfeeb4cd1aa`,
+`3f887b91fb7b36c9ca76adf1a40533c02c0df87dc91cbefc6e99c89a68c6f717`.
+
+The controller moved to `all-turn-evaluation`, reusing its four worker slots
+for 196 packets. No training workers remain. Frozen response scores and the
+independent backups are still pending; training completion is not a passed
+policy-quality or release gate.
+
+The same read-only, compatible-root-reach-weighted mix diagnostic gives:
+
+| Original-root pair | Per-action MAE | Primary agreement | Maximum aggregate action delta |
+| --- | ---: | ---: | ---: |
+| Previous 32 single-turn updates | 8.6662pp | 90.6687% | 10.8007pp |
+| 128 single-turn updates | 2.4509pp | 99.9559% | 3.2915pp |
+| 32 four-turn updates | 5.4252pp | 95.2973% | 1.8108pp |
+
+This checks only the reused public root, normalizes the exported f32 rows,
+and weights each acting-player combo by its root reach times compatible
+opponent reach. Both pairs improve these three diagnostics over the old
+32-update controls. Against the existing thresholds, however, the single-turn
+pair still misses the 3pp aggregate-delta target, while the batched pair still
+misses the 5pp per-action-MAE target. Neither establishes full-game stability.
+Their mean root mixes also differ materially: check frequencies are
+89.0876% / 92.3791% for the single-turn pair and 72.2555% / 70.5377% for the
+batched pair. These are observations, not a reason to select either policy
+before completing the frozen response evaluation.
+
+### Original-root result: more trunk updates win; batching does not transfer
+
+The complete stage finished at approximately **19:19 UTC** in **17,233.477
+seconds** (4h47m), with four successful trainings, all 196 audited packets,
+four native aggregates and four independent JS backups. Session 85123 was
+reaped; parent 64735 and its workers exited. Completed manifest SHA:
+`3aae32157fbb012f1bd6d376b88f8d6f8ae8595eb17d7f5c4f5ce4769e034020`.
+Packet worker time was 19,016.573 seconds and sampled peak footprint
+726,975,616 bytes. Maximum independent-backup difference was 5.55e-17bb.
+
+| Seed | Previous 32 single-turn updates | 128 single-turn updates | 32 four-turn updates | Batch minus matched single |
+| --- | ---: | ---: | ---: | ---: |
+| 100101 | 0.227128290bb | **0.093242363bb** | 0.222352977bb | +0.129110615bb |
+| 100102 | 0.229962298bb | **0.088891958bb** | 0.204676455bb | +0.115784497bb |
+
+All numbers are conditional fixed-root half-summed response gains. The
+128-update controls improve **58.95% / 61.34%** over the previous 32-update
+controls. At matched continuation-query work, however, batching is
+**138.47% / 130.25% worse** than the single-turn controls. The cheap facing-bet
+root's batching benefit therefore does not transfer to this larger trunk.
+Keep the single-turn path as the general default; the opt-in batch sampler
+remains an experimental alternative with both positive and negative evidence.
+Do not launch a larger batch run on the strength of the cheap pilot alone.
+
+Response SHAs, single 100101/100102 then batch 100101/100102:
+`2489b7ad4cc0e94792d58043464f4f286b481818695f458fe4092b3f2f8451e9`,
+`e06be91834d822c9aea53b287ee950cba3ebd41992002cccc41bcd5bd0847ceb`,
+`51a5e57fef4fb05653a31171ce579e0b1425c30bd99da20b701af254eb287240`,
+`531d95e48f61d41b42b5aba1e26c779d808b6ede211bc5d8b5655ab29c88b47d`.
+
+The single-turn profiles' per-seat response gains are
+[0.080971536, 0.105513189]bb and [0.067685135, 0.110098781]bb.
+Flop-only restricted half-gains are 0.056372168bb / 0.051494344bb,
+versus 0.195254236bb / 0.176839142bb for the batched profiles.
+Flop-only and multi-street attacks are nested, not an additive decomposition
+of independent street exploitabilities. The difference motivates examining
+continuation accuracy, but does not itself prove a turn-solver defect.
+
+The original-root research best is now the single-turn 128-update pair.
+This is a real local policy improvement, **not** evidence that the routed
+full-hand model passes 0.50bb/hand, 0.05bb/hand, lookup coverage, or served
+action-EV precision. The broader release limitations recorded above remain.
