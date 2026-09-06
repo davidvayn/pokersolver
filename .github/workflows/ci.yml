@@ -43,6 +43,9 @@ jobs:
       - name: Test Rust release solver
         run: cargo test --release --manifest-path preflop-solver/Cargo.toml
 
+      - name: Test independent native policy audit
+        run: node --test preflop-solver/neural/audit_native_flop_response.test.mjs
+
       - name: Test practice release tools
         run: npm run test:practice-tools
 

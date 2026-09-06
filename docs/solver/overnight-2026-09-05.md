@@ -3506,3 +3506,165 @@ One further obsolete generated debug library,
 `target/debug/deps/libpreflop_solver-97539e8db9d59ff6.rlib`, was losslessly
 gzipped before the larger comparison to increase disk headroom. Its compressed
 copy is retained and recoverable. No models or checkpoints were removed.
+
+### Renewed overnight instruction: September 6, 08:34–20:34 UTC
+
+The user requested another 12 hours of work at 08:34 UTC (01:34 Pacific).
+Continue the existing goal locally through this work window: finish the fixed
+two-vs-eight comparison, inspect both seeds, use short evidence-driven policy
+pilots before longer training, and commit/push verified major milestones.
+Do not relax metrics, pay for compute, or activate an unvalidated model.
+The objective remains all existing quality gates and full-game exploitability
+below 0.50bb/hand, then below 0.05; conditional-root results do not replace it.
+
+The all-turn comparison remains the already-running `response49` process,
+not a fresh run. Its 196-vs-194 bookkeeping defect has a separate guarded
+`local-native-flop-20260906-response49/finalize.py` recovery: verify the original
+supervisor is terminal and all 194 new audited packets plus the two reused
+packets exist unchanged, then compute the four aggregates without rerunning
+any packet. The failed parent manifest stays preserved. The native evaluator
+and eight-round milestone were pushed as `2f4b0eb`.
+
+Started a bounded 12-hour `caffeinate -i -t 43200` idle-system-sleep assertion;
+the display may sleep. This cannot protect against shutdown, power loss or
+closing the laptop lid. The user was asked to keep power connected and the
+lid open. No persistent power-management setting was changed.
+
+### Work prepared while the unchanged all-turn comparison runs
+
+Added `neural/audit_native_flop_response.mjs`: a separate JavaScript
+implementation of the flop action grid, betting settlement, fixed-policy
+backup and information-set-consistent response. It sums all 49 native turn
+packets before maximizing flop decisions and compares the result with the
+native aggregate. Inputs remain frozen: this shares native turn CFVs and a
+hash-pinned f32 all-in equity matrix, so it is **not** an independent hand
+evaluator or a full-game certificate. Its analytic royal-flush fixture checks
+the expected 0.625bb conditional half-summed response gain, and rejects missing
+turns, altered response values and an action-grid mismatch. The Node test is
+included in CI. Actual 20bb aggregate audit results are still pending.
+
+The shared equity export completed in 2.805 seconds under a 512MiB/120-second
+guard, with sampled footprint 9,781,632 bytes. Sampling can miss transient
+allocations. Metadata SHA:
+`4d6d9f0e72dc6dbef4997d9831c37531bb84b124b882e817990bc6fe96809b79`;
+matrix SHA:
+`e057b22ad715c5b1a0d8ab44c86f11a8a8373e7bd119c46417f42a4183be3277`.
+Its separate frozen binary is
+`d98238f6602fe69c7317bd89db81c13bf65fee98d1cda36974ca7071fb35334f`.
+It did not replace the `f9e960...` binary running the comparison.
+
+Research identified a cheap, optional next policy pilot. Baseline control
+variates can preserve the sampled update's expectation while reducing its
+variance; a stale or poor baseline need not reduce variance. The relevant
+primary sources are [Schmid et al., AAAI 2019](https://mlanctot.info/files/papers/aaai19-vrmccfr.pdf)
+and [Davis et al., ICML 2020](https://proceedings.mlr.press/v119/davis20a/davis20a.pdf).
+Their predictive-baseline zero-variance result does not establish that property
+for our range-conditioned, approximate-subgame oracle.
+
+Our isolated adaptation keeps a previous-round conditional reference `b` for
+each public leaf, seat and exact own combo. For current compatible opponent
+mass `M`, sampled-turn mass `M_t` (zero if the turn blocks the own hand), and
+the still-required native CFV `V_t`, the flop update is:
+
+```text
+b * M + (49 / 45) * (V_t - b * M_t)
+```
+
+The exact expectation of the subtracted term is `b*M`, since every compatible
+private pair allows 45 of the 49 public proposals. References are updated only
+after forming the correction, using a 0.5 exponential average of `V_t/M_t`;
+negligible mass skips learning, never the native solve. Current reaches are
+used in both masses, not stale raw CFVs. No division by own reach, clipping
+of importance-weighted estimates, new action abstraction or serving fallback
+is introduced. A turn-blocked own hand can correctly receive a **flop update
+estimate** from the baseline; that is not a value conditioned on seeing that
+turn and must not be exported as user feedback.
+
+`chance_baseline.rs` is test-only research code. Tests verify the all-49-turn
+expectation against direct compatible-pair enumeration with asymmetric raw
+reaches, zero own reach, blocker handling, an empty opponent range, and a
+constant-payoff reference that removes blocker variance. The zero-reference
+case preserves the original estimator. A four-round small native pilot is
+deterministic, adds no turn queries, accepts frozen evaluation and preserves
+the old artifact round-trip when the option is absent. Ten focused tests
+pass; four explicit research entries are ignored (10.63 seconds). The option
+`POKER_NATIVE_FLOP_CHANCE_BASELINE=learned_conditional_turn_v1` is off by default.
+No 20bb corrected-policy pilot or improvement claim has been made yet. First
+finish and inspect both seeds' frozen two-to-eight response changes.
+
+Full release verification after the optional-baseline addition passed **283
+library + nine CLI tests**, 31 explicit research entries ignored, in 156.70 /
+0.86 seconds under the ongoing four-worker evaluation load. The independent
+Node audit test passed in approximately 0.3 seconds. Current research test
+binary SHA: `8eaabbe706ab95a4e977a57606f38bdc49ef554b173c9d0103a6e26fe4268f60`.
+
+To preserve the 20GiB free-disk reserve, losslessly gzipped four obsolete
+`target/debug/deps/preflop_solver-*` executables (`51d532be4c750ace`,
+`8f0636742d4e5a33`, `768d393c6337ac62`, `3e9d0007930b0483`), unlinked cache
+files in `target/debug/incremental/preflop_solver-15zme5pv2fq5r`, and four old
+`dep-graph.bin` files in incremental directories `1eq3vd3ncfugf`,
+`1r02r7ivlvi0z` and the two `2o9p68nxby39n` sessions. Existing hardlinked
+object files were skipped and left untouched. Compressed cache copies remain
+recoverable; no model, checkpoint or result was deleted.
+
+### All-turn comparison completed and independently verified
+
+The 194 new native jobs and two reused packets all passed. Native job span
+was 5,045.024 seconds (84.08 minutes), 19,900.444 worker-seconds, sampled peak
+per worker 1,170,605,304 bytes. The parent then failed at the previously
+identified `194 != 196` bookkeeping assertion, with **zero failed packet
+jobs**. Its failed manifest and runner remain unchanged. The guarded recovery
+verified all 196 identities, logs, audits and hashes, then computed the four
+aggregates in 1.545–1.561 seconds each, without repeating training or packets.
+
+Conditional fixed-root flop/turn/river half-summed response gain:
+
+| Seed | Two rounds | Eight rounds | Reduction |
+| --- | ---: | ---: | ---: |
+| 100101 | 1.899709315bb | 0.717145360bb | 62.25% |
+| 100102 | 1.924641036bb | 0.575393820bb | 70.10% |
+
+Every public turn and exact-combo information set of these fixed profiles is
+included. Both seeds improved, but these are **one reused source-A public
+root**, not independent full-game deals, a release exploitability bound or an
+activation certificate. Neither profile is being deployed.
+
+All four independent JavaScript backups passed. Maximum absolute difference
+from native output was **5.55e-17bb** (zero in three profiles). For eight-round
+seeds 100101/100102, a response that changes **only flop actions** already
+achieves half-summed gains 0.698157758 / 0.550549128bb; allowing turn/river
+deviations raises those to 0.717145360 / 0.575393820bb. The restricted attack
+is nested within the full conditional response, not an additive street-by-
+street exploitability decomposition. It nevertheless locates the dominant
+remaining weakness at the flop for this root. This supports testing the
+prepared variance-reduced **flop** update before spending more on already-
+stronger 64-iteration turn/river leaves.
+
+Next fixed pilot: the same two seeds, eight outer rounds, 64 inner iterations,
+same root/game/chance stream, changing only the opt-in learned conditional
+turn baseline. Compare each new frozen policy with its existing eight-round
+control using all 49 turns. Do not select it on frequency stability or a small
+subset of turns. No longer training or additional model activation is implied.
+
+Artifact identities:
+
+- Original failed parent manifest:
+  `1c59ee394ee574898ea6e2e5248af7253b92ebabae6d17d5ae34d8d65d1ed6d2`.
+- Successful finalization manifest:
+  `7ccc5987d7e7ff049ecf38c0bff75b496d5362a1773fe5ef423522e4b16ddadd`.
+- Recovery runner:
+  `ca5bda43ba49c0ff45eb61852f30820c276bebb0e3ae628f9cfc87e538f89bc2`.
+- Independent backup manifest:
+  `63187e5117a46bec749bfd68de5903e3691a2a18bbffc8527096fa48a9508745`.
+- Response outputs (100101 two/eight, then 100102 two/eight):
+  `ff459d624598db3d7d7a66e6984f180218482e5585858bcee14c3cb20c11b424`,
+  `2d290c45ffbda53c0847eae9d06935ed46f51ad08498ffb823d06cec777605bd`,
+  `a45e3e264d3973cb125ee3fe8384db9065618c2b8138012c7c04e09d784be56f`,
+  `de0ac7a611d495a82643b7de3004a958d6c3f619cfeaabe1d1d44bf0ba59a74a`.
+
+The parent, finalizer, equity exporter and independent backup processes all
+exited and their sessions were reaped. The bounded 12-hour `caffeinate`
+assertion remains active. No npm/browser verification was needed for these
+offline, test-only policy research changes; release Rust and independent Node
+tests passed as recorded above. Preflop stability, source action-EV precision,
+full-hand coverage and full-game exploitability remain unresolved.

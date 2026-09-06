@@ -37,7 +37,7 @@ struct Response {
     interpretation: &'static str,
 }
 
-struct Frozen {
+pub(super) struct Frozen {
     trunk: Trunk,
     candidate_sha256: String,
     turn_iterations: u64,
@@ -46,10 +46,14 @@ struct Frozen {
 }
 
 impl Frozen {
-    fn new(input: &Solution) -> Result<Self, String> {
+    pub(super) fn new(input: &Solution) -> Result<Self, String> {
         if input.schema != "hu-native-counterfactual-turn-flop-pilot-v1"
             || input.iterations < 2
             || input.turn_iterations < 2
+            || input
+                .chance_baseline
+                .as_deref()
+                .is_some_and(|mode| mode != "learned_conditional_turn_v1")
             || input
                 .state
                 .ranges
@@ -386,6 +390,7 @@ mod tests {
             zero_own_reach_completions: [0, 0],
             maximum_conditional_turn_response_gain_bb: 0.0,
             zero_joint_turn_queries: 0,
+            chance_baseline: None,
         }
     }
 
@@ -470,6 +475,9 @@ mod tests {
         invalid.strategies.pop();
         assert!(Frozen::new(&invalid).is_err());
         let mut invalid = fixture.clone();
+        invalid.chance_baseline = Some("unknown control variate".into());
+        assert!(Frozen::new(&invalid).is_err());
+        let mut invalid = fixture.clone();
         invalid.strategies[0].actor = 1 - invalid.strategies[0].actor;
         assert!(Frozen::new(&invalid).is_err());
         let mut invalid = fixture.clone();
@@ -515,6 +523,45 @@ mod tests {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
         format!("{:x}", Sha256::digest(&bytes))
+    }
+
+    #[test]
+    #[ignore = "hash-pinned candidate and guarded export for independent response-backup audit"]
+    fn saved_native_flop_equity_audit_input() {
+        let frozen = read_candidate();
+        let equity = exact_flop_all_in_equities(
+            frozen.trunk.state.board.clone().try_into().unwrap(),
+            &frozen.trunk.legal,
+            1,
+        );
+        // Share the actual f32 terminal inputs, not Rust's traversal or backed-up
+        // values. The independent audit does not claim a second hand evaluator.
+        let bytes: Vec<u8> = equity.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let path = PathBuf::from(std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap())
+            .with_extension("f32le");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        let metadata = serde_json::json!({
+            "schema":"native-flop-equity-audit-input-v1",
+            "candidateSha256":frozen.candidate_sha256,
+            "board":frozen.trunk.state.board,
+            "legal":frozen.trunk.legal,
+            "comboOrder":"high-card-major: high=1..51, low=0..high-1",
+            "encoding":"1326x1326 row-major little-endian f32; NaN for incompatible pairs",
+            "bytes":bytes.len(),
+            "sha256":format!("{:x}",Sha256::digest(&bytes)),
+            "interpretation":"Shared native terminal-equity inputs for independent flop backup/accounting audit; not an independent equity evaluator or a model."
+        });
+        let digest = exclusive_output(&metadata);
+        println!(
+            "{}",
+            serde_json::json!({"stage":"native_flop_equity_audit_input", "metadataSha256":digest})
+        );
     }
 
     #[test]
