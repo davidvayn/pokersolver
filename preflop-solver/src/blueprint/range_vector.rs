@@ -5,6 +5,8 @@
 
 use super::*;
 use std::sync::OnceLock;
+mod flop_terminal;
+pub(super) use flop_terminal::ExactFlopTerminal;
 
 pub const EXACT_COMBO_COUNT: usize = 1_326;
 
@@ -60,6 +62,7 @@ pub(super) struct PublicInformationSetCache {
     hand_bucket_trajectories: [Vec<Option<Vec<Arc<str>>>>; 4],
     public_bucket_trajectories: [Vec<Arc<str>>; 4],
     terminal: OnceLock<PublicTerminalCache>,
+    exact_flop_terminal: Option<Arc<ExactFlopTerminal>>,
 }
 
 impl PublicInformationSetCache {
@@ -78,6 +81,7 @@ impl PublicInformationSetCache {
         Ok(Self {
             board,
             terminal: OnceLock::new(),
+            exact_flop_terminal: None,
             hand_bucket_trajectories: std::array::from_fn(|_| vec![None; EXACT_COMBO_COUNT]),
             public_bucket_trajectories: std::array::from_fn(|index| {
                 public_bucket_trajectory(&deal, streets[index])
@@ -95,6 +99,33 @@ impl PublicInformationSetCache {
         self.terminal
             .get_or_init(|| PublicTerminalCache::new(self.board))
             .values(invested, opponent_reach, player, terminal)
+    }
+
+    pub(super) fn with_exact_flop_terminal(
+        mut self,
+        terminal: Arc<ExactFlopTerminal>,
+    ) -> Result<Self, String> {
+        if self.board[..3] != terminal.flop {
+            return Err("exact flop terminal matrix belongs to another board".to_owned());
+        }
+        self.exact_flop_terminal = Some(terminal);
+        Ok(self)
+    }
+
+    pub(super) fn terminal_values_at_street(
+        &self,
+        street: Street,
+        invested: [f64; 2],
+        opponent_reach: &[f64],
+        player: usize,
+        terminal: RangeTerminalKind,
+    ) -> Result<Vec<f64>, String> {
+        if street == Street::Flop && terminal == RangeTerminalKind::Showdown {
+            if let Some(exact) = &self.exact_flop_terminal {
+                return exact.values(self.board, invested, opponent_reach, player);
+            }
+        }
+        self.terminal_values(invested, opponent_reach, player, terminal)
     }
 
     pub fn map(

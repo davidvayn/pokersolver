@@ -58,7 +58,22 @@ fn masked_ranges(ranges: &[Vec<f64>; 2], board: &[u8; 5]) -> [Vec<f64>; 2] {
     })
 }
 
-pub fn solve(mut config: SampledFlopConfig) -> Result<SampledFlopSolution, String> {
+pub fn solve(config: SampledFlopConfig) -> Result<SampledFlopSolution, String> {
+    solve_impl(config, false)
+}
+
+/// Research alternative: integrate flop all-in chance inside the CFR updates,
+/// while still sampling future cards for every nonterminal continuation.
+pub fn solve_with_exact_terminals(
+    config: SampledFlopConfig,
+) -> Result<SampledFlopSolution, String> {
+    solve_impl(config, true)
+}
+
+fn solve_impl(
+    mut config: SampledFlopConfig,
+    exact_terminals: bool,
+) -> Result<SampledFlopSolution, String> {
     if config.iterations < 2 || config.maximum_information_sets == 0 {
         return Err("sampled flop requires >=2 iterations and a positive node limit".to_owned());
     }
@@ -87,8 +102,28 @@ pub fn solve(mut config: SampledFlopConfig) -> Result<SampledFlopSolution, Strin
     if actions.is_empty() || root.remaining(root.actor, &config.game) <= 0.0 {
         return Err("sampled flop requires a live root decision".to_owned());
     }
-    let input = serde_json::to_vec(&(&config.game, &state)).map_err(|e| e.to_string())?;
+    let input = if exact_terminals {
+        serde_json::to_vec(&(&config.game, &state, "exact-flop-all-in-chance-v1"))
+    } else {
+        serde_json::to_vec(&(&config.game, &state))
+    }
+    .map_err(|e| e.to_string())?;
     let input_sha256 = format!("{:x}", Sha256::digest(&input));
+    let exact_terminal = if exact_terminals {
+        let flop = [state.board[0], state.board[1], state.board[2]];
+        let legal = std::array::from_fn(|_| {
+            all_combos()
+                .iter()
+                .map(|c| !c.cards().iter().any(|card| flop.contains(card)))
+                .collect::<Vec<_>>()
+        });
+        let equities = exact_flop_all_in_equities(flop, &legal, 1);
+        Some(Arc::new(range_vector::ExactFlopTerminal::from_equities(
+            flop, &equities,
+        )?))
+    } else {
+        None
+    };
     let mut trainer = Trainer::fresh(config.game.clone());
     let mut chance_rng = SplitMix64::new(config.seed ^ 0x666c_6f70_2d70_6373);
     let mut zero_joint_chance_samples = 0;
@@ -118,6 +153,9 @@ pub fn solve(mut config: SampledFlopConfig) -> Result<SampledFlopSolution, Strin
                 iteration + 1,
             ));
             let mut cache = range_vector::PublicInformationSetCache::new(board)?;
+            if let Some(exact) = &exact_terminal {
+                cache = cache.with_exact_flop_terminal(exact.clone())?;
+            }
             trainer.public_chance_external_sampling(
                 root.clone(),
                 board,
@@ -165,7 +203,12 @@ pub fn solve(mut config: SampledFlopConfig) -> Result<SampledFlopSolution, Strin
         minimum_root_average_visits = minimum_root_average_visits.min(node.average_visits);
     }
     Ok(SampledFlopSolution {
-        schema: "hu-fixed-flop-sampled-subgame-root-v1".to_owned(),
+        schema: if exact_terminals {
+            "hu-fixed-flop-exact-terminal-sampled-subgame-root-v1"
+        } else {
+            "hu-fixed-flop-sampled-subgame-root-v1"
+        }
+        .to_owned(),
         input_sha256,
         iterations: config.iterations,
         seed: config.seed,
@@ -191,6 +234,8 @@ pub fn solve(mut config: SampledFlopConfig) -> Result<SampledFlopSolution, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod terminal_expectations;
+    mod terminal_pilot;
 
     fn fixture() -> SampledFlopConfig {
         let board = [0, 5, 10];

@@ -2128,7 +2128,8 @@ impl Trainer {
                 }
                 Terminal::Showdown => range_vector::RangeTerminalKind::Showdown,
             };
-            let evaluation = information_set_cache.terminal_values(
+            let evaluation = information_set_cache.terminal_values_at_street(
+                state.street,
                 state.invested,
                 &ranges[1 - traverser],
                 traverser,

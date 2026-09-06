@@ -1242,8 +1242,14 @@ or time safety stop fired. Frozen test executable:
 
 Second cohort: `local-sampled-flop-20260905-cost2`. Explicitly increased only
 the experimental node cap to 2M, keeping the 2GiB sampled-memory stop, 120-second
-overall stop and 20GiB disk reserve. All three 20bb/default-abstraction roots
+overall stop and 20GiB disk reserve. All three 100bb/default-abstraction roots
 completed at 32 iterations, uniform flop ranges, board `[48,21,2]`:
+
+Depth correction, verified during the exact-terminal training pilot below:
+this paragraph originally said 20bb. The archived `cost_probe` in `ed40290`
+uses `BlueprintConfig::default()`, which is 100bb in that same commit. These
+standalone timings must not be treated as 20bb cost evidence. Full-profile
+experiments cloning the explicitly checked 20bb source are a separate scope.
 
 | Pot, bb | Seed | Information sets | Seconds | Trained root combos | Minimum averaging contributions |
 | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -2764,3 +2770,103 @@ Source-B diagnostic SHA:
 Executable and runner remain the parity/fresh frozen hashes recorded above.
 This completed-result update changes documentation only; the 269-test release
 suite and successful CI for `0ae59c3` cover the unchanged implementation.
+
+### Exact flop all-in chance inside training: controlled pilot passed
+
+Following the mixed terminal-weight confirmation, implemented an explicit
+research training alternative, `sampled_flop::solve_with_exact_terminals`.
+Instead of modifying a served probability mix after solving, this changes
+the terminal counterfactual values used by the flop DCFR updates. A showdown
+ending on the flop uses all 990 legal unordered turn/river runouts for each
+compatible private pair. Nonterminal continuations still sample future cards;
+folds and terminals on other streets retain the old evaluator.
+
+The motivation is the sampling-variance problem discussed by
+[Davis, Schmid and Bowling (ICML 2020)](https://proceedings.mlr.press/v119/davis20a.html).
+This implementation does not claim their predictive-baseline theorem. Its
+specific expectation argument keeps the existing sampled-future card masks,
+raw reach weights, and `(49*48)/(45*44)` chance correction. For each fixed
+compatible private pair, the mask admits 45*44 of the 49*48 proposals, and
+the substituted payoff is the exact conditional all-in mean. No future cards
+enter a flop decision and no reach is renormalized after masking. The existing
+opponent-action importance correction remains unchanged. This does not prove
+lower variance at every upstream node or faster full-game convergence.
+
+`range_vector/flop_terminal.rs` recovers integer showdown counts from the
+existing dense equity matrix, checks its exact 1/1980 lattice, blocked entries,
+finite probabilities and mirrored zero-sum consistency, and stores u16 counts.
+Thus f32 matrix rounding does not remain in the exact terminal CFVs. New mode
+has a distinct schema and input hash; ordinary `solve` retains its original
+identity and behavior. No training checkpoint format, production setting,
+website, neural model, action-EV grade or active policy is changed.
+
+Four new mathematical/behavioral tests pass: exhaustive single-private-pair
+mean preservation and lower terminal variance over all 49*48 proposals;
+raw-reach scaling, weighted zero-sum and unchanged folds/other streets;
+invalid/missing/off-lattice/asymmetric matrix rejection; and deterministic
+separately identified root policies without changing the control. A fifth
+normal test pins the pilot's depth explicitly. Complete release results:
+**265 library + nine CLI tests pass**, 23 research entries ignored, 74.18 /
+0.63 seconds. The release native binary is
+`2d93437e9b11b08386ac3f74a7fc793f530477f5ed11bd1ce7f1d1de50e09f97`.
+Default two-round CLI artifact and summary bytes match the archived executable
+for both ordinary PCS and terminal-action-integrated PCS. This is a small
+artifact compatibility check, not a byte-identical executable claim.
+
+The initial `local-sampled-flop-20260905-exactterminaltrain1` startup failed
+before training: its explicit assertion found the unoverridden library default
+100bb instead of 20bb. The diagnosing-bugs loop reproduced that failure twice,
+verified matching binary hashes and no config override, and corrected only
+the pilot config. The original failed run remains untouched. The corrected
+new-directory run `local-sampled-flop-20260905-exactterminaltrain2` completed
+all **24 native solves** at 20bb, 32 iterations and the unchanged action grid:
+three terminal boards times two seeds times two methods, plus three nonterminal
+pot sizes times two seeds times two methods. Its worker took **24.392 seconds**,
+sampled peak physical footprint **185,139,728 bytes**, exit zero, no 2GiB /
+300-second / 20GiB-free-disk stop.
+
+The terminal roots use uniform public flop ranges, limp/check then BB shove,
+and the full exact compatible-opponent/runout expectation for fold/call loss:
+
+| Flop card IDs | Seed | Sampled training loss, bb/decision | Exact-terminal training loss | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| 48,21,2 | 97001 | 0.621242 | 0.002697 | 99.57% |
+| 48,21,2 | 97002 | 0.468291 | 0.004077 | 99.13% |
+| 27,2,9 | 97001 | 0.465239 | 0.000430 | 99.91% |
+| 27,2,9 | 97002 | 0.435429 | 0.000361 | 99.92% |
+| 42,34,25 | 97001 | 0.507589 | 0.002633 | 99.48% |
+| 42,34,25 | 97002 | 0.485657 | 0.002728 | 99.44% |
+
+These are six paired local terminal decisions, not authentic full-hand reach,
+untouched board holdouts, independent per-combo samples or full-game
+exploitability. The exact evaluation covers a single terminal action choice,
+not adversarial nonterminal continuations. Do not promote from this result.
+
+Nonterminal 20bb flop root costs, averaged over seeds 97101/97102, were
+2.206 -> 2.375 seconds (4bb pot), 1.261 -> 1.424 (10bb), and 0.711 -> 0.788
+(20bb). These observed increases of 7.7%, 12.9% and 10.9% use an already warmed
+process-local equity cache; they are not isolated cold-start benchmarks.
+No nonterminal payoff improvement was measured by this cost screen.
+
+The native pilot passed, but its Python post-check then raised `KeyError`:
+it expected `action_values_bb: null`, whereas `PublicBeliefStrategy` explicitly
+omits that optional field when absent. A separate recovered audit, without
+rerunning training or rewriting the failed runner manifest, validates that
+actual schema. Its first label assertion was also corrected from `call` to
+the legal `call_all_in` after checking the saved 20bb history and engine label.
+The final audit verifies all 24 policies, complete board/seed/method coverage,
+native output and binary/runner hashes, control artifact parity, limits, and
+all 1,176 legal / 150 blocked rows per root. Maximum exported probability-sum
+error is **8.0e-8**. EV estimates remain absent; this is not EV precision passing.
+
+Frozen test binary: `d37f77ec5bce82588d86bd4458935cfc6335d0a5e02103a406e0f9bcf8246b63`.
+Frozen runner: `7c3c8f50f09c37bb6b700b010ee6be6d7159312507be7d57ab5a2696a61197ef`.
+Preserved post-check-failed manifest: `30dd9905326c54d4998276223b77cdfcac5d527145fe5c18a8a29802e0b51c4a`.
+Recovered auditor: `c106ea8d81bb7f32eb4fb5e8f8d73c3efdc5c2c19e5a35765ed720a13b7ec6dc`.
+Completed `pilot/recovered-audit.json`: `7e0ca51920508480a93384e232858375128512e09d0434c06d899dac577c5365`.
+
+Disposition: the consistent local loss reduction and bounded cost justify a
+short full-profile comparison of sampled versus exact-terminal training,
+keeping terminal serving weight 0.5 and the 64-iteration turn/river continuation
+fixed. That routed comparison has not yet run. Preflop consistency, routed EV
+precision, full-hand lookup coverage and full-game exploitability remain open.
