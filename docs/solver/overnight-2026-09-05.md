@@ -3110,3 +3110,131 @@ replay against the existing full-profile range reconstruction, then build a
 small boundary-value pilot. Do not use the sparse training averages or the
 old cache's four-iteration-turn action payoffs as substitutes for those targets.
 No such replay/value generator is implemented by this diagnostic milestone.
+
+## September 6: compact routed-flop replay and frozen turn-value pilot
+
+Implemented the preceding direction as an explicit research-only module,
+`response/sampled_flop_policy/turn_values.rs`. A request pins the source hash,
+game, public flop posterior, policy seed/iterations, exact flop action labels,
+revealed turn card and turn/river iterations. It validates the complete public
+trajectory, accounting, ranges and action line before solving. The generator
+never receives an actual private holding or hidden river. `FlopResolve` and
+the rooted replay share the same public-root solver and seed construction;
+both use the same f32 row normalization. Observed actions update every acting
+combo likelihood before conditioning on the next decision/revealed turn.
+
+The generated turn policy is the existing complete joint DCFR average, exported
+as f32. The new `frozen_turn_response::continuation_values` evaluates those
+exported probabilities, not their internal pre-export f64 approximation. It
+shares the unchanged response traversal with the existing evaluator. Values
+are conditional on the own holding and compatible opponent range. Unsupported
+own holdings are `null`, never zero-valued training examples. The artifact
+retains exact conditional response gains, request and policy hashes. It is
+not a deployable policy, action-EV precision certificate or equilibrium oracle.
+
+### Real-source replay exposed a JSON precision issue, now fixed
+
+The first full-source attempt stopped before replaying flop actions: 334 saved
+range entries differed from fresh preflop reconstruction, by at most
+4.336808689942018e-19. The original failed worker and logs are preserved in
+`preflop-solver/neural/runs/local-sampled-flop-20260906-rootedvalues1`.
+Its 66.348-second worker peaked at 5,740,646,768 bytes and returned 101, with no
+resource stop. No value-generation job was started after that failure.
+
+A standalone red-capable Rust probe reproduced the error twice using only
+the decimal `0.00010786472252877025`: native float parsing gives bits
+4547587436113739639, while default serde_json gave 4547587436113739638.
+This ruled out poker traversal as necessary for this mismatch. Enabled
+serde_json's existing `float_roundtrip` feature; the normal regression also
+checks the actual saved combo and complete request round-trip. The library
+documents this feature's preservation guarantee and approximately doubled
+float-parsing cost; this is not doubled training cost. No dependency version
+or lockfile change was required. See the
+[upstream feature definition](https://github.com/serde-rs/json/blob/master/Cargo.toml).
+The source checkpoint uses MessagePack, and the original root fixture remains
+unchanged. No poker strategy math or gate was altered to make parity pass.
+
+### Full-size parity and first compact target complete
+
+The corrected frozen executable is
+`3c644f444e74fdae47c31105f33963e0e3cd7fec16ba242791f01bdb5cdb3c84`.
+Directory: `preflop-solver/neural/runs/local-sampled-flop-20260906-rootedvalues2`.
+The 800-round source A checkpoint hash remains
+`8fc95d56696af9fc8a858fceb8efdad4782a049b5af7b0a8f1cdcc5d694f95aa`.
+The saved root is the same 20bb first-BB flop `[24,14,5]` after limp/check.
+Policy seed 87001, sampled flop 32 iterations, 2M-node cap, joint turn/river
+64 iterations, zero averaging delay/refinement, ordinary DCFR. No old cached
+four-iteration-turn payoff was reused.
+
+Real-checkpoint public reconstruction and compact replay match **exactly** for
+all three paths, with turn card 50:
+
+- check/check;
+- check/bet_to_2.500bb/call;
+- check/bet_to_2.500bb/raise_to_9.500bb/call.
+
+The full-source parity worker took 88.125 seconds, sampled peak 5,843,096,064
+bytes. It passed before the compact worker started. The latter generated the
+bet/call target in 11.936 seconds, sampled peak 149,307,992 bytes, without
+loading the source checkpoint. These are different workloads, not a paired
+speedup benchmark. The target is 203,540 bytes and evaluates 1,740 complete
+exported policy rows, with 1,128 supported combos per seat; the 198 blocked
+combos per seat remain explicitly unsupported.
+
+Conditional turn-root results, **not bb per authentic full hand**:
+
+| Quantity | Player 0 | Player 1 |
+| --- | ---: | ---: |
+| Frozen profile value, bb | +0.332831074 | -0.332831074 |
+| Best-response gain, bb | 0.034938712 | 0.070499724 |
+| Turn-only response gain, bb | 0.019817061 | 0.037158270 |
+| River-only response gain, bb | 0.014258069 | 0.030672195 |
+
+The conditional half-summed gain is 0.052719218bb. This is residual error in
+the existing 64-iteration continuation at one reused development root, not a
+new full-game estimate, before/after improvement or claim that all turn roots
+pass. The targets describe the frozen continuation actually played, not GTO
+values. Their response residual must remain visible to downstream experiments.
+
+An independent JavaScript audit enumerated compatible opponent combinations,
+checked every support mask/value, reconstructed weighted profile values and
+verified log/target hashes. A separate repeat produced a byte-identical target
+in 11.943 seconds, sampled peak 150,258,144 bytes. Both original/repeat compact
+jobs stayed below 2GiB/120 seconds; source parity stayed below 7.5GiB/300
+seconds. All retained the 20GiB disk reserve and exited zero without stops.
+The source, compact and repeat PIDs exited; sessions were reaped.
+
+Target SHA:
+`b16f782c9a86096f8236607293d2eb1a30c8670dfaf843b4fe1359ca7af546e1`.
+Exported policy SHA:
+`905718a62c6f4fe8752ed983413b0941a04a641d58d4ea9bf63a7162a4c666bb`.
+Pilot manifest SHA:
+`621507b1ddc03e91a25b6cebccd2d81ee0c612fcc172a3e8a45e3ab6f15fe5fb`.
+Runner SHA:
+`8fcdf0d17b43c0314b7c18b7857b9ee818efe06b7ee91575c43cf6a0e4463242`.
+Verifier SHA:
+`f7511a4413115bb47a694eaa52de690c5d33366742aa9d5995761ae7ae0bb11a`.
+
+Full `cargo test --release -j 1 --quiet -- --test-threads=2` passes **273
+library and nine CLI tests**, with 27 explicit ignored research entries;
+library runtime 84.51 seconds. The new float-preservation regression passes.
+The ordinary PCS and terminal-integrated two-round native artifacts **and
+summaries** remain byte-identical to the archived controls after this change.
+The native executable itself changed to
+`d15e1397bf40db21158e4cb8a4dd068461d0867c3b429900e5f5d3dc3999b334`.
+Previous milestone `27e770a` passed remote CI 34017415045.
+
+The rebuild briefly consumed the reserved disk headroom. Before further
+workers, four obsolete generated Rust build-cache files were losslessly gzipped:
+the `.rlib`/`.rmeta` pairs for `libpreflop_solver-1651fb0c169876de` and
+`libpreflop_solver-03c921b2c1ea89c3` in `target/release/deps`. Their compressed
+copies remain recoverable, and Cargo can rebuild the originals. No model,
+checkpoint, experiment log, source or unrelated user file was removed. Disk
+headroom is still tight; retain the reserve check before subsequent work.
+
+Next: use this generator in a small flop-action improvement pilot, recomputing
+continuation values for each candidate's actual public ranges. Do not freeze
+values from one posterior and silently reuse them after the flop policy changes.
+Compare against the retained policy on fresh full-hand deals before scaling.
+No serving model was activated; preflop stability, routed EV precision,
+full-hand coverage and full-game exploitability requirements remain unresolved.

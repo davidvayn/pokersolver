@@ -24,6 +24,56 @@ pub(in crate::blueprint) fn evaluate(
     // This validates every descendant, loads the exported f32 probabilities,
     // and does NOT train, install a prior, or consult regrets.
     solver.load_frozen_average_strategies(rows)?;
+    profile_response(&solver).map(|(response, _)| response)
+}
+
+/// Conditional values of the *exported* policy, not its pre-quantization mix.
+/// None means outside the supplied own-hand support or no compatible opponent;
+/// callers must not turn those entries into zero-valued training examples.
+#[derive(Debug, Serialize)]
+pub(in crate::blueprint) struct FrozenTurnValues {
+    pub conditional_values_bb: [Vec<Option<f64>>; 2],
+    pub opponent_compatible_mass: [Vec<f64>; 2],
+    pub response: FrozenTurnResponse,
+}
+
+pub(in crate::blueprint) fn continuation_values(
+    config: TurnRiverSolveConfig,
+    rows: &[PublicBeliefStrategy],
+) -> Result<FrozenTurnValues, String> {
+    let mut solver = TurnRiverSolver::new(config)?;
+    solver.load_frozen_average_strategies(rows)?;
+    let (response, profile) = profile_response(&solver)?;
+    let ranges = &solver.config.state.ranges;
+    let opponent_compatible_mass: [Vec<f64>; 2] = std::array::from_fn(|seat| {
+        compatible_masses_from_card_marginals(&solver.combos, &ranges[1 - seat])
+    });
+    let conditional_values_bb = std::array::from_fn(|seat| {
+        (0..COMBO_COUNT)
+            .map(|combo| {
+                let mass = opponent_compatible_mass[seat][combo];
+                (ranges[seat][combo] > 0.0 && mass > 0.0).then(|| profile[seat][combo] / mass)
+            })
+            .collect::<Vec<_>>()
+    });
+    if conditional_values_bb
+        .iter()
+        .flatten()
+        .flatten()
+        .any(|v| !v.is_finite())
+    {
+        return Err("frozen turn continuation has non-finite supported values".into());
+    }
+    Ok(FrozenTurnValues {
+        conditional_values_bb,
+        opponent_compatible_mass,
+        response,
+    })
+}
+
+fn profile_response(
+    solver: &TurnRiverSolver,
+) -> Result<(FrozenTurnResponse, [Vec<f64>; 2]), String> {
     let reaches = solver.config.state.ranges.clone();
     let joint = joint_compatibility_mass(&reaches);
     let root = solver.config.state.game_state();
@@ -71,7 +121,7 @@ pub(in crate::blueprint) fn evaluate(
             "frozen turn response violates finite/zero-sum/best-response invariants".into(),
         );
     }
-    Ok(result)
+    Ok((result, profile))
 }
 
 #[test]

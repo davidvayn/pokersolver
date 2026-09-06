@@ -7,6 +7,7 @@ use crate::blueprint::public_belief::{sampled_flop, PublicBeliefState, PublicBel
 use std::sync::Mutex;
 use std::time::Instant;
 mod response_pilot;
+mod turn_values;
 
 #[derive(Default)]
 struct Cache {
@@ -26,6 +27,30 @@ pub(super) struct FlopResolve {
 }
 
 impl FlopResolve {
+    // Shared by live research routing and checkpoint-free public-range replay.
+    // Only the visible board/history determine chance; neither holding is input.
+    fn solve_public(
+        &self,
+        game: &BlueprintConfig,
+        state: PublicBeliefState,
+    ) -> Result<sampled_flop::SampledFlopSolution, String> {
+        let identity = serde_json::to_vec(&(&state.board, &state.public_history))
+            .map_err(|error| error.to_string())?;
+        let digest = Sha256::digest(&identity);
+        let config = sampled_flop::SampledFlopConfig {
+            game: game.clone(),
+            state,
+            iterations: self.iterations,
+            seed: self.seed ^ u64::from_le_bytes(digest[..8].try_into().unwrap()),
+            maximum_information_sets: self.maximum_information_sets,
+        };
+        if self.exact_terminal_chance {
+            sampled_flop::solve_with_exact_terminals(config)
+        } else {
+            sampled_flop::solve(config)
+        }
+    }
+
     pub(super) fn clear_cached_rows(&self) {
         let mut cache = self.cache.lock().unwrap();
         cache.rows.clear();
@@ -85,23 +110,11 @@ impl FlopResolve {
         // strictly earlier flop prefix, including the other player's actions.
         // It never consults either actual holding or the future turn/river.
         let ranges = public_ranges(base, state, board)?;
-        let identity = serde_json::to_vec(&(board, &state.public_history))
-            .map_err(|error| error.to_string())?;
-        let digest = Sha256::digest(&identity);
-        let seed = self.seed ^ u64::from_le_bytes(digest[..8].try_into().unwrap());
         let start = Instant::now();
-        let config = sampled_flop::SampledFlopConfig {
-            game: base.table.config.clone(),
-            state: PublicBeliefState::from_game_state(board.to_vec(), state, ranges),
-            iterations: self.iterations,
-            seed,
-            maximum_information_sets: self.maximum_information_sets,
-        };
-        let solution = if self.exact_terminal_chance {
-            sampled_flop::solve_with_exact_terminals(config)
-        } else {
-            sampled_flop::solve(config)
-        }?;
+        let solution = self.solve_public(
+            &base.table.config,
+            PublicBeliefState::from_game_state(board.to_vec(), state, ranges),
+        )?;
         let mix = row_mix(&solution.root, combo, state, actions);
         let mut cache = self.cache.lock().unwrap();
         cache.solves += 1;
