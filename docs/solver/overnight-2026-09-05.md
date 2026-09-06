@@ -4653,3 +4653,102 @@ tests and 9 CLI tests**, with 32 explicitly ignored research pilots; library
 runtime 88.31 seconds. `node --test neural/audit_native_flop_response.test.mjs`
 passed its independent analytic fixture test. `git diff --check` passed.
 No app, browser worker, API, model registry or website asset changed.
+
+### September 6: policy-preserving late-street speedup and averaging diagnosis
+
+Integration commit `f9c9ab77ae067986da7728af34375195dc831fc4` is pushed;
+CI **34060949402 passed** at 21:33:21 UTC, including the production build and
+real every-street resolver checks.
+
+A bounded CPU profile replayed the existing first-seed 128/64 policy's
+turn-0 response packet. It completed in 63.448 seconds with a sampled peak
+footprint of 636,011,552 bytes and reproduced packet SHA
+`e626cb2ff216a12f27788da57f9ae73aef58b08f5b50e8d256ed1e26418eaca8`.
+The five-second training sample was dominated by tree traversal, blocker-aware
+payoff marginals and strategy normalization—not card-strength construction.
+Profile directory: `local-native-full-hand-20260906-cost/baseline`;
+manifest SHA `d631b649c0bcdab96914ef1f1f943996041c39be9271749911547f8e8a8f0a9e`;
+sampling report SHA `0b646c7a399dfb12b8fb9d34b018a4a253d17f6620a0f17515ec94079d7af3f8`.
+
+Two independent, serialized ABBA timing comparisons changed one implementation
+detail at a time. Each used exactly the same policy, turn, 64-iteration budget,
+and required byte-identical complete response packets. Limits: one worker,
+3GiB process footprint, 300 seconds per replay, 1,200 seconds per stage,
+20GiB free-disk reserve. No other training or compilation ran during timings.
+
+| Change | Control replay seconds | Candidate replay seconds | Mean reduction |
+| --- | --- | --- | ---: |
+| Propagate only the updating player's needed payoff vector | 64.047, 63.578 | 58.595, 58.516 | 8.24% |
+| Compact card-strength marginals, on top of the first change | 58.062, 58.633 | 55.745, 53.686 | 6.22% |
+
+The successive comparisons suggest **about 14% combined improvement on this
+packet**, not a universal application-speed claim or a policy-quality gain.
+All eight outputs match the archived packet SHA above. The first comparison
+is `traverser-only-abba`, manifest SHA
+`078b30d93ef001f16db2d026e697e02463ff10fbb06b5f371b6d553c2664ce41`;
+the second is `compact-abba`, manifest SHA
+`e90a363d1fdb2f1431aa91d00814746af3ee66d0231ffe3f50a38bcc62e77a6c`.
+Control binary SHA is
+`ca4d7f0f96f7ed015714a8d5f290687491caf5eb1c5077a45ca62c18d61d4f7f`;
+first candidate `669d04982ad1dabb71b5bc1e48f57e7ef5d4de908438cc10059210a1247bdf06`;
+combined candidate `22ebe7598e18e1456ebb6136cd4ab3defebd284d50dd2d468ae676900123395b`.
+
+The compact kernel exploits a structural fact: one card belongs to only 51
+exact holdings, so most columns of a dense 52 × strength-rank table are empty.
+It removes those empty columns while preserving every nonzero addition and
+its order. There is no hand, chance, sizing or probability abstraction change.
+Nearly tied boards retain the dense kernel when compression is small. Tests
+compare every value bit, and compare every trained regret/average accumulator,
+exported policy and response against the retained original implementation,
+including CFR+, refinement and both protected-resolving seats.
+
+Real-checkpoint recheck: `local-native-full-hand-20260906-integration/paired-own-reach`;
+manifest SHA `210233c3e3d14e5304a2154030c6f783b269a70e71ac363305226db32b5358c6`;
+controller SHA `167045f6b4ec18cc7d1766d4ee4aa149c7ae54c97b968ab897d5da39b1d9a987`;
+binary SHA `638917cefa6908d7feaf440596a5b3f260ae0cbe6bc3a39810265dc5c97df8d3`.
+Both seeds again completed all streets, with **exactly the previous action
+probabilities and frozen flop/continuation identities**. Completion took
+65.620 seconds total; process peaks were 776,226,040 / 761,873,680 bytes.
+These low-budget integration timings are not part of the controlled speed
+comparison. Result SHAs are
+`49ea4bfa807edec0b146059e4dd117b769582ac6720f159ecb2671dc12ee4487`
+and `51e888d2f200996964335a3153798a702c4996f2b7b1a61c677aa816bcb47416`.
+
+**Important new finding: the missing preflop averages are not behind zero
+own-prefix probability.** None of seed A's 524 or seed B's 306 missing queries
+has an exactly zero own-prefix probability in the frozen average policy.
+The maxima are 0.017666738001718932 and 0.006996696818790938 respectively.
+These are own-action products, not full-hand joint reach frequencies.
+All 524 A queries are terminal fold/call decisions; only 274 of B's 306 are.
+Do not blanket-complete these as unreachable all-in states, and do not claim
+that an arbitrary completion would leave exploitability unchanged.
+
+Source inspection: `Trainer::public_chance_external_sampling` accumulates
+averages at opponent nodes and samples one shared public action for further
+recursion. This is a finite-sampling average-coverage/consistency issue, not
+proof that the regret estimator itself is biased. The [original CFR paper,
+Equation 4](https://poker.cs.ualberta.ca/publications/NIPS07-cfr.pdf) defines
+the behavioral average using own realization reach; regret and average
+weights are distinct. Consequently, the next concrete policy experiment is
+an **exact preflop averaging sweep over the small preflop tree**, with regret
+training and its RNG unchanged, before any arbitrary completion or longer
+training. Compare sampled versus complete averaging in short matched pilots;
+measure the existing stability, coverage and policy-response diagnostics.
+Do not assume that faster kernels or this diagnosis have improved full-game
+exploitability. The full-game objective remains unqualified.
+
+Verification: `cargo test --release -j1 --quiet -- --test-threads=2` passed
+**296 library tests and 9 CLI tests**, with 33 opt-in research pilots ignored;
+library runtime 87.49 seconds. The independent JavaScript analytic audit test
+passed. Only formatting of the changed parent-module lines followed these
+tests; no whole-file formatting or model activation occurred.
+
+Disk housekeeping: eight inactive generated Rust debug-cache files were
+losslessly compressed. Each decompressed backup was SHA-verified against the
+original before removing the redundant uncompressed copy; two hard-linked
+candidates were left untouched. No trained checkpoint, model or evaluation
+artifact was removed. Recovery paths and hashes are in
+`local-native-full-hand-20260906-cost/cache-recovery.json`, SHA
+`e877626307bfda337eda8a8df410259378660c904f479b6254b244e913adc779`.
+Use the recorded `gunzip` command to restore each cache, or rebuild debug
+artifacts from source. Recheck actual disk headroom before a larger pilot.

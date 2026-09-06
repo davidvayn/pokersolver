@@ -3,6 +3,34 @@ use super::*;
 use std::io::Write;
 use std::time::Instant;
 
+fn own_prefix_reach(
+    policy: &FrozenPreflopPolicy,
+    state: &GameState,
+    combo: Combo,
+) -> Result<f64, String> {
+    let mut cursor = GameState::initial(&policy.game);
+    let mut own = 1.0;
+    for observed in &state.trajectory {
+        let actions = cursor.legal_actions(&policy.game);
+        let selected = actions
+            .iter()
+            .position(|a| trajectory_action_matches(&cursor, a, observed, &policy.game))
+            .ok_or("invalid preflop diagnostic history")?;
+        if cursor.actor == state.actor && own > 0.0 {
+            own *= policy.strategy(&cursor, combo)?[selected];
+        }
+        cursor = cursor.apply(&actions[selected], &policy.game);
+    }
+    if cursor.public_history != state.public_history
+        || cursor.actor != state.actor
+        || cursor.street != state.street
+        || cursor.invested != state.invested
+    {
+        return Err("preflop diagnostic replay mismatch".into());
+    }
+    Ok(own)
+}
+
 #[test]
 #[ignore = "retained checkpoint full-hand integration; requires explicit inputs and external resource guard"]
 fn native_full_hand_retained_checkpoint_probe() {
@@ -39,6 +67,9 @@ fn native_full_hand_retained_checkpoint_probe() {
     let mut missing = 0;
     let mut first_error = None;
     let mut missing_examples = Vec::new();
+    let mut missing_zero_own_reach = 0;
+    let mut missing_terminal_fold_call = 0;
+    let mut maximum_missing_own_reach = 0.0f64;
     let mut maximum_sum_error = 0.0f64;
     while let Some(state) = pending.pop() {
         if state.terminal.is_some() || state.street != Street::Preflop {
@@ -53,9 +84,21 @@ fn native_full_hand_retained_checkpoint_probe() {
                 }
                 Err(error) => {
                     missing += 1;
+                    let own_reach = own_prefix_reach(&policy.preflop, &state, combo).unwrap();
+                    maximum_missing_own_reach = maximum_missing_own_reach.max(own_reach);
+                    missing_zero_own_reach += usize::from(own_reach == 0.0);
+                    let actions = state.legal_actions(&game);
+                    missing_terminal_fold_call += usize::from(
+                        actions.len() == 2
+                            && actions.iter().any(|a| a.kind == ActionKind::Fold)
+                            && actions.iter().any(|a| a.kind == ActionKind::Call)
+                            && actions
+                                .iter()
+                                .all(|a| state.apply(a, &game).terminal.is_some()),
+                    );
                     if missing_examples.len() < 8 {
                         missing_examples.push(serde_json::json!({"combo":combo.cards(),
-                            "history":state.public_history,"error":error}));
+                            "history":state.public_history,"error":error,"ownPrefixReach":own_reach}));
                     }
                     first_error.get_or_insert(error);
                 }
@@ -72,7 +115,8 @@ fn native_full_hand_retained_checkpoint_probe() {
         "{}",
         serde_json::json!({"stage":"preflop_exhaustive", "publicNodes":public_nodes,
         "queries":queried,"missing":missing,"maximumSumError":maximum_sum_error,"firstError":first_error,
-        "missingExamples":missing_examples})
+        "missingExamples":missing_examples,"missingZeroOwnReach":missing_zero_own_reach,
+        "maximumMissingOwnReach":maximum_missing_own_reach,"missingTerminalFoldCall":missing_terminal_fold_call})
     );
     // Preserve failures in the report. A missing off-path row need not prevent
     // diagnosing supported trajectories; query itself still fails closed if
@@ -138,6 +182,9 @@ fn native_full_hand_retained_checkpoint_probe() {
         "preflopPublicNodes":public_nodes,"preflopQueries":queried,"preflopMissing":missing,
         "preflopExhaustiveCoveragePass":(missing as f64 / queried as f64) <= 0.0001,
         "preflopMissingExamples":missing_examples,
+        "preflopMissingZeroOwnReach":missing_zero_own_reach,
+        "preflopMaximumMissingOwnReach":maximum_missing_own_reach,
+        "preflopMissingTerminalFoldCall":missing_terminal_fold_call,
         "maximumProbabilitySumError":maximum_sum_error,"fixtureRangeMaximumError":fixture_range_error,
         "cardsSeed":881901,"decisions":decisions,"diagnostics":policy.take_resolution_diagnostics(),
         "seconds":started.elapsed().as_secs_f64(),

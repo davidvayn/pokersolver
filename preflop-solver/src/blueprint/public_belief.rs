@@ -28,6 +28,7 @@ mod frozen_flop_walk;
 pub(super) mod frozen_turn_response;
 #[cfg(test)]
 pub(in crate::blueprint) mod counterfactual_turn;
+mod compact_marginals;
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
@@ -8388,6 +8389,7 @@ pub(super) struct SafeTurnRiverPolicy {
 struct RiverBoardData {
     strength_ranks: Vec<usize>,
     strength_group_count: usize,
+    card_strength_layout: compact_marginals::CardStrengthLayout,
     legal: [Vec<bool>; 2],
 }
 
@@ -8470,7 +8472,7 @@ impl TurnRiverSolver {
                 .enumerate()
                 .map(|(rank, strength)| (strength, rank))
                 .collect::<BTreeMap<_, _>>();
-            let strength_ranks = strengths
+            let strength_ranks: Vec<usize> = strengths
                 .iter()
                 .map(|strength| ranks.get(strength).copied().unwrap_or(0))
                 .collect();
@@ -8481,6 +8483,10 @@ impl TurnRiverSolver {
                     .collect()
             });
             river_data[*river as usize] = Some(RiverBoardData {
+                card_strength_layout: compact_marginals::CardStrengthLayout::new(
+                    &combos,
+                    &strength_ranks,
+                ),
                 strength_ranks,
                 strength_group_count: groups.len(),
                 legal: river_legal,
@@ -9109,11 +9115,32 @@ impl TurnRiverSolver {
         }
         let opponent = 1 - actor;
         let mut values = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
-        for combo in 0..COMBO_COUNT {
-            for action in 0..action_count {
-                values[actor][combo] +=
-                    strategy[combo * action_count + action] * children[action][actor][combo];
-                values[opponent][combo] += children[action][opponent][combo];
+        #[cfg(test)]
+        let both_values = self.reference_both_value_players;
+        #[cfg(not(test))]
+        let both_values = false;
+        if both_values {
+            // Retained differential reference: compare every regret and
+            // average accumulator against the original two-value traversal.
+            for combo in 0..COMBO_COUNT {
+                for action in 0..action_count {
+                    values[actor][combo] +=
+                        strategy[combo * action_count + action] * children[action][actor][combo];
+                    values[opponent][combo] += children[action][opponent][combo];
+                }
+            }
+        } else if actor == traverser {
+            for combo in 0..COMBO_COUNT {
+                for action in 0..action_count {
+                    values[actor][combo] +=
+                        strategy[combo * action_count + action] * children[action][actor][combo];
+                }
+            }
+        } else {
+            for combo in 0..COMBO_COUNT {
+                for action in 0..action_count {
+                    values[traverser][combo] += children[action][traverser][combo];
+                }
             }
         }
         let node = self.nodes.get_mut(&key).expect("turn-river node inserted");
@@ -9311,15 +9338,32 @@ impl TurnRiverSolver {
         let data = self.river_data[river as usize]
             .as_ref()
             .expect("known river card");
-        let mut values = showdown_values_from_card_strength_marginals(
-            &self.combos,
-            &data.strength_ranks,
-            data.strength_group_count,
-            opponent_reach,
-            win,
-            loss,
-            tie,
-        );
+        let use_compact = data.card_strength_layout.entries() * 2 < 52 * data.strength_group_count;
+        #[cfg(test)]
+        let use_compact = use_compact && !self.reference_both_value_players;
+        let mut values = if use_compact {
+            data.card_strength_layout.values(
+                &self.combos,
+                &data.strength_ranks,
+                data.strength_group_count,
+                opponent_reach,
+                win,
+                loss,
+                tie,
+            )
+        } else {
+            // Tiny strength alphabets have little empty space to remove.
+            // Keep the dense kernel there (and as a differential reference).
+            showdown_values_from_card_strength_marginals(
+                &self.combos,
+                &data.strength_ranks,
+                data.strength_group_count,
+                opponent_reach,
+                win,
+                loss,
+                tie,
+            )
+        };
         for (own, value) in values.iter_mut().enumerate() {
             if !(data.legal[0][own] || data.legal[1][own]) {
                 *value = 0.0;
