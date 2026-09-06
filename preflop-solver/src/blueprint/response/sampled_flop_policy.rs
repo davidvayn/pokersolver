@@ -21,6 +21,7 @@ pub(super) struct FlopResolve {
     iterations: u64,
     seed: u64,
     maximum_information_sets: usize,
+    exact_terminal_chance: bool,
     cache: Mutex<Cache>,
 }
 
@@ -37,15 +38,27 @@ impl FlopResolve {
             iterations,
             seed,
             maximum_information_sets,
+            exact_terminal_chance: false,
             cache: Mutex::default(),
         }
+    }
+
+    pub(super) fn new_with_exact_terminal_chance(
+        iterations: u64,
+        seed: u64,
+        maximum_information_sets: usize,
+    ) -> Self {
+        let mut resolver = Self::new(iterations, seed, maximum_information_sets);
+        resolver.exact_terminal_chance = true;
+        resolver
     }
 
     pub(super) fn diagnostics(&self) -> serde_json::Value {
         let cache = self.cache.lock().unwrap();
         serde_json::json!({ "solves": cache.solves, "seconds": cache.seconds,
             "maximumInformationSets": cache.maximum_information_sets,
-            "cachedRows": cache.rows.len(), "iterations": self.iterations, "seed": self.seed })
+            "cachedRows": cache.rows.len(), "iterations": self.iterations, "seed": self.seed,
+            "exactTerminalChance": self.exact_terminal_chance })
     }
 
     pub(super) fn strategy(
@@ -77,13 +90,18 @@ impl FlopResolve {
         let digest = Sha256::digest(&identity);
         let seed = self.seed ^ u64::from_le_bytes(digest[..8].try_into().unwrap());
         let start = Instant::now();
-        let solution = sampled_flop::solve(sampled_flop::SampledFlopConfig {
+        let config = sampled_flop::SampledFlopConfig {
             game: base.table.config.clone(),
             state: PublicBeliefState::from_game_state(board.to_vec(), state, ranges),
             iterations: self.iterations,
             seed,
             maximum_information_sets: self.maximum_information_sets,
-        })?;
+        };
+        let solution = if self.exact_terminal_chance {
+            sampled_flop::solve_with_exact_terminals(config)
+        } else {
+            sampled_flop::solve(config)
+        }?;
         let mix = row_mix(&solution.root, combo, state, actions);
         let mut cache = self.cache.lock().unwrap();
         cache.solves += 1;
@@ -110,6 +128,15 @@ mod tests {
 
     #[test]
     fn routed_flop_replays_its_own_ranges_and_ignores_hidden_cards_and_cache_order() {
+        check_routed_flop(false);
+    }
+
+    #[test]
+    fn exact_terminal_routed_flop_replays_ranges_without_hidden_cards_or_cache_order() {
+        check_routed_flop(true);
+    }
+
+    fn check_routed_flop(exact: bool) {
         let (mut base, _) = super::super::tests::tabular_fixture();
         let table = Arc::get_mut(&mut base.table).unwrap();
         table.config.effective_stack_bb = 2.0;
@@ -119,7 +146,11 @@ mod tests {
             equity_samples: 128,
             weight: 0.5,
         });
-        patch.sampled = Some(FlopResolve::new(32, 87001, 300_000));
+        patch.sampled = Some(if exact {
+            FlopResolve::new_with_exact_terminal_chance(32, 87001, 300_000)
+        } else {
+            FlopResolve::new(32, 87001, 300_000)
+        });
         let patch = Arc::new(patch);
         base.flop_patch = Some(patch.clone());
         let mut root = GameState::initial(&game);

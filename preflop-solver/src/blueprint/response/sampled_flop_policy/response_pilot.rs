@@ -39,10 +39,24 @@ fn profile_with_terminal_options(
     iterations: u64,
     terminal: &TerminalFlopOptions,
 ) -> (turn::TabularTurnPolicy, Arc<flop::FlopPatch>) {
+    profile_with_training_options(table, seed, iterations, terminal, false)
+}
+
+fn profile_with_training_options(
+    table: Arc<InferenceTable>,
+    seed: u64,
+    iterations: u64,
+    terminal: &TerminalFlopOptions,
+    exact_terminal_chance: bool,
+) -> (turn::TabularTurnPolicy, Arc<flop::FlopPatch>) {
     assert!([4, 16, 64].contains(&iterations));
     terminal.validate().unwrap();
     let mut patch = flop::FlopPatch::terminal(terminal);
-    patch.sampled = Some(FlopResolve::new(32, seed, 2_000_000));
+    patch.sampled = Some(if exact_terminal_chance {
+        FlopResolve::new_with_exact_terminal_chance(32, seed, 2_000_000)
+    } else {
+        FlopResolve::new(32, seed, 2_000_000)
+    });
     let patch = Arc::new(patch);
     let base = TabularResponsePolicy {
         table,

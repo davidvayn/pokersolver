@@ -11,6 +11,8 @@ struct Budget {
     seed: u64,
 }
 
+mod training_pair;
+
 fn variant(
     table: Arc<InferenceTable>,
     weight: f64,
@@ -18,8 +20,19 @@ fn variant(
     stopped: &AtomicBool,
     output: bool,
 ) -> Result<Vec<serde_json::Value>, String> {
+    variant_with_training(table, weight, budget, stopped, output, false)
+}
+
+fn variant_with_training(
+    table: Arc<InferenceTable>,
+    weight: f64,
+    budget: Budget,
+    stopped: &AtomicBool,
+    output: bool,
+    exact_terminal_chance: bool,
+) -> Result<Vec<serde_json::Value>, String> {
     let game = table.config.clone();
-    let (policy, _) = profile_with_terminal_options(
+    let (policy, _) = profile_with_training_options(
         table,
         87001,
         64,
@@ -27,7 +40,16 @@ fn variant(
             equity_samples: 2048,
             weight,
         },
+        exact_terminal_chance,
     );
+    // Keep archived default records byte-compatible. The new pilot explicitly
+    // defines an absent tag as sampled training and a true tag as exact chance.
+    let tag = |mut record: serde_json::Value| {
+        if exact_terminal_chance {
+            record["exactTerminalTraining"] = true.into();
+        }
+        record
+    };
     let lbr = Lbr {
         seed: 90001,
         early_runouts_per_combo: 16,
@@ -51,9 +73,9 @@ fn variant(
             let action_seed = derived_seed(budget.seed, domain, index + 1);
             if output {
                 emit(
-                    serde_json::json!({"stage":"terminal_confirm_start", "weight":weight,
+                    tag(serde_json::json!({"stage":"terminal_confirm_start", "weight":weight,
                     "phase":phase, "index":index, "chanceSeed":chance_seed, "actionSeed":action_seed,
-                    "holes":deal.holes, "board":deal.board}),
+                    "holes":deal.holes, "board":deal.board})),
                 );
             }
             policy.clear_experiment_hand_caches();
@@ -94,11 +116,11 @@ fn variant(
             );
             raw_sums.push(raw_sum);
             marginal_sums.push(marginal_sum);
-            let record = serde_json::json!({"stage":"terminal_confirm_hand", "weight":weight,
+            let record = tag(serde_json::json!({"stage":"terminal_confirm_hand", "weight":weight,
                 "phase":phase, "index":index, "chanceSeed":chance_seed, "actionSeed":action_seed,
                 "holes":deal.holes, "board":deal.board, "baselineP0Bb":baseline_p0,
                 "attacks":attacks, "assessments":assessments,
-                "rawSeatSumGainBb":raw_sum, "marginalSeatSumGainBb":marginal_sum});
+                "rawSeatSumGainBb":raw_sum, "marginalSeatSumGainBb":marginal_sum}));
             if output {
                 emit(record.clone());
             }
@@ -117,10 +139,10 @@ fn variant(
                 )
             });
         }
-        let summary = serde_json::json!({"stage":"terminal_confirm_summary", "weight":weight,
+        let summary = tag(serde_json::json!({"stage":"terminal_confirm_summary", "weight":weight,
             "phase":phase, "rawSeatGains":per_seat, "rawQualifiedByCalibration":qualified,
             "rawSeatSumGainBb":estimate(&raw_sums), "marginalSeatSumGainBb":estimate(&marginal_sums),
-            "interpretation":"fixed delayed legal attack; raw calibration unchanged; marginalized sums are not an exploitability upper bound"});
+            "interpretation":"fixed delayed legal attack; raw calibration unchanged; marginalized sums are not an exploitability upper bound"}));
         if output {
             emit(summary.clone());
         }

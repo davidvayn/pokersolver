@@ -2870,3 +2870,130 @@ short full-profile comparison of sampled versus exact-terminal training,
 keeping terminal serving weight 0.5 and the 64-iteration turn/river continuation
 fixed. That routed comparison has not yet run. Preflop consistency, routed EV
 precision, full-hand lookup coverage and full-game exploitability remain open.
+
+### Exact-terminal training routed into a short full-profile comparison
+
+The completed local-training milestone was committed/pushed as `e0fdae9`;
+remote `main` was verified at that commit. New research-only routing adds
+`FlopResolve::new_with_exact_terminal_chance` and an explicit training-option
+profile constructor. Both arms still serve the 0.5/2048 terminal correction,
+32-iteration nonterminal flop roots, and 64-iteration joint turn/river policies.
+Only the candidate's nonterminal flop training uses the exact all-in payoff.
+Thus the earlier six terminal-root improvements are not silently substituted
+for the terminal serving policy. Preflop source weights remain untouched.
+
+The new routed-policy test exercises public-range replay, hidden-card/future-card
+invariance and cache-order independence with exact training enabled. A separate
+small paired-run test checks serial/parallel equality, unchanged control, both
+0.5 serving weights, variant identity and cooperative failure. The latter is
+a scheduling/interface test, not evidence of improved full-hand play. The old
+confirmation path retains its records when exact training is disabled; new
+candidate records carry `exactTerminalTraining: true`. In this explicitly
+declared pilot schema an absent tag means the sampled-training control.
+
+Full release verification passes **267 library and nine CLI tests**, with
+24 research entries ignored (76.52 / 0.59 seconds); `git diff --check` passes.
+These routing modules are test-only. The native production binary remains
+`2d93437e9b11b08386ac3f74a7fc793f530477f5ed11bd1ce7f1d1de50e09f97`;
+no website or active-model change is made.
+
+The fixed full-size pilot is `local-sampled-flop-20260905-exactterminalprofile1`:
+source 800-round seeds 26001/26002 sequentially, two workers sharing one full
+immutable source at a time, **16 calibration and 64 holdout deals**, evaluation
+seed **98004**, policy seed 87001, delayed-flop LBR seed 90001/16 early runouts.
+Both sources/variants reuse the same held-out deals: 64 independent holdout
+deals, not 256. This budget and exact-terminal evaluation method were selected
+before viewing its results. No interim tuning, automatic extension or promotion.
+The outcome is a paired restricted-response comparison, not an unrestricted
+full-game exploitability upper bound. Raw calibration remains separately visible.
+
+Frozen test executable:
+`7df5e9e0cf88bed4a507d21acf7dda36b519684eff95b410480a89bb489d927b`.
+Frozen runner:
+`36ba9f30d088cf7d464903887b4898e17ebb254f1151a3e8fe65ee9064e49de6`.
+The runner requires the hash-matching recovered local-pilot audit, refuses an
+existing output directory or another live full-size worker, verifies source
+hashes and retains a **7.5GiB sampled physical-footprint stop, 20GiB free-disk
+reserve and 1,200-second cap per source**. Failures preserve outputs and require
+inspection; no automatic restart or missing-result zero is allowed.
+
+After the test process exited, launched once from `preflop-solver/`:
+
+```bash
+python3 neural/runs/local-sampled-flop-20260905-exactterminalprofile1/run.py 7df5e9e0cf88bed4a507d21acf7dda36b519684eff95b410480a89bb489d927b
+```
+
+Source A initial worker PID: **37044**, retained exec session **90282**.
+The process was verified live after loading the checkpoint, using both policy
+workers and executing flop/turn decisions. Authoritative mutable record:
+`neural/runs/local-sampled-flop-20260905-exactterminalprofile1/pair/manifest.json`.
+Results are **pending**, not a completed or passing model comparison.
+
+### Full-profile exact-training screen complete: do not promote
+
+The fixed pair completed successfully in **955.631 seconds (15.9 minutes)**.
+Source A took 452.867 seconds with sampled peak physical footprint
+6,728,455,376 bytes; B took 501.041 seconds with peak 6,434,559,160 bytes.
+Both workers exited zero with no resource stops. The supervisor and source
+PIDs exited, and exec session 90282 returned zero. About 20.29GiB remained
+free; no files were removed. CI **34015092485 passed** for the preceding
+`e0fdae9` implementation milestone.
+
+| Source | Sampled control holdout gain (SE) | Exact-training candidate gain (SE) | Paired candidate-minus-control (SE) | Individual normal 99% interval |
+| --- | --- | --- | --- | --- |
+| A / 26001 | -0.008247 (0.096100) | +0.404016 (0.193438) | +0.412263 (0.231230) | [-0.183345, +1.007872] |
+| B / 26002 | +0.001966 (0.207939) | +0.311592 (0.169734) | +0.309627 (0.244416) | [-0.319948, +0.939201] |
+
+All values are **exact-terminal-marginalized restricted-attack gains,
+bb/full hand on the half-seat-sum scale**, not unrestricted exploitability or
+an upper bound. The negative control estimate is sampling evidence, not
+negative exploitability. Both seats of all four profiles fail raw calibration;
+that rejection is preserved and never replaced with a passing zero. Raw
+half-seat holdout gains are A +0.001063 -> +0.474742 and B -0.132753 ->
++0.319287. Paired calibration estimates are A -0.015625 (SE 0.058044) and
+B +0.161379 (SE 0.161379), also not significant at the displayed confidence.
+
+**Disposition: do not promote or extend this unchanged candidate.** Despite
+the six strong local terminal-decision results, both full-profile holdout
+point estimates move in the adverse direction and neither paired interval
+excludes zero. This is not proof of a statistically established regression,
+but it supplies no reason to scale this configuration or call it a full-game
+improvement. Keep the default sampled-flop research control, preserve the
+explicit exact-terminal option and all artifacts, and leave serving unchanged.
+Do not pool this development screen with the earlier uniform-range terminal
+pilot to manufacture a global result.
+
+On the shared 64 holdout deals, A changes nine payoff records (two lower,
+seven higher) and eight attack-history pairs; B changes ten payoff records
+(three lower, seven higher) and ten history pairs. This confirms that actual
+full-profile action paths changed, rather than only an unused configuration
+flag. Individual changed-deal outcomes are not software-bug regressions or
+proof that one action is intrinsically wrong.
+
+The native runner checks and an independently implemented read-only JS audit
+both pass. The latter reconstructs all **320 profile hand records / 640 attack
+seat records**, exact matching native-log/manifest events, source and variant
+configuration, frozen binary/runner/log hashes, phase counts, shared unique
+cards/seeds, legal heuristic-maximizing actions, baseline cancellation,
+no-intervention identity, integrated terminal probabilities/values/signs,
+raw calibration flags and raw/marginal/paired estimates and intervals within
+1e-12. There are **64 independent holdout deals**, reused across four profiles.
+
+Completed manifest SHA:
+`4c5e1686459894900308fc9112a1540d3483b42c8a13ff647b1a438c2c30dc39`.
+Read-only `audit.mjs` SHA:
+`cec522002cb5ddc637a04b932e59e41689bb3dea38f55a8b234b5bf636ff861c`.
+A stdout / diagnostic hashes:
+`7c4a52c62923101eb922bd38adf07290e3da7d06534457d92aec2d4ac925e6b7` /
+`c11ba5e4f2958fe253ccfe9f39b03f6966bd639df51580dd216df3dc7502b699`.
+B stdout / diagnostic hashes:
+`af9d4f5bb8e6c5f924f3a8c73e3ee60778aec486661d03979a772ab3e5b56e20` /
+`a0623bcd32d793f6f18b7ddce5e29e7ec0274e3f8fd6f85eae8ea1a0e61eac19`.
+
+The next policy-action work should investigate the already identified
+flop-training/served-continuation mismatch with controlled public-root
+comparisons, not repeat this unchanged exact-training pair with more hands or
+iterations. The mismatch is an architectural limitation and a hypothesis for
+this failed transfer, not a diagnosed cause established by these outcomes.
+All unresolved preflop, routed action-EV, coverage and full-game qualification
+requirements remain unchanged; this goal is not complete.
