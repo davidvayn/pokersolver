@@ -51,6 +51,10 @@ impl Frozen {
             || input.iterations < 2
             || input.turn_iterations < 2
             || input
+                .turn_samples_per_iteration
+                .is_some_and(|n| !(2..=49).contains(&n))
+            || (input.turn_samples_per_iteration.is_some() && input.chance_baseline.is_some())
+            || input
                 .chance_baseline
                 .as_deref()
                 .is_some_and(|mode| mode != "learned_conditional_turn_v1")
@@ -391,6 +395,7 @@ mod tests {
             maximum_conditional_turn_response_gain_bb: 0.0,
             zero_joint_turn_queries: 0,
             chance_baseline: None,
+            turn_samples_per_iteration: None,
         }
     }
 
@@ -476,6 +481,15 @@ mod tests {
         assert!(Frozen::new(&invalid).is_err());
         let mut invalid = fixture.clone();
         invalid.chance_baseline = Some("unknown control variate".into());
+        assert!(Frozen::new(&invalid).is_err());
+        for count in [0, 1, 50] {
+            let mut invalid = fixture.clone();
+            invalid.turn_samples_per_iteration = Some(count);
+            assert!(Frozen::new(&invalid).is_err());
+        }
+        let mut invalid = fixture.clone();
+        invalid.turn_samples_per_iteration = Some(4);
+        invalid.chance_baseline = Some("learned_conditional_turn_v1".into());
         assert!(Frozen::new(&invalid).is_err());
         let mut invalid = fixture.clone();
         invalid.strategies[0].actor = 1 - invalid.strategies[0].actor;

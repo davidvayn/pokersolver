@@ -4,6 +4,7 @@
 use super::*;
 use std::cell::RefCell;
 mod chance_baseline;
+mod chance_batch;
 mod frozen_response;
 mod root_input;
 
@@ -22,6 +23,8 @@ struct Solution {
     zero_joint_turn_queries: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     chance_baseline: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn_samples_per_iteration: Option<usize>,
 }
 
 struct Trunk {
@@ -154,8 +157,31 @@ fn train_with_baseline(
     turn_iterations: u64,
     use_baseline: bool,
 ) -> Result<Solution, String> {
+    train_with_sampling(
+        game,
+        state,
+        seed,
+        iterations,
+        turn_iterations,
+        use_baseline,
+        1,
+    )
+}
+
+fn train_with_sampling(
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+    seed: u64,
+    iterations: u64,
+    turn_iterations: u64,
+    use_baseline: bool,
+    turn_samples: usize,
+) -> Result<Solution, String> {
     if iterations < 2 || turn_iterations < 2 {
         return Err("native flop pilot requires at least two iterations".into());
+    }
+    if !(1..=49).contains(&turn_samples) || (use_baseline && turn_samples != 1) {
+        return Err("native flop turn batches require 1..49 cards and no combined baseline".into());
     }
     let mut trunk = Trunk::new(game.clone(), state)?;
     let turns = (0..52u8)
@@ -169,57 +195,59 @@ fn train_with_baseline(
     let flop: [u8; 3] = trunk.state.board.clone().try_into().unwrap();
     let references = RefCell::new(BTreeMap::new());
     for round in 1..=iterations {
-        let turn = turns[chance.index(turns.len())];
-        let mut board = trunk.state.board.clone();
-        board.push(turn);
+        let sampled = chance_batch::draw(&turns, turn_samples, &mut chance);
         let game = &game;
         // Neither player's update can affect the other's policy in this pass.
         // The chance draw precedes the immutable all-player vector traversal.
         trunk.iteration(round, &|state, reaches, traverser| {
             assert_eq!(traverser, None);
-            let mut masked = reaches.clone();
-            for p in 0..2 {
-                for c in all_combos() {
-                    if c.cards().contains(&turn) {
-                        masked[p][c.key()] = 0.0;
+            let values_for_turn = |turn| {
+                let mut board = flop.to_vec();
+                board.push(turn);
+                let mut masked = reaches.clone();
+                for p in 0..2 {
+                    for c in all_combos() {
+                        if c.cards().contains(&turn) {
+                            masked[p][c.key()] = 0.0;
+                        }
                     }
                 }
-            }
-            let values = solve(TurnRiverSolveConfig {
-                game: game.clone(),
-                state: PublicBeliefState::from_game_state(board.clone(), state, masked),
-                iterations: turn_iterations,
-                averaging_delay: 0,
-                river_refinement_iterations: 0,
-                regret_matching_plus: false,
-            })
-            .expect("native turn oracle failed; no substitute values or partial policy export");
-            queries.set(queries.get() + 1);
-            zero_reach.set(std::array::from_fn(|p| {
-                zero_reach.get()[p] + values.completed_zero_own_reach[p] as u64
-            }));
-            if let Some(gains) = values.conditional_response_gain_bb {
-                residual.set(residual.get().max(gains[0]).max(gains[1]));
-            } else {
-                zero_joint.set(zero_joint.get() + 1);
-            }
+                let values = solve(TurnRiverSolveConfig {
+                    game: game.clone(),
+                    state: PublicBeliefState::from_game_state(board, state, masked),
+                    iterations: turn_iterations,
+                    averaging_delay: 0,
+                    river_refinement_iterations: 0,
+                    regret_matching_plus: false,
+                })
+                .expect("native turn oracle failed; no substitute values or partial policy export");
+                queries.set(queries.get() + 1);
+                zero_reach.set(std::array::from_fn(|p| {
+                    zero_reach.get()[p] + values.completed_zero_own_reach[p] as u64
+                }));
+                if let Some(gains) = values.conditional_response_gain_bb {
+                    residual.set(residual.get().max(gains[0]).max(gains[1]));
+                } else {
+                    zero_joint.set(zero_joint.get() + 1);
+                }
+                values.counterfactual_bb
+            };
             // Proposal is uniform over 49 unseen public cards; a compatible
             // exact private pair has 45 possible turns. No river is sampled.
             if use_baseline {
+                let turn = sampled[0];
                 // Each perfect-recall public leaf is visited once per pass.
                 // Its reference contains only earlier rounds, never this draw.
                 references
                     .borrow_mut()
                     .entry(state.public_history.clone())
                     .or_insert_with(|| chance_baseline::Baseline::new(flop))
-                    .correct_and_learn(turn, reaches, &values.counterfactual_bb)
+                    .correct_and_learn(turn, reaches, &values_for_turn(turn))
             } else {
-                values
-                    .counterfactual_bb
-                    .map(|v| v.into_iter().map(|x| x * 49.0 / 45.0).collect())
+                chance_batch::estimate(&sampled, values_for_turn)
             }
         });
-        eprintln!("native-flop seed={seed} round={round}/{iterations} turn={turn} turn_queries={} zero_own={:?}",
+        eprintln!("native-flop seed={seed} round={round}/{iterations} turns={sampled:?} turn_queries={} zero_own={:?}",
             queries.get(), zero_reach.get());
     }
     let strategies = trunk
@@ -250,7 +278,71 @@ fn train_with_baseline(
         maximum_conditional_turn_response_gain_bb: residual.get(),
         zero_joint_turn_queries: zero_joint.get(),
         chance_baseline: use_baseline.then(|| "learned_conditional_turn_v1".into()),
+        turn_samples_per_iteration: (turn_samples > 1).then_some(turn_samples),
     })
+}
+
+#[test]
+fn native_flop_batch_combines_four_turns_per_frozen_update() {
+    let game = super::tests::config().game;
+    let board = [0, 5, 10];
+    let state = PublicBeliefState::flop_start(
+        board,
+        1,
+        [1.0, 1.0],
+        std::array::from_fn(|_| uniform_range(&board)),
+    );
+    let control = train(game.clone(), state.clone(), 100101, 2, 4).unwrap();
+    let batch = train_with_sampling(game.clone(), state.clone(), 100101, 2, 4, false, 4).unwrap();
+    assert_eq!(batch.turn_queries, 4 * control.turn_queries);
+    assert_eq!(batch.iterations, control.iterations);
+    assert_eq!(batch.strategies.len(), control.strategies.len());
+    assert!(frozen_response::Frozen::new(&batch).is_ok());
+    assert_eq!(batch.turn_samples_per_iteration, Some(4));
+    assert_eq!(control.turn_samples_per_iteration, None);
+    let repeat = train_with_sampling(game, state, 100101, 2, 4, false, 4).unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&batch).unwrap())),
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&repeat).unwrap()))
+    );
+    assert!(train_with_sampling(control.game, control.state, 100101, 2, 4, true, 4).is_err());
+}
+
+#[test]
+fn native_flop_batch_does_not_multiply_terminal_regret_or_average_updates() {
+    let game = super::tests::config().game;
+    let board = [0, 5, 10];
+    let public = PublicBeliefState::flop_start(
+        board,
+        1,
+        [1.0, 1.0],
+        std::array::from_fn(|_| uniform_range(&board)),
+    );
+    let root = public.game_state();
+    let shove = root
+        .legal_actions(&game)
+        .into_iter()
+        .find(|a| a.label.contains("all_in"))
+        .unwrap();
+    let facing = root.apply(&shove, &game);
+    assert!(facing
+        .legal_actions(&game)
+        .iter()
+        .all(|a| facing.apply(a, &game).terminal.is_some()));
+    let state = PublicBeliefState::from_game_state(board.to_vec(), &facing, public.ranges);
+    let control = train(game.clone(), state.clone(), 100101, 4, 4).unwrap();
+    let batch = train_with_sampling(game, state, 100101, 4, 4, false, 4).unwrap();
+    assert_eq!((control.turn_queries, batch.turn_queries), (0, 0));
+    assert_eq!(
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&control.strategies).unwrap())
+        ),
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&batch.strategies).unwrap())
+        )
+    );
 }
 
 #[test]
@@ -363,6 +455,7 @@ fn corrected_native_flop_pilot_is_deterministic_and_keeps_the_default_artifact_c
     let old = train(game, state, 100101, 2, 4).unwrap();
     let bytes = serde_json::to_vec(&old).unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("chance_baseline"));
+    assert!(!String::from_utf8_lossy(&bytes).contains("turn_samples_per_iteration"));
     let parsed: Solution = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(serde_json::to_vec(&parsed).unwrap(), bytes);
 }
@@ -398,14 +491,28 @@ fn saved_20bb_native_flop_pilot() {
         .unwrap_or_else(|_| "2".into())
         .parse()
         .unwrap();
-    assert!([2, 8, 32].contains(&iterations));
+    assert!([2, 8, 32, 128].contains(&iterations));
     let started = std::time::Instant::now();
     let use_baseline = match std::env::var("POKER_NATIVE_FLOP_CHANCE_BASELINE").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("none") => false,
         Ok("learned_conditional_turn_v1") => true,
         other => panic!("unsupported native flop chance baseline: {other:?}"),
     };
-    let result = train_with_baseline(game, state, seed, iterations, 64, use_baseline).unwrap();
+    let turn_samples: usize = std::env::var("POKER_NATIVE_FLOP_TURN_SAMPLES")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .unwrap();
+    assert!([1, 4].contains(&turn_samples));
+    let result = train_with_sampling(
+        game,
+        state,
+        seed,
+        iterations,
+        64,
+        use_baseline,
+        turn_samples,
+    )
+    .unwrap();
     let path = PathBuf::from(std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap());
     let bytes = serde_json::to_vec(&result).unwrap();
     let mut file = fs::OpenOptions::new()
@@ -419,6 +526,7 @@ fn saved_20bb_native_flop_pilot() {
         "{}",
         serde_json::json!({"stage":"native_flop_pilot","seed":seed,"iterations":iterations,"turnIterations":64,
         "publicInputSha256":input_sha256,
+        "turnSamplesPerIteration":turn_samples,
         "seconds":started.elapsed().as_secs_f64(),"turnQueries":result.turn_queries,
         "zeroOwnReachCompletions":result.zero_own_reach_completions,"zeroJointTurnQueries":result.zero_joint_turn_queries,
         "maximumConditionalTurnResponseGainBb":result.maximum_conditional_turn_response_gain_bb,

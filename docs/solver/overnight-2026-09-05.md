@@ -4132,3 +4132,112 @@ checks before launching. No production activation or threshold change follows.
 `5d2010b2b5718bfcf79d4a53a0ed0463c91f0a12a227e79da8a0813e24d545d5`.
 Code and measured findings are committed; ignored raw policies and evaluation
 packets remain local. Full-game release metrics and activation are unchanged.
+
+Milestone `6a2063631879bd831e0b4a3219a505f6d362674d` was pushed; CI
+34037710685 passed. Packet worker time for the completed broader stage was
+19,137.278 seconds, packet span 6,356.571 seconds, sampled peak per packet
+1,139,590,392 bytes.
+
+### Fresh-subset implementation and focused verification
+
+The read-only diagnostic
+`node neural/runs/local-native-flop-20260906-broader-inputs/reproduce-facing.mjs`
+recomputes the independent backups and reproduces the mixed scaling result
+in 0.416 seconds: seed 100101 changes by +0.008157708bb, 100102 by
+-0.067426607bb. Its nonzero exit means the development comparison did not
+improve both seeds, **not** a newly introduced release gate. This is a
+convergence experiment, not an identified production software regression.
+No bisection or browser investigation is appropriate to this isolated seam.
+
+The native research entry now has opt-in `POKER_NATIVE_FLOP_TURN_SAMPLES=4`;
+the default remains one. A fresh partial Fisher-Yates subset uses the existing
+deterministic RNG. Its one-card case preserves the old draw and arithmetic
+order, including signed zero. All leaf values in a batch use the same frozen
+trunk policy and reaches; discounting, regret application and strategy-average
+updates occur once per outer round. The known baseline and batching options
+cannot be combined. An optional artifact field records non-default batch
+size; omitted fields keep old artifacts canonical. The ignored entry also
+accepts 128 outer rounds for the equal-query control. Nothing is activated.
+
+The integration regression first failed as intended (2 versus 8 native turn
+queries). The initial exact-name cargo filter matched no tests and was not
+counted; the explicit fully qualified binary invocation produced the real
+failure in 1.44 seconds. Analytic tests enumerate subset selections and check
+the blocker-aware mean/finite-population variance. A terminal-only real trunk
+checks that extra chance samples do not multiply regret/average updates.
+The new repeatability test initially reused an already-normalized output as
+its second input; it was corrected to replay the identical original input,
+with bounded digest diagnostics instead of dumping entire byte vectors.
+
+All **16 focused native tests** then passed (7.05 seconds, four ignored
+research entries). The independent analytic Node test passed (0.215 seconds).
+The full release suite is running before the pilot. Prepared controller:
+`local-native-flop-20260906-batch4-pair/run.py`, SHA
+`1d5ac0470ed854232dff0d3a5e5080a121de1d0d5213c90d7f8971cf927f757e`.
+It first retrains both old 32-round default controls and requires byte-identical
+policies, then runs the four matched-query candidates and all 196 frozen-turn
+packets. Four worker slots, 2GiB each, 300 seconds per training job, 60 seconds
+per packet, 20-minute stage limit and 20GiB disk floor. It does not automatically
+extend, promote, or activate either variant.
+
+The full release suite passed **289 library tests and nine CLI tests**, with
+31 explicitly ignored research entries (86.75 / 0.62 seconds). Session 59293
+was reaped. Frozen tested binary SHA:
+`b8f681b8d7e6f7c5f60ff98cd386915ff9b0812c7fb52c20ce3253d734e8cb5d`.
+At approximately 14:17 UTC started the fixed short pilot (exec session 90013):
+
+```bash
+python3 neural/runs/local-native-flop-20260906-batch4-pair/run.py \
+  b8f681b8d7e6f7c5f60ff98cd386915ff9b0812c7fb52c20ce3253d734e8cb5d
+```
+
+Authoritative state is `local-native-flop-20260906-batch4-pair/paired128/manifest.json`.
+All previous training/evaluation pools had exited before this launch; no test
+suite overlaps the measured pilot. It begins with the two default-control
+replays before allowing any new candidate training.
+
+### Equal-work subset pilot succeeds on the facing-bet root
+
+The stage completed in **223.427 seconds**, including both byte-identical
+32-round default replays, four candidate trainings, all 196 packets and four
+independent backups (maximum difference 8.88e-16bb). Session 90013 was reaped.
+Completed manifest:
+`708c62b012788d4d57be789f553323f29d588eb5512f328c08ed51105401f393`.
+
+| Seed | Previous 32 single-turn rounds | 128 single-turn rounds | 32 four-turn rounds | Batch minus matched single |
+| --- | ---: | ---: | ---: | ---: |
+| 100101 | 0.171904592bb | 0.059071001bb | 0.050425542bb | -0.008645460bb |
+| 100102 | 0.089272729bb | 0.064298349bb | 0.047321863bb | -0.016976486bb |
+
+All are conditional fixed-root half-summed response gains. Both adding work
+and reducing per-update sampling noise helped here; batching improves about
+14.64% / 26.40% over the matched 128-query control. Training elapsed seconds
+were 108.605 / 108.455 for single-turn controls and 107.393 / 107.876 for
+batches, under the same four-worker stage; sampled peaks were 45.6 / 45.4 /
+62.6 / 58.4MB. Packet worker time was 202.311 seconds, peak 35,684,736 bytes.
+Do not infer a substantial speedup from the small timing difference. Maximum
+probability-sum error was 4.48e-8. This supports the sampling-noise hypothesis
+on this development root, not a full-game or safe-reconstruction claim.
+
+The root-only mix metrics remain mixed: single-turn versus batched weighted
+action MAE is 10.3753pp / 12.7232pp, primary agreement 71.1580% / 75.2672%,
+and maximum aggregate action delta 2.7646pp / 1.5956pp. Lower response loss
+therefore does **not** imply that all policy-stability targets pass. These
+numbers use the same compatible-root-reach weighting described above.
+
+Candidate policy SHAs, single 100101/100102 then batch 100101/100102:
+`489787335b54a65299b1b1751b57d3c879669ded8508515bb231f85bf503d26b`,
+`925d9094f95c6242096bb72f8769865a568543932e205a9030d22fe8ae041cdf`,
+`40701f907f5f3fa2d231c2618e6e0aedaa82979253b347dd52e9e747e33747dd`,
+`eb9e8eb3699dd6bdd4d6c7ed0ff689b3f8db2238f38007885146df9c5d4b0579`.
+Response SHAs in the same order:
+`261d5dddb4d9e6ab0708513e1a35f535d187dfe94136069f0344a601b0fc7021`,
+`73bb9e39dc5efb80cad4c9aab95d0923be4272aae81429d26cdb5f7346082f34`,
+`0e4417fa0e7bf7273ddb5791af664207c5ca186fd85efa55a15b13aa57f2828d`,
+`403337a2ba81dd30d212f733cc79533a6492cb6e694968c3dd8a1ae4a5a02b81`.
+
+Next: a bounded matched-work comparison on the original larger limp/check
+flop, two seeds of 128 single-turn versus 32 four-turn rounds. This tests
+transfer rather than assuming the cheap-root gain generalizes. Preserve the
+existing 32-round checkpoint artifacts and default policy path; no new
+production model is activated and no success threshold is relaxed.
