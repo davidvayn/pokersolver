@@ -5,6 +5,7 @@ use super::*;
 use std::cell::RefCell;
 mod chance_baseline;
 mod frozen_response;
+mod root_input;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Solution {
@@ -369,18 +370,30 @@ fn corrected_native_flop_pilot_is_deterministic_and_keeps_the_default_artifact_c
 #[test]
 #[ignore = "explicit seed/output and external 2GiB/time/disk guard; native-turn flop development pilot, not full-game qualification"]
 fn saved_20bb_native_flop_pilot() {
-    let fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../../tests/fixtures/flop-continuation-public-root-a.json"
-    ))
-    .unwrap();
+    let (input, input_sha256) = match std::env::var("POKER_NATIVE_FLOP_INPUT") {
+        Ok(path) => {
+            assert!(fs::metadata(&path).unwrap().len() <= 1024 * 1024);
+            (
+                fs::read(path).unwrap(),
+                std::env::var("POKER_NATIVE_FLOP_INPUT_SHA").unwrap(),
+            )
+        }
+        Err(std::env::VarError::NotPresent) => {
+            assert!(std::env::var_os("POKER_NATIVE_FLOP_INPUT_SHA").is_none());
+            let bytes =
+                include_bytes!("../../../../tests/fixtures/flop-continuation-public-root-a.json")
+                    .to_vec();
+            let sha = format!("{:x}", Sha256::digest(&bytes));
+            (bytes, sha)
+        }
+        other => panic!("invalid native flop input path: {other:?}"),
+    };
+    let (game, state) = root_input::decode(&input, &input_sha256).unwrap();
     let seed: u64 = std::env::var("POKER_NATIVE_FLOP_SEED")
         .unwrap()
         .parse()
         .unwrap();
     assert!([100101, 100102].contains(&seed));
-    let game: BlueprintConfig = serde_json::from_value(fixture["game"].clone()).unwrap();
-    assert_eq!(game.effective_stack_bb, 20.0);
-    let state = serde_json::from_value(fixture["public"].clone()).unwrap();
     let iterations: u64 = std::env::var("POKER_NATIVE_FLOP_ITERATIONS")
         .unwrap_or_else(|_| "2".into())
         .parse()
@@ -405,6 +418,7 @@ fn saved_20bb_native_flop_pilot() {
     println!(
         "{}",
         serde_json::json!({"stage":"native_flop_pilot","seed":seed,"iterations":iterations,"turnIterations":64,
+        "publicInputSha256":input_sha256,
         "seconds":started.elapsed().as_secs_f64(),"turnQueries":result.turn_queries,
         "zeroOwnReachCompletions":result.zero_own_reach_completions,"zeroJointTurnQueries":result.zero_joint_turn_queries,
         "maximumConditionalTurnResponseGainBb":result.maximum_conditional_turn_response_gain_bb,

@@ -3806,3 +3806,154 @@ Response SHAs, seeds 100101/100102:
 `fc86abfd66d6fe08e9e8d54d107d8a6de54af484ddfe29689250020a14958cb6`.
 The full-game release blockers recorded earlier remain unresolved. Both
 uncorrected controls were at round 20/32 when this result was recorded.
+
+### Uncorrected 32-round training completed; evaluation now running
+
+Milestone `de215528248c6c052c9b36ca91ee7dbc2994ebe9` was pushed and CI
+34028634597 passed. Both scaling controls finished successfully, with no
+resource stop: seed 100101 took 3,321.574 seconds, sampled peak 898,205,160
+bytes; seed 100102 took 3,328.502 seconds, peak 1,039,730,224 bytes. Both made
+288 native turn queries. Outputs are 669,710 / 668,481 bytes; maximum f32
+probability-sum errors are 5.22e-8 / 4.57e-8. The training session 45699 was
+reaped. These are integrity/resource results, not policy-quality results.
+
+Policy SHAs, seeds 100101/100102:
+`e315f1cad78b74b81f712be305f8ee40eb47e7a650fdc61f6e8b49dda27e0e56`,
+`d63819b19908210a14d6f4ba049d7f8a652065d1f55b96ea7bcb7ef3fc03a560`.
+Completed training manifest:
+`d53746bbb2a4bd8f8414d88d84eb301778cb5ecee59b0b8e907d811adaa876d0`.
+
+At approximately 11:07 UTC explicitly launched:
+
+```bash
+python3 neural/runs/local-native-flop-20260906-control32/evaluate.py
+```
+
+Parent PID 54038, initial workers 54061–54064, exec session 18422. Authoritative
+state is `local-native-flop-20260906-control32/evaluation/manifest.json`.
+Both 32-round policy audits and byte-identical replays of the eight-round
+control response outputs passed before the first new packet. The frozen
+runner SHA is `f77492cb4176d12343916c3f02ff396b1a45caa3cd53b4913a307f3f9a664e82`.
+This four-worker stage has 98 packets, the same 64-iteration continuation,
+independent backup verification and two-hour/per-worker/disk guards described
+above. Never restart it without checking live state. No further training or
+activation is scheduled by this runner.
+
+### Public-input preparation and two short broader controls
+
+Added an optional hash-pinned JSON public-root input to the **ignored research
+entry only**. The decoder preserves the old fixture's exact game/ranges,
+rejects bad hashes, unknown schemas, blocked-card weights and inconsistent
+public actions/accounting, and limits the entry to 20bb. It replays the public
+line; no actual private holding, hidden runout or saved rollout payoff enters
+the native solve. Both decoder tests passed; all 12 focused native tests
+passed (10.45 seconds), and the independent analytic Node audit passed.
+
+Prepared exactly two additional reused development contexts from existing
+small frozen action caches: source B, board `[51,17,10]`, BB at a 2bb flop start;
+source A, board `[39,9,51]`, BTN facing 5bb in a three-bet pot (20bb already
+invested in total). These test a different board/source prior and a different
+pot/facing-action situation. They are **not untouched full-game holdouts** and
+do not introduce new release gates. An eight-round baseline is useful for
+either a later scaling comparison or a changed-policy pilot; no longer arm is
+implicitly authorized by the local controller.
+
+After the compiler exited and memory-pressure output reported 64% available,
+started the fixed two-worker control stage at approximately 11:17 UTC:
+
+```bash
+python3 neural/runs/local-native-flop-20260906-broader-inputs/train8.py
+```
+
+It runs both training seeds at each of the two contexts, two workers maximum
+at `nice +10`, 2GiB/900 seconds per worker, a 1,800-second whole-stage stop and
+20GiB free-disk reserve. It only trains/audits four eight-round controls, and
+does not automatically evaluate, extend or activate. Initial workers are
+54643/54644, exec session 9684. Authoritative state is
+`local-native-flop-20260906-broader-inputs/training8/manifest.json`.
+The original 32-round evaluation continues with its unchanged frozen binary.
+
+New input-capable frozen test binary:
+`273861f9b05ad6d09c9c10af2ee5f3c8ce279e6d0182658f5f09f4d52fda4569`.
+Input JSON SHAs (B start, A three-bet facing):
+`c20053fbe8f49a4c3055c1d117b297840eb323baf5f0a2a2a2e73af31fef086e`,
+`462fea0ab13204e5da9b49d35f29cf533fe9f66d960af2a60dde73d827eebaf2`.
+Source cache SHAs in the same order:
+`8075e5fcb411258b48f69539fb1ae2043bac3451fb0fdfa931866be0bbb2316b`,
+`199fe6fd945a6b3e6d830759cd5f582a6b7b41154d1d7601e3bbc0506fad283d`.
+The read-only inspection/export used the already-installed Rust MessagePack
+decoder; no Python/package dependency was installed. Original caches and
+research artifacts remain unchanged.
+
+The broader control stage hit its **time**, not memory, guard. Both B-root
+workers reached 7/8 rounds but neither exported a final policy before the
+900-second stop. Seed 100101 elapsed 900.309 seconds, sampled peak
+1,024,410,776 bytes; seed 100102 elapsed 900.349 seconds, peak 908,821,632
+bytes, stopped by the shared event. Both queued A-root controls were cancelled
+before starting. Parent 54630 exited; session 9684 was reaped. No policy from
+this attempt is available for scoring or promotion. Preserve this failed
+manifest: `b2e1edf68a786a6585caa8aa7cccfd30fe66ee2cb8e81e48988969ae76d6c2db`.
+Frozen runner: `1f547897b602cc8c879f330e2fdbec403c8236fac41d70aa604e92ef9634f4a8`.
+
+A one-second read-only CPU profile while the workers were live showed active
+native turn/river CFR traversal, not an I/O wait or deadlock. It does not
+isolate board cost from CPU contention. The original root's timing was not a
+sufficient budget estimate for this different root under six-worker load.
+Do not alter a running guard or score the incomplete seven-round state. Finish
+the existing four-worker evaluation, then retry the same short controls with
+less contention and an explicitly recorded budget based on this measurement.
+The A-root inputs remain prepared but untested by a native training run.
+
+At 11:33 UTC the original 32-round evaluation was still live, 52/98 packets,
+zero failures. Started the full release Rust suite (exec session 43123) after
+the two timed-out workers exited. This includes a strengthened blocked-reach
+negative test that preserves the range sum, ensuring the rejection checks card
+legality rather than merely catching a normalization error. The frozen running
+evaluation is unchanged.
+
+The full release suite passed: **285 library tests and 9 CLI tests**, 31
+explicit research entries ignored. Library/CLI execution took 159.55 / 0.88
+seconds under the existing four-worker evaluation load; session 43123 was
+reaped. The evaluation had reached 64/98 packets without failures at completion.
+
+### Thirty-two-round scaling result: substantial improvement in both seeds
+
+The original-root evaluation completed successfully in 2,729.425 seconds
+(45.49 minutes). All 98 packets and their independent checks passed. Packet
+span was 2,721.283 seconds, total worker time 10,659.382 seconds, sampled peak
+per worker 1,159,415,032 bytes. Both old eight-round response outputs had
+replayed byte-for-byte, and both new independent JavaScript backups passed
+(maximum differences 0 / 1.39e-17bb). Parent 54038 exited and session 18422
+was reaped. No failed jobs or missing turns were excluded.
+
+Conditional fixed-root half-summed flop/turn/river response gain:
+
+| Seed | Two rounds | Eight rounds | Thirty-two rounds | Eight-to-32 reduction |
+| --- | ---: | ---: | ---: | ---: |
+| 100101 | 1.899709315bb | 0.717145360bb | 0.227128290bb | 68.33% |
+| 100102 | 1.924641036bb | 0.575393820bb | 0.229962298bb | 60.03% |
+
+The eight-to-32 changes are -0.490017069 / -0.345431523bb. This is substantial
+paired improvement on **one reused source-A public flop**, not full-game
+exploitability or passage of the 0.50bb/hand release goal. The flop-only
+restricted responses still achieve half-summed gains 0.199412987 /
+0.199888340bb; stronger full conditional attacks reach the values above.
+These nested attacks are not an additive street decomposition. This result
+does not show a plateau requiring a new reconstruction algorithm yet; retain
+that research caveat, but test transfer to the two already-selected contexts
+before further architectural changes or a large iteration extension.
+
+Completed evaluation manifest:
+`d3830151ca028bfb7aab2032603cc7695195879e11f29b550121a496c6310168`.
+Response SHAs (100101/100102):
+`c65500961e0bd85ba7a12f3f18e7e0ca628ec7479b5acf0a2f96c819826626b4`,
+`0e936da1039dd236a3605f15989765d65bf1a5d5b5b44c8b5349be541c25ea3d`.
+
+Next bounded sequence: retry the same two-root/eight-round controls after all
+existing workers exit, now at normal priority with two workers, an explicit
+1,800-second worker limit and one-hour stage limit. Keep the exact `273861...`
+binary and both input hashes; only execution conditions/budget change, not
+solver settings. Do not treat this as a controlled speed comparison. After
+valid eight-round outputs, the observed original-root scaling supports matched
+32-round arms and the same all-turn evaluation on these contexts. No new
+release gate, model activation or full-game success claim is implied.
