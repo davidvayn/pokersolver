@@ -1868,3 +1868,84 @@ Production executable SHA is
 `4802462816308f3fd84bddf284345593036e95862a05fa2ac1c919290a95d69a`.
 All sequence-owned workers have completed or were explicitly stopped as
 recorded above; none remains live. The managed goal remains active.
+
+### Exact-card all-street LBR challenge of the stronger continuation
+
+The next attack is an online exact-card Bayesian local best response, following
+the [primary LBR method](https://arxiv.org/html/1612.07547v2), rather than another
+small learned critic with no supported decision groups. Its opponent belief
+starts from the legal deal prior, removes visible-card collisions, and updates
+only from the defender's actual observed action likelihoods. Responder actions
+do not incorrectly reweight that opponent belief. Policy queries contain only
+the queried actor's cards and the public board/history, never the actual other
+holding or unrevealed runout. Invalid policies and impossible posteriors fail
+explicitly, without a replacement mix or range.
+
+The heuristic compares every legal action using checkdown equity and the
+defender's immediate fold probabilities. Early-street equity uses 16 seeded
+runouts per positive-weight opponent combo; turn equity enumerates all 44
+compatible rivers and river equity is exact. The same per-combo equity vector
+is reused across candidate actions. Raises are approximated as calls only in
+the heuristic: actual hand play samples all legal defender actions. Recorded
+heuristic action values are not served action EVs or grading confidence data.
+This is a legal restricted attack and supplies lower-bound evidence, not a
+full-game exploitability upper bound or a replacement release criterion.
+
+New regressions cover Bayesian weights/card removal, exact river value bets
+and losing calls, hidden-deal-independent equity samples, malformed-policy
+rejection, deterministic complete hands with decisions on all four streets,
+and covariance-preserving paired gain estimates. Per-hand experimental cache
+clearing drops prior endgame policies and dense equity caches while retaining
+the source checkpoint and cumulative diagnostics. The existing snapshot test
+verifies unchanged river probabilities after clearing/reconstruction for both
+four and 64 iterations. No production model or browser policy was activated.
+
+Pre-pilot verification passes 252 release library tests and nine CLI tests;
+13 explicit research probes are ignored by the ordinary suite. Release build
+passes. The explicit-path two-round production replay at
+`/tmp/poker-exact-lbr-replay.G72S7u` matches both previous artifact and summary
+bytes; artifact SHA remains
+`c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`.
+Production executable SHA:
+`2feccf5806edc6165937d1533203ead37224ec651580adcb0d78f9b0388b7ce5`.
+
+`local-sampled-flop-20260905-lbr1` is launched, not yet a completed result.
+It pins source A / resolve seed 87001, 32 flop iterations, terminal weight
+0.50 and 64 joint turn/river iterations; LBR seed 90001, evaluation seed 90004.
+Eight calibration and 24 independent raw holdout deals each run both attacker
+seats against the same baseline deal. The seat-summed estimator preserves
+within-deal covariance and cancels the baseline exactly. Raw holdout outcomes
+remain visible even when the existing calibration rule rejects a seat; these
+small normal-approximation intervals are cost-pilot diagnostics, not a
+certificate. The guard is 7.5GiB physical footprint, 20GiB free disk reserve,
+and 1,800 seconds. Frozen test executable SHA:
+`6ae3c7064572686dfaaa2b2cab2c7b70f00eb2d1edfcfcdb032c49fe90b9d6a2`.
+
+The cost pilot subsequently **completed** all eight calibration and 24 raw
+holdout deals, both seats, in 572.819 seconds including checkpoint loading.
+Peak physical footprint was 6,374,822,760 bytes (5.937GiB); no guard fired.
+The supervisor independently reconstructs the paired sums and standard errors
+from all completed per-hand events. Both seats failed the small calibration
+block; neither is relabeled qualified based on its later raw holdout.
+
+| Raw independent holdout metric | Mean bb/full hand | SE | Individual normal 99% interval |
+| --- | ---: | ---: | --- |
+| BTN/SB unilateral gain | 3.456636 | 1.426346 | [-0.217388, 7.130660] |
+| BB unilateral gain | 0.991898 | 1.869497 | [-3.823607, 5.807403] |
+| Sum of both gains | 4.448534 | 1.908638 | [-0.467791, 9.364859] |
+| Half-sum of both gains | 2.224267 | 0.954319 | [-0.233896, 4.682430] |
+
+Actual holdout attacker decisions by preflop/flop/turn/river were
+33/7/2/0 for BTN/SB and 17/18/7/1 for BB. This attack is nonempty and exercises
+the combined model, unlike the earlier unsupported learned critic. The
+positive but noisy point estimates warrant an unchanged-rule independent
+larger challenge, not a low-exploitability claim or a hand-fitted repair.
+Keep source A/B paired and use fresh calibration/holdout chance domains.
+No defender action, source checkpoint, or gate changed in this milestone.
+
+A one-second live macOS sample at
+`/tmp/poker-lbr1-policy-cost.sample.txt` captured a normal turn/river solve.
+It does not establish that repeated query overhead is a bug. The diagnostic
+skill's measurement-first loop therefore did not justify a speculative
+performance rewrite; any optimization needs a repeatable isolated cost/parity
+check first. The completed pilot worker and supervisor have both exited.

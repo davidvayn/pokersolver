@@ -2,6 +2,11 @@
 //! A conditional turn-subgame result, not a full-game exploitability bound.
 use super::*;
 
+pub(in crate::blueprint) fn clear_experiment_equity_caches() {
+    DENSE_ALL_IN_EQUITY_CACHE.lock().unwrap().clear();
+    *DENSE_TURN_EQUITY_CACHE.lock().unwrap() = DenseTurnEquityCache::default();
+}
+
 #[derive(Debug, Serialize)]
 pub(in crate::blueprint) struct FrozenTurnResponse {
     pub profile_bb: [f64; 2],

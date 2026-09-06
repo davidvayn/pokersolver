@@ -5,6 +5,7 @@ use super::*;
 use std::io::Write;
 mod support;
 mod tail;
+mod lbr;
 
 fn profile(
     table: Arc<InferenceTable>,

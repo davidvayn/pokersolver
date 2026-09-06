@@ -25,6 +25,12 @@ pub(super) struct FlopResolve {
 }
 
 impl FlopResolve {
+    pub(super) fn clear_cached_rows(&self) {
+        let mut cache = self.cache.lock().unwrap();
+        cache.rows.clear();
+        cache.board.clear();
+    }
+
     pub(super) fn new(iterations: u64, seed: u64, maximum_information_sets: usize) -> Self {
         assert!(iterations >= 2 && maximum_information_sets > 0);
         Self {

@@ -68,6 +68,15 @@ pub(super) struct TabularTurnPolicy {
 
 impl TabularTurnPolicy {
     #[cfg(test)]
+    pub(super) fn clear_experiment_hand_caches(&self) {
+        self.generation.borrow_mut().take();
+        if let Some(sampled) = self.base.flop_patch.as_ref().and_then(|patch| patch.sampled.as_ref()) {
+            sampled.clear_cached_rows();
+        }
+        belief::frozen_turn_response::clear_experiment_equity_caches();
+    }
+
+    #[cfg(test)]
     pub(super) fn turn_root_input(
         &self,
         state: &GameState,

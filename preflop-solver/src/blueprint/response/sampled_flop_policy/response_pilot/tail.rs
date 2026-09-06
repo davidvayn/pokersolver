@@ -86,6 +86,8 @@ fn assert_snapshot_matches_actual_play(iterations: u64) {
         river_expected,
         policy.strategy(&river, &deal, &river_actions, &game)
     );
+    policy.clear_experiment_hand_caches();
+    assert_eq!(river_expected, policy.strategy(&river, &deal, &river_actions, &game));
     let result = frozen_turn_response::evaluate(config, &rows).unwrap();
     assert!(result.gain_bb.iter().all(|v| *v >= -1e-8));
 }
