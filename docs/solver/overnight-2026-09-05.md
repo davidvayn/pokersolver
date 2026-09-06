@@ -3668,3 +3668,141 @@ assertion remains active. No npm/browser verification was needed for these
 offline, test-only policy research changes; release Rust and independent Node
 tests passed as recorded above. Preflop stability, source action-EV precision,
 full-hand coverage and full-game exploitability remain unresolved.
+
+### Corrected eight-round paired pilot launched
+
+Milestone `54aadabc6497d3f020cce61c6a5bf011fa54443d` was committed and pushed;
+CI 34025683716 was running at launch. Started once:
+
+```bash
+python3 neural/runs/local-native-flop-20260906-baseline8/run.py
+```
+
+The stage first reproduced both existing eight-round response artifacts
+**byte-for-byte with the new frozen binary**, without re-solving any old turn
+packet. Two corrected eight-round seeds then started, parent PID 50017,
+initial training workers 50057/50058, exec session 69639. These handles are
+historical identifiers: recheck live processes and the stage manifest before
+acting; never restart an already-running stage. The manifest is
+`neural/runs/local-native-flop-20260906-baseline8/manifest.json`.
+
+After two training workers pass policy audits, this fixed stage automatically
+uses four workers for exactly 98 new turn packets, audits each packet, builds
+both aggregates and independently verifies their backups. Per-process limits
+are 2GiB, 900 seconds for training, 360 seconds per turn packet; the complete
+stage has a two-hour stop and the existing 20GiB disk reserve. No automatic
+selection, longer training or activation follows. The sole policy change is
+the opt-in learned conditional turn baseline. The old controls and every
+failed or completed artifact remain preserved.
+
+Two additional obsolete `dep-graph.bin` files in the
+`target/debug/incremental/preflop_solver-08hj29w1hr24v` sessions were
+losslessly gzipped before launch. Compressed copies are retained; trained
+artifacts were not changed. The preflight reserved 142.42MiB of projected
+additional space above the 20GiB floor.
+
+The corrected eight-round seeds completed in 538.98 / 544.08 seconds, sampled
+peaks 849,020,488 / 674,497,376 bytes, 72 native turn queries each. Both passed
+the policy audit. These timings used different concurrent load than the old
+screen, so they are not a controlled speedup estimate. Candidate hashes:
+`9626a7b533ec6c63a4899a54977f5389e230d2366e8097ad26fb8f4cc1ab37d4`,
+`66cb577d105969a17b5eea642a42b2eddec3c51844ad1d48f1059e789e74d082`.
+Their root check frequencies are 67.6505% / 50.7645%; those small frequency
+changes do not establish an improvement. The 98-packet evaluation remains
+pending. The frozen paired controller SHA is
+`8f2c57a45090b2108c4eaa4e69360b41e614c15e681ce946bf1ad9db0fd02807`.
+CI 34025683716 subsequently passed.
+
+### Bounded uncorrected scaling controls overlap the evaluation
+
+The ordinary two-to-eight comparison improved both seeds by over 60%, while
+their conditional flop-response gains remained substantial. Thus a 32-round
+**uncorrected** control is useful whether the baseline correction succeeds or
+fails: it tests continued iteration benefit, and supplies a matched control
+if a corrected 32-round arm is warranted later. This is a deliberate overlap
+of independent work, not a change to the running baseline8 experiment.
+
+After `memory_pressure -Q` reported 68% available memory, launched two
+`nice -n 10` native controls alongside the four evaluation workers. Six
+processes have at most 12GiB of configured worker allowance, with no resident
+full-checkpoint process. A subsequent memory-pressure query still reported
+65% available. Swap already in use is not treated as evidence of current
+pressure or as free memory. Each new worker has a 2GiB / 4,500-second stop and
+the 20GiB disk floor. Only the ignored pilot entry's allowed round counts
+changed, from `[2, 8]` to `[2, 8, 32]`; all ten focused tests passed (10.37s).
+No default solver or serving policy changed.
+
+```bash
+python3 neural/runs/local-native-flop-20260906-control32/run.py \
+  6a15e1e2ae860f06a9aee19446b41f227e8dc0887c0f3abd9fe4032dafe27c3b
+```
+
+Live-at-launch parent PID 50874, workers 50887/50888, exec session 45699.
+Authoritative state is `neural/runs/local-native-flop-20260906-control32/manifest.json`.
+This stage trains only and does **not** automatically evaluate or select a
+model. Recheck process identities before acting; both baseline8 and control32
+were running at this note. New frozen binary SHA is the command argument;
+the baseline8 evaluation keeps its original `8eaabbe...` binary.
+
+Compressed four further obsolete, unlinked compiler-cache files (both
+`2zuel0py68duf` `dep-graph.bin` files and the `1r02r7ivlvi0z` /
+`1eq3vd3ncfugf` `query-cache.bin` files). Their lossless compressed copies are
+retained; no models/results were deleted.
+
+Research notes for interpreting the pending scaling result, **not additional
+scheduled work**: the [CFR-D paper](https://poker.cs.ualberta.ca/publications/aaai2014-cfrd.pdf)
+separates trunk regret from subgame approximation error and retains average
+subgame-root CFVs for safe reconstruction. Our finite native leaf solves and
+fresh continuation solves are not a proof that those conditions hold. If
+flop improvement plateaus, check reconstruction consistency before blindly
+increasing rounds. The repository already has
+`solve_turn_river_safe_policy_for_seat` and `install_safe_root`; the former
+derives its bounds from a supplied complete anchor policy. The new pilot
+currently exports only the average flop policy, not the needed averaged
+subgame constraints. Reusing that existing machinery with valid constraints
+would be the relevant issue, not building another generic resolver. Also,
+training-oracle iterations and serving-continuation iterations currently share
+`Solution.turn_iterations`; any future compute-budget reallocation must
+separate and honestly record them rather than silently changing evaluation.
+
+At 10:42 UTC the corrected eight-round evaluation had completed 80/98 packets
+without failures, and both uncorrected controls reached round 15/32. Prepared
+`local-native-flop-20260906-control32/evaluate.py` for a separate, explicitly
+launched 98-packet evaluation after training finishes. It validates all 32-round
+policies (the older audit intentionally only handled eight-round outputs),
+replays the old eight-round aggregates byte-for-byte, and uses the same packet
+and independent backup checks. It does not launch itself or promote models.
+Python compilation and Node syntax checks passed. Compressed the four unused
+`08hj29w1hr24v` / `2o9p68nxby39n` incremental `query-cache.bin` files; lossless
+copies remain available. Free disk was 21,239,196KiB and memory-pressure output
+reported 65% available with six native workers still active.
+
+### Conditional-turn baseline comparison: mixed, do not promote
+
+The corrected eight-round pair completed at approximately 10:51 UTC in
+3,523.355 seconds (58.72 minutes), including training and all-turn evaluation.
+All 98 packets, probability/identity audits, two aggregate replays and two
+independent response backups passed. Evaluation used 11,606.030 worker-seconds
+over 2,969.096 seconds; sampled peak per packet worker was 1,196,590,328 bytes.
+The parent exited successfully and session 69639 was reaped.
+
+| Seed | Ordinary eight-round response gain | Corrected eight-round response gain | Change |
+| --- | ---: | ---: | ---: |
+| 100101 | 0.717145360bb | 0.719374126bb | +0.002228767bb (worse) |
+| 100102 | 0.575393820bb | 0.567502276bb | -0.007891544bb (better) |
+
+These are exact-combo, all-public-turn conditional fixed-root half-summed
+response gains, **not full-game exploitability**. The change is small and
+mixed across seeds. It does not justify promotion or a longer corrected run;
+keep the uncorrected default and let the already-running uncorrected 32-round
+controls answer the iteration-scaling question. The correction remains an
+explicit test-only option, not a serving change. No successful release metric
+is inferred from its mathematical unbiasedness or from two-seed averaging.
+
+Completed manifest SHA:
+`06acaa274665171136833f89924dfabfe3e235e0e0d0e035a354286911a6bb16`.
+Response SHAs, seeds 100101/100102:
+`9cb747f48b7bb3da721a0fc3bd317585ab67c33bae327832135c6b9547e3dd86`,
+`fc86abfd66d6fe08e9e8d54d107d8a6de54af484ddfe29689250020a14958cb6`.
+The full-game release blockers recorded earlier remain unresolved. Both
+uncorrected controls were at round 20/32 when this result was recorded.

@@ -385,7 +385,7 @@ fn saved_20bb_native_flop_pilot() {
         .unwrap_or_else(|_| "2".into())
         .parse()
         .unwrap();
-    assert!([2, 8].contains(&iterations));
+    assert!([2, 8, 32].contains(&iterations));
     let started = std::time::Instant::now();
     let use_baseline = match std::env::var("POKER_NATIVE_FLOP_CHANCE_BASELINE").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("none") => false,
