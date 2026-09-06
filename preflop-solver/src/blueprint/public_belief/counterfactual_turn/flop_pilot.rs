@@ -2,10 +2,11 @@
 //! frozen iteration; exact all-in terminals, full joint turn/river leaves.
 //! This does not implement the safe runtime reconstruction required by CFR-D.
 use super::*;
+mod frozen_response;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Solution {
-    schema: &'static str,
+    schema: String,
     game: BlueprintConfig,
     state: PublicBeliefState,
     seed: u64,
@@ -209,7 +210,7 @@ fn train(
         })
         .collect();
     Ok(Solution {
-        schema: "hu-native-counterfactual-turn-flop-pilot-v1",
+        schema: "hu-native-counterfactual-turn-flop-pilot-v1".into(),
         game,
         state: trunk.state,
         seed,
@@ -323,8 +324,13 @@ fn saved_20bb_native_flop_pilot() {
     let game: BlueprintConfig = serde_json::from_value(fixture["game"].clone()).unwrap();
     assert_eq!(game.effective_stack_bb, 20.0);
     let state = serde_json::from_value(fixture["public"].clone()).unwrap();
+    let iterations: u64 = std::env::var("POKER_NATIVE_FLOP_ITERATIONS")
+        .unwrap_or_else(|_| "2".into())
+        .parse()
+        .unwrap();
+    assert!([2, 8].contains(&iterations));
     let started = std::time::Instant::now();
-    let result = train(game, state, seed, 2, 64).unwrap();
+    let result = train(game, state, seed, iterations, 64).unwrap();
     let path = PathBuf::from(std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap());
     let bytes = serde_json::to_vec(&result).unwrap();
     let mut file = fs::OpenOptions::new()
@@ -336,7 +342,7 @@ fn saved_20bb_native_flop_pilot() {
     file.sync_all().unwrap();
     println!(
         "{}",
-        serde_json::json!({"stage":"native_flop_pilot","seed":seed,"iterations":2,"turnIterations":64,
+        serde_json::json!({"stage":"native_flop_pilot","seed":seed,"iterations":iterations,"turnIterations":64,
         "seconds":started.elapsed().as_secs_f64(),"turnQueries":result.turn_queries,
         "zeroOwnReachCompletions":result.zero_own_reach_completions,"zeroJointTurnQueries":result.zero_joint_turn_queries,
         "maximumConditionalTurnResponseGainBb":result.maximum_conditional_turn_response_gain_bb,

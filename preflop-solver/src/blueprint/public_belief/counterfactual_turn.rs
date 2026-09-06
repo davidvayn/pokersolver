@@ -10,6 +10,11 @@ struct Values {
     /// Raw CFVs: scaled by the original opponent reach, not own reach. Board-
     /// blocked combos are mathematical zeros, not missing-node replacements.
     counterfactual_bb: [Vec<f64>; 2],
+    /// Frozen-policy values for evaluation, without training's zero-own-reach
+    /// completion. A response must attack this fixed policy, not re-solve it.
+    profile_counterfactual_bb: [Vec<f64>; 2],
+    best_response_counterfactual_bb: [Vec<f64>; 2],
+    policy_sha256: String,
     completed_zero_own_reach: [usize; 2],
     /// Undefined for a public branch with zero joint reach; never a passing zero.
     conditional_response_gain_bb: Option<[f64; 2]>,
@@ -54,6 +59,7 @@ fn solve(mut config: TurnRiverSolveConfig) -> Result<Values, String> {
     solver.train();
     let rows = solver.policy_strategies();
     let policy_rows = rows.len();
+    let policy_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&rows).unwrap()));
     solver.nodes.clear();
     solver.load_frozen_average_strategies(&rows)?;
     drop(rows);
@@ -104,6 +110,33 @@ fn solve(mut config: TurnRiverSolveConfig) -> Result<Values, String> {
     }
     Ok(Values {
         counterfactual_bb,
+        profile_counterfactual_bb: std::array::from_fn(|seat| {
+            profile[seat]
+                .iter()
+                .enumerate()
+                .map(|(c, v)| {
+                    if solver.legal[seat][c] {
+                        v * totals[1 - seat]
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        }),
+        best_response_counterfactual_bb: std::array::from_fn(|seat| {
+            best[seat]
+                .iter()
+                .enumerate()
+                .map(|(c, v)| {
+                    if solver.legal[seat][c] {
+                        v * totals[1 - seat]
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        }),
+        policy_sha256,
         completed_zero_own_reach,
         conditional_response_gain_bb,
         policy_rows,

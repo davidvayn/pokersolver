@@ -3359,3 +3359,150 @@ the responder cannot see the future turn. A conditional postflop-root result
 would still not certify preflop/full-game exploitability. Use a short
 two-to-eight-iteration paired screen before scaling this more expensive
 native continuation approach; all existing release gaps remain open.
+
+## September 6: eight-round pair and frozen full-postflop response
+
+Implemented `counterfactual_turn/flop_pilot/frozen_response.rs` as a research-
+only evaluation of the complete frozen flop/turn/river continuation at a
+specified public flop root. This is a conditional postflop game, not preflop
+or full-game qualification. The definition of the evaluated policy is explicit:
+the exported f32 flop average, plus a deterministic 64-iteration joint turn/
+river average for every resulting public history and visible turn card.
+Each continuation is constructed from the candidate's own public action
+likelihoods and ranges, frozen, then evaluated. A best responder cannot alter
+the ranges supplied to the opponent's policy construction.
+
+The counterfactual-turn adapter now exposes raw profile and best-response CFVs
+separately from the zero-own-reach completion used in training. Each turn
+packet pins the candidate and its nine frozen continuation policy hashes.
+The aggregation requires **all 49 unique board-legal public turns** and the
+complete continuation-history set. It sums contributions with the exact
+45-compatible-turn denominator before maximizing a flop action. Thus a flop
+response cannot see the future turn; the turn/river response does see already
+revealed public cards. Existing river traversal enumerates every legal river
+and respects exact-combo information sets. Policies and all-in equity values
+retain their documented f32 arithmetic; this is not an exact-real-arithmetic
+certificate or a proof of safe online re-solving.
+
+Tests check an analytically tractable royal-flush-versus-nines public game,
+including fold/call/bet values and a response that benefits from the frozen
+opponent's bluff-folding behavior. A separate synthetic continuation case
+exercises the actual all-turn aggregation: integrating before maximizing gives
+1.75bb, whereas a future-turn-aware maximum would exceed that by over 0.12bb.
+Missing/duplicate turn packets, wrong candidate identities, incomplete public
+histories, malformed policies and board-blocked CFVs fail closed. Reversing
+packet completion order leaves the aggregate bytes unchanged. A compile-time
+borrow error in one corruption-test fixture was corrected before execution;
+it was not a strategy or evaluation failure.
+
+### Completed short screen setup
+
+`local-native-flop-20260906-screen1` ran four bounded workers: two eight-round
+training seeds and one fresh turn-1 packet for each already-frozen two-round
+baseline. Both seeds use the original public fixture, full action abstraction,
+one public-turn sample per immutable iteration and 64-iteration native leaves.
+The first two sampled turns and zero-own-reach completion counts match their
+earlier counterparts. No preflop model or application policy was changed.
+
+| Worker | Seconds | Sampled peak physical footprint, bytes | Result |
+| --- | ---: | ---: | --- |
+| Seed 100101, eight rounds | 592.871 | 945,505,432 | 16 flop rows, 72 turn solves |
+| Seed 100102, eight rounds | 595.594 | 935,871,616 | 16 flop rows, 72 turn solves |
+| Seed 100101 baseline, turn-1 packet | 87.929 | 973,341,776 | Nine frozen continuations |
+| Seed 100102 baseline, turn-1 packet | 88.005 | 980,272,256 | Nine frozen continuations |
+
+All four exited zero without resource stops. Training caps were 900 seconds,
+packet caps 300 seconds, every worker capped at 2GiB sampled physical footprint
+with the 20GiB disk reserve. The four-worker period overlapped a release test
+run, so these are feasibility timings, not isolated algorithm speedups.
+
+| Root action | Seed 100101, 2 -> 8 rounds | Seed 100102, 2 -> 8 rounds |
+| --- | ---: | ---: |
+| Check | 25.72% -> 67.35% | 27.58% -> 51.35% |
+| Bet 1.5bb | 15.68% -> 18.81% | 16.62% -> 25.62% |
+| Bet 2.5bb | 10.41% -> 10.15% | 10.38% -> 21.15% |
+| All-in 19bb | 48.18% -> 3.68% | 45.42% -> 1.88% |
+
+These are action changes, **not demonstrated exploitability improvements**.
+The approximately 16-point cross-seed check-frequency difference remains a
+warning against promoting either short policy. Maximum observed single-seat
+conditional turn response residuals are 0.125891808 / 0.082659070bb across the
+72 training queries, not comparable fixed-root before/after quality estimates.
+There were no zero-joint queries. Zero-own-reach completions total
+29,049 / 32,284 for seed 100101 and 24,276 / 26,795 for seed 100102.
+
+Frozen eight-round exports are 645,549 / 661,743 bytes. Independent audits
+verify hashes, all 16 public rows, legal support, finite f32 probabilities and
+sum errors at most 4.47e-8 / 4.66e-8. A separate JavaScript implementation
+reconstructs every baseline turn-1 public-action reach from the actual frozen
+flop mix, enumerates compatible private-card pairs, checks raw CFV payoff
+bounds and blocked cards, and verifies weighted zero-sum/profile/response
+values for all nine continuations. Both packet audits pass. Their packet sizes
+are 845,504 / 856,526 bytes; a single packet does not emit a postflop aggregate.
+
+Full release tests pass **280 library + nine CLI**, 30 explicit research
+entries ignored, 116.52 / 0.67 seconds under concurrent pilot load. The seven
+focused counterfactual/native-response tests pass in 4.84 seconds. Changes
+since the preceding milestone are test-only native research code; no browser,
+serving or default blueprint path was changed. Prior milestone `db6f88c`
+was pushed and passed CI 34020634378.
+
+Frozen test executable:
+`f9e960f289a65afef0f0df6e33716da2b88934c161d3bd957642cc5a5de80bb3`.
+Completed screen manifest:
+`c84903609b40526d555faed535333122f50643b66457652e7dae06ae7ab7a1a0`.
+Screen runner:
+`22c841e083757660d49a1c9b6972ee6d3b3a3b2cfb1c093b2d4ebd8f4c3f61e0`.
+Seed 100101 eight-round policy:
+`b5e16da5f889f986ca0710cba4fbdd4daee99278f5d9b207dccbfd4c315a1cb6`.
+Seed 100102 eight-round policy:
+`60603be36cea27e4b02ae41b519aa505ea21e408c524d5862a22823c08f02c0e`.
+Turn-1 baseline packets, seeds 100101 / 100102:
+`781d735835608c242a51d6d46f42c17fbd868062a33409efa96744771f151657`,
+`2aa1af1c19857cc12ad5999d8dd1d04f922311b194ee1bb5c01bbfb89532e183`.
+Independent raw-reach/CFV auditor:
+`39e634621f5e1ec1e548435b6e7b2b7cde563978b4e73c7a9934fb1c5917fa37`.
+Independent eight-round policy auditor:
+`c005b054b784aee9250ce54edb289118a03297785256a688ce3b778dc7859b85`.
+
+### All-turn comparison launched; results pending
+
+After the screen and independent audits passed, launched once:
+
+```bash
+python3 neural/runs/local-native-flop-20260906-response49/run.py
+```
+
+This fixed evaluation compares both seeds at two and eight rounds: 49 turns
+per frozen profile, 196 packets total. It reuses the two audited baseline
+packets, leaving **194 new turn packets**. Each contains nine complete frozen
+turn/river policies' value vectors, not just a sampled payoff. Four workers
+run in parallel under 2GiB / 360-second per-worker guards, a two-hour stage
+stop and the 20GiB disk reserve. Every new packet receives the independent
+raw-reach/card-removal audit before completion is recorded. Only the complete
+per-profile packet set can generate a conditional root response; partial
+sets, audit failures or interrupted workers cannot become passing zeros.
+
+Authoritative mutable state is
+`preflop-solver/neural/runs/local-native-flop-20260906-response49/manifest.json`;
+the live supervisor was PID 44840, exec session 85617. Initial packet workers
+44855..44858 completed and subsequent owned workers were verified live. Do
+not restart from an old PID or manifest status alone. No aggregate response
+was available at this milestone, and no model was selected or activated.
+
+Inspection found a bookkeeping defect in the already-running frozen supervisor:
+its final assertion expects 196 new jobs, but two reused packets mean there are
+194 new jobs. The packet solves are unaffected. Preserve the original runner
+and its eventual failed manifest; use a separate guarded finalization after
+verifying all 194 new results plus the two reused packets, without rerunning
+policy training or any completed packet. No aggregate has yet been accepted.
+No longer training is authorized by a low conditional-root number alone:
+first inspect both seeds' two-to-eight response changes, then challenge the
+selected direction on additional authentic roots/full-hand trajectories.
+Full-game exploitability, preflop stability, action-EV precision and full-hand
+coverage are still unresolved.
+
+One further obsolete generated debug library,
+`target/debug/deps/libpreflop_solver-97539e8db9d59ff6.rlib`, was losslessly
+gzipped before the larger comparison to increase disk headroom. Its compressed
+copy is retained and recoverable. No models or checkpoints were removed.
