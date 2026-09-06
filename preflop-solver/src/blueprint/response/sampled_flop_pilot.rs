@@ -7,6 +7,7 @@ use crate::blueprint::neural::{
 use crate::blueprint::public_belief::{sampled_flop, PublicBeliefState, PublicBeliefStrategy};
 use std::time::Instant;
 mod cache;
+mod continuation_probe;
 
 pub(super) fn public_ranges(
     base: &TabularResponsePolicy,

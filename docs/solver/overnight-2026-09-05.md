@@ -2997,3 +2997,116 @@ iterations. The mismatch is an architectural limitation and a hypothesis for
 this failed transfer, not a diagnosed cause established by these outcomes.
 All unresolved preflop, routed action-EV, coverage and full-game qualification
 requirements remain unchanged; this goal is not complete.
+
+### Continuation diagnosis: sparse local averages prevent a faithful EV comparison
+
+The full-profile screen milestone `601c873` was pushed and CI **34016160392
+passed**. The next action was a tight diagnostic, not another longer training
+pair. `sampled_flop` now has an internal read-only observer at the end of its
+unchanged training traversal. The ordinary caller uses a no-op observer. A
+test-only `continuation` module captures frozen average probabilities and
+update counts in memory; it exposes no regrets, resumable state, fallback
+actions or deployable model. It refuses a row with no average contributions
+or no regret updates, matching the local root export's trained-row requirement.
+
+The diagnostic uses **one reused development root**, source A's saved first
+BB flop decision after limp/check, board `[24,14,5]`, 20bb, 2bb pot. Only its
+public state, game configuration and range vectors are reused, not its old
+four-iteration-turn payoff samples. The root is before any flop action, so
+those ranges depend only on the unchanged preflop source. Training uses the
+actual routed seed formula, `87001 XOR first_u64_le(SHA256(board, history))`,
+yielding **3454475668975051736**, and 32 iterations. Each method enumerates all
+four first actions on the same 64 conditional private/runout draws (seed99004),
+then attempts to follow its own frozen local average continuation.
+
+| Local training | Complete action rollouts | Missing infoset | No average contribution | Average exists, no regret update | Unscored total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Sampled | 189 / 256 | 43 | 13 | 11 | 67 |
+| Exact flop terminal | 155 / 256 | 57 | 21 | 23 | 101 |
+
+Most failures occur at turn entry; one per method occurs on the flop. These
+are attempted conditional action rollouts, not independent full hands,
+reach-weighted full-hand lookup coverage or an additional release gate.
+Average-only rows do contain an average distribution but are explicitly
+untrained under this inspection's stated rule; they are distinguished from
+missing rows and absent averages. No interrupted rollout is assigned an EV,
+zero loss, uniform continuation, extrapolated policy or passing grade.
+
+The intentionally strict native command returns **101**, reporting
+`left: 168, right: 0` for complete-continuation availability. Its supervisor
+records `diagnostic_complete_continuation_unavailable`, not a model pass.
+The first bounded run took **5.961 seconds**, sampled peak **133,693,896 bytes**,
+without a 2GiB / 120-second / 20GiB-disk stop. The same two event records are
+reproduced exactly with the final executable in 5.947 seconds, peak136,200,672
+bytes. This makes the negative diagnostic repeatable without loading a full
+checkpoint.
+
+Minimized reproductions need only own cards `[35,26]`, visible turn board
+`[24,14,5,50]`, and their public action histories. After the sampled profile's
+flop check/bet2.5/call, the actual turn key exists with average contributions
+but zero regret updates. After the exact-training profile's
+check/bet2.5/raise9.5/call, the actual key exists with regret updates but zero
+average contributions. The normal regression checks both cases and changes
+the synthetic opponent holding and hidden river; the keys and diagnoses remain
+identical. These are two different continuation histories, not a paired
+same-turn-state payoff comparison. The fixture contains only the frozen public
+root and its source identity, not the old sampled payoffs or training state.
+
+The diagnosing-bugs process therefore rules out a key mismatch or hidden-card
+dependency for these two failures, but does **not** diagnose them as the cause
+of the previous full-profile attack-gain result. The proposed comparison of
+trained-plan versus served-plan action EVs was not completed: the trained
+average continuation is insufficiently populated to score it under the stated
+no-fallback contract. Neither root action ranking nor full-game improvement
+is claimed from this diagnostic.
+
+Research cross-check: [OpenSpiel's external-sampling implementation](https://github.com/google-deepmind/open_spiel/blob/master/open_spiel/algorithms/external_sampling_mccfr.cc)
+also places its simple average updates on the non-traverser's nodes and has a
+separate full-average traversal option. A finite-budget average-only or
+regret-only row is therefore not proof that our standard averaging formula is
+wrong. Do not add unweighted extra average updates merely to fill the table.
+The newer [CCS-MCCFR preprint](https://arxiv.org/html/2607.27035v1) likewise warns
+that fixed marginal chance correctness is not the same as conditional
+unbiasedness under adaptive strategies, and its four HUNL endgame comparisons
+do not establish a significant benefit. This does not justify blindly coupling
+traversers' chance samples or adding another long sampler experiment here.
+
+Verification: **269 library + nine CLI release tests pass**, 25 explicit
+research entries ignored, 80.18 / 0.59 seconds. The minimized diagnostic test
+takes 5.68 seconds and records the known limitation; it does not pretend to fix
+it. Private diagnostic interfaces are scoped to `blueprint`, with no new
+compiler warnings. The final native executable is
+`acbb92b34c47ae09354dbeb50f5f5357a08f24178faf7485363e7dd86e97e662`.
+Its two-round ordinary PCS and terminal-action-integrated artifact and summary
+bytes equal the previously pinned reference outputs. No byte-identical native
+binary or large-run parity claim is made. `git diff --check` passes. No browser
+code or serving policy changed, so no local browser/npm run was performed.
+
+Original diagnostic directory: `local-sampled-flop-20260905-continuationprobe1`.
+Its frozen executable SHA:
+`4a4a9af2d07832898cf112a4c285b31802a7afa8e353e02684b1b3d6501bce4c`.
+Completed negative diagnostic manifest:
+`710a1e503d79687525d65e7a883bbb8b41bcc53db25b762800773ab8e041a16a`.
+Original public cache:
+`6d796cb81412c2740d38cffc9d78a593cd05e0e78c0fce30030c6313adb1c1c2`.
+Committed public-only JSON fixture:
+`6d4c437507c5083d4930c9fea471660477a73f166cec680490c488f9c2cce260`.
+Final frozen test executable:
+`1391bd3475c76dc59ab5462534ab8fd646f32821a882a6f2d946dcd8a4cef243`.
+`local-sampled-flop-20260905-continuationverify1` runner:
+`eb4a2c0b23702414d75a16dc7bd5fb060365f0265f638626fa17d311fef5e233`.
+Completed compatibility/reproduction manifest:
+`1602da17451491582164dc995d8f521ce3b015e24a4ae9432f1d0434334bc655`.
+
+Next concrete policy-action direction: construct range-conditioned turn
+boundary targets with the existing complete 64-iteration joint turn/river
+solver. Start from this compact public flop root and replay the actual routed
+nonterminal flop policies, updating every acting-player combo likelihood after
+each action, before blocking the revealed turn. This can avoid loading a full
+preflop checkpoint for every target: the root already pins the preflop
+posterior, and every flop action on a path reaching the turn uses the sampled
+nonterminal resolver, not the terminal correction. First verify this rooted
+replay against the existing full-profile range reconstruction, then build a
+small boundary-value pilot. Do not use the sparse training averages or the
+old cache's four-iteration-turn action payoffs as substitutes for those targets.
+No such replay/value generator is implemented by this diagnostic milestone.

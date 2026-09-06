@@ -6,6 +6,8 @@
 //! agreement with a separately served turn/river policy require external tests.
 use super::*;
 use crate::blueprint::neural::deal_for_policy_combo_on_board;
+#[cfg(test)]
+pub(in crate::blueprint) mod continuation;
 
 const FUTURE_CHANCE_CORRECTION: f64 = (49.0 * 48.0) / (45.0 * 44.0);
 
@@ -71,9 +73,17 @@ pub fn solve_with_exact_terminals(
 }
 
 fn solve_impl(
-    mut config: SampledFlopConfig,
+    config: SampledFlopConfig,
     exact_terminals: bool,
 ) -> Result<SampledFlopSolution, String> {
+    solve_observed(config, exact_terminals, |_| ()).map(|(solution, ())| solution)
+}
+
+fn solve_observed<T>(
+    mut config: SampledFlopConfig,
+    exact_terminals: bool,
+    observe: impl FnOnce(&Trainer) -> T,
+) -> Result<(SampledFlopSolution, T), String> {
     if config.iterations < 2 || config.maximum_information_sets == 0 {
         return Err("sampled flop requires >=2 iterations and a positive node limit".to_owned());
     }
@@ -202,7 +212,7 @@ fn solve_impl(
         trained_root_combos += 1;
         minimum_root_average_visits = minimum_root_average_visits.min(node.average_visits);
     }
-    Ok(SampledFlopSolution {
+    let solution = SampledFlopSolution {
         schema: if exact_terminals {
             "hu-fixed-flop-exact-terminal-sampled-subgame-root-v1"
         } else {
@@ -228,7 +238,8 @@ fn solve_impl(
             status: "research_only".to_owned(),
             reasons: vec!["Sampled range-conditioned subgame root only; no opponent-CFV protection, full-game exploitability bound or action-EV grade. Not a complete continuation policy.".to_owned()],
         },
-    })
+    };
+    Ok((solution, observe(&trainer)))
 }
 
 #[cfg(test)]
@@ -237,7 +248,7 @@ mod tests {
     mod terminal_expectations;
     mod terminal_pilot;
 
-    fn fixture() -> SampledFlopConfig {
+    pub(super) fn fixture() -> SampledFlopConfig {
         let board = [0, 5, 10];
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 6.0;
