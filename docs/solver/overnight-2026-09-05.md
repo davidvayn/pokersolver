@@ -3238,3 +3238,124 @@ values from one posterior and silently reuse them after the flop policy changes.
 Compare against the retained policy on fresh full-hand deals before scaling.
 No serving model was activated; preflop stability, routed EV precision,
 full-hand coverage and full-game exploitability requirements remain unresolved.
+
+## September 6: counterfactual-aware native turn leaves and first flop pair
+
+Implemented the next policy-action pilot in the test-only
+`public_belief/counterfactual_turn` module. Unlike the preceding on-policy
+target records, flop regret updates need meaningful counterfactual values
+even when the current flop action gives an own holding zero reach.
+[CFR-D](https://poker.cs.ualberta.ca/publications/aaai2014-cfrd.pdf) distinguishes
+counterfactual best responses at such information sets from an ordinary best
+response with arbitrary unreachable behavior. The
+[depth-limited value-function analysis](https://arxiv.org/html/1906.06412v2)
+also makes the quality of an extension at unreachable information sets
+explicit. Neither result licenses treating arbitrary finite-budget subgame
+values as equilibrium values or using unsafe re-solving as a full-game bound.
+
+The native turn adapter allocates every board-legal holding's card/strength
+support, restores the actual action-conditioned ranges before training, and
+solves the existing joint turn/river DCFR game. Construction-only uniform
+weights never enter training. It freezes the f32 average, then evaluates
+profile and per-holding best-response values against that frozen policy.
+Positive-own-reach holdings receive profile CFVs; zero-own-reach holdings
+receive counterfactual best-response CFVs. Values are rescaled by the original
+opponent reach, not own reach. An entire zero range stays zero. A zero-joint-
+reach branch has no aggregate response residual (`None`), not a passing zero.
+No oracle-generated policy is activated or substituted into existing serving.
+
+The flop pilot uses a complete public flop action tree, exact private combos,
+exact all-in terminal equities, and one uniform public-turn proposal per
+immutable all-player update. The chance contribution is multiplied by 49/45
+before the regret backup; no hidden river is sampled. Both players see the
+same frozen strategy during that update. Every turn leaf is recomputed for
+that iteration's actual ranges using 64 joint turn/river iterations. This is
+a finite-budget research approximation, not complete CFR-D reconstruction.
+
+The codebase-design seam shares the original immutable flop traversal between
+the neural and native leaf adapters. The old neural adapter retains its
+behavior. A parity test exposed a fold-value arithmetic-order difference:
+1,484 regret entries differed, at most 2.22e-16. A uniform-legal-range probe
+isolated conflict subtraction versus card-marginal subtraction/add-back.
+Using the existing conflict-summation order restored exact regret and average
+parity. No tolerance, strategy update rule, or release gate was relaxed.
+Other tests cover zero-own-reach royal-flush deviations, entirely zero own
+ranges, raw-reach scaling, invalid blocked reaches, deterministic policies,
+and complete public-node/probability coverage on the small test game.
+
+### Bounded 20bb pair: complete, not yet a quality comparison
+
+Both workers in `local-native-flop-20260906-pair1` completed round one and nine
+turn solves, then stopped at the original 120-second cap. The failed manifest
+and outputs remain unchanged. The diagnosing-bugs performance check reused
+the same frozen executable, inputs, two seeds and two training iterations in
+`local-native-flop-20260906-pair2`, with a declared 300-second cap. A two-second
+native stack sample during seed 100101 showed active turn/river CFR traversal,
+not all-in matrix initialization; it is not a whole-run time attribution.
+Both workers then completed at about 127 seconds. No algorithm change was
+necessary to finish this pilot; the initial wall-time allowance was too short.
+
+| Seed | Seconds | Sampled peak physical footprint, bytes | Flop policy rows | Turn solves | Zero-own-reach CFV completions, p0 / p1 | Maximum single-seat conditional turn response residual, bb |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100101 | 127.076 | 551,437,152 | 16 | 18 | 6,719 / 7,293 | 0.094297865 |
+| 100102 | 127.282 | 434,832,152 | 16 | 18 | 6,850 / 6,962 | 0.082659070 |
+
+The source is the same 800-round A public fixture, 20bb limp/check flop
+`[24,14,5]`, not a new preflop model. These are independent chance seeds at
+one reused development root, not independent full-game training seeds.
+The first seed sampled turns 33/29; the second sampled 0/43. Both have zero
+zero-joint-reach queries. Frozen policy exports are 438,704 / 436,493 bytes.
+The independent JavaScript audit checks both hashes/logs, shapes, finite
+probabilities, support masks, unique histories and normalized input ranges.
+Maximum probability-sum error using the serialized decimals is 7.0e-8.
+The root mixes still put 48.18% / 45.42% on the 19bb all-in into a 2bb pot;
+these two-iteration mixtures must not be mistaken for a validated strategy.
+No new before/after payoff improvement or full-game exploitability is claimed.
+
+`cargo test --release -j 1 --quiet -- --test-threads=2` passes **278 library +
+nine CLI tests**, 28 explicit research entries ignored, 86.47 / 0.64 seconds.
+The ordinary PCS and integrated-terminal two-round artifacts and summaries
+are byte-identical to the archived controls. Their very short workers finish
+between memory polls, so sampled peaks are not representative benchmarks.
+No browser code or active model changed; no npm/browser check was needed.
+All pilot and compatibility workers exited, and their sessions were reaped.
+Prior milestone `5a96f2f` passed remote CI 34018704275.
+
+Frozen test executable:
+`f95cc7733895bfa83e93efe72040606a5e6b0615e377b5da4ca0f4a2564f69cc`.
+Native executable:
+`627868df193aca44956a5858606c5f9a4f73461ae66c295dba422d3edc956c4d`.
+Failed first-pair manifest:
+`2c443d4268726073600f59ddd602b61cbf25e6ac89170aaabfb40c0460d516a2`.
+Completed pair manifest:
+`4c30bfb5245a90c05eab8285012d71472b22a1fd61fd8b3515163234a8c3524e`.
+Pair runner:
+`1e4d162e800050f509ef6ded5f38f4368041b5a8040212d1af21fb0cb21ea9ca`.
+Seed 100101 policy:
+`5d169bbd0ba1ff6c147732575e228a82a4a207b0d222627645471abf224047da`.
+Seed 100102 policy:
+`5e50f69e20920c04740621d85526a5cb2d373c8714e2e0edcc5882c194c61143`.
+Independent audit:
+`e97b4033c6e49fd2571576b0063cdee225fdb053a3531b8fb284c63a20d829b5`.
+Compatibility manifest:
+`82d69fbe19b86855b047d53dcfc7e7048c2612aa842461c2d8980dfc02e7c7a6`.
+
+Disk reserve stayed enforced for pilots. In addition to the earlier recorded
+cache compression, five obsolete release `.rlib`/`.rmeta` pairs were gzipped:
+`394ff283eb4fc760`, `d55d7f7ce6e66485`, `3f98f386b1d3bcbc`,
+`5e116a7aea291ea1`, and `eead71f2764e2ff6` (the `libpreflop_solver-` prefix in
+`target/release/deps`). Three old debug `.rlib` files were also gzipped:
+`f1fe43f6027afd68`, `4a16ef6800aeecb2`, `d633c512f595722d` under
+`target/debug/deps`, recovering about 313MiB. Their hard-linked `.rmeta` files
+were skipped by gzip and remain untouched. All compressed copies are retained
+and recoverable with gzip or Cargo regeneration. No checkpoints, models,
+research outputs, source or unrelated user files were deleted.
+
+Next policy-quality step: freeze each candidate's complete flop average and
+its own range-conditioned turn continuations before measuring a response.
+Do not recompute the opponent's continuation using a responder's changed
+ranges. Aggregate public-turn outcomes before choosing a flop response, so
+the responder cannot see the future turn. A conditional postflop-root result
+would still not certify preflop/full-game exploitability. Use a short
+two-to-eight-iteration paired screen before scaling this more expensive
+native continuation approach; all existing release gaps remain open.
