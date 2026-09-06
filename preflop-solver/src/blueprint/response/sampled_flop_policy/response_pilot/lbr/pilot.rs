@@ -2,6 +2,7 @@
 //! dealer/defender action sampling and final payout see the complete deal.
 use super::*;
 mod delayed;
+mod confirmation;
 mod terminal_capture;
 mod terminal_marginal;
 

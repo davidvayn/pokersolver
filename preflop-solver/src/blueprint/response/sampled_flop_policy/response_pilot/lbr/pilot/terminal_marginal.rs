@@ -4,10 +4,10 @@
 use super::*;
 
 #[derive(Debug, PartialEq, Serialize)]
-struct TerminalAssessment {
+pub(super) struct TerminalAssessment {
     integrated: bool,
     observed_utility: f64,
-    conditional_utility: f64,
+    pub(super) conditional_utility: f64,
     actor: usize,
     selected: usize,
     probabilities: Vec<f64>,
@@ -44,7 +44,7 @@ fn final_decision(
     }
 }
 
-fn assess(
+pub(super) fn assess(
     policy: &dyn ResponsePolicy,
     game: &BlueprintConfig,
     deal: &Deal,

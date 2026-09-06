@@ -2568,3 +2568,85 @@ terminal-action estimator before seeing its data. Do not repeat the old
 32-vs-128 flop-iteration experiment, declare approximate GTO from this LBR
 result, or substitute these payoff SEs for the separate action-EV grading
 precision requirement. No new release gate or paid compute was introduced.
+
+### Shared-table parallel confirmation: full-size parity passed
+
+`local-sampled-flop-20260905-terminalparallel1/parity` completed both original
+sources. The new research-only `pilot/confirmation.rs` runs the control and
+candidate in two threads, each with its own policy and caches, sharing one
+immutable full inference table. Source A/B still run sequentially; no source
+rows are discarded and no second full checkpoint is resident. Both workers
+retain the original per-hand cache clearing and chance/action streams. A
+worker error stops the panel without inventing a replacement result.
+
+The small-game regression compares all serial and parallel semantic records,
+including actual eligible terminal integration, and checks cooperative failure.
+The full-size parity stage then uses the archived evaluation-seed-93004
+prefix: eight calibration and 24 holdout deals per source and variant. All
+raw baselines, attack actions/histories, cards/seeds, and exact terminal
+assessments reproduce the original serial pair and marginal replay within
+1e-12 (discrete fields exactly). Calibration is recomputed on the shorter
+eight-deal prefix, not copied from the original 32-deal calibration.
+
+| Source | Worker seconds | Sampled peak physical bytes | Serial parity |
+| --- | ---: | ---: | --- |
+| 26001 | 156.871 | 6,155,015,016 | pass |
+| 26002 | 185.258 | 6,594,745,480 | pass |
+
+Total pipeline time was 343.866 seconds. Both workers exited successfully
+without reaching the 900-second, 7.5GiB physical-footprint or 20GiB free-disk
+reserve stops. An independent read-only audit rechecked all 128 hand executions
+and 256 seat records against the original serial artifacts, log/source hashes,
+common deals, terminal sums, and paired means/SEs/99% intervals. There are only
+24 shared holdout deals here; this is implementation parity, not new policy
+quality evidence or an isolated serial-versus-parallel speed benchmark.
+
+Frozen executable SHA:
+`bb00d8cb4694c1acea5060955469ec53ae46d1ebe321de36ed0c3f2a462ace74`.
+Frozen runner SHA:
+`1500ba6a2eddef17ff5268a0f075fc7dd3519e7d4fb553258d446db5782b32ba`.
+Completed parity manifest SHA:
+`be7a6961c8019d0595e7ecf5e6516a210b4c4f205d71f7dbb802502a2c6174a9`.
+A/B worker log SHAs:
+`48e693efbf0463d701d4100f4b83fd47f68f2ee015802b745b7af87a64075be2` /
+`9a45b000831c442b20edf89ee1bbc63146c340c1355fc44b26294e87c288caf1`.
+
+The same frozen executable/runner has a separately selected `fresh` stage:
+64 calibration and 256 holdout deals, chance seed **96004**, distinct from
+the archived development data and the unit test's seed 95004. Only the
+terminal weight differs (0.5 versus 1.0); both arms keep 32 sampled-flop
+iterations, 64 joint turn/river iterations, 2,048 terminal equity samples,
+policy seed 87001, and delayed-flop LBR seed 90001 with 16 early runouts.
+The exact final-action estimator and fixed budget were frozen before viewing
+this new data. Do not stop early for an apparent win, pool the shared deals
+as independent observations, or tune either arm from interim outcomes.
+
+Fresh launch requires the completed hash-matching parity record and no live
+full-size worker. It retains the two-thread/one-table design, a 7.5GiB sampled
+physical-footprint stop, a 20GiB free-disk reserve and a 5,400-second cap per
+source. Failure preserves the stage and requires inspection, not an automatic
+restart. Completion yields a paired restricted-response comparison, **not**
+a full-game exploitability upper bound; raw response calibration remains
+visible and is not replaced by marginalized scores or rejected-response zeros.
+No serving model, browser code, release gate or paid resource is changed.
+
+Verification before launch: `cargo test --release -j 1 --quiet --
+--test-threads=2` passes **260 library and nine CLI tests**, with 22 explicit
+research entries ignored (73.43 / 0.59 seconds). `cargo build --release -j 1
+--quiet` and `git diff --check` pass. The production executable is still
+byte-identical to the prior milestone:
+`5ca2ad865f6cf4686b22d163965bf6e64b94564aff49079575480fc90651841e`.
+Browser/npm checks are not rerun locally for this research-only change.
+
+After both parity workers and the regression test process exited, the fresh
+stage was explicitly launched from `preflop-solver/`:
+
+```bash
+python3 neural/runs/local-sampled-flop-20260905-terminalparallel1/run.py fresh bb00d8cb4694c1acea5060955469ec53ae46d1ebe321de36ed0c3f2a462ace74
+```
+
+Initial source A worker PID: 30047. The authoritative stage record is
+`neural/runs/local-sampled-flop-20260905-terminalparallel1/fresh/manifest.json`.
+This launch is pending evidence, not a completed comparison; retain the
+fixed budget and inspect the actual process and resource record before any
+next action. The previous terminal correction remains experimental.
