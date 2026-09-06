@@ -37,6 +37,10 @@ mod recheck;
 pub use recheck::{recheck_full_game_response, ResponseRecheckConfig};
 pub use flop::{evaluate_flop_patch, FlopPatchEvaluationConfig};
 mod table;
+#[cfg(test)]
+mod frozen_preflop;
+#[cfg(test)]
+mod native_policy;
 mod terminal;
 mod turn;
 #[cfg(test)]

@@ -6,6 +6,7 @@ use std::cell::RefCell;
 mod chance_baseline;
 mod chance_batch;
 mod frozen_response;
+pub(in crate::blueprint) use frozen_response::playback::{NativeFlopOptions, NativePostflopPolicy};
 mod root_input;
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -27,7 +27,7 @@ mod frozen_flop_walk;
 #[cfg(test)]
 pub(super) mod frozen_turn_response;
 #[cfg(test)]
-mod counterfactual_turn;
+pub(in crate::blueprint) mod counterfactual_turn;
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";

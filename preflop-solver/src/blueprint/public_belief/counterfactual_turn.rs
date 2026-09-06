@@ -4,6 +4,7 @@
 //! best responses only for zero-own-reach holdings. No policy is deployed here.
 use super::*;
 mod flop_pilot;
+pub(in crate::blueprint) use flop_pilot::{NativeFlopOptions, NativePostflopPolicy};
 
 #[derive(Debug)]
 struct Values {
@@ -21,7 +22,20 @@ struct Values {
     policy_rows: usize,
 }
 
-fn solve(mut config: TurnRiverSolveConfig) -> Result<Values, String> {
+fn solve(config: TurnRiverSolveConfig) -> Result<Values, String> {
+    solve_impl(config, false).map(|(values, _)| values)
+}
+
+// Serving must retain the actual average rows evaluated below, not the
+// best-response completion used only for zero-own-reach trunk updates.
+fn frozen_policy(config: TurnRiverSolveConfig) -> Result<Vec<PublicBeliefStrategy>, String> {
+    solve_impl(config, true).map(|(_, rows)| rows)
+}
+
+fn solve_impl(
+    mut config: TurnRiverSolveConfig,
+    retain_policy: bool,
+) -> Result<(Values, Vec<PublicBeliefStrategy>), String> {
     let raw = config.state.ranges.clone();
     if raw
         .iter()
@@ -62,7 +76,12 @@ fn solve(mut config: TurnRiverSolveConfig) -> Result<Values, String> {
     let policy_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&rows).unwrap()));
     solver.nodes.clear();
     solver.load_frozen_average_strategies(&rows)?;
-    drop(rows);
+    let retained_rows = if retain_policy {
+        rows
+    } else {
+        drop(rows);
+        Vec::new()
+    };
     let root = solver.config.state.game_state();
     let profile = solver.profile_walk(root.clone(), normalized.clone(), None, None, None, true);
     let best: [Vec<f64>; 2] = std::array::from_fn(|seat| {
@@ -108,39 +127,42 @@ fn solve(mut config: TurnRiverSolveConfig) -> Result<Values, String> {
     {
         return Err("invalid counterfactual turn values or response residual".into());
     }
-    Ok(Values {
-        counterfactual_bb,
-        profile_counterfactual_bb: std::array::from_fn(|seat| {
-            profile[seat]
-                .iter()
-                .enumerate()
-                .map(|(c, v)| {
-                    if solver.legal[seat][c] {
-                        v * totals[1 - seat]
-                    } else {
-                        0.0
-                    }
-                })
-                .collect()
-        }),
-        best_response_counterfactual_bb: std::array::from_fn(|seat| {
-            best[seat]
-                .iter()
-                .enumerate()
-                .map(|(c, v)| {
-                    if solver.legal[seat][c] {
-                        v * totals[1 - seat]
-                    } else {
-                        0.0
-                    }
-                })
-                .collect()
-        }),
-        policy_sha256,
-        completed_zero_own_reach,
-        conditional_response_gain_bb,
-        policy_rows,
-    })
+    Ok((
+        Values {
+            counterfactual_bb,
+            profile_counterfactual_bb: std::array::from_fn(|seat| {
+                profile[seat]
+                    .iter()
+                    .enumerate()
+                    .map(|(c, v)| {
+                        if solver.legal[seat][c] {
+                            v * totals[1 - seat]
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect()
+            }),
+            best_response_counterfactual_bb: std::array::from_fn(|seat| {
+                best[seat]
+                    .iter()
+                    .enumerate()
+                    .map(|(c, v)| {
+                        if solver.legal[seat][c] {
+                            v * totals[1 - seat]
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect()
+            }),
+            policy_sha256,
+            completed_zero_own_reach,
+            conditional_response_gain_bb,
+            policy_rows,
+        },
+        retained_rows,
+    ))
 }
 
 #[cfg(test)]
@@ -162,6 +184,32 @@ mod tests {
             averaging_delay: 0,
             river_refinement_iterations: 0,
             regret_matching_plus: false,
+        }
+    }
+
+    #[test]
+    fn retained_policy_is_exactly_the_average_scored_by_counterfactual_values() {
+        let mut input = config();
+        // Keep a legal combo outside own reach: the policy must be the frozen
+        // average, not a unilateral best-response substitution for that combo.
+        let combo = Combo::new(51, 50).key();
+        input.state.ranges[0][combo] = 0.0;
+        let control = solve(input.clone()).unwrap();
+        let rows = frozen_policy(input).unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&rows).unwrap())),
+            control.policy_sha256
+        );
+        assert_eq!(rows.len(), control.policy_rows);
+        assert!(control.completed_zero_own_reach[0] > 0);
+        for row in rows.iter().filter(|row| row.actor == 0) {
+            let n = row.action_labels.len();
+            // River-blocked combos legitimately have all-zero rows.
+            let sum: f64 = row.probabilities[combo * n..(combo + 1) * n]
+                .iter()
+                .map(|v| *v as f64)
+                .sum();
+            assert!(sum == 0.0 || (sum - 1.0).abs() < 1e-6);
         }
     }
 

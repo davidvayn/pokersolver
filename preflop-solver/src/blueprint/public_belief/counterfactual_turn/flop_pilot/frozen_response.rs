@@ -3,6 +3,7 @@
 //! Only all 49 legal public turns may produce an aggregate. Turn chance is
 //! integrated BEFORE a flop action is maximized; no future-card observation.
 use super::*;
+pub(super) mod playback;
 
 type Ranges = [Vec<f64>; 2];
 type History = Vec<String>;

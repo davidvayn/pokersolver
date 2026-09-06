@@ -4546,3 +4546,110 @@ remains running after the completed continuation diagnostic. The bounded
 idle-sleep prevention still expires at the end of the requested 12-hour
 window; no permanent power setting, paid compute, or production model was
 changed.
+
+### September 6 continuation: native full-hand research integration
+
+The requested 08:34:30–20:34:30 UTC work window completed. Work then continued
+toward the still-active full-game objective. An architecture trace found that
+the improved native flop policy was only reachable from isolated research
+pilots; the existing full-hand research adapter still used sampled-flop
+root-only re-solving. More isolated native iterations would not update that
+adapter. The production website model remains unchanged.
+
+Implemented a new **research-only** `ResponsePolicy` adapter in
+`response/native_policy.rs`. Its preflop reader streams schema-5/6 compressed
+or plain JSON/MessagePack, discards postflop nodes and training allocations,
+and retains only frozen preflop averages. It rejects missing, untrained,
+invalid or mismatched policies instead of falling back to uniform actions.
+The same preflop probabilities reconstruct the public flop priors. One
+native flop tree is pinned per public root; its actual evaluated frozen
+turn/river average rows serve later streets, not training's zero-own-reach
+best-response completion. Opponent cards and future board cards cannot enter
+the narrow observable query interface. Cache eviction precedes allocation
+and leaves policy identity unchanged. This uses the existing evaluator seam,
+not a second evaluator or a production activation path.
+
+The existing counterfactual-value path still releases exported rows before
+its response walks. A separate retention path supplies the identical average
+rows to playback. Tests check row-hash parity, legal/accounting rejection,
+visible-card isolation, complete hands, separate worker copies, and
+turn/river cache reuse. The new adapter remains **unconstrained re-solving**:
+there is no opponent-CFV safety proof or full-game exploitability certificate.
+
+Bounded real-checkpoint probe:
+`local-native-full-hand-20260906-integration/paired-metadata`.
+Controller `retry.py` SHA
+`13497470649fc27dd5a15ac4acf01b5bfbceabb9a2a80693faa25722fdd6068a`;
+frozen test binary SHA
+`e150e48097e731274a514d7deda924b354620e50317baf6c4afd6edc6fd2bb54`;
+completed manifest SHA
+`c60e0174d6144928fe62d6d64c5e275a3cae0324a36478d09467122972a963de`.
+Both original 800-round checkpoints were SHA-pinned. Limits were two workers,
+3GiB each, 900 seconds per worker, 1,200 seconds per stage, and a 20GiB free
+disk floor. Both completed in **66.187 seconds** total, with sampled process
+footprint peaks of **1,316,456,128 / 1,239,107,264 bytes**. Raw artifacts remain
+local and ignored; no checkpoint or model artifact was deleted.
+
+| Integration diagnostic | Seed 26001 | Seed 26002 |
+| --- | ---: | ---: |
+| Retained preflop information sets | 16,900 | 16,900 |
+| Streaming load, seconds | 43.677 | 43.077 |
+| Exhaustive preflop queries: 100 public states × 1,326 combos | 132,600 | 132,600 |
+| Queries with no trained frozen average | 524 | 306 |
+| Exhaustive diagnostic lookup coverage | 99.60483% | 99.76923% |
+| Maximum valid preflop probability-sum error | 4.44e-16 | 4.44e-16 |
+| First native flop query, seconds | 14.748 | 15.213 |
+| First native turn query, seconds | 3.014 | 3.029 |
+| Frozen continuation solves through river | 1 | 1 |
+
+These timings use **2 flop / 4 training-turn / 4 response-turn iterations**,
+solely an integration/cost probe. Both completed eight forced check/call
+decisions through all four streets using fresh deterministic cards, seed
+881901. Subsequent same-tree queries took roughly 8–15 microseconds; the
+river did not re-solve. These are not policy-strength samples or candidate
+training budgets. Result SHAs are
+`a2e7aaab3f605a4be282e5f7f118559ff4c7af1639e3d2e12a62789db3b62d5b`
+and `19d4a6211c1246e19bcea79c2dd39f95d0c7e900f308e1aa6bbd828d10766df1`.
+Seed A's reconstructed archived flop-root ranges differed by at most
+**5.20e-18**, so the compact reader did not materially change those priors.
+
+The initial `paired` probe failed explicitly on seed B's missing averages
+and stopped seed A. That failure is preserved, not overwritten. The retry
+retains the coverage failures in its result while also diagnosing supported
+trajectories; any unavailable row actually needed for play or range replay
+still stops evaluation. **Completed probe does not mean passed coverage.**
+This exhaustive preflop distribution is not the required held-out authentic
+and forced-deviation full-game coverage distribution either.
+
+The rejected examples have **zero average visits and zero strategy sums**,
+despite positive regret-update counts (e.g. 459 or 43). They occur on late
+preflop all-in lines such as 5 → 9 → 18 → 20bb. Thus this is not a key/codec
+mismatch or merely an overly strict regret-counter check. The recorded
+realization-weighted average is absent for those holdings. The old uniform
+fallback would silently supply 50/50 fold/call. The strict adapter does not.
+A minimized regression checks this exact absence-of-average pattern even
+when regrets were updated. No new model values were fabricated to close it.
+
+Compatibility check: the retained 128/64 first-seed response aggregate was
+replayed with the new implementation and remained byte-identical, SHA
+`2489b7ad4cc0e94792d58043464f4f286b481818695f458fe4092b3f2f8451e9`,
+including conditional half-gain **0.093242362752bb**. The independent analytic
+JavaScript response audit test also passed. The stronger one-root 128-response
+result remains **0.067488189529bb**, not a full-game result.
+
+Next priority is the actual full-hand candidate: assess cost and response
+quality through this adapter at explicit candidate budgets, not more isolated
+root passes presented as global progress. Cold-root cost is already significant
+at the tiny probe budget. Reuse existing chance/equity caches and resolver
+interfaces when profiling; do not build duplicate cache/oracle frameworks.
+The missing off-path averages need an explicit validated completion policy or
+appropriate training, never a uniform substitution. Global preflop stability,
+served action-EV precision, full-hand coverage and full-game exploitability
+remain unqualified. No release gates were relaxed and no model was activated.
+
+Final local verification for this milestone:
+`cargo test --release -j1 --quiet -- --test-threads=2` passed **295 library
+tests and 9 CLI tests**, with 32 explicitly ignored research pilots; library
+runtime 88.31 seconds. `node --test neural/audit_native_flop_response.test.mjs`
+passed its independent analytic fixture test. `git diff --check` passed.
+No app, browser worker, API, model registry or website asset changed.
