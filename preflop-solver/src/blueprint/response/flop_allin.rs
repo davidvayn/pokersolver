@@ -129,6 +129,17 @@ fn opponent_range(
     opponent_range_impl(base, state, hero, board, game, true)
 }
 
+#[cfg(test)]
+pub(super) fn opponent_range_for_audit(
+    base: &TabularResponsePolicy,
+    state: &GameState,
+    hero: [u8; 2],
+    board: &[u8],
+    game: &BlueprintConfig,
+) -> Option<Vec<([u8; 2], f64)>> {
+    opponent_range(base, state, hero, board, game)
+}
+
 fn opponent_range_impl(
     base: &TabularResponsePolicy,
     state: &GameState,

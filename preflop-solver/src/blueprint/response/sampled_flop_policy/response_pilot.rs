@@ -3,9 +3,9 @@
 //! diagnostic results, never a fabricated zero exploitability certificate.
 use super::*;
 use std::io::Write;
+mod lbr;
 mod support;
 mod tail;
-mod lbr;
 
 fn profile(
     table: Arc<InferenceTable>,
@@ -21,11 +21,27 @@ fn profile_with_turn_iterations(
     seed: u64,
     iterations: u64,
 ) -> (turn::TabularTurnPolicy, Arc<flop::FlopPatch>) {
+    profile_with_terminal_options(
+        table,
+        seed,
+        iterations,
+        &TerminalFlopOptions {
+            equity_samples: 2048,
+            weight: 0.5,
+        },
+    )
+}
+
+// Explicit experimental parameter seam; archived profiles retain 0.5/2048.
+fn profile_with_terminal_options(
+    table: Arc<InferenceTable>,
+    seed: u64,
+    iterations: u64,
+    terminal: &TerminalFlopOptions,
+) -> (turn::TabularTurnPolicy, Arc<flop::FlopPatch>) {
     assert!([4, 16, 64].contains(&iterations));
-    let mut patch = flop::FlopPatch::terminal(&TerminalFlopOptions {
-        equity_samples: 2048,
-        weight: 0.5,
-    });
+    terminal.validate().unwrap();
+    let mut patch = flop::FlopPatch::terminal(terminal);
     patch.sampled = Some(FlopResolve::new(32, seed, 2_000_000));
     let patch = Arc::new(patch);
     let base = TabularResponsePolicy {

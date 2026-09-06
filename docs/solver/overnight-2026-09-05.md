@@ -2293,3 +2293,105 @@ Current gaps remain the preflop stability/precision figures at the top of
 this document, full-hand coverage qualification, and a defensible full-game
 exploitability bound below 0.50 then 0.05bb/hand. No unvalidated activation,
 paid compute, gate relaxation, or additional long training run occurred.
+
+### Reproduced terminal bad calls; explicit full-weight candidate
+
+CI 34004697297 for `06132fe` passed. The diagnosing-bugs loop now has a
+concrete reproduced policy-action loss, not just a noisy large winning hand.
+The development capture replays delayed-pilot source B / holdout index 3 /
+seat 0, reconstructing the actual opponent posterior from the original
+20bb/800-round checkpoint and current 32-flop/64-turn-river profile. Its
+16-runout LBR values exactly match the archived trace `[-1,-9.78626961397315]`.
+It then enumerates all 990 legal remaining boards for each compatible holding:
+1,070,190 showdowns, with no hidden actual opponent cards or future board
+used to choose an action.
+
+The full-checkpoint measurement and a minimized 339-row frozen-average subset
+match **exactly** in action mix, posterior, sampled LBR values and enumerated
+values. The compact MessagePack fixture is 159,594 bytes, contains no regrets
+or resumable state, and is retained under `preflop-solver/tests/fixtures/` with
+provenance. Fixture SHA:
+`4caf41a368b79a80ebdf576e792ed4cd5d1cc0203bde709428018904d0842dc9`.
+The source terminal row has seven averaging contributions and equal sums
+`[234.47321012757615,234.47321012757615]`; it is an existing 50/50 row, not
+an absent-node lookup in this particular case.
+
+`local-sampled-flop-20260905-terminalcapture1` completed in 69.996 seconds,
+peak physical footprint 5,806,887,400 bytes, no resource stop. Its frozen
+executable SHA is
+`9555db8559ed3c606af47c226c15778475ec8cd442393a0e218eee2dc98011d4`,
+runner SHA `a51d767210636af63f5ae411fd9906086d76ceff1640ee9d5533f41edb20e458`,
+and log SHA `ce55cbcf90f5e0321fcf6789664abe4b82df5a2ceb93fec8e08ec91425510caf`.
+
+The fast, unattended red command is the captured frozen executable's
+`terminal_capture::replay_terminal_flop_conditional_loss` test, with
+`POKER_TERMINAL_CAPTURE_DIR` pointing at the capture directory. It failed
+identically twice (2.215 / 2.189 seconds), reporting conditional loss
+**2.2327421425686964bb**, beyond the existing 0.05bb decision tolerance.
+Fold EV is -1bb, enumerated call EV is -9.930968570274786bb, but the composed
+policy folds/calls 75%/25%. This is a conditional decision value against the
+frozen public posterior, not a per-full-hand exploitability estimate.
+
+Three ranked hypotheses were declared before the controlled probes: the
+blend retains bad calls; the corrector and evaluator disagree about ranges;
+or equity sampling changes the selected action. Results on the same fixture:
+
+| Equity samples | Blend weight | Corrector selection | Fold/call mix | Conditional loss, bb |
+| ---: | ---: | --- | --- | ---: |
+| 128 | 0.5 | Fold | 75% / 25% | 2.232742 |
+| 2,048 | 0.5 | Fold | 75% / 25% | 2.232742 |
+| 16,384 | 0.5 | Fold | 75% / 25% | 2.232742 |
+| 2,048 | 1.0 | Fold | 100% / 0% | 0 |
+
+The actual corrector posterior agrees with the independent Bayesian replay
+to maximum absolute difference 2.0816681711721685e-17. The corrector already
+selects fold at every tested sample budget. Thus the retained partial blend,
+not a misclassified equity sign or mismatched range, explains this loss.
+The exact same replay with explicit full weight passes in 2.274 seconds.
+The frozen old executable remains red; no old artifact or gate was changed.
+
+A normal regression now checks both control and explicit candidate through
+the real composed policy path. All **257 library and nine CLI release tests**
+pass; 20 explicit development/research entries are ignored. Release build and
+whitespace checks pass. Production executable SHA is
+`5ca2ad865f6cf4686b22d163965bf6e64b94564aff49079575480fc90651841e`.
+The explicit two-round production replay at
+`/tmp/poker-terminal-candidate-replay.Jm0tRQ` preserves both artifact and summary
+bytes; artifact SHA remains
+`c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`.
+This tiny production check does not certify the full-size research candidate.
+
+The parameter seam is test-only: archived profile factories still use
+terminal weight 0.5 / 2,048 samples, and their event metadata remains correct.
+Only explicit candidate entries request weight 1.0. The terminal correction's
+existing confidence abstention remains unchanged. Earlier full-weight work
+already improved the older profile against fixed opponents; it did not
+qualify an exploitability upper bound and was not the default in the newer
+sampled-flop/64-turn-river combination. This is a controlled integration
+comparison on that combination, not a new optimizer or claimed Nash fix.
+
+`local-sampled-flop-20260905-terminalweightpair1/run.py` is now launched with
+frozen executable
+`6e5fb3b00e0f2bdcca1a12f135b76dbc436654a72e9b601f63c66e0f3a1771cf`
+and runner SHA
+`7af92aad2fb35c0404e2d83ff7c81017bc066262cf5fe53c1f8631ff4f520fda`.
+First it verifies the candidate against the original full checkpoint. Then
+it compares control/candidate sequentially for both source seeds: 32
+calibration and 96 raw holdout hands per variant, fresh seed 93004, the same
+exact-card delayed-LBR rule, 32 flop iterations and 64 turn/river iterations.
+Only terminal blend weight changes. All variants share chance for paired
+deltas, not extra independent hands. Each full-size worker has the existing
+7.5GiB / 20GiB disk-reserve guard and a 1,800-second challenge cap; the initial
+single-case replay has a 600-second cap. Prior inspected cases are not reused
+as validation deals. This paragraph records launch, not completed full-game
+results. No research candidate or website model has been activated.
+
+The initial full-checkpoint replay subsequently passed in 70.464 seconds,
+peak physical footprint 5,838,442,960 bytes, no stop. It reproduces the old
+75/25 mix and 2.2327421425686964bb conditional loss, and the explicit candidate's
+100/0 mix with zero conditional loss, against the same enumerated posterior.
+Full-replay log SHA:
+`ddb386449d00dc0846b21823a62b30fa62876fda1c565c017f7745a81449df67`.
+The supervisor then launched source A's fresh control challenge; paired
+policy-quality results are still pending. This confirms the original
+unminimized decision replay, not a full-game exploitability improvement.

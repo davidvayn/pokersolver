@@ -2,6 +2,7 @@
 //! dealer/defender action sampling and final payout see the complete deal.
 use super::*;
 mod delayed;
+mod terminal_capture;
 
 #[derive(Default, Serialize)]
 struct HandAttack {
@@ -156,6 +157,25 @@ fn run_challenge_from(
     evaluation_seed: u64,
     first_street: Street,
 ) {
+    run_challenge_with_terminal_options(
+        calibration_hands,
+        holdout_hands,
+        evaluation_seed,
+        first_street,
+        TerminalFlopOptions {
+            equity_samples: 2048,
+            weight: 0.5,
+        },
+    );
+}
+
+fn run_challenge_with_terminal_options(
+    calibration_hands: u64,
+    holdout_hands: u64,
+    evaluation_seed: u64,
+    first_street: Street,
+    terminal: TerminalFlopOptions,
+) {
     let source = PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").unwrap());
     let checkpoint_sha = sha256_file(&source).unwrap();
     assert!([
@@ -167,7 +187,7 @@ fn run_challenge_from(
     assert_eq!(table.rounds, 800);
     assert_eq!(table.config.effective_stack_bb, 20.0);
     let game = table.config.clone();
-    let (policy, patch) = profile_with_turn_iterations(table, 87001, 64);
+    let (policy, patch) = profile_with_terminal_options(table, 87001, 64, &terminal);
     let lbr = Lbr {
         seed: 90001,
         early_runouts_per_combo: 16,
@@ -183,7 +203,7 @@ fn run_challenge_from(
     emit(
         serde_json::json!({ "stage":"lbr_configuration", "checkpointSha256":checkpoint_sha,
         "policySeed":87001, "flopIterations":32, "turnRiverIterations":64,
-        "terminalFlopWeight":0.5, "terminalFlopEquitySamples":2048,
+        "terminalFlopWeight":terminal.weight, "terminalFlopEquitySamples":terminal.equity_samples,
         "lbrSeed":lbr.seed, "earlyRunoutsPerCombo":lbr.early_runouts_per_combo,
         "evaluationSeed":evaluation_seed, "calibrationHands":calibration_hands, "rawHoldoutHands":holdout_hands,
         "interpretation":if first_street == Street::Preflop {
