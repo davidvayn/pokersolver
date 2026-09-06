@@ -3,6 +3,7 @@
 use super::*;
 mod delayed;
 mod terminal_capture;
+mod terminal_marginal;
 
 #[derive(Default, Serialize)]
 struct HandAttack {

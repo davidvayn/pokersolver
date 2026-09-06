@@ -2395,3 +2395,176 @@ Full-replay log SHA:
 The supervisor then launched source A's fresh control challenge; paired
 policy-quality results are still pending. This confirms the original
 unminimized decision replay, not a full-game exploitability improvement.
+
+### Terminal-action estimator prepared; inference memory census
+
+Milestone `50aca613b60e4d5ddad2b6bd76b9ab5d75e56235` is pushed and its remote
+CI 34006103776 passed. The fresh terminal-weight pair remains frozen while a
+separate development replay is prepared. This replay does not rerun an attack,
+select different actions, change a defender, or replace an original result.
+It reconstructs each archived terminal history, verifies its original payout,
+and, only when the final defender flop decision has two terminal actions,
+integrates both outcomes using the actual frozen policy probabilities and
+the existing exact legal-runout evaluator. Eligibility is determined before
+the sampled action; folds with a nonterminal alternative and the attacker's
+own actions are not substituted. Strategy queries still receive only own
+cards and the visible board. Invalid histories, payout mismatches, malformed
+probabilities, and observed zero-probability actions fail closed.
+
+This is ordinary terminal-action Rao-Blackwellization, consistent with the
+known-strategy/terminal-observation principles discussed by
+[Burch et al.](https://poker.cs.ualberta.ca/publications/aaai18-burch-aivat.pdf),
+not a complete AIVAT implementation. The
+[Kim/Sandholm heuristic-pathology paper](https://arxiv.org/html/2605.14261v1)
+warns against fitting a correction on the same evaluation outcomes. Here no
+value model, coefficient, inverse-variance weight, or significance target is
+fitted: terminal payouts are determined by the game rules. The original raw
+results remain available. Removing individual action noise does not guarantee
+a smaller *paired* standard error; that must be measured. Reanalyzing these
+same deals adds no independent evidence and cannot turn a restricted response
+into an exploitability upper bound or override its original calibration.
+
+The two normal regressions verify both seats, exact weighted-mean preservation,
+zero expected correction across both terminal actions, independence of hidden
+future cards, exclusion of noneligible folds/attacker actions, and rejection
+of invalid records. All **259 library and nine CLI release tests** pass;
+21 explicit research entries are ignored. The release build passes and the
+production executable remains byte-identical:
+`5ca2ad865f6cf4686b22d163965bf6e64b94564aff49079575480fc90651841e`.
+These are research-only source changes, with no browser or serving change.
+
+Prepared but not yet launched: `local-sampled-flop-20260905-terminalmarginal1`.
+Its frozen test executable SHA is
+`ee379af44b80393bee57109a5e3c3492f3ad26247b11b394427db67252e49e40`;
+runner SHA at preparation was
+`534dda15d1ef8ed745e8efa15eb16b2bd2b0e3396ca522f5ac3d583f8b89e6a8`.
+The runner requires a completed, hash-pinned original pair, checks original
+log/source hashes, loads one full checkpoint at a time, and retains the
+7.5GiB / 20GiB disk-reserve guards with a 900-second cap per source.
+It will report original and marginalized seat-summed outcomes separately,
+including covariance-preserving per-deal control/candidate differences.
+
+A separate read-only streaming census completed both original checkpoints
+without materializing another inference table or altering any artifact.
+It pins the original source hashes and its counts match both original
+800-round summaries. Results in `local-sampled-flop-20260905-inference-census1`:
+
+| Source | Preflop rows | Flop rows | Turn rows | River rows | Peak physical bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A | 16,900 | 3,884,147 | 7,441,993 | 7,721,262 | 19,644,824 |
+| B | 16,900 | 3,817,540 | 7,413,434 | 7,623,642 | 20,054,424 |
+
+Runtime was 48.712 / 48.955 seconds, each below its 300-second / 256MiB
+streaming limits. Census SHA:
+`8ab4e8726b7b532b0eaca400da2d739ecada541b64bd15923bac15f9ce2d2251`.
+Although roughly 79.5% / 79.7% of rows are on the later streets, they cannot
+simply be removed: `TabularTurnPolicy::resolved_strategy` still uses original
+source probabilities for forced zero-entry hands, and the safe arm needs its
+original anchors. No filtered model, invented completion, storage deletion,
+or claimed inference-parity result follows from this census. Preserving that
+exception is necessary before any future memory-saving representation could
+enable more parallel policy trials. This investigation adds no release gate.
+
+### Completed fresh terminal-weight pair; exact replay launched
+
+`local-sampled-flop-20260905-terminalweightpair1` completed every planned job
+without a resource stop. The source A/B control/candidate workers took
+475.229 / 505.657 / 1,237.152 / 1,237.619 seconds. Their peak physical footprints
+were 6,358,733,672 / 6,357,947,240 / 6,366,286,672 / 6,339,122,000 bytes.
+Whole-pipeline time including the initial full-checkpoint case replay was
+3,530.467 seconds. Source B traversed more expensive later-street lines;
+these timings are not an isolated hardware or estimator benchmark.
+
+| Source | Control holdout half-seat gain | Candidate holdout half-seat gain | Paired candidate-minus-control (SE), bb/hand | Individual normal 99% interval |
+| --- | ---: | ---: | --- | --- |
+| A | 0.096645 | -0.163403 | -0.260048 (0.176149) | [-0.713777, +0.193680] |
+| B | 0.562916 | -0.119292 | -0.682208 (0.280931) | [-1.405839, +0.041424] |
+
+These are **half the two seats' summed restricted-attack gains**, not an exact
+Nash gap or certified full-game exploitability. For seat sums, multiply both
+means and standard errors by two. Both sources' point estimates favor the
+full-weight correction, but both paired intervals cross zero. Calibration
+rejects both seats for all four profiles; the raw negative candidate gains
+do not certify zero exploitability. Of 96 holdout hands, source A changes
+five seat sums (four lower, one higher); B changes ten (nine lower, one higher).
+This is encouraging directional evidence with a small affected sample, not
+a qualified global winner or a reason for a longer unchanged training run.
+
+The independent read-only audit checks all 512 hand executions / 1,024 seat
+records, exact deals and action/chance seeds, configurations and scope, original
+source/log/binary/runner hashes, legal bounded action-value argmax, baseline
+cancellation, no-intervention identity, stage counts, calibration flags,
+means, SEs and paired intervals. All pass. There are **96 independent holdout
+deals**, reused across sources and variants, not 384. The audit initially
+exposed its own parser assumption: Rust's harness prefixes the first JSON
+event with the test name. Reading from the opening brace preserves that event
+and makes the complete log/manifest comparison pass. No original log, runner,
+result or statistical estimate was edited to fix this audit issue.
+
+Completed pair manifest SHA:
+`c9d5b168fd3b472b602c4b4dfea9794f2eaac0e54fedc8fd99cfc6d3c2b7eeda`.
+Worker log hashes (A control, A candidate, B control, B candidate):
+
+- `2413901aa36d60dcb85875fdcfc6a1bed0839e986183f63354e282b1ac444d1d`
+- `58ebd1d87cdad8187626d82a7d6d3df09a111765a121019a695cf13ad354fd55`
+- `c3b0b1ac06c9964302ea974e33e20497e5d422c242b8f0d0df3d048e0836d4db`
+- `e7e91893c6d6bdce0f24b72b529a88e5cdcce7c6b7fc7061ea1ee0290b3b2867`
+
+After confirming the original supervisor and all its workers had exited,
+`local-sampled-flop-20260905-terminalmarginal1` was launched against that exact
+completed manifest. Before launch, its parser was also corrected to retain
+Rust's first prefixed JSON event. The actual frozen runner SHA is therefore
+`5d5bb2889ba19bbc26cf8702e45750c8cba1a5ac2e6a86cc305a78e9ad542a51`;
+the executable remains the previously recorded `ee379af4...`. This is a
+separate estimator replay with both original policies and all old records
+preserved, not a fresh validation sample or additional training. Results are
+pending at launch. The existing preflop consistency, action-EV precision,
+full-hand coverage and full-game exploitability requirements remain open.
+
+### Completed exact terminal-action replay
+
+`local-sampled-flop-20260905-terminalmarginal1` is now **complete**, with no
+live worker or resource stop. A/B workers took 123.160 / 162.498 seconds,
+with peak physical footprints 5,797,564,928 / 5,736,927,696 bytes. Total
+pipeline time was 287.327 seconds. This reused all existing trajectories;
+it did not rerun the expensive LBR searches or create new evaluation deals.
+
+| Source | Marginalized control half-seat gain (SE) | Marginalized candidate half-seat gain (SE) | Paired candidate-minus-control (SE) | Individual normal 99% interval |
+| --- | --- | --- | --- | --- |
+| A | +0.174586 (0.126540) | -0.163403 (0.195696) | -0.337989 (0.149054) | [-0.721926, +0.045948] |
+| B | +0.334385 (0.125366) | -0.078664 (0.123265) | -0.413050 (0.131560) | [-0.751925, -0.074174] |
+
+All table values are bb/full-hand **half-seat sums**. Source A integrates
+12 control / seven candidate holdout terminal decisions; B integrates 18 /
+eight. Candidate terminal choices are often already deterministic, explaining
+why removing their final action draw can leave an outcome unchanged. Paired
+SE falls from 0.176149 to 0.149054 for A and from 0.280931 to 0.131560 for B.
+Both mean differences still favor full weight. B's individual interval is now
+entirely negative; A's still includes zero. This is a development reanalysis
+of the same 96 shared holdout deals, **not an independent confirmation**.
+Original calibration flags stay rejected, and no negative response payoff is
+converted to zero exploitability. No full-game upper bound has been obtained.
+
+An independent read-only audit reconstructs all 1,024 seat assessments and
+512 hand sums, matches original observations, verifies exact action weighting,
+player signs, eligible/unchanged records, stage counts, original input and
+output hashes, means, standard errors, and covariance-preserving paired
+intervals. All pass within 1e-12. JSON reparse/serialization can change an
+archived floating payout by at most 1.7763568394002505e-15 in these records;
+this was explicitly checked, not treated as a strategy change. Original
+artifacts and original statistical results remain immutable.
+
+Replay manifest SHA:
+`af2194880cd9423789b2e32b6f9ac4db6f033d0bdcf9ab6dd377fc20df4ac3a3`.
+A/B log hashes:
+`9acb4947ab5a14d858fa9786e9ca4f8d9b6bc603cf7db59b30f02d360f645837` /
+`220ae01d0ce5a7856223749bd65c52c74757e027f8785d86f403c799ca99a2e8`.
+
+Disposition: the full-weight terminal correction remains a promising explicit
+research candidate, not an activated model or a proven global winner. The
+concrete bad-call reproduction is fixed by the candidate, and both paired
+sources support the same direction, but a fresh confirmation must freeze the
+terminal-action estimator before seeing its data. Do not repeat the old
+32-vs-128 flop-iteration experiment, declare approximate GTO from this LBR
+result, or substitute these payoff SEs for the separate action-EV grading
+precision requirement. No new release gate or paid compute was introduced.
