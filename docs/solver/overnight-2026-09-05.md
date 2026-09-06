@@ -4752,3 +4752,92 @@ artifact was removed. Recovery paths and hashes are in
 `e877626307bfda337eda8a8df410259378660c904f479b6254b244e913adc779`.
 Use the recorded `gunzip` command to restore each cache, or rebuild debug
 artifacts from source. Recheck actual disk headroom before a larger pilot.
+
+### September 6 resumed sequence: exact preflop averaging
+
+The user explicitly requested the four-step averaging / continuation allocation /
+full-hand evaluation / validated serving sequence. The earlier overnight goal
+remains externally paused; this work does not mark that objective achieved.
+
+Implemented opt-in `--exact-preflop-averaging` for public-chance sampling. Before
+each traverser update, a complete preflop sweep accumulates both players'
+current policies with their own realization reach and the existing DCFR
+iteration weight. It enumerates all public actions and 169 existing preflop
+classes, without sampling a board or opponent action. Class multiplicity is
+constant over time and cancels within each normalized row. This follows the
+own-reach definition in [CFR Equation 4](https://poker.cs.ualberta.ca/publications/NIPS07-cfr.pdf).
+The sweep applies lazy discounts to **copies** when observing the current
+policy; the trainer's regrets, discount state and RNG are untouched. Sampled
+preflop averages are disabled only in this opt-in mode. Postflop averaging and
+all regret training remain unchanged. Default serialization is unchanged;
+checkpoint schema 7 prevents old binaries or changed configurations from
+mixing sampled and exact average windows on resume.
+
+The regression was run red before implementation (0 rather than 16,900 swept
+nodes), then green. Tests cover complete initially reachable averages, temporal
+realization-flow consistency under changing policies, untouched lazy discounts,
+per-iteration matched regrets/RNG/postflop averages, and deterministic checkpoint
+resume. This is a correction to finite-sampling average coverage, **not evidence
+that the existing regret estimator is biased**.
+
+Controlled full-grid 20bb pilots, seeds 26001/26002, default legacy card buckets,
+terminal integration, DCFR 1.5/0/2, averaging delay 0:
+
+| Rounds / seed | Missing exact-combo averages, sampled → exact | Untrained queries, sampled → exact |
+| --- | ---: | ---: |
+| 8 / 26001 | 79,862 → 0 | 113,242 → 84,864 |
+| 8 / 26002 | 64,666 → 0 | 102,382 → 83,556 |
+| 64 / 26001 | 31,490 → 0 | 49,086 → 29,172 |
+| 64 / 26002 | 19,316 → 0 | 34,182 → 17,238 |
+
+Denominator: **132,600** queries = 100 preflop public states × 1,326 exact
+holdings. "Untrained" additionally requires a positive regret-update count;
+the experiment does not serve initialized/untrained rows as validated policy.
+All four matched comparisons have identical SHA-256 digests of touched regret
+state and complete postflop state, plus identical RNG, sampled-deal and terminal
+evaluation counts. Newly swept but untouched preflop rows have exactly zero
+regrets and discount/update counters.
+
+Initial-root combo-weighted cross-seed results:
+
+| Rounds | Per-action MAE, sampled → exact | Primary agreement | Maximum aggregate delta |
+| --- | ---: | ---: | ---: |
+| 8 | 14.0464% → 12.7931% | 8.8989% → 12.9713% | 24.5408% → 18.2217% |
+| 64 | 8.2390% → 8.2605% | 41.9306% → 43.1373% | 7.7733% → 7.6114% |
+
+At 64 rounds the MAE does **not** improve. Complete-average coverage improves
+from 38/100 to 100/100 public states, but the remaining strategic instability
+does not disappear. Do not call complete initialization full trained coverage,
+or call these conditional diagnostics full-game exploitability. Timings at 64
+rounds were 10.900/10.101s sampled and 11.868/11.910s exact; concurrent
+continuation work means these are indicative costs, not controlled speed tests.
+Largest sampled pilot footprint was 578,437,936 bytes. The controller used one
+worker, a 4GiB footprint stop, 900s per worker, 3600s stage and 20GiB disk floor.
+
+Artifacts (local/ignored): `local-exact-preflop-20260906-paired8` and
+`local-exact-preflop-20260906-paired64`. Frozen test binary SHA
+`cb4313750233d41cbaecdc4415b2aba5aceb34f7b6dab2cadc93564825b527bf`.
+Eight-round training succeeded but its first reporting pass assumed an empty
+initial history; authentic histories contain posted blinds. That reporting bug
+was fixed and regression-tested. No training was repeated or failed evidence
+overwritten: original manifest SHA
+`20991b7d0e8aa7eb6f66aeebfa5b965b37e74e36593e47738df7e755511d2c23`,
+separate verified analysis SHA
+`5a3aee1a79f0f7e8801063c194ddee4e76c57441a4be1e5ee56e1526d759cba1`.
+The 64-round controller completed normally; manifest SHA
+`2cfdfb58a1657a98620336cf0db4fe464bfafaf795ed65bec4f2950eb68f6dbd`.
+
+Verification: `cargo test --release -j1 --quiet -- --test-threads=2` passed
+**300 library tests and 9 CLI tests**, with 34 opt-in research pilots ignored.
+`python3 -m unittest test_preflop_average_pilot` passed 3 reporting tests.
+No website, production model or acceptance gate changed.
+
+The second seed's 128-iteration continuation evaluation is running independently
+from the frozen 128/64 flop policy, with the previously bit-verified optimized
+binary, four workers and original resource limits. Its result is pending; no
+paired conclusion or full-game improvement is asserted yet.
+
+Disk reserve preparation compressed 11 additional inactive, single-link Rust
+debug `dep-graph.bin` caches under `target/debug/incremental/`. Each remains at
+its original path with `.gz` appended and is recoverable using `gunzip` or a
+debug rebuild. No model, checkpoint or evaluation artifact was removed.

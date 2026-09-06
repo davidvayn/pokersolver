@@ -3088,6 +3088,9 @@ fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
     config.streetwise_opponent_estimator = args
         .iter()
         .any(|argument| argument == "--streetwise-opponent-estimator");
+    config.exact_preflop_averaging = args
+        .iter()
+        .any(|argument| argument == "--exact-preflop-averaging");
     config.evaluation_controls.held_out_deals = parse_or(
         args,
         "--held-out-deals",
@@ -3586,6 +3589,7 @@ Blueprint options:
   --traverser-hand-batch-size <n> Default: 1; research pilot, maximum 990
   --opponent-hand-batch-size <n>  Default: 1; research pilot, maximum 990
   --public-chance-sampling        Research: update all board-compatible hands
+  --exact-preflop-averaging       Research: exact own-reach preflop averages (PCS only)
   --integrate-terminal-actions   Research: integrate terminal opponent actions
   --opponent-checkdown-baseline   Research: stateless opponent control variate
   --streetwise-opponent-estimator Research: integrate through flop; checkdown baseline on turn/river

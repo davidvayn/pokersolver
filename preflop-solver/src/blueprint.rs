@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 pub mod neural;
 pub mod preflop;
+mod preflop_average;
 pub mod public_belief;
 pub mod range_vector;
 pub mod response;
@@ -47,6 +48,7 @@ const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
 // probability/regret cutoff. A deterministic new run must use one recurrence.
 const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 5;
 const BLUEPRINT_STREETWISE_CHECKPOINT_SCHEMA_VERSION: u32 = 6;
+const BLUEPRINT_EXACT_PREFLOP_AVERAGE_CHECKPOINT_SCHEMA_VERSION: u32 = 7;
 const MAX_HS_DCFR_HORIZON: u64 = 10_000_000;
 
 fn model_binary_path(path: &Path) -> PathBuf {
@@ -241,6 +243,10 @@ pub struct BlueprintConfig {
     /// checkdown control variate on turn/river. Fresh research training only.
     #[serde(default, skip_serializing_if = "is_false")]
     pub streetwise_opponent_estimator: bool,
+    /// Research-only full preflop realization sweep before each traverser update.
+    /// Checkpoint-pinned; never mix with sampled preflop average sums on resume.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exact_preflop_averaging: bool,
     pub export_postflop_strategies: bool,
     pub recall_mode: RecallMode,
     pub dcfr: DcfrParameters,
@@ -400,6 +406,7 @@ impl Default for BlueprintConfig {
             integrate_terminal_actions: false,
             opponent_checkdown_baseline: false,
             streetwise_opponent_estimator: false,
+            exact_preflop_averaging: false,
             export_postflop_strategies: false,
             recall_mode: RecallMode::Trajectory,
             dcfr: DcfrParameters::default(),
@@ -415,7 +422,9 @@ impl Default for BlueprintConfig {
 
 impl BlueprintConfig {
     fn checkpoint_schema_version(&self) -> u32 {
-        if self.streetwise_opponent_estimator {
+        if self.exact_preflop_averaging {
+            BLUEPRINT_EXACT_PREFLOP_AVERAGE_CHECKPOINT_SCHEMA_VERSION
+        } else if self.streetwise_opponent_estimator {
             BLUEPRINT_STREETWISE_CHECKPOINT_SCHEMA_VERSION
         } else {
             BLUEPRINT_CHECKPOINT_SCHEMA_VERSION
@@ -449,6 +458,11 @@ impl BlueprintConfig {
         }
         if self.max_information_sets == 0 {
             return Err("max information sets must be positive".to_owned());
+        }
+        if self.exact_preflop_averaging
+            && self.traversal != BlueprintTraversal::PublicChanceSampling
+        {
+            return Err("exact preflop averaging requires public-chance sampling".to_owned());
         }
         if (self.integrate_terminal_actions || self.opponent_checkdown_baseline
             || self.streetwise_opponent_estimator)
@@ -1853,6 +1867,9 @@ impl Trainer {
         let mut last_checkpoint_iteration = None;
         while self.completed_iterations < self.config.iterations {
             self.discounts.advance(self.completed_iterations + 1);
+            if self.config.exact_preflop_averaging {
+                self.sweep_preflop_average()?;
+            }
             let traverser = self.completed_iterations as usize % 2;
             let template = Deal::sample(&mut self.rng);
             match self.config.traversal {
@@ -2194,7 +2211,9 @@ impl Trainer {
             return Ok(evaluation.expected_counterfactual_values_bb[traverser].clone());
         }
 
-        if self.completed_iterations >= self.config.averaging_delay {
+        if self.completed_iterations >= self.config.averaging_delay
+            && !(self.config.exact_preflop_averaging && state.street == Street::Preflop)
+        {
             let updates = range_vector::aggregate_average_strategy_updates(
                 &keys,
                 &ranges[actor],
@@ -3984,7 +4003,7 @@ mod tests {
         assert_eq!(trainer.terminal_evaluations, deals.len() as u64);
     }
 
-    fn tiny_config() -> BlueprintConfig {
+    pub(super) fn tiny_config() -> BlueprintConfig {
         BlueprintConfig {
             effective_stack_bb: 6.0,
             iterations: 3,
