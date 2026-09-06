@@ -2650,3 +2650,117 @@ Initial source A worker PID: 30047. The authoritative stage record is
 This launch is pending evidence, not a completed comparison; retain the
 fixed budget and inspect the actual process and resource record before any
 next action. The previous terminal correction remains experimental.
+
+### Fresh confirmation: source A complete, source B live
+
+The shared-table milestone was committed/pushed as `0ae59c3`; remote `main`
+was verified at the same SHA. CI **34010081484 passed**, including the Linux
+release/application pipeline. No unrelated loose artifact, report directory
+or review test was staged.
+
+The fixed fresh stage completed source A (26001) successfully: 2,196.873
+seconds, sampled peak physical footprint 6,892,508,416 bytes, no resource stop.
+Its control and candidate each completed all 64 calibration and 256 holdout
+deals. Source A's process exited before source B (26002) started, initial
+PID 32163. Source B and the complete pair are **pending** at this checkpoint.
+
+| Source A holdout metric, bb/full hand (half-seat sums) | Control | Candidate |
+| --- | ---: | ---: |
+| Raw sampled restricted-attack gain | 0.215530 | 0.023454 |
+| Exact-terminal marginalized restricted-attack gain | 0.208727 | 0.024396 |
+| Marginalized gain SE | 0.121439 | 0.134394 |
+
+The paired marginalized candidate-minus-control estimate is **-0.184331bb**,
+SE **0.097062**, individual normal 99% interval **[-0.434345, +0.065683]**.
+This fresh holdout points in the same direction as the development result,
+but does not exclude zero at the stated confidence. Calibration's paired
+estimate points the other way (+0.148092bb, SE 0.182493); both seats in both
+source-A profiles still fail raw response calibration. Do not convert the
+candidate's small observed response gain into a full-game upper bound,
+declare the pair won before B completes, or extend/tune from partial scores.
+
+The independent read-only source-A audit checks all **640 hand executions /
+1,280 seat records**, 320 shared phase-specific deals, native-log/manifest
+agreement, frozen binary/runner/parity hashes, legal action-value selections,
+exact common cards/seeds, baseline cancellation and no-intervention identity,
+terminal probability weighting/signs, phase counts and retained calibration,
+and raw/marginal/paired means, SEs and intervals. All pass within 1e-12.
+Eligible terminal decisions integrated: control 12 calibration / 48 holdout;
+candidate five / 27. The holdout has **256 shared independent deals**, not
+512 because both policy variants executed them.
+
+Completed source-A stdout SHA:
+`936d70131bb4ca159eb28052966009aefa3f18a0f97c0f6c2953042c7c454b23`.
+Its separate diagnostic log SHA:
+`9e9e477a655865dde39859a7f077a33f11883fbee60ced014e678a4c8fa6df2c`.
+The fresh stage's manifest is still mutable while B runs; no final manifest
+hash or completed-pair result is claimed. Disk availability fell from about
+21.35GiB to 20.8GiB during A, while its logs were only about 608KiB at the
+resource check. No files or user processes were removed, and the original
+20GiB reserve remains enforced for B.
+
+### Completed fresh confirmation: mixed result, no promotion
+
+`local-sampled-flop-20260905-terminalparallel1/fresh` is now **complete**.
+Both source processes and the supervisor have exited, and the retained exec
+session returned exit 0. Source B took 2,043.351 seconds and peaked at
+6,937,859,352 physical bytes. Total pipeline time was **4,242.013 seconds**
+(70.7 minutes). Neither source reached a resource stop; the final disk check
+showed about 20.68GiB free. No checkpoint or unrelated user file was removed.
+
+| Source | Control marginalized holdout gain (SE) | Candidate marginalized holdout gain (SE) | Paired candidate-minus-control (SE) | Individual normal 99% interval |
+| --- | --- | --- | --- | --- |
+| A / 26001 | +0.208727 (0.121439) | +0.024396 (0.134394) | -0.184331 (0.097062) | [-0.434345, +0.065683] |
+| B / 26002 | +0.125005 (0.068607) | +0.217296 (0.112076) | +0.092291 (0.083345) | [-0.122391, +0.306974] |
+
+All table values are bb/full-hand **half-seat sums**, not total exploitability.
+Multiply means, SEs and interval endpoints by two for the seat-summed scale.
+Raw source-B holdout gains are +0.137597 control / +0.222115 candidate on the
+same half-seat scale. Source B's fresh point estimate reverses its development
+result. Neither source's paired interval excludes zero, and both seats in all
+four profiles remain rejected by raw response calibration. B's calibration
+paired estimate is +0.040395bb (SE 0.097769); no calibration result is replaced
+by a marginalized score or a zero certificate.
+
+Disposition: **the full-weight patch did not confirm as a cross-source
+improvement**. Preserve it as an explicit research option and preserve the
+deterministic bad-call reproduction, but keep the existing 0.5-weight control
+as the comparison baseline. Do not activate the candidate, pool development
+and confirmation deals into a new passing claim, or run a longer unchanged
+terminal-weight comparison merely to seek significance. This result leaves
+the preflop consistency, routed action-EV precision, full-hand coverage and
+full-game exploitability requirements unresolved.
+
+The independent full-pair audit checks all **1,280 hand executions / 2,560
+seat records** against native logs and the completed manifest, verifies
+original source, frozen executable/runner, prerequisite-parity and output
+hashes, exact common deals across both sources and weights, all phase counts,
+legal bounded action-value selections, baseline cancellation/no-intervention
+identity, exact terminal weighting and signs, calibration retention, and raw,
+marginal and paired means/SEs/intervals. All pass within 1e-12. There are **256
+independent holdout deals reused across the four profiles**, not 1,024.
+Source B integrates eight calibration / 40 holdout terminal decisions in the
+control and six / 23 in the candidate.
+
+Of the 256 holdout deal-level differences, A changes 36 (24 lower, 12 higher)
+and B changes 28 (15 lower, 13 higher). The largest adverse B difference is
+index 240, +15.666035bb on the half-seat-sum scale. Its native records show
+the seat-0 attacker switching from a flop shove to a call followed by turn
+and river decisions; the other attack also changes its terminal call mix.
+The candidate's river payoff remains a sampled runout outcome, whereas the
+control's terminal flop payoff was exactly integrated. This is not a software
+bug reproduction or evidence that one particular river action is wrong.
+The diagnosing-bugs discipline therefore stops short of inventing a
+"candidate must win this deal" regression: a deterministic path difference
+alone does not establish a population policy defect or explain the entire
+mixed result. No hidden opponent cards are supplied to policy decisions.
+
+Completed fresh manifest SHA:
+`e60bf5a9c36c851afec587caaa92e140d1577aefeb8c0f707447fd31bd429abc`.
+Source-B stdout SHA:
+`847a6de33cb84e7ccf4d197a1f33b1dbfc0d37a77a46cd5ada781412c7f0056b`.
+Source-B diagnostic SHA:
+`e3ce7e658692d8aa8c794e802bdfa214592852406b5110e0dafc10def671a2f2`.
+Executable and runner remain the parity/fresh frozen hashes recorded above.
+This completed-result update changes documentation only; the 269-test release
+suite and successful CI for `0ae59c3` cover the unchanged implementation.
