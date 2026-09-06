@@ -4489,3 +4489,60 @@ research candidate**. The two-seed research best remains the validated
 stronger route. No default was changed to 128, no model was activated, and
 the reproduced root still does not pass 0.05bb. Full-game exploitability,
 coverage, served action-EV precision, and global stability remain unqualified.
+
+### Remaining flop action weaknesses, from existing completed packets
+
+Run-local read-only diagnosis:
+`local-native-flop-20260906-continuation128/diagnose-flop-actions.mjs`, SHA
+`afb2ed35cb1cbfbaa1d8ff4e540b8121fe4bea21330df240ac26a9f969dfef1e`.
+It preserves the existing aggregate checks and independently optimizes one
+public flop decision at a time, using exact private-combo information sets.
+Every other flop action and the frozen continuation remain unchanged. Each
+root-weighted gain is also checked against the corresponding local action
+value difference. These are separate unilateral responses, **not additive
+loss attributions or new release gates**.
+
+For seed 100101 with the stronger 128-iteration continuation:
+
+| One public decision changed | Root-weighted gain |
+| --- | ---: |
+| BTN response after BB checks | 0.033095661bb |
+| BB response after check / BTN bets 2.5bb | 0.027601453bb |
+| BB opening decision on the flop | 0.025108150bb |
+
+The same three decisions are the top three in **both** original 64-iteration
+continuation seeds, although their ordering differs. Their gains are
+0.029365026 / 0.027760057 / 0.024821188bb for seed 100101 and
+0.017785403 / 0.037141775 / 0.018135610bb for seed 100102 in the table's order.
+This is consistent evidence to focus further flop learning on these
+interacting betting/defense decisions, not rare terminal raise branches.
+
+For the stronger first-seed route, the current BTN-after-check mix is
+53.7550% check, 13.3973% bet 1.5bb, 30.5692% bet 2.5bb, 2.2785% jam.
+Its one-decision best response against this frozen opponent is approximately
+37.8293%, 6.3082%, 55.8625%, 0%. On the facing-2.5bb decision, the current
+BB mix is 54.8739% fold, 37.2986% call, 6.5640% raise 9.5bb, 1.2635% jam;
+the corresponding frozen-opponent response is 58.1228%, 40.7981%, 1.0791%, 0%.
+**Do not hard-code these response frequencies as GTO policy**: the opponent
+can adapt, and independent greedy replacements need not improve equilibrium.
+
+The next useful controlled comparison is allocation between more flop
+updates and more accurate training continuations, evaluating both with the
+same explicit continuation budget. For example, 256 outer / 64 inner versus
+128 outer / 128 inner has equal inner-iteration work, but not necessarily
+equal wall time because the number of continuation constructions differs.
+Neither new training entry is exposed in the guarded CLI yet; short default
+parity, higher-budget resource and determinism checks must precede such a
+long run. A second-seed 128-response baseline is also still needed. Do not
+launch a new long stage merely to fill the last minutes of this work window,
+claim that its outcome is guaranteed, relax thresholds, or activate this
+single-root research candidate. Recheck disk/artifact headroom before any
+extension; the current free-space margin above the 20GiB floor is small.
+
+Implementation milestone **`f93342aabc336797b76441dc65b563766e4b01c3`** is
+pushed and CI **34057344791 passed**, including the production application
+build and real every-street resolver checks. No training/evaluation worker
+remains running after the completed continuation diagnostic. The bounded
+idle-sleep prevention still expires at the end of the requested 12-hour
+window; no permanent power setting, paid compute, or production model was
+changed.
