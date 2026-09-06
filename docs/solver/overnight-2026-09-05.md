@@ -1949,3 +1949,96 @@ It does not establish that repeated query overhead is a bug. The diagnostic
 skill's measurement-first loop therefore did not justify a speculative
 performance rewrite; any optimization needs a repeatable isolated cost/parity
 check first. The completed pilot worker and supervisor have both exited.
+
+The completed LBR implementation/result milestone is committed and pushed as
+`0097deebad92309067ac9298e4a500378e3bbf24`. Its first push timed out; an
+authoritative remote check showed the old head, and the subsequent push
+succeeded. Cost-pilot final manifest SHA:
+`0a842a443d046730a295c3c8b331494314ff440c50f6d75b36bf1bbaffdfc0ad`;
+log SHA `92188f3a73620ecec969dcd1ea71b0e3780c7f9139365acbffe934556602f4f6`.
+
+The next independent challenge keeps the same LBR seed/rule, defender profile,
+and calibration threshold, increasing to 64 calibration / 128 raw holdout
+deals per source with fresh evaluation seed 91004. Sources A/B run
+sequentially; common chance across sources supports paired comparisons but
+does not double the independent-deal count. The original 8/24 cost entry
+point retains its original seed and budgets. The new guarded driver is
+`local-sampled-flop-20260905-lbrpair1/run.py`, with a 7.5GiB physical-footprint
+limit, 20GiB disk reserve and 5,400-second cap per source. Expected pair cost
+from the small pilot is roughly 1.5–2 hours, not a completion guarantee.
+This paragraph records the planned independent challenge; consult the live
+manifest for launch/completion and do not describe it as a quality pass.
+
+The pair is now **launched**, with source A verified live first; the supervisor
+starts B only after A completes and passes its event-integrity checks. Frozen
+test executable SHA:
+`f5a3c9775e6827c9d2c5f383ebc879688f58a70a0ef0fa8c5c1dcc9fd111e50c`;
+runner SHA `5ca111c0a61274480cfcdcd75572f1fb0bbce9eafcce9fc9fe4f9c9bdd7f4688`.
+The refactored driver passes all 252 library and nine CLI release tests;
+14 explicit research entries are ignored in the normal suite. Milestone CI
+34000465744 is in progress, not yet a recorded pass. No pair results are
+available at this launch checkpoint. The managed goal remains active.
+
+### Reuse terminal-flop public likelihoods without changing the policy
+
+CI 34000465744 for `0097dee` subsequently passed. The independent A/B pair
+continues on its original immutable executable; none of the following cache
+changes enters that running experiment.
+
+The diagnosing-bugs loop reproduced repeated terminal-flop range work with
+`cargo test --release terminal_panel_reuses_public_likelihoods_across_hero_holdings -- --nocapture`.
+The test queries the real terminal-correction path for two different hero
+holdings on the same public line. Before the fix it failed twice: the second
+holding repeated 2,162 public policy likelihood queries, although only 182
+entries could be newly unblocked (91 at each of two opponent decisions).
+The minimized execution took 0.016732 / 0.015882 seconds, without loading a
+large checkpoint. These are observations, not isolated performance estimates.
+
+A bounded cache now memoizes the selected action's likelihood for each exact
+opponent combo/public board/history. It does **not** memoize a hero-conditioned
+range, reorder its accumulation, alter blocker removal or normalization,
+change the equity samples, or substitute probabilities. Lazy cells only query
+entries the original code would request. Each patch owns its cache; weak table
+and optional backoff identities prevent cross-source reuse without retaining
+checkpoints. A differently configured caller follows the uncached path. The
+32-row limit holds about 0.7MiB of cells plus keys; eviction preserves live row
+references, and no cache mutex is held during nested policy queries.
+
+The same regression passes with 2,162 cold queries and **182** second-holding
+queries (91.6% fewer for that second holding), observed total 0.009307 seconds.
+The deterministic work-count improvement is established; a complete LBR
+runtime speedup is not yet measured. Additional tests compare cached and
+uncached normalized ranges with exact equality for both seats, four boards,
+and both terminal-only and sampled-flop policies. Cold/warm action mixes match
+exactly. Cache tests verify board/action/source separation, bounded retention,
+live-row eviction safety, and no extra strong checkpoint owner.
+
+Final local verification: 255 release library tests and nine CLI tests pass,
+14 research probes ignored; release build and whitespace checks pass. The
+two-round production artifact and summary at
+`/tmp/poker-terminal-cache-replay.6ExvUJ` match the previous replay bytes;
+artifact SHA remains
+`c602ffbb37a2a2c8d6b787051bdafe5749ea4ba2c03905f9b133a4c7a30361d3`.
+Production executable SHA:
+`aa6bf3c5e983efa93aae5baa011fd86949e5f41dbbeb8d82d1eea6c5aa83c3e1`;
+test executable SHA:
+`4aabb3880ab21c75024554c3548faf4f8852b97d96f26c4d763f3dbef8b24df6`.
+This small production replay does not exercise the full-size LBR adapter.
+Once the original pair completes, replay the original 8/24 cost pilot with
+this optimization and compare all decision/action/value outputs before
+claiming whole-evaluation parity or speedup. Keep only one full checkpoint
+loaded at a time. Concurrent local builds affect running-pair wall times.
+
+Source A's completed 64-hand calibration in the ongoing pair is unqualified:
+BTN/SB gain -1.018324bb (SE 1.202154), BB -0.035743bb (SE 0.821065),
+half-sum -0.527033bb (SE 0.651692). Preserve the raw independent holdout and
+finish both sources; this is neither a complete pair nor zero exploitability.
+The original positive 24-hand point estimate has not been replicated by this
+calibration block. Do not tune the running attack to it.
+
+If the completed all-street attack remains uninformative, the primary
+[LBR experiments](https://arxiv.org/html/1612.07547v2) motivate a separately
+frozen delayed-attack pilot: greedy early bets can miss later exploitable
+decisions. That is a candidate next diagnostic, not evidence of a weakness
+already isolated here, and its gains would still be lower-bound evidence.
+No defender policy change or extra release gate is introduced by that option.

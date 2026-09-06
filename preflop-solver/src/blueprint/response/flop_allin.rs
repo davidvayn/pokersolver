@@ -6,6 +6,13 @@
 
 use super::*;
 use crate::blueprint::neural::{deal_for_policy_combo_on_board, trajectory_action_matches};
+mod likelihood_cache;
+pub(super) use likelihood_cache::LikelihoodCache;
+
+#[cfg(test)]
+thread_local! {
+    static RANGE_POLICY_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TerminalFlopOptions {
@@ -119,6 +126,17 @@ fn opponent_range(
     board: &[u8],
     game: &BlueprintConfig,
 ) -> Option<Vec<([u8; 2], f64)>> {
+    opponent_range_impl(base, state, hero, board, game, true)
+}
+
+fn opponent_range_impl(
+    base: &TabularResponsePolicy,
+    state: &GameState,
+    hero: [u8; 2],
+    board: &[u8],
+    game: &BlueprintConfig,
+    cache_enabled: bool,
+) -> Option<Vec<([u8; 2], f64)>> {
     let opponent = 1 - state.actor;
     let mut ranges: Vec<_> = all_combos()
         .iter()
@@ -137,6 +155,10 @@ fn opponent_range(
             .position(|a| trajectory_action_matches(&cursor, a, observed, game))?;
         if cursor.actor == opponent {
             let visible = &board[..cursor.street.board_len()];
+            let cached = if cache_enabled {
+                base.flop_patch.as_ref().and_then(|patch|
+                    patch.terminal_likelihoods.row(base, &cursor, visible, selected, game))
+            } else { None };
             for (cards, weight) in &mut ranges {
                 if *weight <= 0.0 {
                     continue;
@@ -144,7 +166,15 @@ fn opponent_range(
                 let combo = Combo::new(cards[0], cards[1]);
                 let synthetic = deal_for_policy_combo_on_board(combo, opponent, visible).ok()?;
                 // Only this opponent's own action likelihood updates its range.
-                *weight *= base.frozen_strategy(&cursor, &synthetic, &actions, game)[selected];
+                let compute = || {
+                    #[cfg(test)]
+                    RANGE_POLICY_QUERIES.with(|count| count.set(count.get() + 1));
+                    base.frozen_strategy(&cursor, &synthetic, &actions, game)[selected]
+                };
+                *weight *= match &cached {
+                    Some(row) => *row[combo.key()].get_or_init(compute),
+                    None => compute(),
+                };
             }
             let mass: f64 = ranges.iter().map(|(_, w)| w).sum();
             // An impossible forced line keeps the explicit baseline completion;
@@ -167,6 +197,86 @@ fn opponent_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_panel_reuses_public_likelihoods_across_hero_holdings() {
+        let (mut policy, _) = super::super::tests::tabular_fixture();
+        let game = policy.table.config.clone();
+        policy.flop_patch = Some(Arc::new(flop::FlopPatch::terminal(&TerminalFlopOptions {
+            equity_samples: 128, weight: 0.5,
+        })));
+        let mut state = GameState::initial(&game);
+        while state.street != Street::Flop {
+            let action = state.legal_actions(&game).into_iter()
+                .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check)).unwrap();
+            state = state.apply(&action, &game);
+        }
+        let facing = state.apply(state.legal_actions(&game).last().unwrap(), &game);
+        let actions = facing.legal_actions(&game);
+        let first = Deal::from_cards([[48,49], [44,45]], [0,5,10,15,20]);
+        let second = Deal::from_cards([[40,41], [44,45]], [0,5,10,19,24]);
+        RANGE_POLICY_QUERIES.with(|count| count.set(0));
+        let start = std::time::Instant::now();
+        policy.strategy(&facing, &first, &actions, &game);
+        let cold = RANGE_POLICY_QUERIES.with(|count| count.get());
+        policy.strategy(&facing, &second, &actions, &game);
+        let warm = RANGE_POLICY_QUERIES.with(|count| count.get()) - cold;
+        println!("terminal panel coldQueries={cold} secondHoldingQueries={warm} seconds={}", start.elapsed().as_secs_f64());
+        // Two distinct hero cards can uncover at most 91 extra opponent combos
+        // at each of the two observed opponent decisions. The other likelihoods
+        // are public-policy queries already performed by the first holding.
+        assert!(cold > 200);
+        assert!(warm <= 182, "recomputed {warm} public policy likelihoods; expected at most 182 newly unblocked entries");
+    }
+
+    #[test]
+    fn cached_terminal_ranges_match_uncached_replay_exactly_for_both_seats() {
+        for sampled in [false, true] {
+            let (mut policy, _) = super::super::tests::tabular_fixture();
+            let table = Arc::get_mut(&mut policy.table).unwrap();
+            table.config.effective_stack_bb = 2.0;
+            table.nodes.clear();
+            let game = table.config.clone();
+            let mut patch = flop::FlopPatch::terminal(&TerminalFlopOptions {
+                equity_samples: 128, weight: 0.5,
+            });
+            if sampled {
+                patch.sampled = Some(super::super::sampled_flop_policy::FlopResolve::new(32, 87001, 300_000));
+            }
+            policy.flop_patch = Some(Arc::new(patch));
+            let mut root = GameState::initial(&game);
+            while root.street != Street::Flop {
+                let action = root.legal_actions(&game).into_iter()
+                    .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check)).unwrap();
+                root = root.apply(&action, &game);
+            }
+            let mut chance = SplitMix64::new(92201);
+            for _ in 0..4 {
+                let deal = Deal::sample(&mut chance);
+                for actor in 0..2 {
+                    let mut betting = root.clone();
+                    if actor == 1 {
+                        let check = betting.legal_actions(&game).into_iter()
+                            .find(|a| a.kind == ActionKind::Check).unwrap();
+                        betting = betting.apply(&check, &game);
+                    }
+                    let facing = betting.apply(betting.legal_actions(&game).last().unwrap(), &game);
+                    assert_eq!(facing.actor, actor);
+                    let board = &deal.board[..3];
+                    let hero = deal.holes[actor];
+                    let cached = opponent_range_impl(&policy, &facing, hero, board, &game, true).unwrap();
+                    let reference = opponent_range_impl(&policy, &facing, hero, board, &game, false).unwrap();
+                    assert_eq!(cached, reference, "sampled={sampled}, actor={actor}, board={board:?}");
+                    let actions = facing.legal_actions(&game);
+                    let before = policy.strategy(&facing, &deal, &actions, &game);
+                    // A fresh memoization object forces a cold replay while
+                    // retaining the exact same policy and sampling rules.
+                    policy.flop_patch.as_ref().unwrap().terminal_likelihoods.clear();
+                    assert_eq!(before, policy.strategy(&facing, &deal, &actions, &game));
+                }
+            }
+        }
+    }
 
     #[test]
     fn terminal_blend_allows_the_full_best_response_but_no_invalid_probability() {

@@ -117,6 +117,16 @@ fn emit(event: serde_json::Value) {
 #[test]
 #[ignore = "full-size all-street LBR cost/interface pilot; frozen inputs and external resource guard required"]
 fn sampled_profile_lbr_cost_probe() {
+    run_challenge(8, 24, 90004);
+}
+
+#[test]
+#[ignore = "paired independent LBR challenge; frozen source and external resource guard required"]
+fn sampled_profile_lbr_paired_challenge() {
+    run_challenge(64, 128, 91004);
+}
+
+fn run_challenge(calibration_hands: u64, holdout_hands: u64, evaluation_seed: u64) {
     let source = PathBuf::from(std::env::var("POKER_FLOP_PILOT_CHECKPOINT").unwrap());
     let checkpoint_sha = sha256_file(&source).unwrap();
     assert!([
@@ -139,14 +149,17 @@ fn sampled_profile_lbr_cost_probe() {
         "policySeed":87001, "flopIterations":32, "turnRiverIterations":64,
         "terminalFlopWeight":0.5, "terminalFlopEquitySamples":2048,
         "lbrSeed":lbr.seed, "earlyRunoutsPerCombo":lbr.early_runouts_per_combo,
-        "evaluationSeed":90004, "calibrationHands":8, "rawHoldoutHands":24,
+        "evaluationSeed":evaluation_seed, "calibrationHands":calibration_hands, "rawHoldoutHands":holdout_hands,
         "interpretation":"restricted legal all-street attack; approximate checkdown action values; not an exploitability upper bound" }),
     );
     let mut qualified = [false; 2];
-    for (phase, count, domain) in [("calibration", 8, 0), ("raw_holdout", 24, 1)] {
+    for (phase, count, domain) in [
+        ("calibration", calibration_hands, 0),
+        ("raw_holdout", holdout_hands, 1),
+    ] {
         // No overlap between calibration and untouched holdout chance streams.
         // No policy selection/critic tuning occurs within this cost probe.
-        let chance_seed = derived_seed(90004, domain, 0);
+        let chance_seed = derived_seed(evaluation_seed, domain, 0);
         let mut chance = SplitMix64::new(chance_seed);
         let mut gains: [Vec<f64>; 2] = Default::default();
         let mut paired_sums = Vec::new();
@@ -154,7 +167,7 @@ fn sampled_profile_lbr_cost_probe() {
         for index in 0..count {
             let hand_started = Instant::now();
             let deal = Deal::sample(&mut chance);
-            let action_seed = derived_seed(90004, domain, index + 1);
+            let action_seed = derived_seed(evaluation_seed, domain, index + 1);
             emit(serde_json::json!({ "stage":"lbr_hand_start", "phase":phase,
                 "index":index, "chanceSeed":chance_seed, "actionSeed":action_seed,
                 "holes":deal.holes, "board":deal.board }));

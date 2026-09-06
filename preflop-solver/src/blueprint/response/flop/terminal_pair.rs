@@ -137,6 +137,7 @@ mod tests {
             Some(Arc::new(FlopPatch {
                 #[cfg(test)]
                 sampled: None,
+                terminal_likelihoods: Default::default(),
                 bank: DecisionBank::default(),
                 weight: 0.25,
                 all_in_samples: Some(2048),

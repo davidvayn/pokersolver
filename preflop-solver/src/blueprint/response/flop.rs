@@ -110,6 +110,7 @@ impl DecisionBank {
 pub(super) struct FlopPatch {
     #[cfg(test)]
     pub(super) sampled: Option<super::sampled_flop_policy::FlopResolve>,
+    pub(super) terminal_likelihoods: super::flop_allin::LikelihoodCache,
     bank: DecisionBank,
     weight: f64,
     all_in_samples: Option<u32>,
@@ -123,6 +124,7 @@ impl FlopPatch {
         Self {
             #[cfg(test)]
             sampled: None,
+            terminal_likelihoods: Default::default(),
             bank: DecisionBank::default(),
             weight: options.weight,
             all_in_samples: Some(options.equity_samples),
@@ -373,6 +375,7 @@ pub fn evaluate_flop_patch(
     let patch = Arc::new(FlopPatch {
         #[cfg(test)]
         sampled: None,
+        terminal_likelihoods: Default::default(),
         bank: if config.all_in_samples.is_some() || config.flop_backoff.is_some() {
             DecisionBank::default()
         } else {
@@ -578,6 +581,7 @@ mod tests {
                 for weight in [0.0, 0.25] {
                     let saved = FlopPatch {
                         sampled: None,
+                        terminal_likelihoods: Default::default(),
                         bank: DecisionBank::from_decisions(
                             std::iter::once(&decision), ResolverGranularity::ExactTrajectory,
                         ).unwrap(),
@@ -601,6 +605,7 @@ mod tests {
         let baseline = policy.frozen_strategy(&flop, &deal, &actions, &game);
         policy.flop_patch = Some(Arc::new(FlopPatch {
             sampled: None,
+            terminal_likelihoods: Default::default(),
             bank: DecisionBank::from_decisions(
                 std::iter::once(&decision),
                 ResolverGranularity::ExactTrajectory,
@@ -670,6 +675,7 @@ mod tests {
         let baseline = policy.frozen_strategy(&facing_bet, &deal, &actions, &game);
         policy.flop_patch = Some(Arc::new(FlopPatch {
             sampled: None,
+            terminal_likelihoods: Default::default(),
             bank: DecisionBank::from_decisions(
                 [&first, &second].into_iter(),
                 ResolverGranularity::ExactTrajectory,
