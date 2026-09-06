@@ -3957,3 +3957,178 @@ solver settings. Do not treat this as a controlled speed comparison. After
 valid eight-round outputs, the observed original-root scaling supports matched
 32-round arms and the same all-turn evaluation on these contexts. No new
 release gate, model activation or full-game success claim is implied.
+
+### Broader controls recovered; shared-slot paired comparison launched
+
+Milestone `f2be78f853e1b6c95ac8cd316197c6f0f1d8c20c` was pushed; CI
+34031626720 passed. The retry ran with the exact same `273861...` solver/input
+artifacts, two normal-priority workers and no other native workload. Both B
+controls completed in 539.277 / 542.280 seconds (sampled peaks 674,677,624 /
+675,971,936 bytes). Both A three-bet controls completed in 8.030 / 7.519
+seconds (50,397,568 / 50,200,960 bytes). This different load/priority is not a
+controlled speed comparison, and no mathematical change was needed to recover
+the short controls. All four probability/identity checks passed. Parent 56739
+exited and session 27194 was reaped.
+
+The completed retry manifest is
+`53c59d98afa3469e3a28e3517d7540def33f3a3904f6f6b580663e6f22f3c0c5`;
+runner `retry8.py` is
+`d9a95b86aec15920ff27ea4aa52e07182a1008327984c9028f640c8bcc438727`.
+Eight-round policy SHAs, B 100101/100102 then A 100101/100102:
+`2222e413c9dbe0a6477cf058cc45acd3bdb3c84a64817f228a2af1b3e9629189`,
+`ce7a2d3f90dcc19246d50d30d746900367cad2476fc77578c5d16d2328552cb1`,
+`2e3e80bc7dfb6ae437f23c2f29480875f0e6486c4802cc913dfcc22387e7f6a0`,
+`b65b8f40ce1b08b8c102f2e6ad8aa07bb1edf84d9b02f07a30ca2ced926df76f`.
+B has 16 public flop rows and 72 native queries; A has two rows/eight queries.
+Maximum probability-sum errors are 4.74e-8 / 4.85e-8 / 4.47e-8 / 4.47e-8.
+No quality result is inferred from completing those controls.
+
+At approximately 12:09 UTC launched the fixed paired comparison:
+
+```bash
+python3 neural/runs/local-native-flop-20260906-broader-inputs/paired32.py \
+  53c59d98afa3469e3a28e3517d7540def33f3a3904f6f6b580663e6f22f3c0c5
+```
+
+Exec session 8354. Authoritative state:
+`local-native-flop-20260906-broader-inputs/paired32/manifest.json`.
+Runner SHA `10f8425cbbf7802c89ad14235924f825702a63d8c63968099f086a617e725762`.
+It uses **one shared pool of four slots** for four new 32-round training jobs
+and all 392 evaluation packets (two roots × two seeds × two iteration budgets
+× 49 turns). Training completion releases a slot to evaluation; no nested
+process pool can raise native concurrency above four. Per-native memory limit
+is 2GiB, total configured native allowance 8GiB, B training limit 5,400 seconds,
+A training limit 900 seconds, packet limit 360 seconds, whole-stage limit three
+hours, disk floor 20GiB. No full checkpoint process is resident.
+
+The stage first replays the original-root 32-round response outputs with the
+input-capable binary, exports shared terminal-equity inputs separately for the
+two new boards, validates each trained policy, and requires every turn packet
+before aggregation and independent JavaScript backups. An exception signals
+live workers before waiting for the executor to close. Missing/failed data
+cannot become a passing score. The prepared standalone `train32.py` was **not
+launched**; this shared-slot controller replaces it. No longer iteration
+extension or activation follows automatically.
+
+While this stage ran, a read-only comparison of the original fixed flop root
+also checked action-mix sensitivity to the two training chance seeds. Combo
+weights are own root reach times card-compatible opponent reach, normalized
+by joint mass; per-action MAE averages over the four legal actions. Each saved
+float32 row is normalized before comparison. This is **one root**, not the
+full-hand cross-seed release assessment:
+
+| Outer rounds | Weighted action MAE | Weighted primary agreement | Largest aggregate action delta |
+| --- | ---: | ---: | ---: |
+| 2 | 7.7298pp | 70.8646% | 2.8791pp |
+| 8 | 15.5658pp | 60.3685% | 15.9180pp |
+| 32 | 8.6662pp | 90.6687% | 10.8007pp |
+
+Thus the lower 32-round conditional response gains do not mean every normal
+policy metric already passes. The main action usually agrees, but mixing
+weights remain seed-sensitive (the 1.5bb bet averages 12.8044% versus
+23.6051%). No thresholds were changed and no new release gate was introduced.
+
+By 12:59 UTC all four new training jobs had completed. B 100101/100102 took
+3,004.732 / 2,995.285 seconds, sampled peaks 1,010,205,920 / 774,554,944
+bytes. A 100101/100102 took 27.470 / 27.486 seconds, peaks 50,463,104 /
+50,430,360 bytes. All 32-round policies passed input identity, legal support
+and probability checks (maximum sum error at most 4.65e-8). The existing
+four-slot pool moved entirely to evaluation; no extra pool was started.
+New policy SHAs, B 100101/100102 then A 100101/100102:
+`4b05d8dedb6581aafcb6ab1be1764ba8ecf527e7e0cf5ba3ecf110a5a42d1be2`,
+`d0c7bd92239e5a4f5f1b8ab0c2daf4cc0eb1486e1af75bc3797e0d072c3a1af0`,
+`a012313c716dd83aaaac2660748d297f2b26363a12581f598ccaa5e8629d54d8`,
+`7e9f701388816f39aa7a8c49d1a69ff4923e14b3634e58d3712a46869f1bc257`.
+
+The same cheap, read-only **root-only** action-mix calculation (asserting the
+two policies have identical input states) gives:
+
+| Context | Rounds | Weighted action MAE | Weighted primary agreement | Largest aggregate action delta |
+| --- | ---: | ---: | ---: | ---: |
+| B flop start | 8 | 11.0635pp | 87.8081% | 12.3506pp |
+| B flop start | 32 | 5.0031pp | 98.4912% | 3.6847pp |
+| A three-bet facing | 8 | 17.5578pp | 68.6500% | 3.5586pp |
+| A three-bet facing | 32 | 17.9087pp | 47.6785% | 12.3109pp |
+
+The B-root mix becomes more stable, but the A facing-bet mix does not. Its
+response score is still pending: disagreement alone cannot establish whether
+the alternative mixes lose significant EV. Wait for the complete paired
+responses before deciding whether to scale or alter the training estimator.
+
+### Targeted sampling review while the fixed comparison finishes
+
+[Gibson et al. (AAAI 2012)](https://poker.cs.ualberta.ca/publications/AAAI12-generalmccfr.pdf)
+relate regret bounds to bounded, unbiased estimator variance, but explicitly
+warn that higher per-update cost can negate a lower-variance estimator. Their
+probing algorithm is not a missing implementation here: this native trunk
+already enumerates every player action. A comparison must match oracle work,
+not just report fewer noisy updates.
+
+[Li, Chen and Huang (2026 preprint)](https://arxiv.org/html/2607.27035v1)
+study persistent correlated chance streams. The paper distinguishes marginal
+correctness from adaptive conditional bias; its Hold'em endgame comparisons
+do not show a clear benefit. Do not infer that a balanced persistent card
+schedule automatically preserves the present estimator's conditional
+unbiasedness, or transfer the small-game percentage improvements to this run.
+No persistent schedule is being installed.
+
+An independently derived, simpler candidate is a fresh uniform subset of `b`
+distinct public turns **within one frozen trunk update**, with no sampling
+state carried across updates. Its leaf estimate is
+`49 / (45 * b) * sum(V_t for t in sampled_subset)`. Every public card has
+inclusion probability `b / 49`, so the expectation remains `sum(V_t) / 45`,
+including the zero contributions from blocked own cards. For each fixed
+scalar leaf component, variance relative to one independent draw is
+`(49 - b) / (48 * b)`. This concerns the existing 64-iteration continuation
+oracle's values, not an assertion that those values are exact or that runtime
+reconstruction is safe. Trunk probabilities and averaging must update only
+once after combining the subset; the per-update discount schedule must not
+accidentally advance once per sampled card.
+
+Possible cheap next comparison, **not launched or implemented yet**: the
+unstable two-row A context, two seeds, 128 single-turn updates versus 32
+four-turn updates (128 leaf solves each), unchanged inner iteration budget,
+and the existing all-turn frozen response check. Decide after the current
+complete response scores; do not extend this candidate to expensive roots
+merely because its sampling formula has a lower conditional variance.
+
+### Broader response comparison complete: transfer plus a remaining weakness
+
+The shared stage completed in 6,404.954 seconds (106.75 minutes), with all
+four training jobs, **392/392 packets**, eight aggregates and eight independent
+JavaScript backups passing. Maximum independent backup difference was
+4.44e-16bb. Neither missing data nor failed responses were omitted. Parent
+57239 exited and exec session 8354 was reaped. Completed manifest SHA:
+`eab6dc2137623417bad5bfdffb9cc40d18edb90e6491204816f0d7cb6fbbf842`.
+
+Conditional fixed-public-root half-summed response gain:
+
+| Context | Seed | 8 rounds | 32 rounds | Change |
+| --- | ---: | ---: | ---: | ---: |
+| B flop start | 100101 | 0.776872522bb | 0.218397637bb | -0.558474885bb |
+| B flop start | 100102 | 0.805069750bb | 0.212251465bb | -0.592818285bb |
+| A three-bet facing | 100101 | 0.163746884bb | 0.171904592bb | +0.008157708bb |
+| A three-bet facing | 100102 | 0.156699336bb | 0.089272729bb | -0.067426607bb |
+
+The strong reduction transfers to the second limp/check flop. The facing-bet
+case is mixed, matching its unstable action mix: seed 100101 worsens slightly
+while 100102 improves. Its 32-round flop-only restricted half-gains are
+0.170330051 / 0.088261255bb, close to the full conditional response values;
+the stronger attack adds little here. These are nested attacks, not additive
+street attribution. Do not call the combined table a full-game estimate.
+
+The next bounded policy experiment is therefore the previously described
+**equal-oracle-work sampling pair on the cheap two-row facing-bet root**,
+not an indiscriminate long extension of every configuration. Keep the original
+single-turn estimator as control, retain its existing artifacts, implement
+fresh four-turn subsets per frozen update as an opt-in, and compare both seeds
+with 128 leaf solves each. Require default-path replay and unbiased-estimator
+checks before launching. No production activation or threshold change follows.
+
+32-round response SHAs, B 100101/100102 then A 100101/100102:
+`d4c93bb792b07aa62dbee4eb8843dd3db5b702dbe512bc82da7ed5c6be796b85`,
+`7c17b2448c9af729e01dbfa3d17375e0b7628ea254442dd6a9837a6f2371007a`,
+`ee65bf7b421f1d3f3cbc4729913ff7fd986a746c96002f9c81d624f942fee680`,
+`5d2010b2b5718bfcf79d4a53a0ed0463c91f0a12a227e79da8a0813e24d545d5`.
+Code and measured findings are committed; ignored raw policies and evaluation
+packets remain local. Full-game release metrics and activation are unchanged.
