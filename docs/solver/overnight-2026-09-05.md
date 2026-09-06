@@ -2185,3 +2185,111 @@ subtracted from the existing clairvoyant evaluator and called a valid bound.
 No such evaluator is implemented or added as a new gate in this milestone.
 Finish cache parity and the narrowly scoped delayed pilot before considering
 a different evaluation architecture.
+
+### Full-size cache parity passes; delayed pair launched
+
+The cache replay completed all eight calibration and 24 holdout hands, both
+seats, with **195/195 semantic events exactly equal** to the original probe.
+This includes configuration, exact deals and seeds, baseline payoffs, selected
+actions, entire histories, heuristic values, gains, summary estimates and
+calibration flags; only elapsed time and diagnostic work counts are excluded.
+An independent read-only audit rechecked every event, completed log/binary/
+runner hashes, and the pinned prerequisite pair hash. Parity manifest SHA:
+`dfb71148eea06e8e4e614e02469f0f373155bb2da8322da9e2b1c8ad5f1a535e`;
+log SHA `4e9fc9cdfed0dfb237640037c9ba123947fd31305996352cd7dd74b09e4db498`.
+
+Observed worker time including load is 297.519 seconds versus 572.819 seconds
+before caching (48.06% less time, approximately 1.93x throughput for this
+single replay). Peak physical footprint is 6,349,017,936 bytes versus
+6,374,822,760 bytes; neither run hit a stop. These wall times are not an
+isolated repeated benchmark: the original run overlapped local builds.
+The exact semantic parity and deterministic duplicate-query reduction are
+established, but the whole-time difference cannot all be attributed to the
+cache from this comparison alone. This changes cost, not policy quality.
+
+The earlier completed independent pair and tested delayed-attack milestone
+are committed and pushed as `372a4727ac1ded207077cc9a7850ce477de3a6d7`.
+CI 34003540542 is running, not yet a recorded pass. After the parity worker
+exited, `local-sampled-flop-20260905-lbrdelay1/run.py` launched source A with
+its already frozen executable and limits. No delayed result is available
+yet. Source B may start only after A finishes and its records pass integrity
+checks. No model has been activated or relabeled.
+
+### Completed delayed postflop pair and next evidence-driven action
+
+CI 34003540542 for `372a472` passed. The delayed pair subsequently completed
+both sources without a stop: A 338.366 seconds / 6,362,141,544-byte peak,
+B 502.788 seconds / 6,340,039,504-byte peak. Total pair time was 842.861 seconds.
+Both workers and their supervisor exited. Completed manifest SHA:
+`b7571c3cc882dadce2ad2f8e2f5fc97705269d181f9cb49e5fa07ec626c84ea5`;
+A log `8e1892412625744e4185c17ba99cf7fd177ee40f537c96cbda70a716135d4c3c`;
+B log `897d70689bbaf27ed8cfe63e072134347056499a07aa2f3ee11e8f3a847b5dd2`.
+
+Both seats in both sources failed the existing calibration rule. Calibration
+contained only three hands with a postflop attack for A and six for B, out
+of 32 authentic hands each. The independent holdout contained 11 attacked
+hands per source out of 64. Preflop-terminal hands are exact baseline
+identities, not rejected-response values replaced by zero.
+
+| Source / raw holdout metric | Mean bb/full hand | SE | Individual normal 99% interval |
+| --- | ---: | ---: | --- |
+| A BTN/SB gain | 0.921870 | 0.599993 | [-0.623609, 2.467349] |
+| A BB gain | 0.204551 | 0.655433 | [-1.483734, 1.892835] |
+| A seat sum | 1.126420 | 0.551878 | [-0.295123, 2.547964] |
+| A half-seat sum | 0.563210 | 0.275939 | [-0.147561, 1.273982] |
+| B BTN/SB gain | 0.247085 | 0.341599 | [-0.632815, 1.126985] |
+| B BB gain | 0.720013 | 0.464044 | [-0.475286, 1.915312] |
+| B seat sum | 0.967098 | 0.459511 | [-0.216523, 2.150719] |
+| B half-seat sum | 0.483549 | 0.229755 | [-0.108262, 1.075360] |
+
+Holdout attack decisions by preflop/flop/turn/river were A: SB 0/11/1/0,
+BB 0/14/1/0; B: SB 0/11/4/3, BB 0/12/1/1. The positive point estimates are
+directional evidence only: all intervals include zero, neither source has
+a qualified attacker, and these are not upper bounds. In particular B's
+0.483549 point estimate does **not** pass the 0.50 full-game gate. The two
+sources share the same 64 independent holdout deals; do not pool them as
+128 independent hands or compare this new chance stream to the all-street
+pilot as a paired policy improvement.
+
+An independent read-only audit checked all 192 hands / 384 seat records,
+both logs, runner/binary and prerequisite hashes, the complete common-chance
+stream, baseline cancellation, absence of preflop interventions, zero gain
+without any intervention, bounded finite values, selected-action argmax, and
+all summary estimates within 1e-12. This establishes experiment integrity,
+not equilibrium quality. The defender remains unchanged.
+
+The saved development traces identify concrete decisions to replay next.
+For example B holdout index 3 / seat 0 has own cards `[34,21]`, flop
+`[27,2,9]`, limp/check preflop, then BB shoves 19bb into 2bb; the attacker
+folds. A index 29 / seat 0 shoves after limp/check and a flop check on
+`[30,35,4]`. A/B index 62 / seat 1 shoves an 18bb-pot flop on `[8,42,32]`.
+Their large realized paired gains are not exact counterfactual action EVs.
+Treat these now-inspected outcomes as development inputs only; never recycle
+them as untouched validation or infer a policy repair from winnings alone.
+
+The diagnosing-bugs discipline currently pauses speculative policy edits:
+there is no minimized, fast, red-capable reproduction proving the source of
+these remaining gains. The next concrete action is to replay the captured
+terminal flop fold/call case, preserve its actual public posterior and policy
+mix, and measure conditional action values with controlled/exact runouts.
+If expected loss is reproduced, minimize that real path before a scoped policy
+change, then evaluate the **combined full-hand** candidate on fresh paired
+deals. If it is only realized chance noise, do not manufacture a fix. The
+known mismatch between local flop-training continuation and served endgame
+is not yet a proven cause, and the already-small turn/river suffix metric
+does not justify another tail-only optimization loop.
+
+Additional primary research considered
+[DCFR+ and predictive DCFR+](https://arxiv.org/html/2404.13891v2).
+The paper reports DCFR+ strongest on its large HUNL subgame, while predictive
+variants excelled in other settings. Its regret clipping/discounting is a
+possible separate optimizer experiment, not evidence of improvement in this
+sampled solver. The full-tree experimental findings are not a sampled-CFR
+performance guarantee; no optimizer, checkpoint schema, or extra gate was
+changed here. Prioritize the captured policy-action diagnosis before adding
+another optimizer or neural architecture.
+
+Current gaps remain the preflop stability/precision figures at the top of
+this document, full-hand coverage qualification, and a defensible full-game
+exploitability bound below 0.50 then 0.05bb/hand. No unvalidated activation,
+paid compute, gate relaxation, or additional long training run occurred.
