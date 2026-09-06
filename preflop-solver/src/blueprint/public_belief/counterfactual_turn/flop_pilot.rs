@@ -16,6 +16,9 @@ struct Solution {
     seed: u64,
     iterations: u64,
     turn_iterations: u64,
+    // Optional reconstruction budget; never rewrites the training budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_turn_iterations: Option<u64>,
     strategies: Vec<PublicBeliefStrategy>,
     turn_queries: u64,
     zero_own_reach_completions: [u64; 2],
@@ -272,6 +275,7 @@ fn train_with_sampling(
         seed,
         iterations,
         turn_iterations,
+        response_turn_iterations: None,
         strategies,
         turn_queries: queries.get(),
         zero_own_reach_completions: zero_reach.get(),

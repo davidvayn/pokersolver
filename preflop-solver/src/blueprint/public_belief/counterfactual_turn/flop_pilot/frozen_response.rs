@@ -50,6 +50,7 @@ impl Frozen {
         if input.schema != "hu-native-counterfactual-turn-flop-pilot-v1"
             || input.iterations < 2
             || input.turn_iterations < 2
+            || input.response_turn_iterations.is_some_and(|n| n < 2)
             || input
                 .turn_samples_per_iteration
                 .is_some_and(|n| !(2..=49).contains(&n))
@@ -115,7 +116,9 @@ impl Frozen {
         let mut result = Self {
             trunk,
             strategies,
-            turn_iterations: input.turn_iterations,
+            turn_iterations: input
+                .response_turn_iterations
+                .unwrap_or(input.turn_iterations),
             candidate_sha256: format!("{:x}", Sha256::digest(serde_json::to_vec(input).unwrap())),
             turns: BTreeMap::new(),
         };
@@ -389,6 +392,7 @@ mod tests {
             seed: 0,
             iterations: 2,
             turn_iterations: 4,
+            response_turn_iterations: None,
             strategies,
             turn_queries: 0,
             zero_own_reach_completions: [0, 0],
@@ -396,6 +400,31 @@ mod tests {
             zero_joint_turn_queries: 0,
             chance_baseline: None,
             turn_samples_per_iteration: None,
+        }
+    }
+
+    #[test]
+    fn reconstruction_budget_is_explicit_and_does_not_change_flop_training() {
+        let original = royal_fixture();
+        let original_bytes = serde_json::to_vec(&original).unwrap();
+        assert!(!String::from_utf8_lossy(&original_bytes).contains("response_turn_iterations"));
+        let original_frozen = Frozen::new(&original).unwrap();
+        let mut candidate = original.clone();
+        candidate.response_turn_iterations = Some(8);
+        let reconstructed = Frozen::new(&candidate).unwrap();
+        assert_eq!(candidate.turn_iterations, 4);
+        assert_eq!(reconstructed.turn_iterations, 8);
+        assert_eq!(original_frozen.strategies, reconstructed.strategies);
+        assert_ne!(
+            original_frozen.candidate_sha256,
+            reconstructed.candidate_sha256
+        );
+        let packet = reconstructed.turn_packet(0).unwrap();
+        assert_eq!(packet.turn_iterations, 8);
+        assert_eq!(packet.candidate_sha256, reconstructed.candidate_sha256);
+        for invalid in [0, 1] {
+            candidate.response_turn_iterations = Some(invalid);
+            assert!(Frozen::new(&candidate).is_err());
         }
     }
 

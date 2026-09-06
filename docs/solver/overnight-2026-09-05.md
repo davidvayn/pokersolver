@@ -4385,3 +4385,107 @@ The original-root research best is now the single-turn 128-update pair.
 This is a real local policy improvement, **not** evidence that the routed
 full-hand model passes 0.50bb/hand, 0.05bb/hand, lookup coverage, or served
 action-EV precision. The broader release limitations recorded above remain.
+
+Milestone **`a8829b173fedafbef0dce458c969b61658438a84`** was committed and
+pushed. CI **34054634675 passed**, including Rust, the independent policy
+audit, practice release tools, TypeScript tests, production build, pinned
+resolver verification, and real every-street resolver checks.
+
+### Isolate continuation accuracy without retraining the improved flop
+
+The independent backup reproduces the first canonical seed's 0.093242363bb
+conditional response gain in under a second. A diagnostic assertion at
+0.05bb is still red; this is a reused-root diagnostic, not a new global gate.
+Three remaining explanations were separated before the next probe: residual
+flop-policy error, insufficient continuation-solver iterations, and unsafe
+continuation reconstruction. Holding the entire flop policy fixed while
+changing only continuation iterations directly probes the second explanation;
+it does not by itself establish reconstruction safety.
+
+Added optional `response_turn_iterations` to the research candidate. The
+existing `turn_iterations` remains the **training** budget; exported training
+artifacts omit the new field, preserving old canonical bytes. Frozen response
+generation and the independent JS audit use the explicit override only when
+present. The candidate hash pins that override, and packets must match it.
+Invalid budgets are rejected. No production policy or default was changed.
+
+The new Rust seam test first failed at the intended 4-versus-8 iteration
+mismatch; the analytic Node fixture also failed at that budget mismatch.
+After implementation, the Node test passed in 0.380 seconds and the full
+release suite passed **290 library tests and nine CLI tests**, with 31 ignored
+research entries (88.64 / 0.65 seconds). Full-suite session 75175 was reaped.
+Frozen tested binary SHA:
+`b9baf17293600e12bb50301239d1e39fe09c5072381f1b4c047006dc1723b246`.
+Updated independent backup SHA:
+`e36a7385aef61dbd93e70e85919b4483e28fbb21ec851a8986e8bb99aee14f54`.
+
+The first diagnostic controller stopped immediately because Python's JSON
+reformatting failed the native canonical-round-trip hash check. All four
+packet jobs exited before any solve; no response was scored. Preserve the
+failed `local-native-flop-20260906-continuation128/seed100101-response128`
+stage, manifest SHA
+`160449377af9f91f513c0436253237e4a64d5d888691b2ca2546bde295422c63`.
+Session 27010 was reaped. The strict reader check was **not weakened**.
+
+The retry preserves every original numeric token and field order, inserts
+only the hash-pinned override at the canonical position, and asserts parsed
+equality with the unchanged source plus that one field. Native reading still
+independently checks exact canonical round-trip identity. New candidate SHA:
+`575ebd491efeb4257d74c402c76f64ccd03440e3e1b3aec7dec4e382d006c01c`.
+Source is the first canonical seed, not the lower-scoring seed selected after
+evaluation: 100101, 128 single-turn flop updates, 64 training continuation
+iterations, 1,152 training queries. The response override is 128.
+
+At approximately **19:32 UTC**, started the retry (parent PID 76831, exec
+session 87052):
+
+```bash
+python3 neural/runs/local-native-flop-20260906-continuation128/retry.py \
+  b9baf17293600e12bb50301239d1e39fe09c5072381f1b4c047006dc1723b246
+```
+
+Runner SHA `b004038baa8548789fb02013f587ce99199d8e66d9a334dc87f8503a2005ad52`.
+Authoritative state is `seed100101-response128-retry/manifest.json` under
+that run directory. The old 64-iteration aggregate replay passed byte-for-byte
+and its independent audit passed before the new jobs started. Four workers,
+2GiB each, 420-second packet limit, **55-minute whole-stage limit**, 20GiB
+disk floor plus preflight artifact reserve. All 49 turns and the independent
+raw-reach packet/aggregate audits are required. Updated run-local packet
+auditor SHA `11bc63a9f55d34e4c2033c6314e08c7938cd6f00da513f8cc0d3d0d37ecc6b7a`;
+the old auditor and old completed stages remain unchanged. This is a bounded
+one-seed continuation-policy comparison, not a paired-seed release result.
+
+### Stronger continuation improves the fixed-flop candidate
+
+The retry completed at approximately **20:11 UTC** in **2,328.888 seconds**
+(38m49s). All 49 raw-reach packet audits, the native aggregate, and the
+independent backup passed. Session 87052 was reaped; parent 76831 and its
+workers exited. Completed manifest SHA:
+`0e4658970af2914de9a3bfc0c4db55ba58c04764140993a6d4bb4005920052c5`.
+Packet worker time was 8,957.442 seconds, sampled peak footprint
+655,377,536 bytes. Response SHA:
+`12eb5ac793d5aac445b462475c4f8cf717580298172534e27a9df406fa9e57cd`.
+Maximum independent-backup difference was 2.78e-17bb.
+
+| Same seed 100101 frozen flop | 64 continuation iterations | 128 continuation iterations |
+| --- | ---: | ---: |
+| Conditional half-summed response gain | 0.093242363bb | **0.067488190bb** |
+| Seat 0 response gain | 0.080971536bb | 0.057734659bb |
+| Seat 1 response gain | 0.105513189bb | 0.077241720bb |
+| Flop-only restricted half-gain | 0.056372168bb | 0.057984494bb |
+
+The full conditional response improves **0.025754173bb / 27.62%** without
+changing any flop action probability, training statistic, or prior. This
+supports continuation accuracy as one real contributor to the residual.
+It does not eliminate the flop weakness: the stronger continuation's
+flop-only restricted response already gains 0.057984494bb, versus the full
+conditional 0.067488190bb. Further turn iterations alone should not be
+assumed to remove that remaining flop-policy loss. Nested attacks are still
+not an additive street-exploitability decomposition.
+
+Retain this explicit stronger-continuation configuration as a **one-seed
+research candidate**. The two-seed research best remains the validated
+128-update, 64-continuation pair until the second seed is measured with the
+stronger route. No default was changed to 128, no model was activated, and
+the reproduced root still does not pass 0.05bb. Full-game exploitability,
+coverage, served action-EV precision, and global stability remain unqualified.

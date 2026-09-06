@@ -65,6 +65,23 @@ test('royal-flush analytic backup; missing chance, changed values, and illegal a
     fs.renameSync(saved, `${saved}.saved`);
     assert.throws(() => audit(...arguments_), /ENOENT/);
     fs.renameSync(`${saved}.saved`, saved);
+    // A reconstruction budget is hash-pinned separately from the unchanged
+    // training budget and flop rows. Packets must match the chosen route.
+    candidate.response_turn_iterations = 8;
+    write('candidate.json', candidate);
+    const routedDigest = hash(JSON.stringify(candidate));
+    write('response.json', {...response, candidate_sha256: routedDigest});
+    for (let turn = 0; turn < 52; turn++) {
+      if (board.includes(turn)) continue;
+      const packet = JSON.parse(fs.readFileSync(path.join(directory, `turn-${turn}.json`)));
+      write(`turn-${turn}.json`, {...packet, candidate_sha256: routedDigest, turn_iterations: 8});
+    }
+    assert.equal(candidate.turn_iterations, 4);
+    assert.ok(Math.abs(audit(...arguments_).half_summed_gain_bb - 0.625) < 1e-12);
+    const wrongBudget = JSON.parse(fs.readFileSync(saved));
+    write('turn-0.json', {...wrongBudget, turn_iterations: 4});
+    assert.throws(() => audit(...arguments_));
+    write('turn-0.json', wrongBudget);
     candidate.game.action_abstraction.include_all_in = false;
     write('candidate.json', candidate);
     const changedDigest = hash(JSON.stringify(candidate));

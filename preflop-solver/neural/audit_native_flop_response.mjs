@@ -98,6 +98,8 @@ export function audit(candidatePath, packetDirectory, equityPath, responsePath) 
   const candidate = JSON.parse(candidateBytes), candidateSha256 = hash(candidateBytes);
   assert.equal(candidate.schema, 'hu-native-counterfactual-turn-flop-pilot-v1');
   assert.equal(candidate.state.street, 'flop');
+  const turnIterations = candidate.response_turn_iterations ?? candidate.turn_iterations;
+  assert.ok(Number.isSafeInteger(turnIterations) && turnIterations >= 2, 'invalid continuation budget');
   const {game, state} = candidate;
   const legal = state.ranges.map(range => range.map(v => v > 0));
   const rows = new Map();
@@ -134,7 +136,7 @@ export function audit(candidatePath, packetDirectory, equityPath, responsePath) 
     const packet = JSON.parse(bytes);
     assert.equal(packet.schema, 'hu-native-flop-frozen-turn-packet-v1');
     assert.equal(packet.turn, turn); assert.equal(packet.candidate_sha256, candidateSha256);
-    assert.equal(packet.turn_iterations, candidate.turn_iterations);
+    assert.equal(packet.turn_iterations, turnIterations);
     const seen = new Set();
     for (const leaf of packet.leaves) {
       const id = key(leaf.history); assert.ok(!seen.has(id)); seen.add(id);
