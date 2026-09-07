@@ -14,6 +14,7 @@ mod pilot;
 pub(super) struct NativeFullHandPolicy {
     preflop: Arc<FrozenPreflopPolicy>,
     options: NativeFlopOptions,
+    leaf_workers: usize,
     postflop: Mutex<Option<NativePostflopPolicy>>,
 }
 
@@ -22,6 +23,7 @@ impl NativeFullHandPolicy {
         Self {
             preflop,
             options,
+            leaf_workers: 1,
             postflop: Mutex::new(None),
         }
     }
@@ -119,11 +121,16 @@ impl NativeFullHandPolicy {
             let digest = Sha256::digest(serde_json::to_vec(&input).map_err(|e| e.to_string())?);
             let mut options = self.options.clone();
             options.seed ^= u64::from_le_bytes(digest[..8].try_into().unwrap());
-            *cache = Some(NativePostflopPolicy::solve(
-                self.preflop.game.clone(),
-                input,
-                &options,
-            )?);
+            *cache = Some(if self.leaf_workers == 1 {
+                NativePostflopPolicy::solve(self.preflop.game.clone(), input, &options)?
+            } else {
+                NativePostflopPolicy::solve_with_leaf_workers(
+                    self.preflop.game.clone(),
+                    input,
+                    &options,
+                    self.leaf_workers,
+                )?
+            });
         }
         cache.as_mut().unwrap().strategy(state, visible, combo)
     }
@@ -162,6 +169,7 @@ impl ResponsePolicy for NativeFullHandPolicy {
             "flopIterations": self.options.iterations,
             "trainingTurnIterations": self.options.training_turn_iterations,
             "responseTurnIterations": self.options.response_turn_iterations,
+            "executionLeafWorkers": self.leaf_workers,
             "cachedPolicySha256": cache.as_ref().map(|p| p.identity()),
             "cachedContinuationSha256": cache.as_ref().and_then(|p| p.continuation_identity()),
             "cachedTurnSolves": cache.as_ref().map(|p| p.solved_turn_roots()),
@@ -170,10 +178,9 @@ impl ResponsePolicy for NativeFullHandPolicy {
     }
 
     fn parallel_copy(&self) -> Option<Box<dyn ResponsePolicy + Send>> {
-        Some(Box::new(Self::new(
-            self.preflop.clone(),
-            self.options.clone(),
-        )))
+        let mut copy = Self::new(self.preflop.clone(), self.options.clone());
+        copy.leaf_workers = self.leaf_workers;
+        Some(Box::new(copy))
     }
 }
 
@@ -227,6 +234,35 @@ mod tests {
                 response_turn_iterations: 4,
             },
         )
+    }
+
+    #[test]
+    fn native_full_hand_parallel_execution_preserves_policy_and_worker_copies() {
+        let serial = fixture();
+        let mut parallel = fixture();
+        parallel.leaf_workers = 4;
+        let copy = parallel.parallel_copy().unwrap();
+        assert_eq!(
+            copy.take_resolution_diagnostics().unwrap()["executionLeafWorkers"],
+            4
+        );
+        let game = &serial.preflop.game;
+        let deal = Deal::from_sampled_cards([[51, 50], [47, 46]], [0, 5, 10, 15, 20]);
+        let mut state = GameState::initial(game);
+        while state.terminal.is_none() {
+            let actions = state.legal_actions(game);
+            let expected = serial.strategy(&state, &deal, &actions, game);
+            assert_eq!(expected, parallel.strategy(&state, &deal, &actions, game));
+            let a = serial.take_resolution_diagnostics().unwrap();
+            let b = parallel.take_resolution_diagnostics().unwrap();
+            assert_eq!(a["cachedPolicySha256"], b["cachedPolicySha256"]);
+            assert_eq!(a["cachedContinuationSha256"], b["cachedContinuationSha256"]);
+            let action = actions
+                .iter()
+                .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check))
+                .unwrap();
+            state = state.apply(action, game);
+        }
     }
 
     #[test]

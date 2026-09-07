@@ -7,6 +7,7 @@ mod chance_baseline;
 mod chance_batch;
 mod frozen_response;
 pub(in crate::blueprint) use frozen_response::playback::{NativeFlopOptions, NativePostflopPolicy};
+mod parallel_leaves;
 mod root_input;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -130,6 +131,10 @@ impl Trunk {
             true,
             &mut deltas,
         );
+        self.apply_deltas(round, deltas);
+    }
+
+    fn apply_deltas(&mut self, round: u64, deltas: BTreeMap<Vec<String>, FrozenRangeNodeDelta>) {
         for (key, delta) in deltas {
             let node = self.nodes.get_mut(&key).unwrap();
             for (r, d) in node.regrets.iter_mut().zip(delta.regrets) {
@@ -181,6 +186,33 @@ fn train_with_sampling(
     use_baseline: bool,
     turn_samples: usize,
 ) -> Result<Solution, String> {
+    train_with_leaf_workers(
+        game,
+        state,
+        seed,
+        iterations,
+        turn_iterations,
+        use_baseline,
+        turn_samples,
+        1,
+    )
+}
+
+fn train_with_leaf_workers(
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+    seed: u64,
+    iterations: u64,
+    turn_iterations: u64,
+    use_baseline: bool,
+    turn_samples: usize,
+    leaf_workers: usize,
+) -> Result<Solution, String> {
+    if !(1..=4).contains(&leaf_workers) || (leaf_workers > 1 && use_baseline) {
+        return Err(
+            "native leaf workers require 1..4 threads and no shared learned baseline".into(),
+        );
+    }
     if iterations < 2 || turn_iterations < 2 {
         return Err("native flop pilot requires at least two iterations".into());
     }
@@ -201,56 +233,71 @@ fn train_with_sampling(
     for round in 1..=iterations {
         let sampled = chance_batch::draw(&turns, turn_samples, &mut chance);
         let game = &game;
-        // Neither player's update can affect the other's policy in this pass.
-        // The chance draw precedes the immutable all-player vector traversal.
-        trunk.iteration(round, &|state, reaches, traverser| {
-            assert_eq!(traverser, None);
-            let values_for_turn = |turn| {
-                let mut board = flop.to_vec();
-                board.push(turn);
-                let mut masked = reaches.clone();
-                for p in 0..2 {
-                    for c in all_combos() {
-                        if c.cards().contains(&turn) {
-                            masked[p][c.key()] = 0.0;
+        if leaf_workers > 1 {
+            let diagnostics = parallel_leaves::iteration(
+                &mut trunk,
+                round,
+                &sampled,
+                turn_iterations,
+                leaf_workers,
+            )?;
+            queries.set(queries.get() + diagnostics.queries);
+            zero_reach.set(std::array::from_fn(|p| {
+                zero_reach.get()[p] + diagnostics.zero_own[p]
+            }));
+            zero_joint.set(zero_joint.get() + diagnostics.zero_joint);
+            residual.set(residual.get().max(diagnostics.maximum_gain));
+        } else {
+            // Neither player's update can affect the other's policy in this pass.
+            // The chance draw precedes the immutable all-player vector traversal.
+            trunk.iteration(round, &|state, reaches, traverser| {
+                assert_eq!(traverser, None);
+                let values_for_turn = |turn| {
+                    let mut board = flop.to_vec();
+                    board.push(turn);
+                    let mut masked = reaches.clone();
+                    for p in 0..2 {
+                        for c in all_combos() {
+                            if c.cards().contains(&turn) {
+                                masked[p][c.key()] = 0.0;
+                            }
                         }
                     }
-                }
-                let values = solve(TurnRiverSolveConfig {
-                    game: game.clone(),
-                    state: PublicBeliefState::from_game_state(board, state, masked),
-                    iterations: turn_iterations,
-                    averaging_delay: 0,
-                    river_refinement_iterations: 0,
-                    regret_matching_plus: false,
-                })
-                .expect("native turn oracle failed; no substitute values or partial policy export");
-                queries.set(queries.get() + 1);
-                zero_reach.set(std::array::from_fn(|p| {
-                    zero_reach.get()[p] + values.completed_zero_own_reach[p] as u64
-                }));
-                if let Some(gains) = values.conditional_response_gain_bb {
-                    residual.set(residual.get().max(gains[0]).max(gains[1]));
+                    let values = solve(TurnRiverSolveConfig {
+                        game: game.clone(),
+                        state: PublicBeliefState::from_game_state(board, state, masked),
+                        iterations: turn_iterations,
+                        averaging_delay: 0,
+                        river_refinement_iterations: 0,
+                        regret_matching_plus: false,
+                    }).expect("native turn oracle failed; no substitute values or partial policy export");
+                    queries.set(queries.get() + 1);
+                    zero_reach.set(std::array::from_fn(|p| {
+                        zero_reach.get()[p] + values.completed_zero_own_reach[p] as u64
+                    }));
+                    if let Some(gains) = values.conditional_response_gain_bb {
+                        residual.set(residual.get().max(gains[0]).max(gains[1]));
+                    } else {
+                        zero_joint.set(zero_joint.get() + 1);
+                    }
+                    values.counterfactual_bb
+                };
+                // Proposal is uniform over 49 unseen public cards; a compatible
+                // exact private pair has 45 possible turns. No river is sampled.
+                if use_baseline {
+                    let turn = sampled[0];
+                    // Each perfect-recall public leaf is visited once per pass.
+                    // Its reference contains only earlier rounds, never this draw.
+                    references
+                        .borrow_mut()
+                        .entry(state.public_history.clone())
+                        .or_insert_with(|| chance_baseline::Baseline::new(flop))
+                        .correct_and_learn(turn, reaches, &values_for_turn(turn))
                 } else {
-                    zero_joint.set(zero_joint.get() + 1);
+                    chance_batch::estimate(&sampled, values_for_turn)
                 }
-                values.counterfactual_bb
-            };
-            // Proposal is uniform over 49 unseen public cards; a compatible
-            // exact private pair has 45 possible turns. No river is sampled.
-            if use_baseline {
-                let turn = sampled[0];
-                // Each perfect-recall public leaf is visited once per pass.
-                // Its reference contains only earlier rounds, never this draw.
-                references
-                    .borrow_mut()
-                    .entry(state.public_history.clone())
-                    .or_insert_with(|| chance_baseline::Baseline::new(flop))
-                    .correct_and_learn(turn, reaches, &values_for_turn(turn))
-            } else {
-                chance_batch::estimate(&sampled, values_for_turn)
-            }
-        });
+            });
+        }
         eprintln!("native-flop seed={seed} round={round}/{iterations} turns={sampled:?} turn_queries={} zero_own={:?}",
             queries.get(), zero_reach.get());
     }
@@ -496,7 +543,12 @@ fn saved_20bb_native_flop_pilot() {
         .unwrap_or_else(|_| "2".into())
         .parse()
         .unwrap();
-    assert!([2, 8, 32, 128].contains(&iterations));
+    assert!([2, 8, 16, 32, 128].contains(&iterations));
+    let turn_iterations: u64 = std::env::var("POKER_NATIVE_FLOP_TURN_ITERATIONS")
+        .unwrap_or_else(|_| "64".into())
+        .parse()
+        .unwrap();
+    assert!([4, 64, 128].contains(&turn_iterations));
     let started = std::time::Instant::now();
     let use_baseline = match std::env::var("POKER_NATIVE_FLOP_CHANCE_BASELINE").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("none") => false,
@@ -508,14 +560,20 @@ fn saved_20bb_native_flop_pilot() {
         .parse()
         .unwrap();
     assert!([1, 4].contains(&turn_samples));
-    let result = train_with_sampling(
+    let leaf_workers: usize = std::env::var("POKER_NATIVE_FLOP_LEAF_WORKERS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .unwrap();
+    assert!((1..=4).contains(&leaf_workers));
+    let result = train_with_leaf_workers(
         game,
         state,
         seed,
         iterations,
-        64,
+        turn_iterations,
         use_baseline,
         turn_samples,
+        leaf_workers,
     )
     .unwrap();
     let path = PathBuf::from(std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap());
@@ -529,9 +587,10 @@ fn saved_20bb_native_flop_pilot() {
     file.sync_all().unwrap();
     println!(
         "{}",
-        serde_json::json!({"stage":"native_flop_pilot","seed":seed,"iterations":iterations,"turnIterations":64,
+        serde_json::json!({"stage":"native_flop_pilot","seed":seed,"iterations":iterations,"turnIterations":turn_iterations,
         "publicInputSha256":input_sha256,
         "turnSamplesPerIteration":turn_samples,
+        "leafWorkers":leaf_workers,
         "seconds":started.elapsed().as_secs_f64(),"turnQueries":result.turn_queries,
         "zeroOwnReachCompletions":result.zero_own_reach_completions,"zeroJointTurnQueries":result.zero_joint_turn_queries,
         "maximumConditionalTurnResponseGainBb":result.maximum_conditional_turn_response_gain_bb,

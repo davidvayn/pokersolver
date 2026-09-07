@@ -14,7 +14,7 @@ fn matched_preflop_averaging_pilot() {
         .unwrap()
         .parse()
         .unwrap();
-    assert!([2, 8, 16, 32, 64].contains(&rounds));
+    assert!([2, 8, 16, 32, 64, 800].contains(&rounds));
     let exact = match std::env::var("POKER_AVERAGE_MODE").as_deref() {
         Ok("sampled") => false,
         Ok("exact") => true,
@@ -27,7 +27,7 @@ fn matched_preflop_averaging_pilot() {
         iterations: rounds,
         effective_stack_bb: 20.0,
         averaging_delay: 0,
-        max_information_sets: 4_000_000,
+        max_information_sets: if rounds == 800 { 22_000_000 } else { 4_000_000 },
         traversal: BlueprintTraversal::PublicChanceSampling,
         integrate_terminal_actions: true,
         exact_preflop_averaging: exact,
@@ -114,6 +114,16 @@ fn matched_preflop_averaging_pilot() {
         pending.extend(actions.iter().map(|a| state.apply(a, &config)));
     }
     assert_eq!(rows.len(), 16_900);
+    let frozen_export = std::env::var("POKER_AVERAGE_POLICY_OUTPUT")
+        .ok()
+        .map(|output| {
+            let path = PathBuf::from(&output);
+            assert!(!path.exists());
+            match trainer.write_frozen_preflop_average(&path) {
+                Ok(()) => serde_json::json!({"status":"complete","path":output}),
+                Err(error) => serde_json::json!({"status":"rejected","reason":error.to_string()}),
+            }
+        });
     let result = serde_json::json!({"schema":"matched-exact-preflop-average-pilot-v1",
         "config":config,"trainingSeconds":training_seconds,"progress":progress,
         "regretStateSha256":format!("{:x}",regret_hash.finalize()),
@@ -122,6 +132,7 @@ fn matched_preflop_averaging_pilot() {
         "terminalEvaluations":trainer.terminal_evaluations,"totalNodes":trainer.nodes.len(),
         "exhaustiveQueries":132_600,"absentAverageCombos":absent_average_combos,
         "untrainedCombos":untrained_combos,"rows":rows,
+        "frozenExport":frozen_export,
         "interpretation":"Full-grid 20bb matched short PCS pilot. Coverage/stability diagnostics only; not full-game exploitability or a release-qualified policy."});
     let mut output = fs::OpenOptions::new()
         .write(true)

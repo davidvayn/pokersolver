@@ -4841,3 +4841,214 @@ Disk reserve preparation compressed 11 additional inactive, single-link Rust
 debug `dep-graph.bin` caches under `target/debug/incremental/`. Each remains at
 its original path with `.gz` appended and is recoverable using `gunzip` or a
 debug rebuild. No model, checkpoint or evaluation artifact was removed.
+
+### September 6: stronger continuation pair completed
+
+Averaging milestone `4c8ec08d61987a78be20adb5cf720a1e0796b370` is pushed;
+CI **34065233414 passed**. The second 128-response continuation seed completed
+all 49 turn packets, per-packet checks, default-response byte replay, and the
+independent JavaScript flop aggregation audit.
+
+| Frozen 128/64 flop seed | Response continuation 64 | Response continuation 128 | Reduction |
+| --- | ---: | ---: | ---: |
+| 100101 | 0.093242362752bb | 0.067488189529bb | 27.62% |
+| 100102 | 0.088891958113bb | 0.061639830192bb | 30.66% |
+
+These are **conditional-root half-summed response gains**, not full-game
+exploitability. Flop strategies were not retrained for this comparison.
+The pair supports the benefit of stronger played turn/river continuations on
+this root, not a global exploitability upper bound or a safe-resolving proof.
+
+Second-seed directory: `local-native-flop-20260906-continuation128/seed100102-response128`.
+Stage runtime **2327.326 seconds**; largest sampled packet footprint
+**1,206,863,120 bytes**. Four workers, 2GiB per worker, 420s per packet,
+3300s stage and 20GiB disk floor. Native binary SHA
+`22ebe7598e18e1456ebb6136cd4ab3defebd284d50dd2d468ae676900123395b`.
+Completed manifest SHA
+`44b05bccea3c5167b8ec88230bcc30a68a972113eff534e966c2d993db91b59d`;
+candidate SHA `3949f22b2581f2dd53a9ff18c5ae0457399b5d03ed81d7f010d56f618ade02e4`;
+response SHA `725be7ee61d407215d9fd269191184e07185cf8ec424fc094adffa47acbff5bc`.
+
+Next controlled allocation stage is running at
+`local-native-flop-20260906-allocation16x128/paired`. It reuses the archived
+32-flop/64-training-turn pair and trains 16-flop/128-training-turn policies,
+both evaluated with the **same 64-turn-iteration continuation**. Thus the
+training allocation, not the served continuation budget, is compared at equal
+inner-iteration work. The opt-in research entry accepts 16 flop iterations and
+`POKER_NATIVE_FLOP_TURN_ITERATIONS`; default remains 64. Both archived control
+responses reproduced their original hashes before new training started.
+Frozen binary SHA
+`c31ef9251ffe5b637518b4a446190498dce6ce9bcf4fdf63389ae1751ae414d8`;
+two training workers / four response workers, 2GiB per worker, 5400s per training,
+420s per turn packet, 10800s stage, 20GiB disk reserve. No result is claimed yet.
+
+For the combined-model step, an immutable preflop-only average export was
+implemented and tested against the existing strict reader. It includes no
+regrets, RNG or lazy discount state and is deliberately not resumable. The
+legacy `strategy_sum` compatibility field contains normalized probabilities.
+Incomplete training, missing or untrained rows, illegal actions and invalid
+probability sums prevent export; initialized averages are not silently accepted.
+The current tests pass **301 library tests** (34 opt-in pilots ignored), plus
+the earlier unchanged CLI suite. This is still not a website activation.
+
+An 800-round matched averaging replay is now running serially in
+`local-exact-preflop-20260906-paired800`, same original seeds and full grid.
+It does not retroactively attach averages to an old checkpoint: both modes
+replay the same regret training from scratch and compare digests. Only a
+complete trained preflop average may be exported for a subsequent combined
+candidate. No large training checkpoints are written. Frozen binary SHA
+`41a4dfd966d0dea5152de63344e93d0347a2bb5f79b577e5c9e77ea85a006301`.
+One worker, 8GiB footprint stop, 900s per worker, 3600s stage, 20GiB disk floor.
+The earlier four-worker continuation stage completed before this larger replay.
+
+### September 6: 800-round averaging replay and compact integration completed
+
+All four 800-round matched runs completed. Regret-state and complete postflop
+state digests, RNG states, sampled-deal counts and terminal-evaluation counts
+match between sampled and exact averaging **for both seeds**. The controls
+reproduce the original node counts and missing-query counts.
+
+| Seed | Total trained table nodes | Missing/untrained preflop queries, sampled → exact | Frozen exact policy bytes |
+| --- | ---: | ---: | ---: |
+| 26001 | 19,064,302 | 524 → 0 / 132,600 | 1,456,185 |
+| 26002 | 18,871,516 | 306 → 0 / 132,600 | 1,457,818 |
+
+Both complete exact policies exported; the sampled controls correctly refused
+complete export. There are no initialized-but-untrained preflop rows in either
+800-round exact export. This establishes exhaustive **preflop** lookup coverage,
+not full-hand authentic/forced-deviation coverage or equilibrium quality.
+
+The established root-stability helper was reused without threshold changes:
+
+| Existing metric | Sampled | Exact | Gate |
+| --- | ---: | ---: | ---: |
+| Maximum individual-action combo-weighted MAE | 8.28159% | 8.29443% | ≤5% |
+| Unweighted primary-action agreement | 64.49704% | 64.49704% | ≥85% |
+| Combo-weighted primary agreement (diagnostic) | 66.81750% | 66.81750% | — |
+| Maximum aggregate action delta | 5.27187% | 5.25829% | ≤3% |
+
+**Strategic stability is not fixed.** The earlier per-public-state pilot
+diagnostic averages error over all actions; the established gate takes the
+maximum error of an individual action. These are different aggregations.
+The 800-round initial-root mean-over-actions error is 5.13898% → 5.13109%,
+but that must not replace or be presented as passing the existing 8.29443%
+maximum-action gate. The unchanged existing helper and thresholds are included
+in a separate verified analysis, not retroactively substituted into old results.
+
+Pure training seconds: 129.949 / 144.545 (sampled/exact A) and 122.343 / 139.015
+(B). End-to-end worker times, including whole-table digesting and diagnostics:
+204.831 / 221.178 and 196.931 / 216.197 seconds. Largest sampled footprint was
+6,261,740,272 bytes, below the serial 8GiB stop. No resumable/full-table copies
+were written. Only small frozen preflop averages and diagnostics were retained.
+
+Completed training manifest SHA
+`b3121eb1200ecd995af4eb4ea7d5056d4956420a4708811d3e34b32895d8644c`;
+separate established-metric analysis SHA
+`02b0c00b9c53f64f2bb1c21aef7eb33913bc8effc406078aa94fd7aa4043b835`.
+Exact source hashes:
+
+- A: `de81857c96d387c8089e7c48704b175d79ee2b023ddca26702a91d166504b32c`
+- B: `55515a4591765b644d721c37622c65e334dd9bdedb703447014ae2f70463395c`
+
+Both compact exports were passed through the existing strict full-hand adapter
+probe in `local-native-full-hand-20260906-integration/paired-compact-average`.
+All 132,600 preflop queries per seed passed, followed by eight forced check/call
+decisions through all streets. Source loads took **0.1464 / 0.1569 seconds**,
+versus roughly 43 seconds for the old full checkpoints. Peak footprints were
+910,853,512 / 913,687,944 bytes; stage time was 29.807 seconds. The native
+budget here is explicitly **2 / 4 / 4**, strictly an interface/coverage check,
+not the strong postflop candidate or a full-game response measurement.
+Manifest SHA `b0f72491d9b5d7404bdc55b9dfe08c91d1283dae8dd1f22e64efbce4c3116921`.
+
+The allocation comparison is still running. To address the cold-root cost
+before meaningful full-hand response evaluation, an opt-in parallel native-leaf
+path is being tested. It snapshots the discounted flop policy, collects exact
+own reaches, solves independent turn leaves with 1–4 bounded threads, then
+backs up CFVs in the original action/chance order. No averaging, action grid,
+sampling schedule or trained policy identity is intentionally changed. Shared
+learned-baseline mode is rejected for parallel execution. Default stays serial.
+Unit comparison passes complete-policy/diagnostic byte parity at 2/4 workers
+and 1/4 sampled turns; an additional per-round f64-accumulator test is pending.
+
+A guarded original-root ABBA benchmark is running at
+`local-native-flop-20260906-leaf-parallel/abba` (1,4,4,1 leaf workers).
+Every output must equal the archived 2/64 policy SHA
+`5d169bbd0ba1ff6c147732575e228a82a4a207b0d222627645471abf224047da`.
+Frozen benchmark binary SHA
+`642a5b2ad47710f98646cd47bf1a772d4549daa1b0edf144c54b30dc5d14545a`.
+One benchmark process, up to 4 leaf threads, 6GiB process stop, 600s per job,
+2400s stage, 20GiB disk floor. The allocation experiment also shares this host;
+do not describe these measurements as isolated-host timing. No speed result is
+claimed before all ABBA runs and identity checks finish.
+
+Additional disk preparation compressed only inactive single-link debug build
+caches (6 more dependency graphs, 3 old executables, and 8 object/library/cache
+files). Each is recoverable at the same path with `.gz` appended or by rebuilding
+debug artifacts. No trained policy, checkpoint or evaluation was removed.
+
+### September 6: parallel continuation parity and bounded serving check
+
+All four ABBA runs completed and reproduced the archived complete policy SHA
+`5d169bbd0ba1ff6c147732575e228a82a4a207b0d222627645471abf224047da`.
+Serial runs took 150.361 / 206.069 seconds; four-worker runs took 85.235 /
+92.747 seconds. Means are **178.215 → 88.991 seconds**, a 50.07% reduction
+on this shared-host benchmark. The allocation evaluation transitioned from two
+training workers to four response workers during this interval, so the result
+is not an isolated-host or universal throughput estimate. Peak parallel process
+footprint was **1,414,006,320 bytes**. Benchmark manifest SHA
+`5743b8e8c6ff778edc856b6d424ae25d3bd741b1b04d544b981efbe362222893`.
+
+The additional per-round test passes bit comparisons for every f64 regret,
+strategy sum and lazy-discount counter. The research full-hand adapter now has
+an execution-only worker-count seam, copied into isolated response workers;
+ordinary entry points remain serial. No thread count enters policy identity.
+This is a speed improvement, not a new policy or exploitability result.
+
+The allocation stage hit the **20GiB free-disk safety floor during a separate
+Rust test build**, not a numerical or policy failure. Both trainings and 28
+audited response packets completed before the stop. The failed original
+manifest is preserved unchanged, SHA
+`d251c202f0cac488081cf5ef0d038cd024bf890b3229e2e0e3e8aa4ad8f76cf0`.
+An additional 74 inactive single-link debug `query-cache.bin` files (282,276,958
+uncompressed bytes) were losslessly compressed, recoverable at the same paths
+with `.gz` appended or by rebuilding debug caches. No model or measurement
+artifact was removed. Avoid concurrent builds with tight disk reserves.
+
+Response-only recovery is running in
+`local-native-flop-20260906-allocation16x128/resume-response`. It hash-checks the
+frozen binary, policies, completed packets and audits; hard-links the 28 verified
+packets into a fresh aggregate directory and runs only missing packets. Neither
+training nor a successful packet is repeated. Four workers, 2GiB each, 420s per
+packet, 5400s recovery-stage limit and the unchanged 20GiB disk floor. Recovery
+controller SHA `60e857d47b83defa898997d7d47794612c49be771c166223419dc367c24edcdf`.
+
+Next is a bounded **128 / 64 / 128, four-leaf-worker cold full-hand serving
+probe** through the strict compact preflop adapter. The website's existing
+`REQUEST_TIMEOUT_MS` is 300 seconds; do not increase it or deploy a weaker
+policy to claim this candidate serves. This checks the actual candidate-budget
+cost on a fresh board, not adaptive-response strength or action-EV confidence.
+A timeout must remain a failure and must not be scored. No website activation
+is authorized by a mere integration pass; source stability still fails.
+
+Final-source local verification for this implementation: `cargo test --release
+-j1 --quiet -- --test-threads=2` passed **304 library and 9 CLI tests**, with
+35 explicitly ignored research pilots (196.95s library runtime). All four
+Python averaging/reporting tests and the independent JavaScript analytic audit
+test pass. The added reporting test explicitly distinguishes the established
+maximum-action MAE from the smaller mean-over-actions diagnostic.
+
+`npm test -- --minWorkers=1 --maxWorkers=2` passed **137 application tests**;
+the four opt-in native integration tests were run separately and **all four
+passed**, including action EVs on every postflop street. Initial invocation with
+only `--maxWorkers=2` ran no tests because Vitest's default minimum conflicted;
+supplying both limits fixed the invocation without any repository change.
+All **11 practice-tool and 9 policy-tool tests** pass, and the existing v102
+website's pinned artifact verification passes. These protect the currently
+served model; they do **not** measure or qualify the new native research route.
+The new native flop export still has `action_values_bb: None`; do not borrow
+the older website model's EV-precision percentage for this candidate.
+
+Frozen final-source serving-probe binary SHA
+`866d19ec425bde898e3f8befa04cd8501f1fab94eb05baea32ce69d8773cf293`.
+The cold timing probe will run after local training/test workers finish, to
+avoid attributing shared training load to an idle-host serving result.

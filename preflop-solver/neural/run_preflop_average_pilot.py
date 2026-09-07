@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from cloud_blueprint_run import atomic_json, file_sha256
+from cloud_blueprint_run import atomic_json, file_sha256, policy_stability_summary
 from worker_resources import WorkerResourceGuard
 
 
@@ -77,7 +77,26 @@ def analyze(record):
             sampledMissingAverageCombos=a['absentAverageCombos'], exactMissingAverageCombos=b['absentAverageCombos'],
             sampledUntrainedCombos=a['untrainedCombos'], exactUntrainedCombos=b['untrainedCombos'],
             sampledTrainingSeconds=a['trainingSeconds'], exactTrainingSeconds=b['trainingSeconds']))
-    return dict(comparisons=comparisons, stability={mode: stability(outputs[26001, mode], outputs[26002, mode])
+    established = {}
+    for mode in ('sampled', 'exact'):
+        summaries = []
+        for seed in (26001, 26002):
+            rows = outputs[seed, mode]['rows']
+            first_length = min(len(r['history']) for r in rows)
+            root = [r for r in rows if len(r['history']) == first_length]
+            summaries.append({'rootStrategies': [dict(hand=r['hand'],
+                averageVisits=r['averageVisits'] or 0, regretUpdates=r['regretUpdates'] or 0,
+                trainedAverage=r['trained'], actions=[dict(action=a, probability=p)
+                    for a, p in zip(r['actions'], r['probabilities'] or [])]) for r in root]})
+        try:
+            # Reuse the established gate exactly: MAXIMUM individual-action
+            # MAE and unweighted primary agreement. The per-public-state
+            # diagnostic above instead reports the MEAN across actions.
+            established[mode] = policy_stability_summary(summaries)
+        except ValueError as error:
+            established[mode] = dict(available=False, passed=False, reason=str(error))
+    return dict(comparisons=comparisons, establishedRootStability=established,
+        stability={mode: stability(outputs[26001, mode], outputs[26002, mode])
         for mode in ('sampled', 'exact')})
 
 
@@ -86,10 +105,12 @@ def main():
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--binary-sha256', required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--rounds', type=int, choices=[2, 8, 16, 32, 64], default=8)
+    parser.add_argument('--rounds', type=int, choices=[2, 8, 16, 32, 64, 800], default=8)
     parser.add_argument('--workers', type=int, choices=[1, 2], default=1)
     parser.add_argument('--analyze-existing', action='store_true', help='Verify completed outputs and write a separate analysis; no training or overwrite')
     args = parser.parse_args()
+    assert args.rounds != 800 or args.workers == 1, '800-round matched replay is serial on the 16GiB host'
+    worker_memory_gib = 8 if args.rounds == 800 else 4
     binary = args.binary.resolve()
     assert file_sha256(binary) == args.binary_sha256
     stage = args.output.resolve()
@@ -116,7 +137,7 @@ def main():
     started = time.monotonic()
     record = dict(schema='paired-exact-preflop-averaging-controller-v1', status='running',
         binarySha256=args.binary_sha256, runnerSha256=file_sha256(Path(__file__)),
-        rounds=args.rounds, maximumWorkers=args.workers, maximumWorkerMemoryGiB=4,
+        rounds=args.rounds, maximumWorkers=args.workers, maximumWorkerMemoryGiB=worker_memory_gib,
         maximumWorkerSeconds=900, maximumStageSeconds=3600, minimumFreeDiskGiB=20,
         jobs=[], comparisons=[], stability={}, interpretation='Research diagnostic only. No promotion or full-game exploitability claim.')
 
@@ -131,6 +152,8 @@ def main():
         output = directory/'result.json'
         env = dict(POKER_AVERAGE_SEED=str(seed), POKER_AVERAGE_MODE=mode,
             POKER_AVERAGE_ROUNDS=str(args.rounds), POKER_AVERAGE_OUTPUT=str(output))
+        if args.rounds == 800:
+            env['POKER_AVERAGE_POLICY_OUTPUT'] = str(directory/'frozen-preflop.json.gz')
         command = [str(binary), 'blueprint::preflop_average::pilot::matched_preflop_averaging_pilot',
             '--exact', '--ignored', '--nocapture', '--test-threads=1']
         result = dict(seed=seed, mode=mode, command=command, environment=env, output=str(output),
@@ -138,7 +161,7 @@ def main():
         with (directory/'stdout.log').open('xb') as stdout, (directory/'stderr.log').open('xb') as stderr:
             process = subprocess.Popen(command, env=dict(os.environ, **env), stdout=stdout,
                 stderr=stderr, start_new_session=True)
-            guard = WorkerResourceGuard(process, directory, 4*1024**3, 900, 20*1024**3, stop_event=stop).start()
+            guard = WorkerResourceGuard(process, directory, worker_memory_gib*1024**3, 900, 20*1024**3, stop_event=stop).start()
             result['pid'] = process.pid
             atomic_json(directory/'manifest.json', result)
             print(seed, mode, 'pid', process.pid, flush=True)
@@ -153,6 +176,9 @@ def main():
         result['status'] = 'complete' if result['exitCode'] == 0 and result['resourceStopReason'] is None else 'failed'
         if result['status'] == 'complete':
             result['outputSha256'] = file_sha256(output)
+            frozen = directory/'frozen-preflop.json.gz'
+            if frozen.exists():
+                result['frozenPolicySha256'] = file_sha256(frozen)
         else:
             stop.set()
         atomic_json(directory/'manifest.json', result)

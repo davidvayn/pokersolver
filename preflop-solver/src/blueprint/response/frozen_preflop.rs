@@ -179,6 +179,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn frozen_preflop_export_is_complete_readable_and_not_resumable() {
+        let config = BlueprintConfig {
+            effective_stack_bb: 20.0,
+            iterations: 1,
+            averaging_delay: 0,
+            traversal: BlueprintTraversal::PublicChanceSampling,
+            exact_preflop_averaging: true,
+            ..BlueprintConfig::default()
+        };
+        let mut trainer = Trainer::fresh(config.clone());
+        trainer.discounts.advance(1);
+        trainer.sweep_preflop_average().unwrap();
+        trainer.completed_iterations = 1;
+        let path = std::env::temp_dir().join(format!(
+            "frozen-preflop-export-{}.json.gz",
+            std::process::id()
+        ));
+        assert!(
+            trainer.write_frozen_preflop_average(&path).is_err(),
+            "initialized averages are not trained"
+        );
+        assert!(!path.exists());
+        // Synthetic codec fixture only: mark every row updated and provide
+        // non-uniform, finite average mass. No training-strength claim.
+        for node in trainer.nodes.values_mut() {
+            node.regret_updates = 1;
+            for (i, mass) in node.strategy_sum.iter_mut().enumerate() {
+                *mass = (i + 1) as f64 * 1.3;
+            }
+        }
+        trainer.write_frozen_preflop_average(&path).unwrap();
+        assert!(
+            trainer.write_frozen_preflop_average(&path).is_err(),
+            "no overwrite"
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&read_json_artifact(&path).unwrap()).unwrap();
+        assert_eq!(value["artifact_kind"], "immutable-preflop-average-v1");
+        assert!(value.get("rng_state").is_none());
+        assert!(value["nodes"].as_object().unwrap().values().all(|node| node
+            .get("regrets")
+            .is_none()
+            && node.get("last_discount_iteration").is_none()
+            && (node["strategy_sum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .sum::<f64>()
+                - 1.0)
+                .abs()
+                < 1e-12));
+        assert!(
+            read_checkpoint(&path).is_err(),
+            "frozen policy must not masquerade as resumable training"
+        );
+        let loaded = FrozenPreflopPolicy::read(&path).unwrap();
+        assert_eq!(loaded.node_count(), 16_900);
+        let mut pending = vec![GameState::initial(&config)];
+        while let Some(state) = pending.pop() {
+            if state.terminal.is_some() || state.street != Street::Preflop {
+                continue;
+            }
+            for combo in [Combo::new(51, 50), Combo::new(48, 44), Combo::new(4, 1)] {
+                let deal = neural::deal_for_policy_combo_on_board(combo, state.actor, &[]).unwrap();
+                let (key, _, _) = information_set(&state, &deal, &config);
+                let actual = loaded.strategy(&state, combo).unwrap();
+                for (a, b) in actual.iter().zip(trainer.nodes[&key].average_strategy()) {
+                    assert!((a - b).abs() < 2e-15);
+                }
+            }
+            pending.extend(
+                state
+                    .legal_actions(&config)
+                    .iter()
+                    .map(|a| state.apply(a, &config)),
+            );
+        }
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn strict_preflop_streaming_preserves_averages_across_all_codecs_and_rejects_missing() {
         let (mut trainer, deal) = super::super::tests::fixture_trainer();
         trainer

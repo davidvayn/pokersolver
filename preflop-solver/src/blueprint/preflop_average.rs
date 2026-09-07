@@ -5,6 +5,92 @@ use super::*;
 mod pilot;
 
 impl Trainer {
+    /// Immutable, preflop-only serving input for the strict existing reader.
+    /// The legacy `strategy_sum` field contains normalized frozen averages;
+    /// no regrets, RNG, discount state or resumable checkpoint is exported.
+    #[cfg(test)]
+    pub(super) fn write_frozen_preflop_average(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if path.exists() {
+            return Err("refusing to overwrite frozen preflop policy".into());
+        }
+        if self.completed_iterations != self.config.iterations {
+            return Err("refusing to freeze incomplete preflop training".into());
+        }
+        let classes = all_combos()
+            .into_iter()
+            .map(|c| format!("preflop:{}", c.label()))
+            .collect::<BTreeSet<_>>();
+        let mut rows = BTreeMap::new();
+        let mut histories = BTreeMap::new();
+        let mut pending = vec![GameState::initial(&self.config)];
+        while let Some(state) = pending.pop() {
+            if state.terminal.is_some() || state.street != Street::Preflop {
+                continue;
+            }
+            let actions = state.legal_actions(&self.config);
+            for class in &classes {
+                let (key, descriptor, _) = information_set_from_bucket_trajectories(
+                    &state,
+                    &self.config,
+                    vec![Arc::from(class.as_str())],
+                    Vec::new(),
+                );
+                let node = self
+                    .nodes
+                    .get(&key)
+                    .ok_or("missing preflop row; no frozen fallback")?;
+                let history = self
+                    .public_histories
+                    .get(&descriptor.public_history_id)
+                    .ok_or("missing preflop history")?;
+                if history != &state.public_history {
+                    return Err("preflop history mismatch".into());
+                }
+                histories.insert(descriptor.public_history_id, history);
+                if node.descriptor != descriptor
+                    || node.regret_updates == 0
+                    || node.average_visits == 0
+                    || !node.strategy_sum.iter().any(|p| *p > 0.0)
+                    || node.strategy_sum.iter().any(|p| !p.is_finite() || *p < 0.0)
+                    || node
+                        .action_labels
+                        .iter()
+                        .map(AsRef::as_ref)
+                        .ne(actions.iter().map(|a| a.label.as_str()))
+                {
+                    return Err(format!(
+                        "untrained or invalid preflop row {key}; cannot freeze complete policy"
+                    )
+                    .into());
+                }
+                let probabilities = node.average_strategy();
+                if probabilities
+                    .iter()
+                    .any(|p| !p.is_finite() || *p < 0.0 || *p > 1.0)
+                    || (probabilities.iter().sum::<f64>() - 1.0).abs() > 1e-12
+                {
+                    return Err("invalid normalized frozen preflop policy".into());
+                }
+                rows.insert(
+                    key,
+                    serde_json::json!({"descriptor":node.descriptor,
+                    "action_labels":node.action_labels,"strategy_sum":probabilities,
+                    "average_visits":node.average_visits,"regret_updates":node.regret_updates}),
+                );
+            }
+            pending.extend(actions.iter().map(|a| state.apply(a, &self.config)));
+        }
+        write_json_atomic(
+            path,
+            &serde_json::json!({
+                "artifact_kind":"immutable-preflop-average-v1", "schema_version":self.config.checkpoint_schema_version(),
+                "model":MODEL,"approximate":true,"config":self.config,"completed_iterations":self.completed_iterations,
+                "public_histories":histories,"nodes":rows,
+                "interpretation":"Frozen trained preflop average only. Normalized strategy_sum compatibility field; not resumable and not release-qualified."
+            }),
+        )
+    }
+
     pub(super) fn sweep_preflop_average(&mut self) -> Result<(), String> {
         if self.completed_iterations < self.config.averaging_delay {
             return Ok(());

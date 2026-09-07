@@ -30,15 +30,29 @@ impl NativePostflopPolicy {
         state: PublicBeliefState,
         options: &NativeFlopOptions,
     ) -> Result<Self, String> {
+        Self::solve_with_leaf_workers(game, state, options, 1)
+    }
+
+    // Execution setting only. Canonical policy bytes and root seeds remain
+    // independent of worker count; the ordinary entry stays serial.
+    pub fn solve_with_leaf_workers(
+        game: BlueprintConfig,
+        state: PublicBeliefState,
+        options: &NativeFlopOptions,
+        leaf_workers: usize,
+    ) -> Result<Self, String> {
         if options.response_turn_iterations < 2 {
             return Err("native playback requires at least two continuation iterations".into());
         }
-        let mut candidate = super::super::train(
+        let mut candidate = super::super::train_with_leaf_workers(
             game,
             state,
             options.seed,
             options.iterations,
             options.training_turn_iterations,
+            false,
+            1,
+            leaf_workers,
         )?;
         candidate.response_turn_iterations = (options.response_turn_iterations
             != candidate.turn_iterations)

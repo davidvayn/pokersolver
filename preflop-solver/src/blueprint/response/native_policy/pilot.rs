@@ -34,6 +34,32 @@ fn own_prefix_reach(
 #[test]
 #[ignore = "retained checkpoint full-hand integration; requires explicit inputs and external resource guard"]
 fn native_full_hand_retained_checkpoint_probe() {
+    retained_checkpoint_probe(
+        NativeFlopOptions {
+            seed: 100101,
+            iterations: 2,
+            training_turn_iterations: 4,
+            response_turn_iterations: 4,
+        },
+        1,
+    );
+}
+
+#[test]
+#[ignore = "candidate-budget cold serving probe; explicit inputs and external five-minute guard required"]
+fn native_full_hand_candidate_serving_probe() {
+    retained_checkpoint_probe(
+        NativeFlopOptions {
+            seed: 100101,
+            iterations: 128,
+            training_turn_iterations: 64,
+            response_turn_iterations: 128,
+        },
+        4,
+    );
+}
+
+fn retained_checkpoint_probe(options: NativeFlopOptions, leaf_workers: usize) {
     let source =
         PathBuf::from(std::env::var("POKER_NATIVE_CHECKPOINT").expect("explicit checkpoint"));
     let source_sha =
@@ -47,19 +73,16 @@ fn native_full_hand_retained_checkpoint_probe() {
     assert_eq!(preflop.rounds, 800);
     assert_eq!(preflop.game.effective_stack_bb, 20.0);
     let game = preflop.game.clone();
-    let policy = NativeFullHandPolicy::new(
-        preflop,
-        NativeFlopOptions {
-            seed: 100101,
-            iterations: 2,
-            training_turn_iterations: 4,
-            response_turn_iterations: 4,
-        },
-    );
+    let solve_budget = serde_json::json!({"flopIterations":options.iterations,
+        "trainingTurnIterations":options.training_turn_iterations,
+        "responseTurnIterations":options.response_turn_iterations,
+        "leafWorkers":leaf_workers});
+    let mut policy = NativeFullHandPolicy::new(preflop, options);
+    policy.leaf_workers = leaf_workers;
     println!(
         "{}",
         serde_json::json!({"stage":"preflop_loaded", "seconds":loading_seconds,
-        "nodes":policy.preflop.node_count()})
+        "nodes":policy.preflop.node_count(),"solveBudget":solve_budget})
     );
     let mut pending = vec![GameState::initial(&game)];
     let mut queried = 0;
@@ -165,8 +188,19 @@ fn native_full_hand_retained_checkpoint_probe() {
     while state.terminal.is_none() {
         let actions = state.legal_actions(&game);
         let before = Instant::now();
+        println!(
+            "{}",
+            serde_json::json!({"stage":"decision_started",
+            "street":state.street,"actor":state.actor,"history":state.public_history,
+            "elapsedSeconds":started.elapsed().as_secs_f64()})
+        );
         let mix = policy.strategy(&state, &deal, &actions, &game);
         let seconds = before.elapsed().as_secs_f64();
+        println!(
+            "{}",
+            serde_json::json!({"stage":"decision_completed",
+            "street":state.street,"actor":state.actor,"seconds":seconds})
+        );
         let action = actions
             .iter()
             .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check))
@@ -178,7 +212,7 @@ fn native_full_hand_retained_checkpoint_probe() {
     }
     assert_eq!(decisions.len(), 8);
     let result = serde_json::json!({"schema":"native-full-hand-integration-probe-v1",
-        "checkpointSha256":source_sha,"loadingSeconds":loading_seconds,
+        "checkpointSha256":source_sha,"loadingSeconds":loading_seconds,"solveBudget":solve_budget,
         "preflopPublicNodes":public_nodes,"preflopQueries":queried,"preflopMissing":missing,
         "preflopExhaustiveCoveragePass":(missing as f64 / queried as f64) <= 0.0001,
         "preflopMissingExamples":missing_examples,
@@ -188,7 +222,7 @@ fn native_full_hand_retained_checkpoint_probe() {
         "maximumProbabilitySumError":maximum_sum_error,"fixtureRangeMaximumError":fixture_range_error,
         "cardsSeed":881901,"decisions":decisions,"diagnostics":policy.take_resolution_diagnostics(),
         "seconds":started.elapsed().as_secs_f64(),
-        "interpretation":"Strict checkpoint reader and full-hand research integration only. Forced trajectory, tiny 2/4/4 solve budget; no exploitability, strength or release qualification."});
+        "interpretation":"Strict checkpoint reader and full-hand research integration/cold serving cost only. Forced trajectory at the explicit solveBudget; no exploitability, action-EV precision or release qualification."});
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
