@@ -5052,3 +5052,93 @@ Frozen final-source serving-probe binary SHA
 `866d19ec425bde898e3f8befa04cd8501f1fab94eb05baea32ce69d8773cf293`.
 The cold timing probe will run after local training/test workers finish, to
 avoid attributing shared training load to an idle-host serving result.
+
+### September 6: training-allocation pair completed
+
+Implementation milestone `e7b6b08e29df7328f65b4576f29298aa0b39942e` is pushed.
+The response-only recovery completed all remaining 70 packets, reused 28
+hash-verified packets, and passed both full aggregates and independent audits.
+Recovery runtime **1764.864 seconds**; largest sampled response footprint
+**1,170,031,888 bytes**. The original failed-stage manifest remains unchanged;
+the successful recovery manifest SHA is
+`0bd9b1c91539eac717701a9e07864b8175cf5b375c247a6daf470e7fcfc5f7f8`.
+
+| Seed | 32 flop × 64 training-turn | 16 flop × 128 training-turn | Stronger-training minus more-flop |
+| --- | ---: | ---: | ---: |
+| 100101 | 0.227128290414bb | 0.405701728583bb | +0.178573438168bb |
+| 100102 | 0.229962297618bb | 0.354495625077bb | +0.124533327459bb |
+
+Both profiles use the same **64-iteration played continuation** during this
+comparison. These are conditional-root half-summed response gains, lower is
+better. Equal inner-iteration work is not necessarily equal wall time. The
+more-flop allocation is about **44% / 35% better** than spending that work on
+stronger training continuations. Do not promote 16/128 as the better policy.
+Together with the separate played-continuation comparison, the current evidence
+favors additional flop updates while retaining the stronger **played** turn/
+river continuation. It does not establish that arbitrary increases improve all
+roots, that the combined preflop/native model has improved globally, or that
+full-game exploitability is below a release threshold.
+
+Training times were 2500.682 / 2527.469 seconds, peak process footprints
+1,205,175,616 / 1,200,211,264 bytes. Candidate SHAs (16/128 training with an
+explicit 64-response budget):
+
+- A: `83e7dd3d8b8700d50bda66102ac1ff03286eea5d03802e40494f11efad1287df`
+- B: `224ceb1a60dd5cd407d706d11da6ec003fd91cd9720fbd23d12875d4bc1f4752`
+
+Final response SHAs:
+
+- A: `b32a35cf70aadc808b8c992ddcb3dfdc916755d420d68d9fd943c63cba06b2c7`
+- B: `7c4f14f6f0c62b0b3314cd2ec59a41e6302cbedbb3bdfc19c39f51310361c759`
+
+Before isolated cold-serving timing, eight more inactive single-link debug
+`metadata.rmeta` caches (31,334,199 original bytes) were compressed, recoverable
+at their original paths with `.gz` appended or by rebuilding debug artifacts.
+No trained data was removed. The serving probe started only after the paired
+evaluation and local tests completed. Controller SHA
+`6925a3f61d9c63c00d0ab9786ed13b6a90cb5255f88cebc97c63d8d7d1cdc8eb`.
+
+### September 6: cold-serving failure and four-step sequence status
+
+Implementation CI **34069318785 passed**, including Linux Rust release tests,
+the production Next build, pinned-bundle verification and actual resolver
+queries on every postflop street. No website model, activation manifest or
+acceptance threshold changed.
+
+The isolated candidate serving probe in
+`local-native-full-hand-20260906-integration/candidate-serving` **failed the
+existing 300-second request deadline**. It passed all 132,600 strict preflop
+lookups with zero misses and a maximum probability-sum error of 4.44e-16, then
+completed both preflop decisions. Its first cold flop query reached only
+**11 of 128 iterations** (99 native turn queries) before the guard stopped it.
+No flop action was returned and no partial policy or action score was exported.
+
+Stage elapsed time **301.438 seconds**, sampled peak process footprint
+**1,185,318,232 bytes**; the stop reason is the serving deadline, not memory,
+disk or a solver panic. Four leaf workers ran with no concurrent local research
+or test job. Observed early throughput suggests roughly an hour for this cold
+root, but that is only an extrapolation: the full solve was not completed and
+other boards/histories can have different costs. This is a local route-cost
+measurement against the actual website timeout, not a cloud benchmark or proof
+that all hosting configurations fail. Probe manifest SHA
+`79a7b2d818edd8ded525a3bdae4f8b7601173862d036c35306ca695744f31af8`.
+
+| Requested step | Status at this checkpoint |
+| --- | --- |
+| 1. Exact preflop averaging and matched pilots | Completed. Missing trained preflop queries eliminated; regret/postflop/RNG parity passes. Strategic stability did not materially improve. |
+| 2. Stronger continuation pair and compute-allocation comparison | Completed, including all chance packets and independent audits. More flop updates win the equal-inner-work training pair; stronger played continuation wins its separate comparison. |
+| 3. Pinned combined model across complete hands and adaptive opponents | **Not completed.** Tiny-budget forced full-hand integration passes, but the strong cold route times out on its first flop. No strong full-hand response/exploitability measurement is available. |
+| 4. Coverage, EV-confidence, serving qualification and accepted website integration | **Not completed.** Preflop coverage and existing-site regression checks pass; strong-route serving fails. Native action-EV confidence, full-hand held-out coverage and release acceptance remain unqualified. |
+
+The unchanged source root-stability gates still fail: maximum individual-action
+MAE **8.29443% vs 5%**, primary agreement **64.49704% vs 85%**, aggregate delta
+**5.25829% vs 3%**. Those are root diagnostics, not a complete reach-weighted
+full-hand stability measurement. The native re-solving route also still lacks
+an opponent-CFV safety guarantee. Neither low conditional response gains nor
+passing old v102 action-EV validation can qualify this combined candidate.
+
+All local jobs from this sequence have ended. Do not silently launch a multi-day
+adaptive-response evaluation, substitute the tiny probe budget as the strong
+model, extend the website timeout, relax gates or activate this candidate. The
+next phase needs to address cold postflop cost and remaining policy stability
+before a practical strong full-hand evaluation and accepted website rollout.
