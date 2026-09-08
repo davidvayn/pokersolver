@@ -1,6 +1,6 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: LCFR128 response regresses; sampling-drift diagnosis identifies a bounded refresh pilot**.
+Updated: 2026-09-08. Status: **Step 3: late-refresh128 training complete; matched response captures underway**.
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -448,7 +448,7 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   peak1.491GB, manifest SHA256
   `08bc2c4e50eb96e3c7978e2b2ad4aaf462461b38884d456501c32fff742f6782`.
   Thirteen focused Python tests PASS, diff check PASS.
-- **Currently running:** `local-compact-preflop-20260908-lcfr-refresh128-a`,
+- **Training complete:** `local-compact-preflop-20260908-lcfr-refresh128-a`,
   fresh paired LCFR128,2 workers,2.5GiB/5400s caps,8-update checkpoints,20GiB
   disk reserve. Two-phase proposal SHA256
   `8786d933f44e70c17706a3ff8bd2838e6a2871e322d04dea9737c01ac99746fb`;
@@ -457,6 +457,22 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   starting at33. No new continuation/value model, action grid or regret schedule.
   After completion, run the SAME paired frozen response evaluation and compare
   against both LCFR32 and unchanged LCFR128. No512/1024.
+- Early native verification PASS: both first32 numerical update prefixes match
+  LCFR32 exactly (excluding timing/trace-only metadata); through updates35/38,
+  every selected history reports the correct active proposal probability.
+  The phase switch at33 is exercised in actual training, not only unit tests.
+  Source/proposal milestone `18eafaf` committed; push still fails GitHub DNS.
+- Refresh128 COMPLETE in3013.980s wall, seed training2837.623/3013.768s; all256
+  actual sampled probabilities verified and both first32 prefixes exact.
+  Manifest SHA256 `0e54976e666846b0cdd0835c32a00d8533c07a5ef090f7fce8bf44da418be5d4`.
+  Frozen policies `20602d3c7bb319d8cbffe958e4e4fd0691a1bbcce1f7284cbde36fd0bf3b329a`
+  and `6dff07df4ce764642080128d8332aa3ce3678613e42ae5489995d19865c967cd`.
+  All guards pass, peak1.883/1.985GB. Cross-seed worst-action MAE19.0161%,
+  primary agreement33.1361%, max aggregate delta8.6718pts: still FAIL/mixed,
+  not evidence of lower exploitability. Probability sums within4.44e-16.
+  **Currently running:** seed1 complete response capture and seed2 preflight at
+  `local-frozen-preflop-response-20260908-lcfr-refresh128-{seed}-{preflight|complete}`.
+  Seed1 preflight passed92.337s. No training remains active; do not restart it.
 
 ## Objective and scope
 
