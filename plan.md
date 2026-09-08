@@ -1,6 +1,23 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: late-refresh128 training complete; matched response captures underway**.
+Updated: 2026-09-08. Status: **Step 3: both128 comparisons complete; scaling rejected; continuation-robustness diagnosis next**.
+
+Current decision: retain the paired LCFR32 research reference, not either128
+extension. Restricted preflop response gains by seed:
+
+| Configuration | Seed27001 | Seed27002 |
+| --- | ---: | ---: |
+| Retained LCFR32 | 0.461800bb | 0.467628bb |
+| Unchanged LCFR128 | 0.571055bb | 0.515454bb |
+| Late-refresh LCFR128 | 0.612373bb | 0.463114bb |
+
+These are NOT full-game exploitability values. No512/1024, no paid compute,
+no model promotion. All training and evaluations in this bounded sequence are
+complete; **nothing is currently running**. The release plan is NOT complete.
+Two reused evaluation board clusters do not provide a qualifying99% bound.
+The next policy-directed action is to isolate continuation robustness at the
+costly opening/limp/raise branches, not repeat optimizer/sampler parameter sweeps.
+
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -470,9 +487,42 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   All guards pass, peak1.883/1.985GB. Cross-seed worst-action MAE19.0161%,
   primary agreement33.1361%, max aggregate delta8.6718pts: still FAIL/mixed,
   not evidence of lower exploitability. Probability sums within4.44e-16.
-  **Currently running:** seed1 complete response capture and seed2 preflight at
+  Response captures subsequently completed at
   `local-frozen-preflop-response-20260908-lcfr-refresh128-{seed}-{preflight|complete}`.
   Seed1 preflight passed92.337s. No training remains active; do not restart it.
+- Export-only restoration of refresh32 checkpoints reproduces BOTH original
+  LCFR32 frozen policies BYTE-FOR-BYTE, zero new updates,1.230s wall. Manifest SHA
+  `808e2038c29c7038fb119009667ea09cf6af2494b1f7be22d49cdfa1aedbbea4`, parity report
+  `e7479156c3ab020cdb5fcc4e05bd382977d0bb7df91c6d36202e2dbc3b733739`.
+- Late-refresh response COMPLETE: **0.612373044 / 0.463113714bb**, SE
+  **0.156627225 / 0.065841088bb**. Versus unchanged128, seed deltas
+  **+0.041317848 / -0.052340287bb**, pair mean-0.005511220bb, board-cluster
+  SE0.013151541bb: mixed, no credible paired improvement. Versus retained32,
+  deltas **+0.150572848 / -0.004514323bb**, pair mean+0.073029263bb, cluster
+  SE0.015821196bb; THREE of FOUR seed/board comparisons regress. **Reject
+  scaling/promotion.** Keep refresh opt-in only for reproducibility; do not call
+  its implementation or conditional-variance screen a policy improvement.
+  Captures elapsed2043.354/2018.942s, peaks1.005/1.016GB, all8 guards pass.
+  Manifest SHAs `ed91eb88bae3fafc22976adcd0b412d138fab11868b0e980f969d6a126689ab6`
+  and `422e62a690d5b1584bae5ac87fc45c797ae93e7357a69bd25b9c339c00563db0`.
+  Comparison versus32 SHA `49267b51e78373206cbf5e207dae9811a356d44fcc3ed16b53a5fb2943974326`;
+  versus128 SHA `d7b941f425042e57f36e60723cd5e8e93465be39e67ee6d9c960513dab8aabc0`.
+- Next sequence (NOT implemented or running):
+  1. Reuse captured response attributions to pin the costly opening, limp and
+     BB-facing-open branches. Preserve the32 reference and independent source
+     hashes; no global sampling/discount retuning based on this failed pair.
+  2. On the SAME frozen ranges and matched chance, compare increased flop
+     search against increased turn-continuation search. Measure action-value
+     ordering/response consequences, not merely network fit loss. Small cost
+     preflight first; no complete-policy training until evidence favors an arm.
+  3. If stronger search remains unstable, test opponent-continuation diversity
+     or coherent counterfactual bounds on tiny exact-game controls before any
+     full-hand integration. Depth-limited imperfect-information values are
+     strategy-dependent; this is not repaired by lowering sampling variance
+     alone. Do not claim the current evidence proves bias dominates variance.
+  4. Only the supported continuation change gets a new paired short policy
+     pilot and the SAME response comparison. Full-game, EV-confidence,
+     coverage and serving gates still follow; no approximate-GTO release claim.
 
 ## Objective and scope
 

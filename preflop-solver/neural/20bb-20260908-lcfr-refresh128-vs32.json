@@ -1,0 +1,203 @@
+{
+  "schema": "paired-linear-weighting-update-count-comparison-v1",
+  "sources": [
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr32-27001-complete",
+      "sha256": "63b2ac901e450600c82bbecdf2e8b4d65cb7e9de4314690ebe3a0c7e7f914be0"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr-refresh128-27001-complete",
+      "sha256": "ed91eb88bae3fafc22976adcd0b412d138fab11868b0e980f969d6a126689ab6"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr32-27002-complete",
+      "sha256": "2975a47ced98e8df08c23fd0fdbf6759625224e26e4485a5102962b0a30fb9cc"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr-refresh128-27002-complete",
+      "sha256": "422e62a690d5b1584bae5ac87fc45c797ae93e7357a69bd25b9c339c00563db0"
+    }
+  ],
+  "results": [
+    {
+      "seed": 27001,
+      "referenceMeanBb": 0.46180019652721627,
+      "candidateMeanBb": 0.6123730443772466,
+      "candidateStandardErrorBb": 0.15662722510928315,
+      "pairedBoardChangesBb": [
+        0.2364781204072448,
+        0.0646675752928158
+      ],
+      "meanChangeBb": 0.1505728478500303
+    },
+    {
+      "seed": 27002,
+      "referenceMeanBb": 0.4676280367009751,
+      "candidateMeanBb": 0.463113714049237,
+      "candidateStandardErrorBb": 0.06584108811769535,
+      "pairedBoardChangesBb": [
+        -0.058777204206347466,
+        0.04974855890287139
+      ],
+      "meanChangeBb": -0.00451432265173804
+    }
+  ],
+  "attributions": [
+    {
+      "seed": 27001,
+      "largestContributions": [
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "meanGainContributionBb": 0.20798212918694908
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb"
+          ],
+          "meanGainContributionBb": 0.08053301216343703
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "meanGainContributionBb": 0.06507737988913041
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.06493144223615033
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb"
+          ],
+          "meanGainContributionBb": 0.04993035584994228
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.500bb"
+          ],
+          "meanGainContributionBb": 0.040321964938984683
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_5.000bb"
+          ],
+          "meanGainContributionBb": 0.024814715288911087
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.500bb",
+            "Preflop:p1:raise_to_9.000bb"
+          ],
+          "meanGainContributionBb": 0.02379490592215265
+        }
+      ]
+    },
+    {
+      "seed": 27002,
+      "largestContributions": [
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb",
+            "Preflop:p1:raise_to_7.500bb"
+          ],
+          "meanGainContributionBb": 0.08273859779054366
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "meanGainContributionBb": 0.08253643810772111
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_5.000bb"
+          ],
+          "meanGainContributionBb": 0.055201203622677664
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.04847881309130739
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb"
+          ],
+          "meanGainContributionBb": 0.035144078369258314
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb",
+            "Preflop:p1:raise_to_9.000bb"
+          ],
+          "meanGainContributionBb": 0.026134321347670405
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.500bb",
+            "Preflop:p1:raise_to_7.500bb"
+          ],
+          "meanGainContributionBb": 0.025611797318134278
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb"
+          ],
+          "meanGainContributionBb": 0.022271291921744128
+        }
+      ]
+    }
+  ],
+  "seedAveragedBoardChangesBb": [
+    0.08885045810044867,
+    0.057208067097843596
+  ],
+  "meanChangeBb": 0.07302926259914613,
+  "boardClusterStandardErrorBb": 0.015821195501302537,
+  "allSeedBoardChangesImprove": false,
+  "independentEvaluationClusters": 2,
+  "qualifyingConfidenceUpperBound99Bb": null,
+  "releaseAccepted": false,
+  "fullGameGateEvaluated": false,
+  "interpretation": "Restricted preflop response on two reused development evaluation board clusters; not full-game exploitability or a qualifying confidence bound. Continuation settings are identical; updates increase32 to128 and the endpoint proposal refreshes after32; unchanged native continuation, regret and averaging rules. Initial32 prefix verified."
+}
