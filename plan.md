@@ -1,6 +1,6 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: fixed-importance paired32 improves mean response resistance; preparing unchanged128 comparison**.
+Updated: 2026-09-08. Status: **Step 3: fixed-importance32 improves mean response resistance; checkpointed128 pair running**.
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -174,6 +174,61 @@ external/resource issue preventing further bounded local diagnosis and pilots.
 - Small, byte-identical copies of the proposal and both response comparisons
   are retained outside ignored runs as `neural/20bb-20260908-fixed-importance*.json`
   for the source-control milestone. They are research evidence, not serving models.
+- Milestone committed locally as `450d910` (86 accumulated research-source/report
+  files; unrelated website/report files left untouched). Push to origin/main
+  failed: DNS cannot resolve github.com in this environment. Do not claim pushed.
+  Three JavaScript diagnostic tests also pass.
+- The first128 attempt is **stopped, not completed**. Refined timing using the
+  exact scheduled histories and observed native costs projected~62–74min versus
+  its3600s cap; the compact loop had no checkpoints despite core Trainer support.
+  Both workers stopped through the execution session's normal interrupt handler
+  after~2040s. A direct cross-session signal was denied; session interruption
+  succeeded. No completed128 policy exists, and no response evaluation was run.
+  The32 policies/results remain intact. Do not resume from a frozen average—it
+  lacks regrets, averaging accumulators and RNG state.
+- Current work: local-only immutable MessagePack training checkpoint generations
+  plus hash-pinned receipts carrying continuation identity and progress. Reuse
+  Trainer's existing serializer/restorer; enforce unchanged model, proposal,
+  baseline, chance seed and solver binary. Add deterministic split-run testing.
+  Next restart same128 policy settings with checkpoints every8 updates and a
+  **5400s (90min) maximum per worker**, retaining2GB memory/20GB disk safeguards.
+  Checkpoint/resume artifacts are never serving exports. Do not restart until
+  the new correctness test passes; compare the32 numerical prefix again.
+- Recovery test first failed on exact bytes: generic Trainer restoration treats
+  a zero sampled-deal count as legacy missing data and fills it from iterations.
+  Compact exact-private integration legitimately records zero private deals.
+  The adapter now preserves that counter; the uninterrupted/split checkpoint
+  bytes match exactly, including regrets, averages, discount accumulators and RNG.
+- Current: live8-update checkpoint preflight in
+  `local-compact-preflop-20260908-importance8-recovery-preflight` plus full Rust
+  library regression. New binary SHA256
+  `345680d3e4736a478c2321032f3be0f7c1ee9d98932f1be143e3f07bab6ca967`.
+  Resume these real eight-update checkpoints into a new128 output directory;
+  do not recompute those initial updates. No claim of completed128 strength yet.
+- Completed live8 checkpoint preflight in181.770s, manifest SHA256
+  `73b8ef2fa4609bc2a2cfa6c0676304f984228f9144aab3fc10430d7da6d822c6`.
+  Both first8 numerical progress prefixes match the32 reference. Receipts:
+  seed27001 `fdc7a92be0f3c06821457b86ae3602f52a590a385adcf064ac49ca9d94012c60`,
+  seed27002 `fd74622d6e15c9253823d500c16b80fa8d0874d7db34b131dedf7ea11b2d3572`.
+  Each state file is~1.3MB. Full library regression **344 passed,50 ignored,0 failed**
+  in137.109s; manifest SHA256
+  `8e1e6321bdbaf47c75f85b37c7e44eb19e4dcb70d84d9e025db2025d106f58dd`.
+  CPU Python31 tests pass again; the previously documented Metal exclusions remain.
+- **Currently running** `local-compact-preflop-20260908-importance128-recovered-a`:
+  both seeds restore their completed8-state, run through128, checkpoint every8,
+  max5400s per worker,2GB memory cap,20GB disk reserve. Same345680 binary and
+  frozen importance proposal/model/kernel. Do not confuse this with the stopped
+  `importance128-a` attempt. Next verify the post-resume32 prefix, then evaluate
+  final128 policies against importance32 using the same pinned response protocol.
+- Strong live recovery verification is complete: loaded each recovered run's
+  round32 checkpoint, requested target32, and exported without any new training
+  updates. Both frozen policy files are **byte-identical to the original
+  importance32 policies**, not merely close metrics. This also verifies the
+  round8->128 resume across real native continuations. Export-only controller
+  completed in1.191s (`importance32-resume-parity`), manifest SHA256
+  `5333648b89fed9408e566c7eff263311e5c71cd4f83016ce87dc409a071fdf21`.
+  Parity report SHA256 `ed6e6b8a9907cc5c2581c01ed95e1c0592a7e278754a4d9b2445a4683b87de1c`,
+  with a tracked copy at `neural/20bb-20260908-checkpoint-replay.json`.
 
 ## Objective and scope
 

@@ -7,6 +7,7 @@ use public_belief::counterfactual_turn::{
 use public_belief::PublicBeliefState;
 use public_belief::PublicValueNetwork;
 use std::time::Instant;
+mod checkpoint;
 mod exact_checkdown;
 mod fixed_control;
 mod fixed_noise;
@@ -678,10 +679,32 @@ fn compact_preflop_continuation_pilot() {
         ..BlueprintConfig::default()
     };
     config.validate().unwrap();
-    let mut trainer = Trainer::fresh(config.clone());
+    let checkpoint_interval: u64 = std::env::var("POKER_COMPACT_CHECKPOINT_INTERVAL")
+        .unwrap_or_else(|_| "0".into()).parse().unwrap();
+    assert!([0,8,16,32].contains(&checkpoint_interval));
+    let resume_path = std::env::var("POKER_COMPACT_RESUME_RECEIPT").ok();
+    let resume_sha = std::env::var("POKER_COMPACT_RESUME_SHA").ok();
+    assert_eq!(resume_path.is_some(),resume_sha.is_some());
+    assert!((checkpoint_interval==0 && resume_path.is_none()) ||
+        (played_profile && turn_baseline && !use_history_baseline && !simultaneous
+            && !root_turn_averages && !diagnose_targets && flop_checkdown_scale==1.0));
+    let recovery_identity = serde_json::json!({
+        "binarySha256":std::env::var("POKER_COMPACT_BINARY_SHA").ok(),
+        "modelSha256":model.artifact_sha256(),"checkdownSha256":checkdown_sha,
+        "proposalSha256":proposal_sha,"continuationSeed":continuation_seed,
+        "sampling":sampling.label(),"playedProfile":played_profile,
+        "turnBaseline":turn_baseline,"rootTrace":trace_root_updates,
+        "flopIterations":128,"turnIterations":64});
+    if checkpoint_interval>0 || resume_path.is_some() {
+        assert!(recovery_identity["binarySha256"].as_str().is_some_and(|s|
+            s.len()==64 && s.bytes().all(|c|c.is_ascii_hexdigit())));
+    }
+    let (mut trainer, mut progress) = if let Some(path) = &resume_path {
+        checkpoint::restore(Path::new(path),resume_sha.as_deref().unwrap(),&recovery_identity,&config).unwrap()
+    } else { (Trainer::fresh(config.clone()),Vec::new()) };
+    let resumed_from_round = trainer.completed_iterations;
     let started = Instant::now();
-    let mut progress = Vec::new();
-    for _ in 0..rounds {
+    while trainer.completed_iterations < rounds {
         let tick = continuation_step(
             &mut trainer,
             &model,
@@ -701,6 +724,14 @@ fn compact_preflop_continuation_pilot() {
         .unwrap();
         eprintln!("{tick}");
         progress.push(tick);
+        if checkpoint_interval>0 && (trainer.completed_iterations%checkpoint_interval==0
+            || trainer.completed_iterations==rounds) {
+            let receipt = checkpoint::save(&trainer,&output.with_extension("checkpoints"),
+                &recovery_identity,&progress).unwrap();
+            eprintln!("{}",serde_json::json!({"stage":"compact_checkpoint_complete",
+                "round":trainer.completed_iterations,"receipt":receipt,
+                "receiptSha256":format!("{:x}",Sha256::digest(fs::read(&receipt).unwrap()))}));
+        }
     }
     trainer.write_frozen_preflop_average(&frozen).unwrap();
     let snapshot = Snapshot::capture(&trainer).unwrap();
@@ -737,6 +768,8 @@ fn compact_preflop_continuation_pilot() {
         "rootRealizationTurnAverages":root_turn_averages,
         "targetDiagnosticEnabled":diagnose_targets,
         "rootUpdateTraceEnabled":trace_root_updates,
+        "checkpointInterval":checkpoint_interval,"resumedFromRound":resumed_from_round,
+        "resumeReceiptSha256":resume_sha,
         "playedProfileTargets":played_profile,
         "interpretation":"Compact exact-private-hand DCFR with exact preflop averages, endpoint checkdown control variate and evolving counterfactual public beliefs. Approximate native continuation oracle; not full-game exploitability."});
     let bytes = serde_json::to_vec(&payload).unwrap();

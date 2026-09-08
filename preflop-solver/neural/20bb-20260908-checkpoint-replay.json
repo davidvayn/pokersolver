@@ -1,0 +1,19 @@
+{
+  "schema": "compact-native-resume-policy-parity-v1",
+  "manifestSha256": "5333648b89fed9408e566c7eff263311e5c71cd4f83016ce87dc409a071fdf21",
+  "results": [
+    {
+      "seed": 27001,
+      "policySha256": "b8b3f024ded0c9bff2828253f299678819bd7bbdec0387abf8dd72c9b074293a",
+      "byteIdentical": true,
+      "newTrainingUpdates": 0
+    },
+    {
+      "seed": 27002,
+      "policySha256": "1bf3ca5ae76f9c7bf0690be838cf365950fbdbcc5889e58e9bc00ecbcf7be87c",
+      "byteIdentical": true,
+      "newTrainingUpdates": 0
+    }
+  ],
+  "releaseAccepted": false
+}

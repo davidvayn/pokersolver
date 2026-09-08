@@ -59,10 +59,13 @@ class CompactComparisonTests(unittest.TestCase):
                 frozen.write_bytes(str(seed).encode())
                 result = dict(config=dict(seed=seed,iterations=int(environment["POKER_COMPACT_ROUNDS"])),continuationSeed=28001,
                     valueModelSha256=sha256(model),frozenPolicy=str(frozen),
-                    frozenPolicySha256=sha256(frozen),progress=[],trainingSeconds=0.1,totalNodes=16900,
+                    frozenPolicySha256=sha256(frozen),progress=[dict(round=i+1) for i in range(int(environment["POKER_COMPACT_ROUNDS"]))],trainingSeconds=0.1,totalNodes=16900,
                     exactCheckdownSha256=environment.get("POKER_COMPACT_CHECKDOWN_SHA"),
                     endpointSampling=environment["POKER_COMPACT_ENDPOINT_SAMPLING"],
                     endpointProposalSha256=environment.get("POKER_COMPACT_PROPOSAL_SHA"),
+                    checkpointInterval=int(environment["POKER_COMPACT_CHECKPOINT_INTERVAL"]),
+                    resumedFromRound=json.loads(Path(environment["POKER_COMPACT_RESUME_RECEIPT"]).read_text())["completedIterations"] if "POKER_COMPACT_RESUME_RECEIPT" in environment else 0,
+                    resumeReceiptSha256=environment.get("POKER_COMPACT_RESUME_SHA"),
                     completeTurnBaseline=environment["POKER_COMPACT_TURN_BASELINE"]=="1",
                     playedProfileTargets=environment["POKER_COMPACT_PLAYED_TARGETS"]=="1",
                     rootUpdateTraceEnabled=environment["POKER_COMPACT_TRACE_ROOT"]=="1")
@@ -114,6 +117,21 @@ class CompactComparisonTests(unittest.TestCase):
             self.assertEqual(manifest["maximumWorkerSeconds"], 3600)
             self.assertEqual(manifest["rounds"], 128)
             self.assertFalse(manifest["rootUpdateTraceEnabled"])
+            checkpoint = root/"round0008.mpk.gz"
+            checkpoint.write_bytes(b"fixture checkpoint")
+            receipt = root/"round0008.json"
+            receipt.write_text(json.dumps(dict(schema="compact-preflop-checkpoint-v1",
+                completedIterations=8,checkpoint=checkpoint.name,checkpointSha256=sha256(checkpoint))))
+            recovered = [str(root/"recovered") if x==str(root/"extended") else x for x in extended]
+            recovered += ["--checkpoint-interval","8","--maximum-worker-seconds","5400",
+                          "--resume","27001",str(receipt),sha256(receipt)]
+            with patch("sys.argv",recovered), patch("run_compact_preflop_continuation.guarded",side_effect=worker), \
+                    patch("run_compact_preflop_continuation.signal.signal"), \
+                    patch("run_compact_preflop_continuation.compare",return_value={}):
+                main()
+            manifest = json.loads((root/"recovered/manifest.json").read_text())
+            self.assertEqual(manifest["maximumWorkerSeconds"],5400)
+            self.assertEqual(manifest["resumedSeeds"]["27001"]["round"],8)
             barrier = threading.Barrier(2)
             def failing_worker(command, environment, output, *args):
                 barrier.wait(timeout=5)

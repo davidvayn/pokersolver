@@ -81,6 +81,9 @@ def main():
     parser.add_argument("--diagnose-targets", action="store_true")
     parser.add_argument("--played-profile-targets", action="store_true")
     parser.add_argument("--trace-root-updates", action="store_true")
+    parser.add_argument("--checkpoint-interval", type=int, choices=[0,8,16,32], default=0)
+    parser.add_argument("--maximum-worker-seconds", type=int, choices=[3600,5400])
+    parser.add_argument("--resume", action="append", nargs=3, default=[], metavar=("SEED","RECEIPT","SHA256"))
     args = parser.parse_args()
     pinned = {}
     for name in ("binary", "model"):
@@ -128,6 +131,27 @@ def main():
     if args.trace_root_updates and (args.rounds > 32 or not args.played_profile_targets
             or args.turn_root_averages or args.diagnose_targets):
         raise ValueError("root trace requires a <=32-update unchanged played-target replay")
+    if (args.checkpoint_interval or args.resume) and (not args.played_profile_targets
+            or args.history_baseline or args.simultaneous_updates or args.turn_root_averages
+            or args.diagnose_targets or args.flop_baseline_scale != 1.0):
+        raise ValueError("recovery supports only isolated played-profile continuation training")
+    if args.maximum_worker_seconds and (args.rounds != 128 or not args.checkpoint_interval):
+        raise ValueError("extended runtime requires checkpointed128 training")
+    resumes = {}
+    for seed, path, digest in args.resume:
+        seed, path = int(seed), Path(path).resolve()
+        if seed not in (27001,27002) or seed in resumes or sha256(path) != digest:
+            raise ValueError("invalid or duplicate pinned seed recovery")
+        receipt = json.loads(path.read_text())
+        count = receipt["completedIterations"]
+        if (receipt["schema"] != "compact-preflop-checkpoint-v1" or type(count) is not int
+                or not 0 < count <= args.rounds or receipt["checkpoint"] != f"round{count:04}.mpk.gz"):
+            raise ValueError("invalid compact checkpoint generation")
+        state = path.parent/receipt["checkpoint"]
+        if sha256(state) != receipt["checkpointSha256"]:
+            raise ValueError("checkpoint state changed")
+        pinned[str(path)], pinned[str(state)] = digest, receipt["checkpointSha256"]
+        resumes[seed] = dict(receipt=str(path),sha256=digest,round=count)
     if args.checkdown:
         args.checkdown=args.checkdown.resolve()
         if sha256(args.checkdown)!=args.checkdown_sha256: raise ValueError("checkdown kernel changed")
@@ -142,7 +166,7 @@ def main():
     for sig in (signal.SIGINT,signal.SIGTERM): signal.signal(sig,lambda *_:stop.set())
     started = time.monotonic()
     endpoint_budget = 1 if args.endpoint_sampling in ("uniform_one", "opponent_reach", "fixed_importance") else 6
-    seconds_budget = min(3600, 150*args.rounds*endpoint_budget)
+    seconds_budget = args.maximum_worker_seconds or min(3600, 150*args.rounds*endpoint_budget)
     record = dict(schema="compact-preflop-continuation-controller-v1", status="running",
         pinnedInputs=pinned, runnerSha256=sha256(Path(__file__)), rounds=args.rounds,
         continuationSeed=args.continuation_seed, maximumWorkerSeconds=seconds_budget,
@@ -156,6 +180,7 @@ def main():
         targetDiagnosticEnabled=args.diagnose_targets,
         playedProfileTargets=args.played_profile_targets,
         rootUpdateTraceEnabled=args.trace_root_updates,
+        checkpointInterval=args.checkpoint_interval, resumedSeeds=resumes,
         maximumConcurrentWorkers=args.workers,
         maximumWorkerMemoryBytes=2*1024**3, jobs=[], releaseAccepted=False,
         continuationFunction=dict(flopIterations=128,trainingTurnIterations=64,playedTurnIterations=64,
@@ -181,6 +206,8 @@ def main():
             "POKER_COMPACT_DIAGNOSE_TARGETS":"1" if args.diagnose_targets else "0",
             "POKER_COMPACT_PLAYED_TARGETS":"1" if args.played_profile_targets else "0",
             "POKER_COMPACT_TRACE_ROOT":"1" if args.trace_root_updates else "0",
+            "POKER_COMPACT_CHECKPOINT_INTERVAL":str(args.checkpoint_interval),
+            "POKER_COMPACT_BINARY_SHA":args.binary_sha256,
         }
         if args.checkdown:
             environment.update(POKER_COMPACT_CHECKDOWN=str(args.checkdown),
@@ -188,6 +215,9 @@ def main():
         if args.endpoint_proposal:
             environment.update(POKER_COMPACT_PROPOSAL=str(args.endpoint_proposal),
                                POKER_COMPACT_PROPOSAL_SHA=args.endpoint_proposal_sha256)
+        if seed in resumes:
+            environment.update(POKER_COMPACT_RESUME_RECEIPT=resumes[seed]["receipt"],
+                               POKER_COMPACT_RESUME_SHA=resumes[seed]["sha256"])
         worker = guarded(test_command(args.binary, TEST), environment,
             args.output/("seed%d-worker"%seed), seconds_budget, 2*1024**3, stop)
         result = json.loads(output.read_text())
@@ -205,8 +235,13 @@ def main():
                 or result.get("targetDiagnosticEnabled", False)!=args.diagnose_targets
                 or result.get("playedProfileTargets", False)!=args.played_profile_targets
                 or result.get("rootUpdateTraceEnabled", False)!=args.trace_root_updates
+                or result.get("checkpointInterval",0)!=args.checkpoint_interval
+                or result.get("resumedFromRound",0)!=resumes.get(seed,{}).get("round",0)
+                or result.get("resumeReceiptSha256")!=resumes.get(seed,{}).get("sha256")
                 or sha256(Path(result["frozenPolicy"]))!=result["frozenPolicySha256"]):
             raise ValueError("compact pilot identity mismatch")
+        if len(result["progress"]) != args.rounds or [t["round"] for t in result["progress"]] != list(range(1,args.rounds+1)):
+            raise ValueError("incomplete or discontinuous training progress")
         for tick in result["progress"]:
             samples=tick.get("endpointSamples")
             if samples is not None and (len(samples)!=endpoint_budget
