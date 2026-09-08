@@ -115,8 +115,7 @@ class CompactComparisonTests(unittest.TestCase):
                     patch("run_compact_preflop_continuation.compare",return_value={}):
                 main()
             self.assertEqual(json.loads((root/"lcfr/manifest.json").read_text())["regretSchedule"],"lcfr")
-            invalid_linear = [x for x in linear if x!="--trace-root-updates"]
-            invalid_linear[invalid_linear.index("--rounds")+1] = "128"
+            invalid_linear = argv+["--regret-schedule","lcfr"]
             with patch("sys.argv",invalid_linear), patch("run_compact_preflop_continuation.guarded") as rejected:
                 with self.assertRaisesRegex(ValueError,"LCFR screen"):
                     main()
@@ -132,6 +131,17 @@ class CompactComparisonTests(unittest.TestCase):
             self.assertEqual(manifest["maximumWorkerSeconds"], 3600)
             self.assertEqual(manifest["rounds"], 128)
             self.assertFalse(manifest["rootUpdateTraceEnabled"])
+            linear_extended = [str(root/"linear-extended") if x==str(root/"extended") else x for x in extended]
+            linear_extended += ["--regret-schedule","lcfr","--checkpoint-interval","8",
+                                "--maximum-worker-seconds","5400"]
+            with patch("sys.argv",linear_extended), patch("run_compact_preflop_continuation.guarded",side_effect=worker), \
+                    patch("run_compact_preflop_continuation.signal.signal"), \
+                    patch("run_compact_preflop_continuation.compare",return_value={}):
+                main()
+            manifest = json.loads((root/"linear-extended/manifest.json").read_text())
+            self.assertEqual(manifest["rounds"],128)
+            self.assertEqual(manifest["regretSchedule"],"lcfr")
+            self.assertEqual(manifest["maximumWorkerSeconds"],5400)
             checkpoint = root/"round0008.mpk.gz"
             checkpoint.write_bytes(b"fixture checkpoint")
             receipt = root/"round0008.json"

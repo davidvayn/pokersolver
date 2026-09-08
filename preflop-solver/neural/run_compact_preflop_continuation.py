@@ -140,11 +140,11 @@ def main():
         raise ValueError("recovery supports only isolated played-profile continuation training")
     if args.maximum_worker_seconds and (args.rounds != 128 or not args.checkpoint_interval):
         raise ValueError("extended runtime requires checkpointed128 training")
-    if args.regret_schedule == "lcfr" and (args.rounds > 32 or not args.played_profile_targets
+    if args.regret_schedule == "lcfr" and (args.rounds > 128 or not args.played_profile_targets
             or not args.turn_baseline or args.endpoint_sampling != "fixed_importance"
-            or args.resume or args.simultaneous_updates or args.turn_root_averages
+            or args.simultaneous_updates or args.turn_root_averages
             or args.history_baseline or args.diagnose_targets or args.flop_baseline_scale != 1.0):
-        raise ValueError("LCFR screen permits only fresh isolated <=32-update importance pilots")
+        raise ValueError("LCFR screen permits only isolated <=128-update importance pilots")
     resumes = {}
     for seed, path, digest in args.resume:
         seed, path = int(seed), Path(path).resolve()

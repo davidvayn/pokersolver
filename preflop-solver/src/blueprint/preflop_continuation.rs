@@ -671,7 +671,7 @@ fn compact_preflop_continuation_pilot() {
     let regret_schedule = std::env::var("POKER_COMPACT_REGRET_SCHEDULE")
         .unwrap_or_else(|_| "dcfr".into());
     assert!(["dcfr","lcfr"].contains(&regret_schedule.as_str()));
-    assert!(regret_schedule!="lcfr" || (rounds<=32 && played_profile && turn_baseline
+    assert!(regret_schedule!="lcfr" || (rounds<=128 && played_profile && turn_baseline
         && sampling==EndpointSampling::FixedImportance && !simultaneous
         && !root_turn_averages && !use_history_baseline && !diagnose_targets
         && flop_checkdown_scale==1.0));
@@ -697,7 +697,6 @@ fn compact_preflop_continuation_pilot() {
     let resume_path = std::env::var("POKER_COMPACT_RESUME_RECEIPT").ok();
     let resume_sha = std::env::var("POKER_COMPACT_RESUME_SHA").ok();
     assert_eq!(resume_path.is_some(),resume_sha.is_some());
-    assert!(regret_schedule!="lcfr" || resume_path.is_none());
     assert!((checkpoint_interval==0 && resume_path.is_none()) ||
         (played_profile && turn_baseline && !use_history_baseline && !simultaneous
             && !root_turn_averages && !diagnose_targets && flop_checkdown_scale==1.0));

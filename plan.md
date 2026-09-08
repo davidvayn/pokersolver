@@ -1,6 +1,6 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: importance128 rejected; diagnosed and isolated LCFR32 pair running**.
+Updated: 2026-09-08. Status: **Step 3: LCFR32 improves paired mean11.3%; preparing unchanged bounded128 test**.
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -328,6 +328,35 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   Checkpoints every8, target32, two workers,3600s/2GB worker guards.
   Boundary unit test passes; final library regression346 passed/51 ignored/
   0 failed in141.2s;25 CPU Python tests pass. No UI or serving model changes.
+- Milestone committed as `e82beb3`; push again failed github.com DNS resolution.
+  Final regression manifest SHA256
+  `1dc2d247d5df6501d7100cc79c541f77811a19b7145cc7a4fd0680c4d26f8f7b`.
+- Corrected LCFR32 pair COMPLETE in626.728s, seeds626.175/569.920s.
+  Manifest SHA256 `1b129e4f7843766114833415064f9f36472b297d7667f620c370c632b649f876`.
+  Frozen policies27001 `ca791b4a9fdc320ff903ee9e9ea1140270090f857d6ef07d4fad59ccb9323e87`,
+  27002 `79373cc75185d75012323e9baf227ed80164c41341f7131bec23754cc3a7e7e8`.
+  All64 traced linear recurrences match (max3.55e-15), sampled chance/proposals
+  match the DCFR reference, and independently summed linear opening averages
+  match exports (max4.44e-16). Root stability still FAILS: MAE23.1771%, primary
+  agreement47.3373%, aggregate delta14.1896pts. Both response preflights running
+  at `local-frozen-preflop-response-20260908-lcfr32-{27001,27002}-preflight`.
+  Use archived179750 executable for completed captures. Compare against
+  importance32 with identical native continuation metadata; no scale-up yet.
+- LCFR32 response pair COMPLETE,1986.275/1987.246s. Seed means improve
+  **0.475653->0.461800bb** and **0.572239->0.467628bb**. Paired decrease0.059232bb
+  (11.3%), board-cluster SE0.054779bb. Three of four individual comparisons
+  improve; both seed-averaged boards improve (-0.114012/-0.004453bb).
+  Seed1's second board regresses0.036799bb, so evidence is modest, NOT
+  conclusive, NOT a qualifying confidence bound and NOT full-game exploitability.
+  Comparison SHA256 `d3a482a2410745cded5010f33020c4a62f8ff6739034e8de9f27bb34974db232`;
+  tracked byte-identical `neural/20bb-20260908-lcfr32-response.json`.
+- Decision: test whether the SAME linear weighting avoids the earlier128
+  deterioration. Bounded128 pair only; no512/1024 or promotion. Native/runner
+  admission expands to128, all learning/continuation settings remain unchanged.
+  Fresh run required because old32 checkpoint receipts pin the old executable;
+  do not silently relabel those receipts as produced by the new binary. Retain
+  checkpoints every8,5400s/2GB worker guards and20GB disk reserve; verify the
+  numerical32 prefix and export-only32 checkpoint parity again. No paid compute.
 
 ## Objective and scope
 
