@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--regret-schedule", choices=["dcfr", "lcfr"], default="dcfr")
     parser.add_argument("--checkpoint-interval", type=int, choices=[0,8,16,32], default=0)
     parser.add_argument("--maximum-worker-seconds", type=int, choices=[3600,5400])
+    parser.add_argument("--maximum-worker-memory-mib", type=int, choices=[2048,2560], default=2048)
     parser.add_argument("--resume", action="append", nargs=3, default=[], metavar=("SEED","RECEIPT","SHA256"))
     args = parser.parse_args()
     pinned = {}
@@ -140,6 +141,8 @@ def main():
         raise ValueError("recovery supports only isolated played-profile continuation training")
     if args.maximum_worker_seconds and (args.rounds != 128 or not args.checkpoint_interval):
         raise ValueError("extended runtime requires checkpointed128 training")
+    if args.maximum_worker_memory_mib > 2048 and (args.rounds != 128 or not args.checkpoint_interval):
+        raise ValueError("extended memory requires checkpointed128 training")
     if args.regret_schedule == "lcfr" and (args.rounds > 128 or not args.played_profile_targets
             or not args.turn_baseline or args.endpoint_sampling != "fixed_importance"
             or args.simultaneous_updates or args.turn_root_averages
@@ -191,7 +194,7 @@ def main():
         regretSchedule=args.regret_schedule,
         checkpointInterval=args.checkpoint_interval, resumedSeeds=resumes,
         maximumConcurrentWorkers=args.workers,
-        maximumWorkerMemoryBytes=2*1024**3, jobs=[], releaseAccepted=False,
+        maximumWorkerMemoryBytes=args.maximum_worker_memory_mib*1024**2, jobs=[], releaseAccepted=False,
         continuationFunction=dict(flopIterations=128,trainingTurnIterations=64,playedTurnIterations=64,
             completeRootSupport=True,rootSeedRule="100101-xor-first8-le-sha256-public-input-v1"),
         baseline="exact_preflop_checkdown_mean" if args.checkdown else "sampled_flop_checkdown",
@@ -229,7 +232,7 @@ def main():
             environment.update(POKER_COMPACT_RESUME_RECEIPT=resumes[seed]["receipt"],
                                POKER_COMPACT_RESUME_SHA=resumes[seed]["sha256"])
         worker = guarded(test_command(args.binary, TEST), environment,
-            args.output/("seed%d-worker"%seed), seconds_budget, 2*1024**3, stop)
+            args.output/("seed%d-worker"%seed), seconds_budget, args.maximum_worker_memory_mib*1024**2, stop)
         result = json.loads(output.read_text())
         if (result["config"]["seed"]!=seed or result["config"]["iterations"]!=args.rounds
                 or result["continuationSeed"]!=args.continuation_seed

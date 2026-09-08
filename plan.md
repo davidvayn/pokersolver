@@ -1,6 +1,6 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: LCFR32 improves paired mean11.3%; preparing unchanged bounded128 test**.
+Updated: 2026-09-08. Status: **Step 3: recovered LCFR128 training complete; matched response evaluation running**.
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -357,6 +357,47 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   do not silently relabel those receipts as produced by the new binary. Retain
   checkpoints every8,5400s/2GB worker guards and20GB disk reserve; verify the
   numerical32 prefix and export-only32 checkpoint parity again. No paid compute.
+- **Initial attempt:** `local-compact-preflop-20260908-lcfr128-a`, two fresh
+  seeds through128 with8-update checkpoints and5400s worker limits. Archived
+  executable SHA256 `0b4d04bb281a0d69c5d8a0a52f6834a24856110804bef9eacbb2b51494af1f64`.
+  The bounded-admission change passes the native linear-regret/average test and
+  controller tests. Source/result milestone committed as `3d85bc7`; push still
+  fails DNS. This attempt later stopped on its memory guard; see recovery below.
+  Next compare its completed frozen policies to LCFR32 (not the failed DCFR128).
+- Both first32 numerical prefixes match LCFR32. Export-only restoration of the
+  new run's32 checkpoints also reproduces BOTH original frozen policies
+  BYTE-FOR-BYTE, with zero additional training updates (1.178s).
+  `local-compact-preflop-20260908-lcfr32-resume-parity` manifest SHA256
+  `dae98571cce1ea9db3d45dd6c4caf46758f6fe62ae7d528e2780651c5ae78ab3`;
+  policy parity report SHA256
+  `c5f763921922aa4ea3f5c3154867b0912854e2b7a092bb7e0a64b19d7d78af25`.
+  This verifies LCFR state recovery and the unchanged32->128 trajectory, not
+  final128 policy strength.
+- Initial128 pair stopped at940.399s when seed27001 reached2,160,642,328 bytes,
+  slightly above its2GiB cap. Last complete checkpoints40/48 are intact and
+  SHA-verified; only the incomplete tails must be repeated. No numerical failure.
+  System memory free55% on16GiB before recovery. Added an explicit, bounded
+  2560MiB-per-worker option restricted to checkpointed128; default remains2GiB.
+  Controller regression was RED before this option, then10 focused controller/
+  resource tests PASS. No Rust, policy, sampling, or continuation change.
+  **Training complete:** `local-compact-preflop-20260908-lcfr128-recovered-a`,
+  same archived0b4d04 executable, seeds resumed40/48, two workers with2.5GiB each,
+  5400s worker limits, checkpoints every8 and20GiB disk reserve. Receipt SHAs
+  `383f1deddafdd1a4cc152b9ef4c0cfccd607f72654e0e629f74480aa3a6a1b53` and
+  `791b648375825165412bdd296580b30307284ad8852efd081fa90ac11295aa54`.
+  Early resumed updates42/50 are healthy. Evaluate final recovered policies
+  against LCFR32 only after training completes; no512/1024 yet.
+- Recovered pair finished in1752.330s wall (seed segments1487.864/1752.115s),
+  all128 progress entries and16900 nodes verified. Manifest SHA256
+  `68363796fa6155c5922d66acc630f6d2bdb751b5fc006dbc516e48b2da809aec`.
+  Frozen policies seed27001
+  `7a964a869523619ae9c907e756ebc5e0db8d880f822b84b662a64a5cbd91124e`, seed27002
+  `4d353737b60a1cdbf754886a58e6094341c4b37e844d8b4775cf2720fe58119d`.
+  Stability remains failing/mixed: worst-action MAE21.5226%, minimum primary
+  agreement34.3195%, max aggregate delta14.3338pts; probability sums valid
+  to4.44e-16. Do not infer strength from these values. Seed1 response preflight
+  passed93.000s; its full capture and seed2 preflight are now running at
+  `local-frozen-preflop-response-20260908-lcfr128-{seed}-{preflight|complete}`.
 
 ## Objective and scope
 

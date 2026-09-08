@@ -55,6 +55,7 @@ class CompactComparisonTests(unittest.TestCase):
             model.write_bytes(b"fixture model")
             def worker(command, environment, output, *args):
                 barrier.wait(timeout=5)  # Fails if the two jobs run serially.
+                self.assertEqual(args[1], (2560 if output.parent.name == "linear-extended" else 2048)*1024**2)
                 seed = int(environment["POKER_COMPACT_SEED"])
                 frozen = root/f"seed{seed}.gz"
                 frozen.write_bytes(str(seed).encode())
@@ -133,7 +134,7 @@ class CompactComparisonTests(unittest.TestCase):
             self.assertFalse(manifest["rootUpdateTraceEnabled"])
             linear_extended = [str(root/"linear-extended") if x==str(root/"extended") else x for x in extended]
             linear_extended += ["--regret-schedule","lcfr","--checkpoint-interval","8",
-                                "--maximum-worker-seconds","5400"]
+                                "--maximum-worker-seconds","5400","--maximum-worker-memory-mib","2560"]
             with patch("sys.argv",linear_extended), patch("run_compact_preflop_continuation.guarded",side_effect=worker), \
                     patch("run_compact_preflop_continuation.signal.signal"), \
                     patch("run_compact_preflop_continuation.compare",return_value={}):
@@ -142,6 +143,12 @@ class CompactComparisonTests(unittest.TestCase):
             self.assertEqual(manifest["rounds"],128)
             self.assertEqual(manifest["regretSchedule"],"lcfr")
             self.assertEqual(manifest["maximumWorkerSeconds"],5400)
+            self.assertEqual(manifest["maximumWorkerMemoryBytes"],2560*1024**2)
+            with patch("sys.argv", argv+["--maximum-worker-memory-mib","2560"]), \
+                    patch("run_compact_preflop_continuation.guarded") as rejected:
+                with self.assertRaisesRegex(ValueError,"extended memory requires checkpointed128"):
+                    main()
+                rejected.assert_not_called()
             checkpoint = root/"round0008.mpk.gz"
             checkpoint.write_bytes(b"fixture checkpoint")
             receipt = root/"round0008.json"
