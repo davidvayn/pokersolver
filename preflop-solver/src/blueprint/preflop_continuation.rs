@@ -345,7 +345,7 @@ fn continuation_step(
     }
     let selected = if sampling == EndpointSampling::FixedImportance {
         fixed_proposal.ok_or("missing fixed endpoint proposal")?.select(
-            &live, trainer.completed_iterations as usize % 2, &mut trainer.rng)?
+            &live, trainer.completed_iterations as usize % 2, round, &mut trainer.rng)?
     } else if sampling == EndpointSampling::OpponentReach {
         sampling::select_opponent_reach(
             &snapshot,
@@ -671,6 +671,8 @@ fn compact_preflop_continuation_pilot() {
     let regret_schedule = std::env::var("POKER_COMPACT_REGRET_SCHEDULE")
         .unwrap_or_else(|_| "dcfr".into());
     assert!(["dcfr","lcfr"].contains(&regret_schedule.as_str()));
+    assert!(fixed_proposal.as_ref().and_then(|p|p.refresh_after_round()).is_none()
+        || regret_schedule=="lcfr");
     assert!(regret_schedule!="lcfr" || (rounds<=128 && played_profile && turn_baseline
         && sampling==EndpointSampling::FixedImportance && !simultaneous
         && !root_turn_averages && !use_history_baseline && !diagnose_targets
@@ -772,6 +774,7 @@ fn compact_preflop_continuation_pilot() {
         "exactCheckdownSha256":checkdown_sha,
         "endpointSampling":sampling.label(),
         "endpointProposalSha256":proposal_sha,
+        "endpointProposalRefreshAfterRound":fixed_proposal.as_ref().and_then(|p|p.refresh_after_round()),
         "regretSchedule":regret_schedule,
         "historyBaseline":use_history_baseline,
         "completeTurnBaseline":turn_baseline,

@@ -101,11 +101,18 @@ pub(super) struct FixedProposal {
     schema: String,
     live_histories: Vec<History>,
     probabilities_by_actor: [Vec<f64>; 2],
+    /// Optional bounded pilot: both phases are frozen before any new draws.
+    #[serde(default)]
+    probabilities_after_round32: Option<[Vec<f64>; 2]>,
     uniform_mixture: f64,
     release_accepted: bool,
 }
 
 impl FixedProposal {
+    pub(super) fn refresh_after_round(&self) -> Option<u64> {
+        self.probabilities_after_round32.as_ref().map(|_| 32)
+    }
+
     pub(super) fn read(path: &Path, expected_sha: &str) -> Result<Self, String> {
         if fs::metadata(path).map_err(|e| e.to_string())?.len() > 2 * 1024 * 1024 {
             return Err("oversized endpoint proposal".into());
@@ -124,7 +131,8 @@ impl FixedProposal {
             || self.release_accepted || self.uniform_mixture != 0.5
             || live.len() != 49 || live != self.live_histories
             || live.iter().collect::<BTreeSet<_>>().len() != 49
-            || self.probabilities_by_actor.iter().any(|q| {
+            || self.probabilities_by_actor.iter().chain(
+                self.probabilities_after_round32.iter().flat_map(|q| q.iter())).any(|q| {
                 q.len() != 49 || q.iter().any(|v| !v.is_finite() || *v < 0.5/49.0 || *v > 1.0)
                     || (q.iter().sum::<f64>()-1.0).abs() > 1e-12
             })
@@ -135,11 +143,18 @@ impl FixedProposal {
     }
 
     fn at_draw(&self, live: &[History], actor: usize, draw: f64) -> Result<BTreeMap<History, f64>, String> {
+        self.at_draw_for_round(live, actor, 1, draw)
+    }
+
+    fn at_draw_for_round(&self, live: &[History], actor: usize, round: u64, draw: f64) -> Result<BTreeMap<History, f64>, String> {
         self.validate(live)?;
-        if actor > 1 || !(0.0..1.0).contains(&draw) {
+        if actor > 1 || round == 0 || !(0.0..1.0).contains(&draw) {
             return Err("invalid proposal actor or draw".into());
         }
-        let q = &self.probabilities_by_actor[actor];
+        let phase = if round > 32 {
+            self.probabilities_after_round32.as_ref().unwrap_or(&self.probabilities_by_actor)
+        } else { &self.probabilities_by_actor };
+        let q = &phase[actor];
         let mut cumulative = 0.0;
         let mut chosen = q.len()-1;
         for (index, probability) in q.iter().enumerate() {
@@ -149,8 +164,8 @@ impl FixedProposal {
         Ok(BTreeMap::from([(live[chosen].clone(), q[chosen])]))
     }
 
-    pub(super) fn select(&self, live: &[History], actor: usize, rng: &mut SplitMix64) -> Result<BTreeMap<History, f64>, String> {
-        self.at_draw(live, actor, rng.next_f64())
+    pub(super) fn select(&self, live: &[History], actor: usize, round: u64, rng: &mut SplitMix64) -> Result<BTreeMap<History, f64>, String> {
+        self.at_draw_for_round(live, actor, round, rng.next_f64())
     }
 }
 
@@ -160,7 +175,7 @@ fn fixed_importance_selection_returns_exact_q_for_both_actors_and_all_endpoints(
     let q: Vec<_> = (0..49).map(|i| 0.5/49.0 + 0.5*(i+1) as f64/1225.0).collect();
     let mut proposal = FixedProposal { schema: "preflop-endpoint-importance-screen-v1".into(),
         live_histories: live.clone(), probabilities_by_actor: [q.clone(), q.iter().rev().copied().collect()],
-        uniform_mixture: 0.5, release_accepted: false };
+        uniform_mixture: 0.5, release_accepted: false, probabilities_after_round32: None };
     for actor in 0..2 {
         let mut cumulative = 0.0;
         let mut expected = 0.0;
@@ -179,6 +194,48 @@ fn fixed_importance_selection_returns_exact_q_for_both_actors_and_all_endpoints(
     assert!(proposal.at_draw(&live, 0, 1.0).is_err());
     proposal.probabilities_by_actor[0][0] = 0.0;
     assert!(proposal.at_draw(&live, 0, 0.5).is_err());
+}
+
+#[test]
+fn late_importance_refresh_preserves_prefix_and_exact_conditional_expectation() {
+    let live: Vec<History> = (0..49).map(|i| vec![i.to_string()]).collect();
+    let early: Vec<_> = (0..49).map(|i| 0.5/49.0+0.5*(i+1) as f64/1225.0).collect();
+    let late: Vec<_> = early.iter().rev().copied().collect();
+    let value=serde_json::json!({"schema":"preflop-endpoint-importance-screen-v1",
+        "liveHistories":live,"probabilitiesByActor":[early,late],"uniformMixture":0.5,
+        "releaseAccepted":false,"probabilitiesAfterRound32":[late,early]});
+    let proposal: FixedProposal=serde_json::from_value(value.clone()).unwrap();
+    let mut original=value;
+    original.as_object_mut().unwrap().remove("probabilitiesAfterRound32");
+    let original: FixedProposal=serde_json::from_value(original).unwrap();
+    for seed in [27001,27002] {
+        let mut old_rng=SplitMix64::new(seed);
+        let mut new_rng=SplitMix64::new(seed);
+        for round in 1..=32 {
+            let actor=(round as usize-1)%2;
+            assert_eq!(original.select(&live,actor,round,&mut old_rng).unwrap(),
+                proposal.select(&live,actor,round,&mut new_rng).unwrap());
+        }
+        assert_eq!(old_rng.next_f64(),new_rng.next_f64());
+    }
+    for round in [1,32,33,128] {
+        for actor in 0..2 {
+            let q=if (actor==0)==(round<=32) { &early } else { &late };
+            let mut total=0.0;
+            let mut mean=0.0;
+            for (i,p) in q.iter().enumerate() {
+                let selected=proposal.at_draw_for_round(&live,actor,round,total+p/2.0).unwrap();
+                assert_eq!(selected,BTreeMap::from([(live[i].clone(),*p)]));
+                mean+=p*corrected_known_expectation(&[2.0],&[0.0],&[i as f64-24.0],*p).unwrap()[0];
+                total+=p;
+            }
+            assert!((mean-2.0).abs()<1e-10);
+        }
+    }
+    // Invalid late support must fail before training, not only after round32.
+    let mut bad=proposal;
+    bad.probabilities_after_round32.as_mut().unwrap()[0][0]=0.0;
+    assert!(bad.at_draw_for_round(&live,0,1,0.5).is_err());
 }
 
 /// Conditional on the iteration's already-fixed policy, each endpoint keeps

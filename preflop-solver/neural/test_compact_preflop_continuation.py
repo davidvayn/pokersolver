@@ -28,7 +28,7 @@ class CompactComparisonTests(unittest.TestCase):
         result = compare([a,b])
         self.assertTrue(result["establishedRootStability"]["passed"])
         self.assertEqual(result["withinPublicState"]["completePublicStates"],100)
-        for mutation in ("missing", "untrained", "model", "seed", "baseline", "sampling", "proposal", "history_baseline", "turn_baseline", "scale", "simultaneous", "turn_averages", "played_targets", "schedule"):
+        for mutation in ("missing", "untrained", "model", "seed", "baseline", "sampling", "proposal", "history_baseline", "turn_baseline", "scale", "simultaneous", "turn_averages", "played_targets", "schedule", "refresh"):
             bad = copy.deepcopy(b)
             if mutation=="missing": bad["rows"].pop()
             elif mutation=="untrained": bad["rows"][0]["trained"]=False
@@ -43,6 +43,7 @@ class CompactComparisonTests(unittest.TestCase):
             elif mutation=="turn_averages": bad["rootRealizationTurnAverages"]=True
             elif mutation=="played_targets": bad["playedProfileTargets"]=True
             elif mutation=="schedule": bad["regretSchedule"]="lcfr"
+            elif mutation=="refresh": bad["endpointProposalRefreshAfterRound"]=32
             else: bad["config"]["seed"]=27001
             with self.assertRaises(ValueError): compare([a,bad])
 
@@ -55,7 +56,7 @@ class CompactComparisonTests(unittest.TestCase):
             model.write_bytes(b"fixture model")
             def worker(command, environment, output, *args):
                 barrier.wait(timeout=5)  # Fails if the two jobs run serially.
-                self.assertEqual(args[1], (2560 if output.parent.name == "linear-extended" else 2048)*1024**2)
+                self.assertEqual(args[1], (2560 if output.parent.name in ("linear-extended","late-refresh") else 2048)*1024**2)
                 seed = int(environment["POKER_COMPACT_SEED"])
                 frozen = root/f"seed{seed}.gz"
                 frozen.write_bytes(str(seed).encode())
@@ -66,6 +67,8 @@ class CompactComparisonTests(unittest.TestCase):
                     exactCheckdownSha256=environment.get("POKER_COMPACT_CHECKDOWN_SHA"),
                     endpointSampling=environment["POKER_COMPACT_ENDPOINT_SAMPLING"],
                     endpointProposalSha256=environment.get("POKER_COMPACT_PROPOSAL_SHA"),
+                    endpointProposalRefreshAfterRound=32 if "POKER_COMPACT_PROPOSAL" in environment and
+                        json.loads(Path(environment["POKER_COMPACT_PROPOSAL"]).read_text()).get("probabilitiesAfterRound32") is not None else None,
                     checkpointInterval=int(environment["POKER_COMPACT_CHECKPOINT_INTERVAL"]),
                     resumedFromRound=json.loads(Path(environment["POKER_COMPACT_RESUME_RECEIPT"]).read_text())["completedIterations"] if "POKER_COMPACT_RESUME_RECEIPT" in environment else 0,
                     resumeReceiptSha256=environment.get("POKER_COMPACT_RESUME_SHA"),
@@ -98,7 +101,7 @@ class CompactComparisonTests(unittest.TestCase):
             self.assertTrue(json.loads((root/"traced/manifest.json").read_text())["rootUpdateTraceEnabled"])
             self.assertTrue(all(r["rootUpdateTraceEnabled"] for r in comparison.call_args.args[0]))
             proposal = root/"proposal.json"
-            proposal.write_bytes(b"fixture proposal")
+            proposal.write_text("{}")
             importance = [str(root/"importance") if x == str(root/"traced") else x for x in traced]
             importance += ["--endpoint-sampling", "fixed_importance", "--endpoint-proposal", str(proposal),
                            "--endpoint-proposal-sha256", sha256(proposal)]
@@ -144,6 +147,16 @@ class CompactComparisonTests(unittest.TestCase):
             self.assertEqual(manifest["regretSchedule"],"lcfr")
             self.assertEqual(manifest["maximumWorkerSeconds"],5400)
             self.assertEqual(manifest["maximumWorkerMemoryBytes"],2560*1024**2)
+            late = root/"late-proposal.json"
+            late.write_text(json.dumps(dict(probabilitiesAfterRound32=[[1/49]*49]*2)))
+            refreshed = [str(root/"late-refresh") if x==str(root/"linear-extended") else
+                         str(late) if x==str(proposal) else sha256(late) if x==sha256(proposal) else x
+                         for x in linear_extended]
+            with patch("sys.argv",refreshed), patch("run_compact_preflop_continuation.guarded",side_effect=worker), \
+                    patch("run_compact_preflop_continuation.signal.signal"), \
+                    patch("run_compact_preflop_continuation.compare",return_value={}):
+                main()
+            self.assertEqual(json.loads((root/"late-refresh/manifest.json").read_text())["endpointProposalRefreshAfterRound"],32)
             with patch("sys.argv", argv+["--maximum-worker-memory-mib","2560"]), \
                     patch("run_compact_preflop_continuation.guarded") as rejected:
                 with self.assertRaisesRegex(ValueError,"extended memory requires checkpointed128"):

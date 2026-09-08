@@ -435,6 +435,28 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   finite-budget range-conditioned oracle is equilibrium-correct; [depth-limited
   solving](https://arxiv.org/abs/1805.08195) motivates a separate continuation-
   robustness comparison if this variance-only change fails.
+- Late-refresh implementation COMPLETE. Optional `probabilitiesAfterRound32`
+  is validated with the original distribution before the first draw, including
+  all49 histories, normalization and50% uniform support. Actual selection
+  receives the update number and returns the ACTIVE q. Old proposal files remain
+  unchanged. Source/recovery identity pins the entire two-phase proposal;
+  controller/result metadata reject unsupported or mismatched phase schedules.
+  Round32/33 exact-expectation tests and two-seed first32 RNG-prefix checks pass.
+  Final archived binary SHA256
+  `210845ed3eccf857152cde22501571f26acdd11efe559e8f83f99d8e33b62a0b`.
+  Full guarded Rust release suite **347 PASS,51 ignored,0 failed**,194.985s,
+  peak1.491GB, manifest SHA256
+  `08bc2c4e50eb96e3c7978e2b2ad4aaf462461b38884d456501c32fff742f6782`.
+  Thirteen focused Python tests PASS, diff check PASS.
+- **Currently running:** `local-compact-preflop-20260908-lcfr-refresh128-a`,
+  fresh paired LCFR128,2 workers,2.5GiB/5400s caps,8-update checkpoints,20GiB
+  disk reserve. Two-phase proposal SHA256
+  `8786d933f44e70c17706a3ff8bd2838e6a2871e322d04dea9737c01ac99746fb`;
+  tracked byte-identical `20bb-20260908-lcfr-late-refresh-proposal.json`.
+  First32 must match retained LCFR32 numerically; verify actual sampled q switches
+  starting at33. No new continuation/value model, action grid or regret schedule.
+  After completion, run the SAME paired frozen response evaluation and compare
+  against both LCFR32 and unchanged LCFR128. No512/1024.
 
 ## Objective and scope
 

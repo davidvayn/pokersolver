@@ -40,6 +40,8 @@ def compare(outputs):
         raise ValueError("paired endpoint sampling differs")
     if outputs[0].get("endpointProposalSha256") != outputs[1].get("endpointProposalSha256"):
         raise ValueError("paired endpoint proposal differs")
+    if outputs[0].get("endpointProposalRefreshAfterRound") != outputs[1].get("endpointProposalRefreshAfterRound"):
+        raise ValueError("paired endpoint proposal schedule differs")
     if outputs[0].get("historyBaseline", False) != outputs[1].get("historyBaseline", False):
         raise ValueError("paired history baseline differs")
     if outputs[0].get("completeTurnBaseline", False) != outputs[1].get("completeTurnBaseline", False):
@@ -89,6 +91,7 @@ def main():
     parser.add_argument("--maximum-worker-memory-mib", type=int, choices=[2048,2560], default=2048)
     parser.add_argument("--resume", action="append", nargs=3, default=[], metavar=("SEED","RECEIPT","SHA256"))
     args = parser.parse_args()
+    proposal_refresh_round = None
     pinned = {}
     for name in ("binary", "model"):
         path = getattr(args,name).resolve()
@@ -115,6 +118,11 @@ def main():
         if sha256(args.endpoint_proposal) != args.endpoint_proposal_sha256:
             raise ValueError("endpoint proposal changed")
         pinned[str(args.endpoint_proposal)] = args.endpoint_proposal_sha256
+        proposal = json.loads(args.endpoint_proposal.read_text())
+        if proposal.get("probabilitiesAfterRound32") is not None:
+            if args.regret_schedule != "lcfr":
+                raise ValueError("late proposal refresh requires isolated LCFR pilot")
+            proposal_refresh_round = 32
     if args.flop_baseline_scale!=1.0 and not args.turn_baseline:
         raise ValueError("scale pilot requires the retained complete-turn control")
     if args.simultaneous_updates and (not args.turn_baseline or args.flop_baseline_scale != 1.0):
@@ -183,6 +191,7 @@ def main():
         continuationSeed=args.continuation_seed, maximumWorkerSeconds=seconds_budget,
         endpointSampling=args.endpoint_sampling, maximumEndpointsPerRound=endpoint_budget,
         endpointProposalSha256=args.endpoint_proposal_sha256,
+        endpointProposalRefreshAfterRound=proposal_refresh_round,
         historyBaseline=args.history_baseline,
         completeTurnBaseline=args.turn_baseline,
         flopCheckdownScale=args.flop_baseline_scale,
@@ -240,6 +249,7 @@ def main():
                 or result.get("exactCheckdownSha256")!=args.checkdown_sha256
                 or result.get("endpointSampling", "uniform_one")!=args.endpoint_sampling
                 or result.get("endpointProposalSha256")!=args.endpoint_proposal_sha256
+                or result.get("endpointProposalRefreshAfterRound")!=proposal_refresh_round
                 or result.get("historyBaseline", False)!=args.history_baseline
                 or result.get("completeTurnBaseline", False)!=args.turn_baseline
                 or result.get("flopCheckdownScale", 1.0)!=args.flop_baseline_scale
