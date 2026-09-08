@@ -1,6 +1,6 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: fixed-importance32 improves mean response resistance; checkpointed128 pair running**.
+Updated: 2026-09-08. Status: **Step 3: importance128 rejected; diagnosed and isolated LCFR32 pair running**.
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -19,8 +19,12 @@ It also revealed an extra first-update discount when the initial sweep creates
 nodes. That accounting bug is fixed and verified (342 release tests pass).
 The fixed32 response pair is complete: **0.42267 -> 0.50590bb** and
 **0.88371 -> 0.87580bb**. Keep the correctness fix, not a claim of stronger play.
-No128/512 extension is supported. An all-state, actor-specific fixed importance
-allocation passes the saved-capture screen (details below); test only paired32.
+That discount-only result did not support a128/512 extension. The subsequent
+all-state, actor-specific fixed importance allocation completed paired32 and
+improved both seed means against the corrected reference (details below).
+Its unchanged checkpointed128 pair has completed; no512/1024 is supported by
+the evidence yet. Compare final128 response captures against importance32 before
+choosing the next training budget.
 The target diagnosis and corrected32/corrected128 comparisons are complete.
 Do not repeat them. Neither result proves an asymptotic convergence ceiling or GTO qualification.
 
@@ -159,7 +163,7 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   Same seeds, chance stream, proposal, model, baseline, targets and averaging.
   Root tracing is disabled after its verified read-only32 diagnostic; compare
   the numerical first32-update prefix to prove the trajectory is unchanged.
-  Current: `local-compact-preflop-20260908-importance128-a` is running with
+  First attempt (subsequently stopped): `local-compact-preflop-20260908-importance128-a` used
   binary SHA256 `eaed2e32a35a5ca482f2a8ee7d67d996a6a240801cbce927f78cde0f679870f3`.
   Only the opt-in pilot-length admission changed; the sampling tests4/4 pass.
   Numerical progress matches the32 prefix so far. Exclude timing, root trace
@@ -229,6 +233,101 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   `5333648b89fed9408e566c7eff263311e5c71cd4f83016ce87dc409a071fdf21`.
   Parity report SHA256 `ed6e6b8a9907cc5c2581c01ed95e1c0592a7e278754a4d9b2445a4683b87de1c`,
   with a tracked copy at `neural/20bb-20260908-checkpoint-replay.json`.
+- Recovery milestone committed locally as `24cb701`; its push also failed DNS.
+  Both450d910 and24cb701 are pending origin/main. The active128 run is unaffected.
+- Exact345680 executable archived at
+  `neural/runs/local-compact-binaries/preflop-solver-345680d3e4736a478c2321032f3be0f7c1ee9d98932f1be143e3f07bab6ca967`
+  (10MB, hash verified). Use this archive for subsequent resume/evaluation jobs.
+  The currently active controller still pins the original target/deps binary:
+  **do not rebuild/overwrite it while that controller runs**. Checkpoint receipts
+  pin binary content, not its location, so the archived copy supports later recovery.
+- Checkpointed128 training is COMPLETE,2671.473s for the resumed pair;
+  seed segments2249.345/2671.034s, peak1.902/1.893GB, all guards pass.
+  Manifest SHA256 `e0c6ee671782698026a019908a0f020f6548298e1793978c8d8fe757a37463f5`.
+  Frozen policies27001 `1cb331906c0dd7c576af1270460805baa662d0ac00af8bbf057d2aa0c5597499`,
+  27002 `b5a9648a5094760f5bf30d77780d97fdd0e7f05f35d40a2e8ecf7fecf778dff1`.
+  Root stability improves from importance32 but still FAILS: worst-action
+  MAE17.5765%, minimum primary agreement24.2604%, aggregate delta12.1762pts.
+  Probability sum error3.33e-16; no strength claim from stability alone.
+  Seed27001 response preflight passed95.400s and complete capture is running;
+  seed27002 preflight is running. Paths:
+  `local-frozen-preflop-response-20260908-importance128-{27001,27002}-{preflight,complete}`.
+  Both use the archived345680 executable and identical continuation protocol.
+  The completed training controller no longer needs its target/deps path pinned.
+- Paired128 response evaluations COMPLETE,2034.723/2020.022s; every worker
+  succeeds within guards, peak1.199/1.036GB. Manifest hashes27001
+  `a0b20b0cd3a1eaf05a90d854939ecc19153824e07d945e8926c5a5d7ae923c61`,27002
+  `59a2f78f0cea260fe5e329b54376ed4c3b74b16692aa4fca1bcc79f9fcc5d7a0`.
+  Response gains REGRESS from importance32: **0.475653->0.696300bb** and
+  **0.572239->0.885924bb**, worse on BOTH evaluation boards for BOTH seeds.
+  Paired mean increase0.267166bb, two-board cluster SE0.036870bb; this remains
+  restricted preflop response, not full-game exploitability. **No512/1024**.
+  Comparison SHA256 `de414a6a28675098013a7e164857f39a05111c10ffc2406eda7096177e5beca7`,
+  tracked byte-identical copy `neural/20bb-20260908-fixed-importance128-response.json`.
+- Fast saved-capture diagnosis reproduces the regression, conserves the exact
+  response-gain decomposition and checks crossed frozen attackers. Seed1's old
+  limp/BB5bb contribution falls0.303677->0.007910bb, but opening contribution
+  rises-0.140430->0.298464bb. Both128 policies resist their OLD32 attackers better
+  (0.184814/0.236002bb), while newly fitted attackers expose other weaknesses.
+  Switching only the opening mix32->128 under frozen OLD continuation values
+  loses0.181715/0.016501bb; under NEW values it loses0.114318/0.029046bb.
+  All eight seed/board/frozen-value opening comparisons worsen. Weak offsuit
+  over-opening is visible, not merely a changed evaluation opponent.
+  This crossing is diagnostic only: ranges/downstream policies remain frozen,
+  so it is not a newly re-solved full-game candidate or qualification metric.
+- Next read the existing eight-update checkpoints to locate opening deterioration
+  without replaying native training. Test late noisy updates versus sustained
+  drift before proposing a new pilot. Read-only checkpoint-root export added;
+  compiling targeted recovery regression, no training job active.
+- Checkpoint-root inspection COMPLETE:32 checkpoints, ZERO native queries,
+  original32/128 averages reproduced exactly. Manifest SHA256
+  `581d16352eee1e9958c537e9ab6dd0d7b1467d9b1e2aaec3016ee62628370bc1`.
+  It shows sustained mid-run opening deterioration, not just one final spike.
+  Seed1 85o's2.5bb average rises0.27% at32 to60.21% at128; its current mix reaches
+  77.4% at64 and92.6% at128. Seed2 differs. Equal weighting of eight-update
+  blocks helps seed1 but hurts seed2: reject an averaging-only change.
+  Tracked `20bb-20260908-opening-checkpoint-trajectory.json` documents the caveats.
+- Research cross-check: Brown/Sandholm2019 distinguishes sampled LCFR from
+  full-traversal DCFR settings (section Discounted Monte Carlo CFR):
+  https://www.cs.cmu.edu/~sandholm/cs15-888F21/reweighting.aaai19.pdf .
+  Saved32 action-value replay first reproduces the actual DCFR regrets/mixes/
+  averages exactly. Plain CFR is mixed/worse. Linear weighting improves opening
+  value on all eight seed/board/fixed-continuation comparisons (+0.00458 to
+  +0.03701bb). This is an OPEN-LOOP screen, not new native strength: opponents
+  and downstream policies do not react. Source `20bb-20260908-linear-weighting-screen.json`.
+- Selected bounded next pilot: opt-in LCFR, keeping fixed importance proposal,
+  chance seeds, native continuation budgets, targets and action abstraction.
+  LCFR stores R_t=(sum_{s<=t} s*delta_s)/t, discounts BOTH signs by(t-1)/t
+  before update, and uses exact linear own-realization average weights.
+  It does not clip sample values or negative regret. This is a fresh <=32 pair,
+  not an extension or reuse of incompatible DCFR regrets. Default DCFR unchanged.
+  New actual-caller test failed before implementation on signed-regret weighting;
+  mixed-schedule controller test also failed before the identity check. Controller
+  tests now pass; native linear-regret/average regression compiling. No native
+  LCFR pilot launched until correctness passes. Full-game release remains blocked.
+- LCFR actual-caller regret/average test PASS (0.27s); first library regression
+  345 passed/51 ignored/0 failed (126.67s). The initial `lcfr32-a` attempt was
+  STOPPED after62.802s by an early parity check: even the unchanged first-round
+  public state produced different continuation values (max root differences
+  0.059559/0.323086bb). The preflop config was passed through to the native
+  postflop solver, leaking the new regret parameters into the supposedly fixed
+  continuation. No completed LCFR policy/result from that attempt.
+- Fix: shared `solve_pinned_compact_continuation` boundary resets only optimizer
+  schedule/parameters to the original fixed DCFR defaults while preserving game,
+  cards, ranges and action abstraction. Compact training, frozen response captures
+  and compact full-hand playback all use it. A boundary regression requires the
+  resulting serialized configs to be identical for DCFR/LCFR preflop inputs.
+  Rebuild/test, then restart fresh as `lcfr32-b`; verify first-update native values
+  match importance32, plus every observed linear-regret recurrence and identical
+  chance/endpoint draws. This is one isolated algorithm pilot, not a new oracle.
+- Corrected `lcfr32-b` is RUNNING under archived binary
+  `179750bf28bcda5a1a0efe34794566c790e2baf00ad3e6221f008f03a9684f2e`.
+  Both first-update native policy hashes are BYTE-IDENTICAL to importance32,
+  not merely similar EVs. All observed signed-regret recurrences and current
+  mixtures pass, with identical boards/turns/endpoint selections/proposals.
+  Checkpoints every8, target32, two workers,3600s/2GB worker guards.
+  Boundary unit test passes; final library regression346 passed/51 ignored/
+  0 failed in141.2s;25 CPU Python tests pass. No UI or serving model changes.
 
 ## Objective and scope
 

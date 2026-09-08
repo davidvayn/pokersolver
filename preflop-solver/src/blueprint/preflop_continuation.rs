@@ -449,7 +449,7 @@ fn continuation_step(
                     training_turn_iterations: 64,
                     response_turn_iterations: 64,
                 };
-                let policy = NativePostflopPolicy::solve_counterfactual_learned_with_turn_averages(
+                let policy = NativePostflopPolicy::solve_pinned_compact_continuation(
                     trainer.config.clone(),
                     input,
                     &options,
@@ -668,7 +668,14 @@ fn compact_preflop_continuation_pilot() {
     let output = PathBuf::from(std::env::var("POKER_COMPACT_OUTPUT").unwrap());
     let frozen = output.with_extension("preflop.json.gz");
     assert!(!output.exists() && !frozen.exists());
-    let config = BlueprintConfig {
+    let regret_schedule = std::env::var("POKER_COMPACT_REGRET_SCHEDULE")
+        .unwrap_or_else(|_| "dcfr".into());
+    assert!(["dcfr","lcfr"].contains(&regret_schedule.as_str()));
+    assert!(regret_schedule!="lcfr" || (rounds<=32 && played_profile && turn_baseline
+        && sampling==EndpointSampling::FixedImportance && !simultaneous
+        && !root_turn_averages && !use_history_baseline && !diagnose_targets
+        && flop_checkdown_scale==1.0));
+    let mut config = BlueprintConfig {
         seed,
         effective_stack_bb: 20.0,
         iterations: rounds,
@@ -678,6 +685,11 @@ fn compact_preflop_continuation_pilot() {
         traversal: BlueprintTraversal::PublicChanceSampling,
         ..BlueprintConfig::default()
     };
+    if regret_schedule=="lcfr" {
+        config.dcfr_schedule = DcfrSchedule::Lcfr;
+        config.dcfr = DcfrParameters { positive_regret_exponent:1.0,
+            negative_regret_exponent:1.0, strategy_exponent:1.0 };
+    }
     config.validate().unwrap();
     let checkpoint_interval: u64 = std::env::var("POKER_COMPACT_CHECKPOINT_INTERVAL")
         .unwrap_or_else(|_| "0".into()).parse().unwrap();
@@ -685,6 +697,7 @@ fn compact_preflop_continuation_pilot() {
     let resume_path = std::env::var("POKER_COMPACT_RESUME_RECEIPT").ok();
     let resume_sha = std::env::var("POKER_COMPACT_RESUME_SHA").ok();
     assert_eq!(resume_path.is_some(),resume_sha.is_some());
+    assert!(regret_schedule!="lcfr" || resume_path.is_none());
     assert!((checkpoint_interval==0 && resume_path.is_none()) ||
         (played_profile && turn_baseline && !use_history_baseline && !simultaneous
             && !root_turn_averages && !diagnose_targets && flop_checkdown_scale==1.0));
@@ -693,7 +706,7 @@ fn compact_preflop_continuation_pilot() {
         "modelSha256":model.artifact_sha256(),"checkdownSha256":checkdown_sha,
         "proposalSha256":proposal_sha,"continuationSeed":continuation_seed,
         "sampling":sampling.label(),"playedProfile":played_profile,
-        "turnBaseline":turn_baseline,"rootTrace":trace_root_updates,
+        "turnBaseline":turn_baseline,"rootTrace":trace_root_updates,"regretSchedule":regret_schedule,
         "flopIterations":128,"turnIterations":64});
     if checkpoint_interval>0 || resume_path.is_some() {
         assert!(recovery_identity["binarySha256"].as_str().is_some_and(|s|
@@ -760,6 +773,7 @@ fn compact_preflop_continuation_pilot() {
         "exactCheckdownSha256":checkdown_sha,
         "endpointSampling":sampling.label(),
         "endpointProposalSha256":proposal_sha,
+        "regretSchedule":regret_schedule,
         "historyBaseline":use_history_baseline,
         "completeTurnBaseline":turn_baseline,
         "flopCheckdownScale":flop_checkdown_scale,

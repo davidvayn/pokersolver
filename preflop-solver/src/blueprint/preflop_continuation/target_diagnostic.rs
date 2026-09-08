@@ -184,3 +184,49 @@ fn first_update_is_not_retroactively_discounted_when_sweep_creates_nodes() {
         assert!((b-a*factor).abs()<1e-12, "first update must receive round2 discount only");
     }
 }
+
+#[test]
+fn compact_lcfr_matches_explicit_linear_regrets_and_realization_average() {
+    let game = BlueprintConfig { effective_stack_bb:20.0, exact_preflop_averaging:true,
+        averaging_delay:0, dcfr_schedule:DcfrSchedule::Lcfr,
+        dcfr:DcfrParameters { positive_regret_exponent:1.0,
+            negative_regret_exponent:1.0, strategy_exponent:1.0 },
+        ..BlueprintConfig::default() };
+    let mut trainer = Trainer::fresh(game.clone());
+    let mut cumulative = vec![vec![0.0;169];8];
+    let mut average = vec![vec![0.0;169];8];
+    for t in 1..=6 {
+        let snapshot = begin_update(&mut trainer).unwrap();
+        let before = root_regrets(&trainer,&snapshot);
+        for a in 0..8 { for c in 0..169 {
+            assert!((before[a][c]*t as f64-cumulative[a][c]).abs()<1e-10,
+                "LCFR must retain exactly the linearly weighted signed history");
+        }}
+        let endpoints = snapshot.endpoints.keys().enumerate().map(|(i,h)|
+            (h.clone(),[vec![(i as f64-30.0)*(t as f64-3.5)/100.0;1326],
+                vec![-(i as f64-30.0)*(t as f64-3.5)/100.0;1326]])).collect();
+        let trace = root_trace(&trainer,&snapshot,&endpoints).unwrap();
+        let q:Vec<Vec<f64>> = serde_json::from_value(trace["actionValuesBb"].clone()).unwrap();
+        let mix:Vec<Vec<f64>> = serde_json::from_value(trace["probabilities"].clone()).unwrap();
+        let weights:Vec<usize> = serde_json::from_value(trace["multiplicities"].clone()).unwrap();
+        let root = GameState::initial(&game);
+        let row = &snapshot.rows[&root.public_history];
+        for (c,indices) in root_classes().values().enumerate() {
+            let node = &trainer.nodes[&row.keys[indices[0]]];
+            for a in 0..8 {
+                average[a][c]+=mix[a][c]*t as f64;
+                assert!((node.strategy_sum[a]-average[a][c]).abs()<1e-10);
+            }
+        }
+        if t%2==1 { for c in 0..169 {
+            let ev:f64 = (0..8).map(|a|q[a][c]*mix[a][c]).sum();
+            for a in 0..8 { cumulative[a][c]+=(q[a][c]-ev)*weights[c] as f64/1326.0*t as f64; }
+        }}
+        apply_snapshot_updates(&mut trainer,&snapshot,&endpoints,false).unwrap();
+        let after = root_regrets(&trainer,&snapshot);
+        for a in 0..8 { for c in 0..169 {
+            assert!((after[a][c]*t as f64-cumulative[a][c]).abs()<1e-10);
+        }}
+        trainer.completed_iterations+=1;
+    }
+}

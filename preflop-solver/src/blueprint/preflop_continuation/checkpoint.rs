@@ -105,3 +105,47 @@ fn compact_checkpoint_replays_discounts_averages_rng_and_rejects_changed_oracle(
     assert!(fs::read(first).unwrap()==fs::read(second).unwrap(),"resumed checkpoint bytes differ");
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// Read-only diagnostic for an existing local training state, not a policy export.
+fn root_diagnostic(path: &Path, digest: &str) -> Result<serde_json::Value, String> {
+    if fs::metadata(path).map_err(|e| e.to_string())?.len() > 32*1024*1024
+        || format!("{:x}", Sha256::digest(fs::read(path).map_err(|e| e.to_string())?)) != digest {
+        return Err("diagnostic checkpoint size/hash mismatch".into());
+    }
+    let saved = read_checkpoint(path).map_err(|e| e.to_string())?;
+    let config = saved.config.clone();
+    let trainer = Trainer::from_checkpoint(saved, &config)?;
+    let mut rows = Vec::new();
+    for node in trainer.nodes.values() {
+        let history = trainer.public_histories.get(&node.descriptor.public_history_id)
+            .ok_or("missing diagnostic history")?;
+        if history.len() != 1 { continue; }
+        rows.push(serde_json::json!({"hand":node.descriptor.hand_bucket_trajectory,
+            "actions":node.action_labels,"regrets":node.regrets,
+            "strategySum":node.strategy_sum,"average":node.average_strategy(),
+            "current":node.current_strategy(),"averageVisits":node.average_visits}));
+    }
+    if rows.len() != 169 { return Err("diagnostic requires all169 root classes".into()); }
+    rows.sort_by(|a,b| a["hand"].to_string().cmp(&b["hand"].to_string()));
+    Ok(serde_json::json!({"schema":"compact-checkpoint-root-diagnostic-v1",
+        "checkpointSha256":digest,"round":trainer.completed_iterations,
+        "seed":config.seed,"rows":rows,"nativeQueries":0,"releaseAccepted":false}))
+}
+
+#[test]
+#[ignore = "explicit hash-pinned local checkpoint diagnostic; no training"]
+fn compact_checkpoint_root_diagnostic() {
+    let path = PathBuf::from(std::env::var("POKER_COMPACT_DIAGNOSTIC_CHECKPOINT").unwrap());
+    let digest = std::env::var("POKER_COMPACT_DIAGNOSTIC_CHECKPOINT_SHA").unwrap();
+    let output = PathBuf::from(std::env::var("POKER_COMPACT_DIAGNOSTIC_OUTPUT").unwrap());
+    assert!(!output.exists(), "refuse to overwrite diagnostic");
+    assert!(root_diagnostic(&path, "incorrect-hash").is_err());
+    let report = root_diagnostic(&path, &digest).unwrap();
+    for row in report["rows"].as_array().unwrap() {
+        for field in ["average", "current"] {
+            let values = row[field].as_array().unwrap();
+            assert!((values.iter().map(|v| v.as_f64().unwrap()).sum::<f64>()-1.0).abs()<1e-12);
+        }
+    }
+    write_json_atomic(&output, &report).unwrap();
+}

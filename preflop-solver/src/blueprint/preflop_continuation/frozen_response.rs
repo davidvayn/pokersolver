@@ -244,7 +244,7 @@ fn frozen_preflop_response_capture() {
             training_turn_iterations: 64,
             response_turn_iterations: 64,
         };
-        let policy = NativePostflopPolicy::solve_counterfactual_learned_with_turn_averages(
+        let policy = NativePostflopPolicy::solve_pinned_compact_continuation(
             preflop.game.clone(),
             input,
             &options,

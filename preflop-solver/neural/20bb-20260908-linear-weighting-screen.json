@@ -1,0 +1,82 @@
+{
+  "schema": "frozen-root-update-rule-screen-v1",
+  "results": [
+    {
+      "seed": 27001,
+      "mode": "cfr",
+      "fixedValueChangeBb": [
+        [
+          -0.03339328610008238,
+          -0.04898212288001806
+        ],
+        [
+          -0.03912612520226224,
+          -0.042353224735028984
+        ]
+      ]
+    },
+    {
+      "seed": 27001,
+      "mode": "lcfr",
+      "fixedValueChangeBb": [
+        [
+          0.004583168627099574,
+          0.0115936277506344
+        ],
+        [
+          0.017519387899865155,
+          0.01609149518142633
+        ]
+      ]
+    },
+    {
+      "seed": 27002,
+      "mode": "cfr",
+      "fixedValueChangeBb": [
+        [
+          0.002908690494451374,
+          -0.022618832602863424
+        ],
+        [
+          0.04090629265606779,
+          0.022574951085115473
+        ]
+      ]
+    },
+    {
+      "seed": 27002,
+      "mode": "lcfr",
+      "fixedValueChangeBb": [
+        [
+          0.02726744948595458,
+          0.026309094252573197
+        ],
+        [
+          0.03701200217543866,
+          0.0358534382592641
+        ]
+      ]
+    }
+  ],
+  "sourceResponses": [
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27001-complete",
+      "sha256": "1e652b61be8bda6366d01cce39540940f7eeddd7ac5602f6cd4f61e565c97248"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance128-27001-complete",
+      "sha256": "a0b20b0cd3a1eaf05a90d854939ecc19153824e07d945e8926c5a5d7ae923c61"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27002-complete",
+      "sha256": "ec3d5a9a8ab5ba34406b9c6ff1bdf9454c13c3d46874a4df1e2b313d3e8f5f8e"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance128-27002-complete",
+      "sha256": "59a2f78f0cea260fe5e329b54376ed4c3b74b16692aa4fca1bcc79f9fcc5d7a0"
+    }
+  ],
+  "nativeQueries": 0,
+  "releaseAccepted": false,
+  "interpretation": "Open-loop reweighting of the same captured action-value sequence. Exact DCFR replay verified first. Opponent/downstream values do not react to changed root policies. Positive values mean a better opening under the two fixed old32/new128 continuation value sets, not actual trained strength."
+}

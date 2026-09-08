@@ -302,6 +302,8 @@ pub enum BlueprintTraversal {
 pub enum DcfrSchedule {
     #[default]
     Fixed,
+    /// Linear weighting of signed regrets and own-realization averages.
+    Lcfr,
     /// HS-DCFR(30) from Zhang, McAleer, and Sandholm (AAAI 2026).
     Hs30,
 }
@@ -513,8 +515,13 @@ impl BlueprintConfig {
             return Err("DCFR exponents must be finite and non-negative".to_owned());
         }
         match self.dcfr_schedule {
-            DcfrSchedule::Fixed if self.dcfr_schedule_horizon != 0 => {
+            DcfrSchedule::Fixed | DcfrSchedule::Lcfr if self.dcfr_schedule_horizon != 0 => {
                 return Err("fixed DCFR cannot declare a schedule horizon".to_owned());
+            }
+            DcfrSchedule::Lcfr if self.dcfr != (DcfrParameters {
+                positive_regret_exponent:1.0, negative_regret_exponent:1.0,
+                strategy_exponent:1.0 }) => {
+                return Err("LCFR requires linear regret and strategy parameters".to_owned());
             }
             DcfrSchedule::Hs30
                 if self.dcfr != DcfrParameters::default()
@@ -1364,7 +1371,7 @@ impl BlueprintDiscountAccumulator {
 
     fn parameters_at(&self, iteration: u64) -> DcfrParameters {
         match self.schedule {
-            DcfrSchedule::Fixed => self.parameters.clone(),
+            DcfrSchedule::Fixed | DcfrSchedule::Lcfr => self.parameters.clone(),
             DcfrSchedule::Hs30 => {
                 let progress = iteration as f64 / self.schedule_horizon as f64;
                 DcfrParameters {
@@ -1382,10 +1389,15 @@ impl BlueprintDiscountAccumulator {
         let parameters = self.parameters_at(iteration);
         let positive_power = time.powf(parameters.positive_regret_exponent);
         let negative_power = time.powf(parameters.negative_regret_exponent);
-        let factors = [
+        let factors = if self.schedule == DcfrSchedule::Lcfr {
+            // Stored regrets are (sum_{s<=t} s * delta_s) / t. Before the
+            // current update, (t-1)/t preserves that invariant for BOTH signs.
+            // At t=1 all regrets are zero; use1 to avoid a log(0) accumulator.
+            [if iteration==1 { 1.0 } else { (time-1.0)/time };2]
+        } else { [
             positive_power / (positive_power + 1.0),
             negative_power / (negative_power + 1.0),
-        ];
+        ] };
         for (cumulative, factor) in self.cumulative_logs.iter_mut().zip(factors) {
             *cumulative += factor.ln();
         }
@@ -1709,7 +1721,7 @@ struct Trainer {
 impl Trainer {
     fn fresh(config: BlueprintConfig) -> Self {
         let strategy_averaging_weights = match config.dcfr_schedule {
-            DcfrSchedule::Fixed => None,
+            DcfrSchedule::Fixed | DcfrSchedule::Lcfr => None,
             DcfrSchedule::Hs30 => Some(hs_dcfr_strategy_averaging_weights(
                 config.dcfr_schedule_horizon,
             )),
@@ -1814,7 +1826,7 @@ impl Trainer {
                 cumulative_logs: checkpoint.regret_discount_cumulative_logs,
             },
             strategy_averaging_weights: match target.dcfr_schedule {
-                DcfrSchedule::Fixed => None,
+                DcfrSchedule::Fixed | DcfrSchedule::Lcfr => None,
                 DcfrSchedule::Hs30 => Some(hs_dcfr_strategy_averaging_weights(
                     target.dcfr_schedule_horizon,
                 )),
@@ -2779,11 +2791,13 @@ impl Trainer {
         if self.config.streetwise_opponent_estimator {
             provenance.push("Research streetwise opponent estimator: exact terminal integration with a conditional continuation proposal on preflop/flop; stateless checkdown baselines with the original proposal and corrected residuals on turn/river. Selection depends only on the public street. This preserves each local estimator expectation; lower variance, better policy quality and exploitability are not guaranteed.".to_owned());
         }
-        if self.config.dcfr_schedule != DcfrSchedule::Fixed {
+        if self.config.dcfr_schedule == DcfrSchedule::Hs30 {
             provenance.push(format!(
                 "HS-DCFR(30) varies alpha=1+3t/n, beta=-1-2t/n, and gamma=30-5t/n over a pinned {}-iteration horizon. Strategy contributions use the exact terminal-relative product of the changing gamma discounts, and lazy regret discounts preserve every skipped global factor.",
                 self.config.dcfr_schedule_horizon
             ));
+        } else if self.config.dcfr_schedule == DcfrSchedule::Lcfr {
+            provenance.push("LCFR gives iteration t linear weight in signed regrets and own-realization averages; it does not clip or asymmetrically forget negative regrets.".to_owned());
         } else {
             provenance.push(
                 "For fixed DCFR, the repeated average-strategy discount telescopes to the exact global iteration^gamma contribution used at each sampled visit."

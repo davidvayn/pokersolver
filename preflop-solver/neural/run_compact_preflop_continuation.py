@@ -52,6 +52,8 @@ def compare(outputs):
         raise ValueError("paired turn average definition differs")
     if outputs[0].get("playedProfileTargets", False) != outputs[1].get("playedProfileTargets", False):
         raise ValueError("paired continuation target definition differs")
+    if outputs[0].get("regretSchedule", "dcfr") != outputs[1].get("regretSchedule", "dcfr"):
+        raise ValueError("paired regret weighting differs")
     if [v["config"]["seed"] for v in outputs] != [27001,27002]:
         raise ValueError("unexpected paired solver seeds")
     return dict(establishedRootStability=policy_stability_summary(roots),
@@ -81,6 +83,7 @@ def main():
     parser.add_argument("--diagnose-targets", action="store_true")
     parser.add_argument("--played-profile-targets", action="store_true")
     parser.add_argument("--trace-root-updates", action="store_true")
+    parser.add_argument("--regret-schedule", choices=["dcfr", "lcfr"], default="dcfr")
     parser.add_argument("--checkpoint-interval", type=int, choices=[0,8,16,32], default=0)
     parser.add_argument("--maximum-worker-seconds", type=int, choices=[3600,5400])
     parser.add_argument("--resume", action="append", nargs=3, default=[], metavar=("SEED","RECEIPT","SHA256"))
@@ -137,6 +140,11 @@ def main():
         raise ValueError("recovery supports only isolated played-profile continuation training")
     if args.maximum_worker_seconds and (args.rounds != 128 or not args.checkpoint_interval):
         raise ValueError("extended runtime requires checkpointed128 training")
+    if args.regret_schedule == "lcfr" and (args.rounds > 32 or not args.played_profile_targets
+            or not args.turn_baseline or args.endpoint_sampling != "fixed_importance"
+            or args.resume or args.simultaneous_updates or args.turn_root_averages
+            or args.history_baseline or args.diagnose_targets or args.flop_baseline_scale != 1.0):
+        raise ValueError("LCFR screen permits only fresh isolated <=32-update importance pilots")
     resumes = {}
     for seed, path, digest in args.resume:
         seed, path = int(seed), Path(path).resolve()
@@ -180,6 +188,7 @@ def main():
         targetDiagnosticEnabled=args.diagnose_targets,
         playedProfileTargets=args.played_profile_targets,
         rootUpdateTraceEnabled=args.trace_root_updates,
+        regretSchedule=args.regret_schedule,
         checkpointInterval=args.checkpoint_interval, resumedSeeds=resumes,
         maximumConcurrentWorkers=args.workers,
         maximumWorkerMemoryBytes=2*1024**3, jobs=[], releaseAccepted=False,
@@ -206,6 +215,7 @@ def main():
             "POKER_COMPACT_DIAGNOSE_TARGETS":"1" if args.diagnose_targets else "0",
             "POKER_COMPACT_PLAYED_TARGETS":"1" if args.played_profile_targets else "0",
             "POKER_COMPACT_TRACE_ROOT":"1" if args.trace_root_updates else "0",
+            "POKER_COMPACT_REGRET_SCHEDULE":args.regret_schedule,
             "POKER_COMPACT_CHECKPOINT_INTERVAL":str(args.checkpoint_interval),
             "POKER_COMPACT_BINARY_SHA":args.binary_sha256,
         }
@@ -235,6 +245,7 @@ def main():
                 or result.get("targetDiagnosticEnabled", False)!=args.diagnose_targets
                 or result.get("playedProfileTargets", False)!=args.played_profile_targets
                 or result.get("rootUpdateTraceEnabled", False)!=args.trace_root_updates
+                or result.get("regretSchedule", "dcfr")!=args.regret_schedule
                 or result.get("checkpointInterval",0)!=args.checkpoint_interval
                 or result.get("resumedFromRound",0)!=resumes.get(seed,{}).get("round",0)
                 or result.get("resumeReceiptSha256")!=resumes.get(seed,{}).get("sha256")

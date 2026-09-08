@@ -193,7 +193,7 @@ impl NativeFullHandPolicy {
             options.seed ^= u64::from_le_bytes(digest[..8].try_into().unwrap());
             *cache = Some(if let Some(model) = &self.learned {
                 if self.complete_root_support {
-                    NativePostflopPolicy::solve_counterfactual_learned_with_turn_averages(
+                    NativePostflopPolicy::solve_pinned_compact_continuation(
                         self.preflop.game.clone(), input, &options, model,
                         self.root_realization_turn_averages,
                     )?

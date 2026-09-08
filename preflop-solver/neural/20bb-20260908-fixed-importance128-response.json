@@ -1,0 +1,200 @@
+{
+  "schema": "paired-fixed-importance-update-count-comparison-v1",
+  "sources": [
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27001-complete",
+      "sha256": "1e652b61be8bda6366d01cce39540940f7eeddd7ac5602f6cd4f61e565c97248"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance128-27001-complete",
+      "sha256": "a0b20b0cd3a1eaf05a90d854939ecc19153824e07d945e8926c5a5d7ae923c61"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27002-complete",
+      "sha256": "ec3d5a9a8ab5ba34406b9c6ff1bdf9454c13c3d46874a4df1e2b313d3e8f5f8e"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance128-27002-complete",
+      "sha256": "59a2f78f0cea260fe5e329b54376ed4c3b74b16692aa4fca1bcc79f9fcc5d7a0"
+    }
+  ],
+  "results": [
+    {
+      "seed": 27001,
+      "referenceMeanBb": 0.4756530256623739,
+      "candidateMeanBb": 0.6962999460073883,
+      "candidateStandardErrorBb": 0.1864204361357645,
+      "pairedBoardChangesBb": [
+        0.2856935995063108,
+        0.15560024118371812
+      ],
+      "meanChangeBb": 0.22064692034501446
+    },
+    {
+      "seed": 27002,
+      "referenceMeanBb": 0.5722394267017585,
+      "candidateMeanBb": 0.8859242879607709,
+      "candidateStandardErrorBb": 0.18770435962386056,
+      "pairedBoardChangesBb": [
+        0.32237823277939603,
+        0.3049914897386288
+      ],
+      "meanChangeBb": 0.3136848612590124
+    }
+  ],
+  "attributions": [
+    {
+      "seed": 27001,
+      "largestContributions": [
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "meanGainContributionBb": 0.29846374602622705
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.07664707038539292
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.500bb"
+          ],
+          "meanGainContributionBb": 0.053725700454201386
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb"
+          ],
+          "meanGainContributionBb": 0.05167678569889667
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.04564224299258554
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb"
+          ],
+          "meanGainContributionBb": 0.0452099855830075
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.500bb",
+            "Preflop:p1:raise_to_9.000bb"
+          ],
+          "meanGainContributionBb": 0.02624357074427587
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "meanGainContributionBb": 0.02073940857181749
+        }
+      ]
+    },
+    {
+      "seed": 27002,
+      "largestContributions": [
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "meanGainContributionBb": 0.33173674197783876
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "meanGainContributionBb": 0.161511705167733
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.1183398264771752
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.08749291348622992
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb"
+          ],
+          "meanGainContributionBb": 0.08523656582391928
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb",
+            "Preflop:p1:raise_to_7.500bb"
+          ],
+          "meanGainContributionBb": 0.02610011473298751
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_5.000bb"
+          ],
+          "meanGainContributionBb": 0.025717142418968032
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_5.000bb"
+          ],
+          "meanGainContributionBb": 0.02159404842228886
+        }
+      ]
+    }
+  ],
+  "seedAveragedBoardChangesBb": [
+    0.3040359161428534,
+    0.23029586546117345
+  ],
+  "meanChangeBb": 0.2671658908020134,
+  "boardClusterStandardErrorBb": 0.03687002534083998,
+  "allSeedBoardChangesImprove": false,
+  "independentEvaluationClusters": 2,
+  "qualifyingConfidenceUpperBound99Bb": null,
+  "releaseAccepted": false,
+  "fullGameGateEvaluated": false,
+  "interpretation": "Restricted preflop response on two reused development evaluation board clusters; not full-game exploitability or a qualifying confidence bound. Continuation settings are identical; only the number of training updates changes from32 to128; exact checkpoint replay preserves the trajectory."
+}

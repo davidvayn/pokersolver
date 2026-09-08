@@ -28,7 +28,7 @@ class CompactComparisonTests(unittest.TestCase):
         result = compare([a,b])
         self.assertTrue(result["establishedRootStability"]["passed"])
         self.assertEqual(result["withinPublicState"]["completePublicStates"],100)
-        for mutation in ("missing", "untrained", "model", "seed", "baseline", "sampling", "proposal", "history_baseline", "turn_baseline", "scale", "simultaneous", "turn_averages", "played_targets"):
+        for mutation in ("missing", "untrained", "model", "seed", "baseline", "sampling", "proposal", "history_baseline", "turn_baseline", "scale", "simultaneous", "turn_averages", "played_targets", "schedule"):
             bad = copy.deepcopy(b)
             if mutation=="missing": bad["rows"].pop()
             elif mutation=="untrained": bad["rows"][0]["trained"]=False
@@ -42,6 +42,7 @@ class CompactComparisonTests(unittest.TestCase):
             elif mutation=="simultaneous": bad["simultaneousUpdates"]=True
             elif mutation=="turn_averages": bad["rootRealizationTurnAverages"]=True
             elif mutation=="played_targets": bad["playedProfileTargets"]=True
+            elif mutation=="schedule": bad["regretSchedule"]="lcfr"
             else: bad["config"]["seed"]=27001
             with self.assertRaises(ValueError): compare([a,bad])
 
@@ -58,6 +59,7 @@ class CompactComparisonTests(unittest.TestCase):
                 frozen = root/f"seed{seed}.gz"
                 frozen.write_bytes(str(seed).encode())
                 result = dict(config=dict(seed=seed,iterations=int(environment["POKER_COMPACT_ROUNDS"])),continuationSeed=28001,
+                    regretSchedule=environment.get("POKER_COMPACT_REGRET_SCHEDULE","dcfr"),
                     valueModelSha256=sha256(model),frozenPolicy=str(frozen),
                     frozenPolicySha256=sha256(frozen),progress=[dict(round=i+1) for i in range(int(environment["POKER_COMPACT_ROUNDS"]))],trainingSeconds=0.1,totalNodes=16900,
                     exactCheckdownSha256=environment.get("POKER_COMPACT_CHECKDOWN_SHA"),
@@ -106,6 +108,19 @@ class CompactComparisonTests(unittest.TestCase):
             manifest = json.loads((root/"importance/manifest.json").read_text())
             self.assertEqual(manifest["endpointProposalSha256"], sha256(proposal))
             self.assertEqual(manifest["maximumEndpointsPerRound"], 1)
+            linear = [str(root/"lcfr") if x==str(root/"importance") else x for x in importance]
+            linear += ["--regret-schedule", "lcfr"]
+            with patch("sys.argv",linear), patch("run_compact_preflop_continuation.guarded",side_effect=worker), \
+                    patch("run_compact_preflop_continuation.signal.signal"), \
+                    patch("run_compact_preflop_continuation.compare",return_value={}):
+                main()
+            self.assertEqual(json.loads((root/"lcfr/manifest.json").read_text())["regretSchedule"],"lcfr")
+            invalid_linear = [x for x in linear if x!="--trace-root-updates"]
+            invalid_linear[invalid_linear.index("--rounds")+1] = "128"
+            with patch("sys.argv",invalid_linear), patch("run_compact_preflop_continuation.guarded") as rejected:
+                with self.assertRaisesRegex(ValueError,"LCFR screen"):
+                    main()
+                rejected.assert_not_called()
             extended = [str(root/"extended") if x == str(root/"importance") else x
                         for x in importance if x != "--trace-root-updates"]
             extended[extended.index("--rounds")+1] = "128"

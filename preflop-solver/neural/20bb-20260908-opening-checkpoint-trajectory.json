@@ -1,0 +1,429 @@
+{
+  "schema": "compact-opening-checkpoint-trajectory-v1",
+  "sourceManifestSha256": "581d16352eee1e9958c537e9ab6dd0d7b1467d9b1e2aaec3016ee62628370bc1",
+  "responseSources": [
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27001-complete",
+      "sha256": "1e652b61be8bda6366d01cce39540940f7eeddd7ac5602f6cd4f61e565c97248"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance128-27001-complete",
+      "sha256": "a0b20b0cd3a1eaf05a90d854939ecc19153824e07d945e8926c5a5d7ae923c61"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27002-complete",
+      "sha256": "ec3d5a9a8ab5ba34406b9c6ff1bdf9454c13c3d46874a4df1e2b313d3e8f5f8e"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance128-27002-complete",
+      "sha256": "59a2f78f0cea260fe5e329b54376ed4c3b74b16692aa4fca1bcc79f9fcc5d7a0"
+    }
+  ],
+  "results": [
+    {
+      "seed": 27001,
+      "points": [
+        {
+          "round": 8,
+          "averageVs32FrozenValueBb": [
+            -0.20386097746063397,
+            -0.23840828666127592
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.20386097746063397,
+            -0.23840828666127592
+          ],
+          "weak85oRaise25Probability": 0.11120923181401142
+        },
+        {
+          "round": 16,
+          "averageVs32FrozenValueBb": [
+            -0.026687675232764003,
+            -0.007215209396935015
+          ],
+          "blockVs32FrozenValueBb": [
+            0.0012870566979523114,
+            0.029288960697434592
+          ],
+          "weak85oRaise25Probability": 0.02036522994148685
+        },
+        {
+          "round": 24,
+          "averageVs32FrozenValueBb": [
+            0.00952134255038255,
+            0.041278030407009295
+          ],
+          "blockVs32FrozenValueBb": [
+            0.025434588908663187,
+            0.06258998303529974
+          ],
+          "weak85oRaise25Probability": 0.00621762938621721
+        },
+        {
+          "round": 32,
+          "averageVs32FrozenValueBb": [
+            -2.0825996652064565e-18,
+            1.6936874638499495e-18
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.007133727598910482,
+            -0.030926964678034484
+          ],
+          "weak85oRaise25Probability": 0.002663145453886742
+        },
+        {
+          "round": 40,
+          "averageVs32FrozenValueBb": [
+            -0.01950386414802208,
+            -0.039884057362055955
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.04035659366702887,
+            -0.08252645140148776
+          ],
+          "weak85oRaise25Probability": 0.0068637425595940785
+        },
+        {
+          "round": 48,
+          "averageVs32FrozenValueBb": [
+            -0.05805594172244885,
+            -0.059504620800895164
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.11179196523653903,
+            -0.08685285012196668
+          ],
+          "weak85oRaise25Probability": 0.0247314138545372
+        },
+        {
+          "round": 56,
+          "averageVs32FrozenValueBb": [
+            -0.10244366244005332,
+            -0.09275287986832129
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.17884229961940296,
+            -0.14997865403000016
+          ],
+          "weak85oRaise25Probability": 0.06386336319369215
+        },
+        {
+          "round": 64,
+          "averageVs32FrozenValueBb": [
+            -0.1670215100861139,
+            -0.13117904759617896
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.29941006175336865,
+            -0.20995505015817234
+          ],
+          "weak85oRaise25Probability": 0.2226298831533767
+        },
+        {
+          "round": 72,
+          "averageVs32FrozenValueBb": [
+            -0.20224015207325674,
+            -0.15101234054768042
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.28606014513685585,
+            -0.1982153666674859
+          ],
+          "weak85oRaise25Probability": 0.38123133978672125
+        },
+        {
+          "round": 80,
+          "averageVs32FrozenValueBb": [
+            -0.21378452310708734,
+            -0.1562358861973075
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.24507701155602377,
+            -0.17039497216435034
+          ],
+          "weak85oRaise25Probability": 0.4762891327018599
+        },
+        {
+          "round": 88,
+          "averageVs32FrozenValueBb": [
+            -0.2122261860427278,
+            -0.15334219104841004
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.20748607603029284,
+            -0.14454022280807893
+          ],
+          "weak85oRaise25Probability": 0.5353713746694958
+        },
+        {
+          "round": 96,
+          "averageVs32FrozenValueBb": [
+            -0.20604425179939595,
+            -0.14766682588009505
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.18519073875675762,
+            -0.1285221218278238
+          ],
+          "weak85oRaise25Probability": 0.5724981471403872
+        },
+        {
+          "round": 104,
+          "averageVs32FrozenValueBb": [
+            -0.19871923900348232,
+            -0.1399332502809526
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.17157925294592985,
+            -0.11127949365504661
+          ],
+          "weak85oRaise25Probability": 0.5698214460198661
+        },
+        {
+          "round": 112,
+          "averageVs32FrozenValueBb": [
+            -0.1913263661203078,
+            -0.13110260687542885
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.16148025078065675,
+            -0.09545200043737845
+          ],
+          "weak85oRaise25Probability": 0.5522459736958214
+        },
+        {
+          "round": 120,
+          "averageVs32FrozenValueBb": [
+            -0.18375684322678862,
+            -0.12032101804881232
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.15068286453719,
+            -0.07321236349981386
+          ],
+          "weak85oRaise25Probability": 0.5368601724936322
+        },
+        {
+          "round": 128,
+          "averageVs32FrozenValueBb": [
+            -0.18171537439976165,
+            -0.11431819811705585
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.1721169621484746,
+            -0.08609462712128821
+          ],
+          "weak85oRaise25Probability": 0.602115452947003
+        }
+      ],
+      "blockEqualOpeningVs32FrozenValueBb": [
+        -0.14964670510134062,
+        -0.10715503009371684
+      ]
+    },
+    {
+      "seed": 27002,
+      "points": [
+        {
+          "round": 8,
+          "averageVs32FrozenValueBb": [
+            0.002929531567042497,
+            0.037614350065581365
+          ],
+          "blockVs32FrozenValueBb": [
+            0.002929531567042497,
+            0.037614350065581365
+          ],
+          "weak85oRaise25Probability": 0.0006127450980392157
+        },
+        {
+          "round": 16,
+          "averageVs32FrozenValueBb": [
+            -0.013584054400318029,
+            0.08137593534579582
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.016191462710953876,
+            0.08828565933740866
+          ],
+          "weak85oRaise25Probability": 8.355614973262032e-05
+        },
+        {
+          "round": 24,
+          "averageVs32FrozenValueBb": [
+            -0.03252694803243643,
+            0.01051817033474661
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.04085202701999493,
+            -0.020622610057888423
+          ],
+          "weak85oRaise25Probability": 2.5510204081632654e-05
+        },
+        {
+          "round": 32,
+          "averageVs32FrozenValueBb": [
+            -9.017065236955692e-18,
+            -3.478025117589614e-18
+          ],
+          "blockVs32FrozenValueBb": [
+            0.024370343327054803,
+            -0.007880586336430948
+          ],
+          "weak85oRaise25Probability": 0.0024767299257571593
+        },
+        {
+          "round": 40,
+          "averageVs32FrozenValueBb": [
+            -0.01186845373193755,
+            -0.015962600836122023
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.024557716413560488,
+            -0.033029157244087996
+          ],
+          "weak85oRaise25Probability": 0.0032174082306301107
+        },
+        {
+          "round": 48,
+          "averageVs32FrozenValueBb": [
+            -0.041970304909401096,
+            -0.06061231601059466
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.08392793428921996,
+            -0.12284756493799483
+          ],
+          "weak85oRaise25Probability": 0.0018733804498777258
+        },
+        {
+          "round": 56,
+          "averageVs32FrozenValueBb": [
+            -0.060258198957184254,
+            -0.089414282554388
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.09173470100647388,
+            -0.1389872490518168
+          ],
+          "weak85oRaise25Probability": 0.0011849327670861443
+        },
+        {
+          "round": 64,
+          "averageVs32FrozenValueBb": [
+            -0.06039462981175981,
+            -0.0942406948676349
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.06067432143819771,
+            -0.1041351363702659
+          ],
+          "weak85oRaise25Probability": 0.0007964380392011477
+        },
+        {
+          "round": 72,
+          "averageVs32FrozenValueBb": [
+            -0.061935172825869175,
+            -0.10161945648551005
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.06560164880197193,
+            -0.11918083059681264
+          ],
+          "weak85oRaise25Probability": 0.0005608047411915497
+        },
+        {
+          "round": 80,
+          "averageVs32FrozenValueBb": [
+            -0.05316208186662122,
+            -0.0939363078338046
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.02938150112305156,
+            -0.07311015457431619
+          ],
+          "weak85oRaise25Probability": 0.000409669992098865
+        },
+        {
+          "round": 88,
+          "averageVs32FrozenValueBb": [
+            -0.05557675955901553,
+            -0.09717910803905612
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.06292166469430216,
+            -0.10704297515278391
+          ],
+          "weak85oRaise25Probability": 0.0003083110499565046
+        },
+        {
+          "round": 96,
+          "averageVs32FrozenValueBb": [
+            -0.05568867338287735,
+            -0.0935925172266244
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.0560661921809899,
+            -0.08149387376946919
+          ],
+          "weak85oRaise25Probability": 0.0022173534525653502
+        },
+        {
+          "round": 104,
+          "averageVs32FrozenValueBb": [
+            -0.051468595519844854,
+            -0.08185226716679188
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.035832738278969864,
+            -0.03835333661013965
+          ],
+          "weak85oRaise25Probability": 0.004026338705049224
+        },
+        {
+          "round": 112,
+          "averageVs32FrozenValueBb": [
+            -0.044211099115999894,
+            -0.06569358702821596
+          ],
+          "blockVs32FrozenValueBb": [
+            -0.014911518537624274,
+            -0.0004586183261197415
+          ],
+          "weak85oRaise25Probability": 0.011985871281965831
+        },
+        {
+          "round": 120,
+          "averageVs32FrozenValueBb": [
+            -0.030879381510656476,
+            -0.04717900848559564
+          ],
+          "blockVs32FrozenValueBb": [
+            0.02737170646113489,
+            0.03371787032426993
+          ],
+          "weak85oRaise25Probability": 0.018506375886979485
+        },
+        {
+          "round": 128,
+          "averageVs32FrozenValueBb": [
+            -0.016501255716606933,
+            -0.029046215148164443
+          ],
+          "blockVs32FrozenValueBb": [
+            0.051100647846689794,
+            0.05620907918494821
+          ],
+          "weak85oRaise25Probability": 0.027709863457656775
+        }
+      ],
+      "blockEqualOpeningVs32FrozenValueBb": [
+        -0.029805074830836786,
+        -0.039457195882244875
+      ]
+    }
+  ],
+  "nativeQueries": 0,
+  "releaseAccepted": false,
+  "interpretation": "Opening-only fixed-continuation diagnostic. Columns use old32/new128 frozen values averaged on reused evaluation boards. No new full-game policy or independent strength metric. Block-equal screen retains t^2 weighting within each eight-update block; it is not exact uniform averaging."
+}

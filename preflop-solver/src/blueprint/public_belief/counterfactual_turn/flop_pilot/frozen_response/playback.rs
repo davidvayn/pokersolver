@@ -3,6 +3,30 @@
 //! an opponent holding nor an unrevealed board can enter reconstruction.
 use super::*;
 
+fn compact_continuation_game(mut game: BlueprintConfig) -> BlueprintConfig {
+    // A preflop optimizer's settings are not part of the pinned postflop
+    // oracle. Preserve cards, stacks, action abstraction and all other inputs.
+    game.dcfr = crate::blueprint::DcfrParameters::default();
+    game.dcfr_schedule = crate::blueprint::DcfrSchedule::Fixed;
+    game.dcfr_schedule_horizon = 0;
+    game
+}
+
+#[test]
+fn compact_continuation_does_not_inherit_preflop_update_schedule() {
+    let game = BlueprintConfig { seed:27001, iterations:32, effective_stack_bb:20.0,
+        ..BlueprintConfig::default() };
+    let mut linear = game.clone();
+    linear.dcfr_schedule = crate::blueprint::DcfrSchedule::Lcfr;
+    linear.dcfr = crate::blueprint::DcfrParameters { positive_regret_exponent:1.0,
+        negative_regret_exponent:1.0, strategy_exponent:1.0 };
+    assert_ne!(serde_json::to_vec(&game).unwrap(),serde_json::to_vec(&linear).unwrap());
+    assert_eq!(serde_json::to_vec(&game).unwrap(),
+        serde_json::to_vec(&compact_continuation_game(linear)).unwrap());
+    assert_eq!(serde_json::to_vec(&game).unwrap(),
+        serde_json::to_vec(&compact_continuation_game(game.clone())).unwrap());
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::blueprint) struct NativeFlopOptions {
     pub seed: u64,
@@ -25,6 +49,16 @@ pub(in crate::blueprint) struct NativePostflopPolicy {
 }
 
 impl NativePostflopPolicy {
+    /// Shared compact-preflop training, evaluation and full-hand playback
+    /// boundary. Its postflop optimizer stays fixed when preflop training varies.
+    pub fn solve_pinned_compact_continuation(
+        game: BlueprintConfig, state: PublicBeliefState, options: &NativeFlopOptions,
+        model: &PublicValueNetwork, root_realization_turn_averages: bool,
+    ) -> Result<Self,String> {
+        Self::solve_counterfactual_learned_with_turn_averages(
+            compact_continuation_game(game),state,options,model,root_realization_turn_averages)
+    }
+
     pub fn validate_learned_model(
         game: &BlueprintConfig,
         model: &PublicValueNetwork,
