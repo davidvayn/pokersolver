@@ -403,6 +403,50 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertEqual([layer["outputSize"] for layer in head], [256, 128, 64, 1])
         self.assertEqual(head[-1]["activation"], "linear")
 
+    def test_pooled_wide_reuses_existing_towers_and_pooled_runtime(self) -> None:
+        model = module.SharedComboValueNetwork(True,"wide-pooled","payoff-exposure",module.FEATURE_SCHEMA_EXACT_RUNOUT)
+        plain = module.SharedComboValueNetwork(True,"wide","payoff-exposure",module.FEATURE_SCHEMA_EXACT_RUNOUT)
+        for name in ("context_tower","query_tower"):
+            a = module.tower_payload(getattr(model,name),"relu","relu")
+            b = module.tower_payload(getattr(plain,name),"relu","relu")
+            self.assertEqual([(x["inputSize"],x["outputSize"]) for x in a],
+                             [(x["inputSize"],x["outputSize"]) for x in b])
+        head = module.tower_payload(model.head,"relu","linear")
+        self.assertEqual(head[0]["inputSize"],64*4)
+        self.assertEqual([x["outputSize"] for x in head],[64,1])
+        self.assertEqual(module.network_schema_for_architecture("wide-pooled"),module.POOLED_NETWORK_SCHEMA)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"native-pooled.json"
+            module.export_model(model,path,7,"a"*64,module.native_values.SCHEMA,"research_only","b"*64,"payoff-exposure")
+            payload = json.loads(path.read_text())
+        self.assertEqual(payload["predictionContract"],"native-turn-cfv-full-stack-v1")
+        self.assertEqual(payload["schema"],module.POOLED_NETWORK_SCHEMA)
+        self.assertEqual(payload["rangeAggregation"],"joint-reach-weighted-own-and-opponent-query-pooling")
+
+    def test_pooled_tiny_reach_matches_rust_one_e_minus_nine_floor(self) -> None:
+        model = module.SharedComboValueNetwork(True,"wide-pooled","payoff-exposure")
+        context_count, query_count = module.feature_sizes(module.FEATURE_SCHEMA)
+        model.context_tower = module.nn.Linear(context_count,1,bias=False)
+        model.context_tower.weight = module.mx.zeros((1,context_count))
+        model.query_tower = module.nn.Linear(query_count,1,bias=False)
+        weight = np.zeros((1,query_count),dtype=np.float32)
+        weight[0,0] = 1
+        model.query_tower.weight = module.mx.array(weight)
+        model.head = module.nn.Linear(4,1,bias=False)
+        model.head.weight = module.mx.array([[0.,1.,0.,0.]])
+        queries = np.zeros((1,2,module.COMBO_COUNT,query_count),dtype=np.float32)
+        queries[0,0,:,0] = 1
+        tiny = 2.0**-30
+        reach = np.zeros((1,2,module.COMBO_COUNT),dtype=np.float32)
+        reach[:,:,0] = tiny
+        actual = np.asarray(model(module.mx.zeros((1,2,context_count)),module.mx.array(queries),
+                                  module.mx.array(reach),module.mx.array([20.]))).reshape(2,-1)
+        pooled = tiny/1e-9
+        # Preserve the existing training projection here; isolate pooling.
+        correction = pooled*tiny/1e-8/2
+        np.testing.assert_allclose(actual[0],pooled-correction,atol=1e-6)
+        np.testing.assert_allclose(actual[1],-correction,atol=1e-6)
+
     def test_pooled_xwide_uses_both_complete_range_embeddings(self) -> None:
         model = module.SharedComboValueNetwork(
             True, "xwide-gelu-pooled", "pot", module.FEATURE_SCHEMA_EXACT_RUNOUT

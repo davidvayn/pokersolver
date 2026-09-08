@@ -4,6 +4,7 @@
 use super::*;
 use std::io::Write;
 mod lbr;
+pub(in crate::blueprint::response) use lbr::paired_lbr_hand;
 mod support;
 mod tail;
 

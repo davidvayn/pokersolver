@@ -7,14 +7,18 @@ use crate::blueprint::neural::{normalize_ranges_for_board, trajectory_action_mat
 use crate::blueprint::public_belief::counterfactual_turn::{
     NativeFlopOptions, NativePostflopPolicy,
 };
-use crate::blueprint::public_belief::PublicBeliefState;
+use crate::blueprint::public_belief::{PublicBeliefState, PublicValueNetwork};
 use std::sync::Mutex;
 mod pilot;
+mod full_hand_probe;
 
 pub(super) struct NativeFullHandPolicy {
     preflop: Arc<FrozenPreflopPolicy>,
     options: NativeFlopOptions,
     leaf_workers: usize,
+    learned: Option<Arc<PublicValueNetwork>>,
+    complete_root_support: bool,
+    root_realization_turn_averages: bool,
     postflop: Mutex<Option<NativePostflopPolicy>>,
 }
 
@@ -24,8 +28,66 @@ impl NativeFullHandPolicy {
             preflop,
             options,
             leaf_workers: 1,
+            learned: None,
+            complete_root_support: false,
+            root_realization_turn_averages: false,
             postflop: Mutex::new(None),
         }
+    }
+
+    fn with_learned_continuation(
+        preflop: Arc<FrozenPreflopPolicy>,
+        options: NativeFlopOptions,
+        model: Arc<PublicValueNetwork>,
+    ) -> Result<Self, String> {
+        NativePostflopPolicy::validate_learned_model(&preflop.game, &model)?;
+        if options.iterations < 2 || options.training_turn_iterations < 2
+            || options.response_turn_iterations < 2 {
+            return Err("invalid pinned learned full-hand search budget".into());
+        }
+        let mut policy = Self::new(preflop, options);
+        policy.learned = Some(model);
+        Ok(policy)
+    }
+
+    fn with_compact_continuation(
+        preflop: Arc<FrozenPreflopPolicy>,
+        options: NativeFlopOptions,
+        model: Arc<PublicValueNetwork>,
+    ) -> Result<Self, String> {
+        let mut policy = Self::with_learned_continuation(preflop, options, model)?;
+        policy.complete_root_support = true;
+        Ok(policy)
+    }
+
+    fn with_compact_continuation_and_turn_averages(
+        preflop: Arc<FrozenPreflopPolicy>, options: NativeFlopOptions,
+        model: Arc<PublicValueNetwork>, root_realization_turn_averages: bool,
+    ) -> Result<Self,String> {
+        let mut policy = Self::with_compact_continuation(preflop,options,model)?;
+        policy.root_realization_turn_averages = root_realization_turn_averages;
+        Ok(policy)
+    }
+
+    fn route_identity(&self) -> String {
+        let mut payload = serde_json::json!({
+            "schema":"research-pinned-full-hand-route-v1",
+            "preflopSha256":self.preflop.artifact_sha256,
+            "learnedLeafModelSha256":self.learned.as_ref().and_then(|m| m.artifact_sha256()),
+            "seed":self.options.seed,"flopIterations":self.options.iterations,
+            "trainingTurnIterations":self.options.training_turn_iterations,
+            "playedTurnIterations":self.options.response_turn_iterations,
+            "rootSeedRule":"seed-xor-first8-le-sha256-public-input-v1",
+            "playedContinuation":"frozen-native-turn-river-average-v1",
+        });
+        if self.complete_root_support {
+            payload["rootSupport"] = serde_json::json!("all-board-legal-own-realization-average-v1");
+            payload["beliefReplay"] = serde_json::json!("true-reaches-from-ones-normalize-once-v1");
+        }
+        if self.root_realization_turn_averages {
+            payload["playedContinuation"] = serde_json::json!("frozen-native-turn-river-root-realization-average-v1");
+        }
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&payload).unwrap()))
     }
 
     // Replay only preflop. The complete frozen flop tree already contains the
@@ -60,7 +122,8 @@ impl NativeFullHandPolicy {
     fn root_input(&self, root: &GameState, board: &[u8]) -> Result<PublicBeliefState, String> {
         let game = &self.preflop.game;
         let mut cursor = GameState::initial(game);
-        let mut ranges = [vec![1.0 / 1326.0; 1326], vec![1.0 / 1326.0; 1326]];
+        let initial = if self.complete_root_support { 1.0 } else { 1.0 / 1326.0 };
+        let mut ranges = [vec![initial; 1326], vec![initial; 1326]];
         for observed in &root.trajectory {
             let actions = cursor.legal_actions(game);
             let selected = actions
@@ -73,11 +136,18 @@ impl NativeFullHandPolicy {
                         self.preflop.strategy(&cursor, combo)?[selected];
                 }
             }
-            normalize_ranges_for_board(&mut ranges, &[])?;
+            if !self.complete_root_support {
+                normalize_ranges_for_board(&mut ranges, &[])?;
+            }
             cursor = cursor.apply(&actions[selected], game);
         }
         if cursor.public_history != root.public_history || cursor.street != Street::Flop {
             return Err("native full-hand preflop replay differs from root".into());
+        }
+        if self.complete_root_support {
+            return PublicBeliefState::from_preflop_reaches(
+                root, board.try_into().map_err(|_| "expected three flop cards")?, ranges,
+            );
         }
         normalize_ranges_for_board(&mut ranges, board)?;
         Ok(PublicBeliefState::from_game_state(
@@ -121,7 +191,18 @@ impl NativeFullHandPolicy {
             let digest = Sha256::digest(serde_json::to_vec(&input).map_err(|e| e.to_string())?);
             let mut options = self.options.clone();
             options.seed ^= u64::from_le_bytes(digest[..8].try_into().unwrap());
-            *cache = Some(if self.leaf_workers == 1 {
+            *cache = Some(if let Some(model) = &self.learned {
+                if self.complete_root_support {
+                    NativePostflopPolicy::solve_counterfactual_learned_with_turn_averages(
+                        self.preflop.game.clone(), input, &options, model,
+                        self.root_realization_turn_averages,
+                    )?
+                } else {
+                    NativePostflopPolicy::solve_with_learned_leaves(
+                        self.preflop.game.clone(), input, &options, model,
+                    )?
+                }
+            } else if self.leaf_workers == 1 {
                 NativePostflopPolicy::solve(self.preflop.game.clone(), input, &options)?
             } else {
                 NativePostflopPolicy::solve_with_leaf_workers(
@@ -163,7 +244,13 @@ impl ResponsePolicy for NativeFullHandPolicy {
     fn take_resolution_diagnostics(&self) -> Option<serde_json::Value> {
         let cache = self.postflop.lock().unwrap();
         Some(serde_json::json!({
-            "route": "research-strict-preflop-native-flop-turn-river-v1",
+            "route": if self.learned.is_some() { "research-strict-preflop-learned-flop-native-turn-river-v1" }
+                else { "research-strict-preflop-native-flop-turn-river-v1" },
+            "routeSha256": self.route_identity(),
+            "preflopSha256": self.preflop.artifact_sha256,
+            "learnedLeafModelSha256": self.learned.as_ref().and_then(|m| m.artifact_sha256()),
+            "completeRootSupport": self.complete_root_support,
+            "rootRealizationTurnAverages": self.root_realization_turn_averages,
             "preflopRounds": self.preflop.rounds,
             "preflopNodes": self.preflop.node_count(),
             "flopIterations": self.options.iterations,
@@ -180,6 +267,9 @@ impl ResponsePolicy for NativeFullHandPolicy {
     fn parallel_copy(&self) -> Option<Box<dyn ResponsePolicy + Send>> {
         let mut copy = Self::new(self.preflop.clone(), self.options.clone());
         copy.leaf_workers = self.leaf_workers;
+        copy.learned = self.learned.clone();
+        copy.complete_root_support = self.complete_root_support;
+        copy.root_realization_turn_averages = self.root_realization_turn_averages;
         Some(Box::new(copy))
     }
 }
@@ -234,6 +324,58 @@ mod tests {
                 response_turn_iterations: 4,
             },
         )
+    }
+
+    #[test]
+    fn compact_replay_preserves_raw_reaches_and_zero_support() {
+        let mut policy = fixture();
+        policy.complete_root_support = true;
+        let game = &policy.preflop.game;
+        let mut state = GameState::initial(game);
+        let mut raw = [vec![1.0; 1326], vec![1.0; 1326]];
+        while state.street == Street::Preflop && state.terminal.is_none() {
+            let actions = state.legal_actions(game);
+            let chosen = actions.iter().position(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check)).unwrap();
+            for combo in all_combos() {
+                raw[state.actor][combo.key()] *= policy.preflop.strategy(&state, combo).unwrap()[chosen];
+            }
+            state = state.apply(&actions[chosen], game);
+        }
+        let board = [0, 5, 10];
+        let expected = PublicBeliefState::from_preflop_reaches(&state, board, raw.clone()).unwrap();
+        let actual = policy.root_input(&state, &board).unwrap();
+        assert_eq!(serde_json::to_vec(&actual).unwrap(), serde_json::to_vec(&expected).unwrap());
+        raw[0].fill(0.0);
+        let zero = PublicBeliefState::from_preflop_reaches(&state, board, raw.clone()).unwrap();
+        assert!(zero.ranges[0].iter().all(|v| *v == 0.0));
+        assert!((zero.ranges[1].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(PublicBeliefState::from_preflop_reaches(&state, [0, 0, 5], raw.clone()).is_err());
+        raw[1][0] = f64::INFINITY;
+        assert!(PublicBeliefState::from_preflop_reaches(&state, board, raw).is_err());
+    }
+
+    #[test]
+    fn full_hand_route_identity_pins_policy_budgets_not_execution_cache() {
+        let mut policy = fixture();
+        let identity = policy.route_identity();
+        policy.leaf_workers = 4;
+        assert_eq!(identity, policy.route_identity());
+        assert_eq!(policy.parallel_copy().unwrap().take_resolution_diagnostics().unwrap()["routeSha256"], identity);
+        policy.options.response_turn_iterations += 1;
+        assert_ne!(identity, policy.route_identity());
+        policy.options.response_turn_iterations -= 1;
+        policy.options.seed += 1;
+        assert_ne!(identity, policy.route_identity());
+        policy.options.seed -= 1;
+        policy.complete_root_support = true;
+        assert_ne!(identity, policy.route_identity());
+        assert_eq!(policy.parallel_copy().unwrap().take_resolution_diagnostics().unwrap()["routeSha256"], policy.route_identity());
+        let compact_identity = policy.route_identity();
+        policy.root_realization_turn_averages = true;
+        assert_ne!(compact_identity,policy.route_identity());
+        let copy = policy.parallel_copy().unwrap().take_resolution_diagnostics().unwrap();
+        assert_eq!(copy["routeSha256"],policy.route_identity());
+        assert_eq!(copy["rootRealizationTurnAverages"],true);
     }
 
     #[test]

@@ -11,6 +11,23 @@ pub(crate) struct ExactFlopTerminal {
 }
 
 impl ExactFlopTerminal {
+    #[cfg(test)]
+    pub(crate) fn class_totals(&self, class_by_combo: &[usize], count: usize) -> Result<(Vec<u64>, Vec<u64>), String> {
+        if class_by_combo.len() != EXACT_COMBO_COUNT || count != 169
+            || class_by_combo.iter().any(|c| *c >= count) {
+            return Err("invalid preflop class mapping".into());
+        }
+        let mut wins = vec![0u64; count*count];
+        let mut pairs = vec![0u64; count*count];
+        for (i, units) in self.units.iter().enumerate() {
+            if *units == BLOCKED { continue; }
+            let key = class_by_combo[i/EXACT_COMBO_COUNT]*count + class_by_combo[i%EXACT_COMBO_COUNT];
+            wins[key] += *units as u64;
+            pairs[key] += 1;
+        }
+        Ok((wins, pairs))
+    }
+
     pub(crate) fn from_equities(flop: [u8; 3], equities: &[f32]) -> Result<Self, String> {
         if flop.iter().any(|c| *c >= 52)
             || flop.iter().collect::<BTreeSet<_>>().len() != 3
@@ -65,6 +82,19 @@ impl ExactFlopTerminal {
         invested: [f64; 2],
         opponent_reach: &[f64],
         player: usize,
+    ) -> Result<Vec<f64>, String> {
+        self.values_for_board(&board, invested, opponent_reach, player)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn values_on_flop(
+        &self, invested: [f64; 2], opponent_reach: &[f64], player: usize,
+    ) -> Result<Vec<f64>, String> {
+        self.values_for_board(&self.flop, invested, opponent_reach, player)
+    }
+
+    fn values_for_board(
+        &self, board: &[u8], invested: [f64; 2], opponent_reach: &[f64], player: usize,
     ) -> Result<Vec<f64>, String> {
         if board[..3] != self.flop
             || player > 1

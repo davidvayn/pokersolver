@@ -27,6 +27,7 @@ test('royal-flush analytic backup; missing chance, changed values, and illegal a
     return {public_history: history, actor, action_labels: labels, probabilities};
   }
   const candidate = {schema: 'hu-native-counterfactual-turn-flop-pilot-v1', game, state,
+    learned_leaf_model_sha256: 'b'.repeat(64), // Test-only prediction identity.
     turn_iterations: 4, strategies: [
       row(root, 1, ['check', 'bet_all_in_to_1.000bb']),
       row([...root, 'Flop:p1:check'], 0, ['check', 'bet_all_in_to_1.000bb']),
@@ -58,6 +59,57 @@ test('royal-flush analytic backup; missing chance, changed values, and illegal a
     const result = audit(...arguments_);
     assert.ok(result.maximumDifferenceBb < 1e-12);
     assert.ok(Math.abs(result.half_summed_gain_bb - 0.625) < 1e-12);
+    // Diagnose individual actions against the same frozen subsequent policy.
+    // At the root the villain gets -1.25bb checking and -0.5bb shoving;
+    // the 50/50 policy therefore loses 0.375bb to this one-node deviation.
+    const diagnosed = audit(...arguments_, {actionDiagnostics: true});
+    assert.equal(diagnosed.half_summed_gain_bb, result.half_summed_gain_bb);
+    assert.equal(diagnosed.actionDiagnostics.length, 4);
+    const rootDiagnostic = diagnosed.actionDiagnostics.find(row =>
+      JSON.stringify(row.history) === JSON.stringify(root));
+    assert.deepEqual(rootDiagnostic.actionLabels, ['check', 'bet_all_in_to_1.000bb']);
+    assert.deepEqual(rootDiagnostic.reachWeightedMix, [0.5, 0.5]);
+    assert.ok(Math.abs(rootDiagnostic.localDeviationLossBb - 0.375) < 1e-12);
+    assert.ok(Math.abs(rootDiagnostic.rootWeightedContributionBb - 0.375) < 1e-12);
+    for (const [i, value] of [-1.25, -0.5].entries()) {
+      assert.ok(Math.abs(rootDiagnostic.costlyHands[0].actionEvBb[i] - value) < 1e-12);
+    }
+    assert.equal(rootDiagnostic.costlyHands[0].bestAction, 'bet_all_in_to_1.000bb');
+    const facedBet = diagnosed.actionDiagnostics.find(row => row.actor === 0
+      && row.actionLabels.includes('fold'));
+    assert.ok(Math.abs(facedBet.localDeviationLossBb - 1.5) < 1e-12);
+    assert.ok(Math.abs(facedBet.rootWeightedContributionBb - 0.75) < 1e-12);
+    const probe={schema:'hu-native-flop-frozen-leaf-predictions-v1',candidate_sha256:digest,
+      model_sha256:'b'.repeat(64),releaseAccepted:false,packets:[]};
+    for(let turn=0;turn<52;turn++) {
+      if(board.includes(turn)) continue;
+      const packet=JSON.parse(fs.readFileSync(path.join(directory,`turn-${turn}.json`)));
+      probe.packets.push({turn,leaves:packet.leaves.map(leaf=>({history:leaf.history,
+        predicted_counterfactual_bb:leaf.profile_bb}))});
+    }
+    const identical=audit(...arguments_,{leafPredictions:probe});
+    assert.equal(identical.half_summed_gain_bb,result.half_summed_gain_bb);
+    assert.ok(identical.actionValueDiagnostics.every(row=>row.actionValueRmseBb<1e-12));
+    for(const packet of probe.packets) for(const leaf of packet.leaves)
+      leaf.predicted_counterfactual_bb=leaf.predicted_counterfactual_bb.map(row=>row.map(v=>-v));
+    const wrong=audit(...arguments_,{leafPredictions:probe});
+    assert.equal(wrong.half_summed_gain_bb,result.half_summed_gain_bb,'prediction must never alter audited native response');
+    const wrongRoot=wrong.actionValueDiagnostics.find(row=>JSON.stringify(row.history)===JSON.stringify(root));
+    assert.ok(Math.abs(wrongRoot.nativeLossFromPredictedBestBb-.75)<1e-12);
+    assert.equal(wrongRoot.costlyHands[0].predictedBest,'check');
+    assert.throws(()=>audit(...arguments_,{leafPredictions:{...probe,packets:probe.packets.slice(1)}}));
+    assert.throws(()=>audit(...arguments_,{leafPredictions:{...probe,model_sha256:'c'.repeat(64)}}));
+    const alternative={...probe,model_sha256:'c'.repeat(64),
+      prediction_role:'alternative_value_model',source_policy_model_sha256:'b'.repeat(64)};
+    const alternateResult=audit(...arguments_,{leafPredictions:alternative,
+      alternativeValueModelSha256:'c'.repeat(64)});
+    assert.equal(alternateResult.half_summed_gain_bb,result.half_summed_gain_bb);
+    assert.equal(alternateResult.predictionRole,'alternative_value_model');
+    assert.equal(alternateResult.sourcePolicyModelSha256,'b'.repeat(64));
+    assert.throws(()=>audit(...arguments_,{leafPredictions:alternative}));
+    assert.throws(()=>audit(...arguments_,{leafPredictions:{...alternative,source_policy_model_sha256:'d'.repeat(64)},
+      alternativeValueModelSha256:'c'.repeat(64)}));
+    assert.throws(()=>audit(...arguments_,{leafPredictions:{...probe,packets:[probe.packets[0],...probe.packets.slice(0,48)]}}));
     write('response.json', {...response, half_summed_gain_bb: 0});
     assert.throws(() => audit(...arguments_), /half-summed gain/);
     write('response.json', response);

@@ -7,6 +7,7 @@ use crate::blueprint::public_belief::{sampled_flop, PublicBeliefState, PublicBel
 use std::sync::Mutex;
 use std::time::Instant;
 mod response_pilot;
+pub(super) use response_pilot::paired_lbr_hand;
 mod turn_values;
 
 #[derive(Default)]

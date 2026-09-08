@@ -25,6 +25,8 @@ use std::sync::Arc;
 pub mod neural;
 pub mod preflop;
 mod preflop_average;
+#[cfg(test)]
+mod preflop_continuation;
 pub mod public_belief;
 pub mod range_vector;
 pub mod response;

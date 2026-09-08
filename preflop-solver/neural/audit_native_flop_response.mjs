@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { summarizeActions } from './native_action_diagnostics.mjs';
+import { compareActionValues, sumPredictedLeaves } from './native_action_value_probe.mjs';
 
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const key = history => JSON.stringify(history);
@@ -93,7 +95,7 @@ function apply(state, action, game) {
   return next;
 }
 
-export function audit(candidatePath, packetDirectory, equityPath, responsePath) {
+export function audit(candidatePath, packetDirectory, equityPath, responsePath, options = {}) {
   const candidateBytes = fs.readFileSync(candidatePath);
   const candidate = JSON.parse(candidateBytes), candidateSha256 = hash(candidateBytes);
   assert.equal(candidate.schema, 'hu-native-counterfactual-turn-flop-pilot-v1');
@@ -158,8 +160,18 @@ export function audit(candidatePath, packetDirectory, equityPath, responsePath) 
   assert.equal(packets.length, 49);
   for (const leaf of leaves.values()) assert.equal(leaf.count, 49);
   assert.ok(packets.every(p => p.leaves === leaves.size));
-  const visitedRows = new Set(), visitedLeaves = new Set();
-  function backUp(cursor, ranges, seat, best, continueBest) {
+  const alternativeModel = options.alternativeValueModelSha256;
+  if (alternativeModel !== undefined) {
+    assert.match(alternativeModel,/^[a-f0-9]{64}$/);
+    assert.equal(options.leafPredictions?.prediction_role,'alternative_value_model');
+    assert.equal(options.leafPredictions.source_policy_model_sha256,candidate.learned_leaf_model_sha256);
+  }
+  const predictedLeaves = options.leafPredictions ? sumPredictedLeaves(options.leafPredictions,
+    candidateSha256,alternativeModel ?? candidate.learned_leaf_model_sha256,
+    state.board,leaves,combos,game.effective_stack_bb) : null;
+  const nativeActions=new Map(), actionValueDiagnostics=[];
+  const visitedRows = new Set(), visitedLeaves = new Set(), actionDiagnostics = [];
+  function backUp(cursor, ranges, seat, best, continueBest, predicted=false) {
     if (cursor.terminal === 'fold') {
       const value = cursor.winner === seat ? cursor.invested_bb[1 - seat] : -cursor.invested_bb[seat];
       return compatibleMass(ranges[1 - seat]).map(mass => mass * value);
@@ -182,6 +194,7 @@ export function audit(candidatePath, packetDirectory, equityPath, responsePath) 
     const id = key(cursor.public_history);
     if (cursor.street === 'turn') {
       assert.ok(leaves.has(id), `missing live turn leaf ${id}`); visitedLeaves.add(id);
+      if (predicted) return predictedLeaves.get(id)[seat];
       return leaves.get(id)[best && continueBest ? 'best_response_bb' : 'profile_bb'][seat];
     }
     const row = rows.get(id); assert.ok(row, `missing flop row ${id}`); visitedRows.add(id);
@@ -193,8 +206,20 @@ export function audit(candidatePath, packetDirectory, equityPath, responsePath) 
       if (!(best && actor === seat)) {
         for (let c = 0; c < N; c++) child[actor][c] *= row.probabilities[c * n + a];
       }
-      return backUp(apply(cursor, action, game), child, seat, best, continueBest);
+      return backUp(apply(cursor, action, game), child, seat, best, continueBest, predicted);
     });
+    if (options.actionDiagnostics && !best && actor === seat && !predicted) {
+      actionDiagnostics.push(summarizeActions({history: cursor.public_history, actor,
+        actionLabels: row.action_labels, probabilities: row.probabilities,
+        actionCfvs: children, ownReach: ranges[seat],
+        opponentMass: compatibleMass(ranges[1 - seat]), rootJoint: joint, combos}));
+    }
+    if (predictedLeaves && !best && actor===seat) {
+      if (!predicted) nativeActions.set(id,children);
+      else actionValueDiagnostics.push(compareActionValues({history:cursor.public_history,actor,
+        actionLabels:row.action_labels,probabilities:row.probabilities,nativeCfvs:nativeActions.get(id),
+        predictedCfvs:children,ownReach:ranges[seat],opponentMass:compatibleMass(ranges[1-seat]),rootJoint:joint,combos}));
+    }
     return Float64Array.from({length: N}, (_, c) => {
       if (actor === seat && best) return Math.max(...children.map(v => v[c]));
       let result = 0;
@@ -229,11 +254,18 @@ export function audit(candidatePath, packetDirectory, equityPath, responsePath) 
   close(half_summed_gain_bb, response.half_summed_gain_bb, 'half-summed gain');
   const flopOnlyGain = flopOnlyBest.map((v, p) => v - profile_bb[p]);
   assert.ok(gain_bb.every((v, p) => v >= -EPS && v + EPS >= flopOnlyGain[p] && flopOnlyGain[p] >= -EPS));
+  if (predictedLeaves) for(const seat of [0,1]) backUp(state,state.ranges,seat,false,false,true);
   return {schema: 'native-flop-independent-response-audit-v1', candidateSha256,
     responseSha256: hash(responseBytes), equityMetadataSha256: hash(equityMetadataBytes),
     packets, publicRows: rows.size, leaves: leaves.size, maximumDifferenceBb,
     profile_bb, best_response_bb, gain_bb, half_summed_gain_bb,
     flopOnlyRestrictedGainBb: flopOnlyGain,
+    ...(options.actionDiagnostics ? {actionDiagnostics} : {}),
+    ...(predictedLeaves ? {actionValueDiagnostics} : {}),
+    ...(alternativeModel ? {predictionRole:'alternative_value_model',
+      sourcePolicyModelSha256:candidate.learned_leaf_model_sha256,
+      alternativeValueModelSha256:alternativeModel,
+      predictionInterpretation:'Alternative values on unchanged source-policy beliefs and actions; native response remains that of the source policy, not the alternative model.'} : {}),
     interpretation: 'Independent flop chance/back-up/betting audit with shared frozen turn CFVs and native f32 terminal equities. Conditional reused root, not full-game exploitability or independent equity validation.'};
 }
 

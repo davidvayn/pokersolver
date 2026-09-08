@@ -133,6 +133,40 @@ pub struct PublicBeliefState {
 }
 
 impl PublicBeliefState {
+    /// Shared boundary for compact preflop training and its frozen playback.
+    /// Multiply true action reaches from ones before calling; normalize once,
+    /// against revealed cards only. Zero-reach deviations remain explicit.
+    #[cfg(test)]
+    pub(super) fn from_preflop_reaches(
+        state: &GameState,
+        board: [u8; 3],
+        mut ranges: [Vec<f64>; 2],
+    ) -> Result<Self, String> {
+        if state.street != Street::Flop || state.terminal.is_some()
+            || board.iter().any(|c| *c >= 52)
+            || board.iter().collect::<BTreeSet<_>>().len() != 3
+            || ranges.iter().any(|r| r.len() != COMBO_COUNT
+                || r.iter().any(|v| !v.is_finite() || *v < 0.0)) {
+            return Err("invalid preflop continuation boundary".into());
+        }
+        for combo in all_combos() {
+            if combo.cards().iter().any(|c| board.contains(c)) {
+                ranges[0][combo.key()] = 0.0;
+                ranges[1][combo.key()] = 0.0;
+            }
+        }
+        for range in &mut ranges {
+            let total: f64 = range.iter().sum();
+            if !total.is_finite() {
+                return Err("preflop continuation reach overflow".into());
+            }
+            if total > 0.0 {
+                for v in range { *v /= total; }
+            }
+        }
+        Ok(Self::from_game_state(board.to_vec(), state, ranges))
+    }
+
     pub fn flop_start(
         board: [u8; 3],
         actor: usize,
@@ -601,6 +635,8 @@ pub struct PublicValueNetwork {
     source_policy_sha256: Option<String>,
     #[serde(default)]
     source_validation_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prediction_contract: Option<String>,
     #[serde(default)]
     feature_schema: Option<String>,
     #[serde(default)]
@@ -645,6 +681,16 @@ impl PublicValueNetwork {
     }
 
     fn validate(&self) -> Result<(), String> {
+        if let Some(contract) = &self.prediction_contract {
+            if contract != "native-turn-cfv-full-stack-v1"
+                || !matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v4" | "hu-public-belief-combo-value-network-v5")
+                || !self.uses_exact_ranges
+                || self.target_scale_bb != 20.0
+                || self.source_validation_status.as_deref() == Some("accepted")
+            {
+                return Err("native value prediction contract is incompatible or release-labelled".into());
+            }
+        }
         if !self.target_scale_bb.is_finite()
             || self.target_scale_bb <= 0.0
             || !self.range_scale.is_finite()
@@ -854,6 +900,59 @@ impl PublicValueNetwork {
         invested: [f64; 2],
         ranges: &[Vec<f64>; 2],
     ) -> [Vec<f64>; 2] {
+        self.predict_shared_combo_with_bounds(board, actor, invested, ranges, invested)
+    }
+
+    // Research-only full-betting continuation. Feature construction still uses
+    // actual investments; only the payoff envelope includes possible future bets.
+    fn predict_native_turn(
+        &self,
+        config: &TurnRiverSolveConfig,
+    ) -> Result<[Vec<f64>; 2], String> {
+        if self.prediction_contract.as_deref() != Some("native-turn-cfv-full-stack-v1")
+            || config.game.effective_stack_bb != self.target_scale_bb
+            || config.state.board.len() != 4
+        {
+            return Err("native continuation requires an explicitly compatible value artifact".into());
+        }
+        // Validate accounting and board legality without replacing zero ranges.
+        let mut validation = config.state.clone();
+        validation.ranges = std::array::from_fn(|_| uniform_range(&config.state.board));
+        validation.validate_street_and_normalize(&config.game, Street::Turn, 4)?;
+        let mut ranges = config.state.ranges.clone();
+        for range in &mut ranges {
+            if range.len() != COMBO_COUNT || range.iter().any(|v| !v.is_finite() || *v < 0.0) {
+                return Err("native prediction needs finite nonnegative exact ranges".into());
+            }
+            for combo in all_combos() {
+                if combo.cards().iter().any(|c| config.state.board.contains(c)) && range[combo.key()] != 0.0 {
+                    return Err("native prediction has board-blocked reach".into());
+                }
+            }
+            let total = range.iter().sum::<f64>();
+            if !total.is_finite() {
+                return Err("native prediction reach overflow".into());
+            }
+            if total > 0.0 { for value in range { *value /= total; } }
+        }
+        let values = self.predict_shared_combo_with_bounds(
+            &config.state.board, config.state.actor, config.state.invested_bb,
+            &ranges, [self.target_scale_bb; 2],
+        );
+        if values.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("nonfinite native prediction; no fallback".into());
+        }
+        Ok(values)
+    }
+
+    fn predict_shared_combo_with_bounds(
+        &self,
+        board: &[u8],
+        actor: usize,
+        invested: [f64; 2],
+        ranges: &[Vec<f64>; 2],
+        payoff_bounds: [f64; 2],
+    ) -> [Vec<f64>; 2] {
         let conflicts = combo_conflicts();
         let (mut contexts, mut queries) = shared_combo_features(
             board,
@@ -977,7 +1076,7 @@ impl PublicValueNetwork {
             }
             values
         });
-        project_value_predictions_to_payoff_bounds(&mut result, board, invested, ranges, &masses);
+        project_value_predictions_to_payoff_bounds(&mut result, board, payoff_bounds, ranges, &masses);
         result
     }
 
@@ -8408,6 +8507,8 @@ struct TurnRiverSolver {
     safe_root: Option<SafeResolveRoot>,
     training_round_offset: u64,
     #[cfg(test)]
+    root_realization_averages: bool,
+    #[cfg(test)]
     reference_both_value_players: bool,
 }
 
@@ -8502,6 +8603,8 @@ impl TurnRiverSolver {
             nodes: BTreeMap::new(),
             safe_root: None,
             training_round_offset: 0,
+            #[cfg(test)]
+            root_realization_averages: false,
             #[cfg(test)]
             reference_both_value_players: false,
         })
@@ -8982,13 +9085,14 @@ impl TurnRiverSolver {
                     false,
                     TurnRiverTrainingMode::Joint,
                 );
+                let accumulate_average = self.prepare_average_update(round,TurnRiverTrainingMode::Joint);
                 self.walk(
                     root.clone(),
                     reaches.clone(),
                     None,
                     1,
                     round,
-                    true,
+                    accumulate_average,
                     TurnRiverTrainingMode::Joint,
                 );
             }
@@ -9004,16 +9108,27 @@ impl TurnRiverSolver {
                 false,
                 TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement,
             );
+            let accumulate_average = self.prepare_average_update(round,TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement);
             self.walk(
                 root.clone(),
                 reaches.clone(),
                 None,
                 1,
                 round,
-                true,
+                accumulate_average,
                 TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement,
             );
         }
+    }
+
+    fn prepare_average_update(&mut self, round: u64, mode: TurnRiverTrainingMode) -> bool {
+        #[cfg(test)]
+        if self.root_realization_averages {
+            self.sweep_root_realization_averages(round,mode);
+            return false;
+        }
+        let _ = (round,mode);
+        true
     }
 
     fn node_key(state: &GameState, river: Option<u8>) -> Vec<String> {
@@ -13326,7 +13441,7 @@ pub(super) fn combo_conflicts() -> Arc<Vec<Vec<usize>>> {
         .clone()
 }
 
-fn compatible_mass_from_conflicts(range: &[f64], conflicts: &[Vec<usize>], own: usize) -> f64 {
+pub(super) fn compatible_mass_from_conflicts(range: &[f64], conflicts: &[Vec<usize>], own: usize) -> f64 {
     let total = range.iter().sum::<f64>();
     (total
         - conflicts[own]
@@ -13677,6 +13792,7 @@ mod tests {
             source_dataset_sha256: Some("0".repeat(64)),
             source_policy_sha256: None,
             source_validation_status: Some("accepted".to_owned()),
+            prediction_contract: None,
             feature_schema: None,
             context_public_count: 0,
             context_size: 0,
@@ -13691,7 +13807,7 @@ mod tests {
         }
     }
 
-    fn zero_shared_value_network() -> PublicValueNetwork {
+    pub(super) fn zero_shared_value_network() -> PublicValueNetwork {
         let layer = |input_size, output_size, activation: &str| ValueNetworkLayer {
             input_size,
             output_size,
@@ -13716,6 +13832,7 @@ mod tests {
             source_dataset_sha256: Some("1".repeat(64)),
             source_policy_sha256: None,
             source_validation_status: Some("rejected".to_owned()),
+            prediction_contract: None,
             feature_schema: Some("rank-suit-invariant-combo-query-v1".to_owned()),
             context_public_count: SHARED_CONTEXT_PUBLIC_COUNT,
             context_size: SHARED_CONTEXT_COUNT,
@@ -13804,6 +13921,76 @@ mod tests {
         let routed = network.predict(&board, 0, [4.0, 4.0], &ranges);
         let expected = network.predict_shared_combo(&board, 0, [4.0, 4.0], &ranges);
         assert_eq!(routed, expected);
+    }
+
+    #[test]
+    fn native_projection_nearly_incompatible_ranges_matches_python_cutoff() {
+        let board = [0, 5, 10, 15];
+        let tiny = 2.0f64.powi(-30);
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        ranges[0][Combo::new(51, 50).key()] = 1.0 - tiny;
+        ranges[0][Combo::new(49, 48).key()] = tiny;
+        ranges[1][Combo::new(51, 49).key()] = 1.0 - tiny;
+        ranges[1][Combo::new(50, 47).key()] = tiny;
+        let combos = all_combos();
+        let masses = std::array::from_fn(|p| {
+            compatible_masses_from_card_marginals(&combos, &ranges[1 - p])
+        });
+        let joint = ranges[0].iter().zip(&masses[0]).map(|(r, m)| r * m).sum::<f64>();
+        assert_eq!(joint, tiny * tiny);
+        let mut values = [vec![0.001; COMBO_COUNT], vec![0.001; COMBO_COUNT]];
+        project_value_predictions_to_payoff_bounds(&mut values, &board, [20.0; 2], &ranges, &masses);
+        for combo in combos {
+            let expected = if combo.cards().iter().any(|c| board.contains(c)) { 0.0 } else { 0.001 };
+            for p in 0..2 {
+                assert_eq!(values[p][combo.key()], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn native_value_contract_preserves_future_bets_and_zero_own_reach() {
+        for pooled in [false, true] {
+        let mut network = zero_shared_value_network();
+        network.schema = if pooled { "hu-public-belief-combo-value-network-v5" } else {
+            "hu-public-belief-combo-value-network-v4"
+        }.into();
+        network.value_normalization = Some("payoff-exposure".into());
+        network.prediction_contract = Some("native-turn-cfv-full-stack-v1".into());
+        network.query_tower[0].weights[94] = 1.0;
+        network.head[0].activation = "linear".into();
+        network.head[0].weights[1] = 0.5;
+        if pooled {
+            network.head[0].input_size = 4;
+            network.head[0].weights = vec![0.0, 0.125, -0.125, 0.5];
+        }
+        network.validate().unwrap();
+        let board = [8, 9, 16, 20];
+        let mut ranges = std::array::from_fn(|_| uniform_range(&board));
+        let absent = Combo::new(51, 50).key();
+        ranges[0][absent] = 0.0;
+        let mut game = BlueprintConfig::default();
+        game.effective_stack_bb = 20.0;
+        let mut config = TurnRiverSolveConfig { game,
+            state: PublicBeliefState::turn_start(board, 1, [1.0, 1.0], ranges),
+            iterations: 64, averaging_delay: 0, river_refinement_iterations: 0,
+            regret_matching_plus: false };
+        let native = network.predict_native_turn(&config).unwrap();
+        let legacy = network.predict(&board, 1, [1.0, 1.0], &config.state.ranges);
+        assert!(legacy.iter().flatten().all(|v| v.abs() <= 1.0));
+        assert!(native.iter().flatten().any(|v| v.abs() > 1.01));
+        assert!(native.iter().flatten().all(|v| v.is_finite() && v.abs() <= 20.0));
+        assert!(native[0][absent].abs() > 0.01);
+        for v in &mut config.state.ranges[0] { *v *= 0.125; }
+        let scaled = network.predict_native_turn(&config).unwrap();
+        for (a, b) in native.iter().flatten().zip(scaled.iter().flatten()) {
+            assert!((a-b).abs() < 1e-10, "conditional EV must not depend on total reach");
+        }
+        config.state.ranges[0].fill(0.0);
+        assert!(network.predict_native_turn(&config).unwrap()[0][absent].abs() > 0.01);
+        network.prediction_contract = None;
+        assert!(network.predict_native_turn(&config).is_err());
+        }
     }
 
     #[test]

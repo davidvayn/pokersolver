@@ -43,6 +43,7 @@ pub(super) struct Frozen {
     candidate_sha256: String,
     turn_iterations: u64,
     strategies: BTreeMap<History, Vec<f64>>,
+    root_realization_turn_averages: bool,
     turns: BTreeMap<History, (GameState, Ranges)>,
 }
 
@@ -52,6 +53,10 @@ impl Frozen {
             || input.iterations < 2
             || input.turn_iterations < 2
             || input.response_turn_iterations.is_some_and(|n| n < 2)
+            || input.complete_root_support == Some(false)
+            || input.root_realization_turn_averages == Some(false)
+            || (input.root_realization_turn_averages == Some(true)
+                && input.complete_root_support != Some(true))
             || input
                 .turn_samples_per_iteration
                 .is_some_and(|n| !(2..=49).contains(&n))
@@ -64,11 +69,16 @@ impl Frozen {
                 .state
                 .ranges
                 .iter()
-                .any(|r| (r.iter().sum::<f64>() - 1.0).abs() > 1e-10)
+                .any(|r| {
+                    let sum = r.iter().sum::<f64>();
+                    (sum - 1.0).abs() > 1e-10 && !(input.complete_root_support == Some(true) && sum == 0.0)
+                })
         {
             return Err("invalid frozen native flop candidate".into());
         }
-        let mut trunk = Trunk::new(input.game.clone(), input.state.clone())?;
+        let mut trunk = if input.complete_root_support == Some(true) {
+            Trunk::new_counterfactual(input.game.clone(), input.state.clone())?
+        } else { Trunk::new(input.game.clone(), input.state.clone())? };
         // Validation may normalize. Preserve the already-normalized exported
         // prior exactly; do not silently change the evaluated input posterior.
         trunk.state = input.state.clone();
@@ -122,6 +132,7 @@ impl Frozen {
                 .unwrap_or(input.turn_iterations),
             candidate_sha256: format!("{:x}", Sha256::digest(serde_json::to_vec(input).unwrap())),
             turns: BTreeMap::new(),
+            root_realization_turn_averages: input.root_realization_turn_averages == Some(true),
         };
         result.collect_turns(
             result.trunk.state.game_state(),
@@ -150,6 +161,26 @@ impl Frozen {
         }
     }
 
+    pub(super) fn belief_queries(&self, turn: u8) -> Result<Vec<TurnRiverSolveConfig>, String> {
+        if turn >= 52 || self.trunk.state.board.contains(&turn) {
+            return Err("belief query has invalid or already-visible card".into());
+        }
+        Ok(self.turns.values().map(|(state, reaches)| {
+            continuation_config(&self.trunk.game, &self.trunk.state.board, state, reaches,
+                turn, self.turn_iterations)
+        }).collect())
+    }
+
+    fn solve_turn(&self, config: TurnRiverSolveConfig) -> Result<Values,String> {
+        solve_impl_with_root_averages(config,false,self.root_realization_turn_averages)
+            .map(|(values,_)|values)
+    }
+
+    fn freeze_turn(&self, config: TurnRiverSolveConfig) -> Result<Vec<PublicBeliefStrategy>,String> {
+        solve_impl_with_root_averages(config,true,self.root_realization_turn_averages)
+            .map(|(_,rows)|rows)
+    }
+
     fn turn_packet(&self, turn: u8) -> Result<TurnPacket, String> {
         if turn >= 52 || self.trunk.state.board.contains(&turn) {
             return Err("turn packet has invalid or already-visible card".into());
@@ -167,7 +198,7 @@ impl Frozen {
             }
             // This call receives only the frozen profile's reaches, never a
             // best responder's changed reaches. Freeze once, evaluate both BRs.
-            let values = solve(TurnRiverSolveConfig {
+            let values = self.solve_turn(TurnRiverSolveConfig {
                 game: self.trunk.game.clone(),
                 state: PublicBeliefState::from_game_state(board.clone(), state, ranges),
                 iterations: self.turn_iterations,
@@ -397,7 +428,10 @@ mod tests {
             strategies,
             turn_queries: 0,
             zero_own_reach_completions: [0, 0],
-            maximum_conditional_turn_response_gain_bb: 0.0,
+            maximum_conditional_turn_response_gain_bb: Some(0.0),
+            learned_leaf_model_sha256: None,
+            complete_root_support: None,
+            root_realization_turn_averages: None,
             zero_joint_turn_queries: 0,
             chance_baseline: None,
             turn_samples_per_iteration: None,

@@ -5,10 +5,73 @@ use super::*;
 use std::cell::RefCell;
 mod chance_baseline;
 mod chance_batch;
+mod continuation;
+mod root_support;
+pub(in crate::blueprint) use root_support::exact_flop_kernel;
+mod forced_beliefs;
 mod frozen_response;
 pub(in crate::blueprint) use frozen_response::playback::{NativeFlopOptions, NativePostflopPolicy};
 mod parallel_leaves;
 mod root_input;
+mod search_beliefs;
+mod value_targets;
+
+// Observation is ordered, opt-in, and outside the regret/chance computation.
+// A failed capture aborts the pilot; it never substitutes a continuation value.
+type LeafObserver<'a> = dyn FnMut(u64, &TurnRiverSolveConfig, &Values) -> Result<(), String> + 'a;
+
+// A proposer may expose its inputs, never its predictions as native labels.
+enum LeafObservation<'a, 'b> {
+    Native(&'a mut LeafObserver<'b>),
+    Beliefs(&'a mut (dyn FnMut(u64, &TurnRiverSolveConfig) -> Result<(), String> + 'b)),
+}
+
+impl LeafObservation<'_, '_> {
+    fn observe(
+        &mut self,
+        round: u64,
+        config: &TurnRiverSolveConfig,
+        leaf: &continuation::Leaf,
+    ) -> Result<(), String> {
+        match self {
+            Self::Native(callback) => match leaf {
+                continuation::Leaf::Native(values) => callback(round, config, values),
+                continuation::Leaf::Predicted(_) => {
+                    Err("predicted values cannot enter native target capture".into())
+                }
+            },
+            Self::Beliefs(callback) => callback(round, config),
+        }
+    }
+}
+
+fn continuation_config(
+    game: &BlueprintConfig,
+    flop: &[u8],
+    state: &GameState,
+    reaches: &[Vec<f64>; 2],
+    turn: u8,
+    iterations: u64,
+) -> TurnRiverSolveConfig {
+    let mut board = flop.to_vec();
+    board.push(turn);
+    let mut masked = reaches.clone();
+    for range in &mut masked {
+        for combo in all_combos() {
+            if combo.cards().contains(&turn) {
+                range[combo.key()] = 0.0;
+            }
+        }
+    }
+    TurnRiverSolveConfig {
+        game: game.clone(),
+        state: PublicBeliefState::from_game_state(board, state, masked),
+        iterations,
+        averaging_delay: 0,
+        river_refinement_iterations: 0,
+        regret_matching_plus: false,
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Solution {
@@ -24,12 +87,18 @@ struct Solution {
     strategies: Vec<PublicBeliefStrategy>,
     turn_queries: u64,
     zero_own_reach_completions: [u64; 2],
-    maximum_conditional_turn_response_gain_bb: f64,
+    maximum_conditional_turn_response_gain_bb: Option<f64>,
     zero_joint_turn_queries: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     chance_baseline: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_samples_per_iteration: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    learned_leaf_model_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    complete_root_support: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_realization_turn_averages: Option<bool>,
 }
 
 struct Trunk {
@@ -38,6 +107,7 @@ struct Trunk {
     legal: [Vec<bool>; 2],
     nodes: BTreeMap<Vec<String>, RangeNode>,
     equity: OnceLock<Arc<Vec<f32>>>,
+    complete_root_support: bool,
 }
 
 impl Trunk {
@@ -51,6 +121,7 @@ impl Trunk {
             legal,
             nodes: BTreeMap::new(),
             equity: OnceLock::new(),
+            complete_root_support: false,
         };
         trunk.prepare(trunk.state.game_state());
         Ok(trunk)
@@ -134,7 +205,10 @@ impl Trunk {
         self.apply_deltas(round, deltas);
     }
 
-    fn apply_deltas(&mut self, round: u64, deltas: BTreeMap<Vec<String>, FrozenRangeNodeDelta>) {
+    fn apply_deltas(&mut self, round: u64, mut deltas: BTreeMap<Vec<String>, FrozenRangeNodeDelta>) {
+        if self.complete_root_support {
+            self.replace_counterfactual_averages(&mut deltas);
+        }
         for (key, delta) in deltas {
             let node = self.nodes.get_mut(&key).unwrap();
             for (r, d) in node.regrets.iter_mut().zip(delta.regrets) {
@@ -208,6 +282,68 @@ fn train_with_leaf_workers(
     turn_samples: usize,
     leaf_workers: usize,
 ) -> Result<Solution, String> {
+    train_with_observer(
+        game,
+        state,
+        seed,
+        iterations,
+        turn_iterations,
+        use_baseline,
+        turn_samples,
+        leaf_workers,
+        None,
+    )
+}
+
+fn train_with_observer(
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+    seed: u64,
+    iterations: u64,
+    turn_iterations: u64,
+    use_baseline: bool,
+    turn_samples: usize,
+    leaf_workers: usize,
+    observer: Option<&mut LeafObserver<'_>>,
+) -> Result<Solution, String> {
+    train_with_evaluator(game, state, seed, iterations, turn_iterations, use_baseline,
+        turn_samples, leaf_workers, observer.map(LeafObservation::Native), continuation::Evaluator::Native)
+}
+
+fn train_with_evaluator(
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+    seed: u64,
+    iterations: u64,
+    turn_iterations: u64,
+    use_baseline: bool,
+    turn_samples: usize,
+    leaf_workers: usize,
+    observer: Option<LeafObservation<'_, '_>>,
+    evaluator: continuation::Evaluator<'_>,
+) -> Result<Solution, String> {
+    train_with_root_support(game, state, seed, iterations, turn_iterations,
+        use_baseline, turn_samples, leaf_workers, observer, evaluator, false)
+}
+
+fn train_with_root_support(
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+    seed: u64,
+    iterations: u64,
+    turn_iterations: u64,
+    use_baseline: bool,
+    turn_samples: usize,
+    leaf_workers: usize,
+    mut observer: Option<LeafObservation<'_, '_>>,
+    evaluator: continuation::Evaluator<'_>,
+    complete_root_support: bool,
+) -> Result<Solution, String> {
+    let learned_leaf_model_sha256 = evaluator.model_sha256()?;
+    let captures_native_values = observer.as_ref().is_some_and(|o| matches!(o, LeafObservation::Native(_)));
+    if learned_leaf_model_sha256.is_some() && (captures_native_values || use_baseline) {
+        return Err("learned predictions cannot be exported as native labels or combined with a chance baseline".into());
+    }
     if !(1..=4).contains(&leaf_workers) || (leaf_workers > 1 && use_baseline) {
         return Err(
             "native leaf workers require 1..4 threads and no shared learned baseline".into(),
@@ -219,7 +355,9 @@ fn train_with_leaf_workers(
     if !(1..=49).contains(&turn_samples) || (use_baseline && turn_samples != 1) {
         return Err("native flop turn batches require 1..49 cards and no combined baseline".into());
     }
-    let mut trunk = Trunk::new(game.clone(), state)?;
+    let mut trunk = if complete_root_support {
+        Trunk::new_counterfactual(game.clone(), state)?
+    } else { Trunk::new(game.clone(), state)? };
     let turns = (0..52u8)
         .filter(|c| !trunk.state.board.contains(c))
         .collect::<Vec<_>>();
@@ -233,13 +371,20 @@ fn train_with_leaf_workers(
     for round in 1..=iterations {
         let sampled = chance_batch::draw(&turns, turn_samples, &mut chance);
         let game = &game;
-        if leaf_workers > 1 {
-            let diagnostics = parallel_leaves::iteration(
+        if leaf_workers > 1 || observer.is_some() || learned_leaf_model_sha256.is_some() {
+            if use_baseline {
+                return Err(
+                    "native value capture cannot be combined with a learned chance baseline".into(),
+                );
+            }
+            let diagnostics = parallel_leaves::iteration_evaluated(
                 &mut trunk,
                 round,
                 &sampled,
                 turn_iterations,
                 leaf_workers,
+                &mut observer,
+                evaluator,
             )?;
             queries.set(queries.get() + diagnostics.queries);
             zero_reach.set(std::array::from_fn(|p| {
@@ -253,24 +398,17 @@ fn train_with_leaf_workers(
             trunk.iteration(round, &|state, reaches, traverser| {
                 assert_eq!(traverser, None);
                 let values_for_turn = |turn| {
-                    let mut board = flop.to_vec();
-                    board.push(turn);
-                    let mut masked = reaches.clone();
-                    for p in 0..2 {
-                        for c in all_combos() {
-                            if c.cards().contains(&turn) {
-                                masked[p][c.key()] = 0.0;
-                            }
-                        }
-                    }
-                    let values = solve(TurnRiverSolveConfig {
-                        game: game.clone(),
-                        state: PublicBeliefState::from_game_state(board, state, masked),
-                        iterations: turn_iterations,
-                        averaging_delay: 0,
-                        river_refinement_iterations: 0,
-                        regret_matching_plus: false,
-                    }).expect("native turn oracle failed; no substitute values or partial policy export");
+                    let values = solve(continuation_config(
+                        game,
+                        &flop,
+                        state,
+                        reaches,
+                        turn,
+                        turn_iterations,
+                    ))
+                    .expect(
+                        "native turn oracle failed; no substitute values or partial policy export",
+                    );
                     queries.set(queries.get() + 1);
                     zero_reach.set(std::array::from_fn(|p| {
                         zero_reach.get()[p] + values.completed_zero_own_reach[p] as u64
@@ -327,10 +465,13 @@ fn train_with_leaf_workers(
         strategies,
         turn_queries: queries.get(),
         zero_own_reach_completions: zero_reach.get(),
-        maximum_conditional_turn_response_gain_bb: residual.get(),
+        maximum_conditional_turn_response_gain_bb: learned_leaf_model_sha256.is_none().then(|| residual.get()),
         zero_joint_turn_queries: zero_joint.get(),
         chance_baseline: use_baseline.then(|| "learned_conditional_turn_v1".into()),
         turn_samples_per_iteration: (turn_samples > 1).then_some(turn_samples),
+        learned_leaf_model_sha256,
+        complete_root_support: complete_root_support.then_some(true),
+        root_realization_turn_averages: None,
     })
 }
 
@@ -565,7 +706,12 @@ fn saved_20bb_native_flop_pilot() {
         .parse()
         .unwrap();
     assert!((1..=4).contains(&leaf_workers));
-    let result = train_with_leaf_workers(
+    let learned = std::env::var("POKER_NATIVE_FLOP_VALUE_MODEL").ok().map(|path| {
+        let network = PublicValueNetwork::read(Path::new(&path)).unwrap();
+        assert_eq!(network.artifact_sha256().unwrap(), std::env::var("POKER_NATIVE_FLOP_VALUE_MODEL_SHA").unwrap());
+        network
+    });
+    let result = train_with_evaluator(
         game,
         state,
         seed,
@@ -574,6 +720,8 @@ fn saved_20bb_native_flop_pilot() {
         use_baseline,
         turn_samples,
         leaf_workers,
+        None,
+        learned.as_ref().map_or(continuation::Evaluator::Native, continuation::Evaluator::Learned),
     )
     .unwrap();
     let path = PathBuf::from(std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap());

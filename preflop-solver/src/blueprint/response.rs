@@ -40,6 +40,8 @@ mod table;
 #[cfg(test)]
 mod frozen_preflop;
 #[cfg(test)]
+pub(super) use frozen_preflop::FrozenPreflopPolicy;
+#[cfg(test)]
 mod native_policy;
 mod terminal;
 mod turn;

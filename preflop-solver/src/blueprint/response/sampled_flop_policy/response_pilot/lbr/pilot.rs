@@ -62,6 +62,62 @@ fn play(
     play_from(policy, game, deal, seat, seed, lbr, Some(Street::Preflop))
 }
 
+/// Same frozen all-street attack as the archived challenge, usable with any
+/// strict defender. Self-play's two seat payoffs cancel in the paired total,
+/// so no additional baseline rollout is needed. Seat utilities are NOT gains.
+pub(in crate::blueprint::response) fn paired_lbr_hand(
+    policy: &dyn ResponsePolicy,
+    game: &BlueprintConfig,
+    deal: &Deal,
+    action_seed: u64,
+) -> Result<serde_json::Value, String> {
+    let lbr = Lbr { seed: 90001, early_runouts_per_combo: 16 };
+    let first = play(policy, game, deal, 0, action_seed, &lbr)?;
+    let second = play(policy, game, deal, 1, action_seed, &lbr)?;
+    let total = first.utility + second.utility;
+    if !total.is_finite() {
+        return Err("nonfinite paired full-hand attack payoff".into());
+    }
+    Ok(serde_json::json!({"schema":"paired-frozen-lbr-hand-v1",
+        "lbrSeed":90001,"earlyRunoutsPerCombo":16,"actionSeed":action_seed,
+        "seatAttackerUtilityBb":[first.utility,second.utility],
+        "pairedTotalResponseGainBb":total,"attacks":[first,second],
+        "interpretation":"One complete deal cluster, both seats. Legal frozen checkdown-heuristic LBR; total gain uses zero-sum self-play cancellation. No exploitability upper bound or per-seat gain claim."}))
+}
+
+#[test]
+fn shared_full_hand_lbr_detects_fold_everywhere_positive_control() {
+    let game = BlueprintConfig { effective_stack_bb:20.0, ..BlueprintConfig::default() };
+    let deal = Deal::from_sampled_cards([[51,50],[47,46]], [0,5,10,15,20]);
+    let report = paired_lbr_hand(&super::tests::Pattern::Fold, &game, &deal, 29001).unwrap();
+    assert_eq!(report["pairedTotalResponseGainBb"],1.5);
+    assert_eq!(report["seatAttackerUtilityBb"],serde_json::json!([1.0,0.5]));
+    let baseline = baseline(&super::tests::Pattern::Fold, &game, &deal, 29001).unwrap();
+    assert_eq!((1.0-baseline)+(0.5+baseline),1.5);
+}
+
+#[test]
+fn full_continuation_response_learner_exploits_fold_positive_control_on_new_deals() {
+    let game = BlueprintConfig { effective_stack_bb:20.0, ..BlueprintConfig::default() };
+    let mut config = response_config(game, PathBuf::from("unused-positive-control"), 30001, 64, 64);
+    config.minimum_range_particles = 2;
+    let defender = super::tests::Pattern::Fold;
+    let (preflop, resolver) = train_learned_response(&defender, &config, 0);
+    let result = evaluate_resolver(&defender, &preflop, &resolver, &config, 0, 64, u64::MAX, true);
+    assert!(result.estimated_gain_bb > 0.0);
+    // A tiny class-specific critic misses almost all held-out hands, even
+    // against a trivial defender. Preserve that warning instead of calling
+    // an insignificant gain evidence of equilibrium.
+    assert!(result.resolver_lookup_coverage < 0.1);
+    assert!(result.approximate_one_sided_99_5_percent_gain_lower_bound_bb <= 0.0);
+    config.training_deals = 512;
+    let (preflop, resolver) = train_learned_response(&defender, &config, 0);
+    let covered = evaluate_resolver(&defender, &preflop, &resolver, &config, 0, 512, u64::MAX, true);
+    assert!(covered.resolver_lookup_coverage > 0.5);
+    assert!(covered.approximate_one_sided_99_5_percent_gain_lower_bound_bb > 0.0,
+        "positive-control coverage/confidence: {covered:?}");
+}
+
 fn play_from(
     policy: &dyn ResponsePolicy,
     game: &BlueprintConfig,

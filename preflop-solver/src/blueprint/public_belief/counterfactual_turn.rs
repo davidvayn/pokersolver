@@ -4,7 +4,8 @@
 //! best responses only for zero-own-reach holdings. No policy is deployed here.
 use super::*;
 mod flop_pilot;
-pub(in crate::blueprint) use flop_pilot::{NativeFlopOptions, NativePostflopPolicy};
+mod root_averages;
+pub(in crate::blueprint) use flop_pilot::{NativeFlopOptions, NativePostflopPolicy, exact_flop_kernel};
 
 #[derive(Debug)]
 struct Values {
@@ -33,8 +34,16 @@ fn frozen_policy(config: TurnRiverSolveConfig) -> Result<Vec<PublicBeliefStrateg
 }
 
 fn solve_impl(
+    config: TurnRiverSolveConfig,
+    retain_policy: bool,
+) -> Result<(Values, Vec<PublicBeliefStrategy>), String> {
+    solve_impl_with_root_averages(config,retain_policy,false)
+}
+
+fn solve_impl_with_root_averages(
     mut config: TurnRiverSolveConfig,
     retain_policy: bool,
+    root_realization_averages: bool,
 ) -> Result<(Values, Vec<PublicBeliefStrategy>), String> {
     let raw = config.state.ranges.clone();
     if raw
@@ -47,6 +56,7 @@ fn solve_impl(
     // current action reach. These construction weights never enter training.
     config.state.ranges = std::array::from_fn(|_| uniform_range(&config.state.board));
     let mut solver = TurnRiverSolver::new(config)?;
+    solver.root_realization_averages = root_realization_averages;
     let mut normalized = raw.clone();
     let mut totals = [0.0; 2];
     for seat in 0..2 {
@@ -247,6 +257,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn zero_root_reach_does_not_erase_learned_royal_flush_averages() {
+      for root_weight in [0.0,1e-16] {
+        let mut input = config();
+        input.iterations = 16;
+        input.state.board = vec![32,36,40,44];
+        let nuts = Combo::new(48,0).key();
+        input.state.ranges = [vec![0.0;COMBO_COUNT],vec![0.0;COMBO_COUNT]];
+        input.state.ranges[0][Combo::new(49,45).key()] = 1.0;
+        input.state.ranges[1][Combo::new(41,37).key()] = 1.0;
+        input.state.ranges[0][nuts] = root_weight;
+        let legacy = frozen_policy(input.clone()).unwrap();
+        let rows = solve_impl_with_root_averages(input,true,true).unwrap().1;
+        let mut checked = 0;
+        for row in rows.iter().filter(|r| r.actor==0
+            && !r.public_history.iter().any(|h|h.starts_with("chance:river:"))) {
+            if let Some(fold) = row.action_labels.iter().position(|a|a=="fold") {
+                let probability = row.probabilities[nuts*row.action_labels.len()+fold];
+                let old = legacy.iter().find(|r|r.public_history==row.public_history).unwrap();
+                let old_probability = old.probabilities[nuts*row.action_labels.len()+fold];
+                assert!((old_probability - 1.0/row.action_labels.len() as f32).abs()<1e-7);
+                assert!(probability < 0.1,
+                    "royal flush retained uniform folding after 16 updates: {probability}");
+                checked += 1;
+            }
+        }
+        assert!(checked>0);
+      }
     }
 
     #[test]

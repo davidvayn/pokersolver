@@ -1,0 +1,876 @@
+{
+  "schema": "preflop-endpoint-importance-screen-v1",
+  "sourceManifests": {
+    "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-baseline-20260908-discountstamp32/manifest.json": "ecd18ff8416f8200ffe05f9e80529db3cf8c92f68071e82a0d73791abf2f1ad4",
+    "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27001-complete/manifest.json": "d18991a0e29f37719e80913c93e447f6fff2ec47ceed05fafea7820f72842053",
+    "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27002-complete/manifest.json": "08d9eb0d5fb030fb6637a5feb50bd1e592e3fc28464aa32b6fb5a60f7969ae88"
+  },
+  "analysisSha256": "d6613f53a542b9f04153b0fac84fac3d623e152525f73e73494165217ef26ba5",
+  "helperSha256": "be8c4bf8d0334e756339e2db178456252476f13a2fecc18b89ed29db6a50a9b6",
+  "fitBoardIndices": [
+    0,
+    1
+  ],
+  "evaluationBoardIndices": [
+    2,
+    3
+  ],
+  "uniformMixture": 0.5,
+  "liveHistories": [
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:check",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_3.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_3.000bb",
+      "Preflop:p0:raise_to_11.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_3.000bb",
+      "Preflop:p0:raise_to_7.500bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_3.000bb",
+      "Preflop:p0:raise_to_7.500bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_3.000bb",
+      "Preflop:p0:raise_to_9.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_3.000bb",
+      "Preflop:p0:raise_to_9.000bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:raise_to_11.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:raise_to_11.000bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:raise_to_7.500bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:raise_to_7.500bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:raise_to_9.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_4.000bb",
+      "Preflop:p0:raise_to_9.000bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_5.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_5.000bb",
+      "Preflop:p0:raise_to_11.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_5.000bb",
+      "Preflop:p0:raise_to_11.000bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_5.000bb",
+      "Preflop:p0:raise_to_9.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:limp",
+      "Preflop:p1:raise_to_5.000bb",
+      "Preflop:p0:raise_to_9.000bb",
+      "Preflop:p1:raise_to_18.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.000bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.000bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.000bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.500bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.500bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.500bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.500bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.500bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_2.500bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_3.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_3.000bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_3.000bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_3.000bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_3.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_3.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:raise_to_7.500bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_4.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_5.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_5.000bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_5.000bb",
+      "Preflop:p1:raise_to_11.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_5.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:call",
+      "deal:Flop"
+    ],
+    [
+      "blinds:0.500/1.000",
+      "Preflop:p0:raise_to_5.000bb",
+      "Preflop:p1:raise_to_9.000bb",
+      "Preflop:p0:raise_to_18.000bb",
+      "Preflop:p1:call",
+      "deal:Flop"
+    ]
+  ],
+  "probabilitiesByActor": [
+    [
+      0.020757831853079854,
+      0.02577640028407751,
+      0.013996398802337471,
+      0.015385468958422653,
+      0.011162251379630216,
+      0.022260429927047506,
+      0.01067852587459541,
+      0.038985825555024445,
+      0.025837305567608417,
+      0.011831530370839905,
+      0.02144915771288451,
+      0.010728951204228366,
+      0.01749879535110046,
+      0.01224253546570972,
+      0.03597803447399536,
+      0.01917982740075136,
+      0.010954224581046881,
+      0.024796853639899898,
+      0.011011325367445184,
+      0.023225248795930846,
+      0.029080269659733766,
+      0.021182842558793328,
+      0.010988698937509799,
+      0.024286496735169992,
+      0.011285907948974579,
+      0.02828995800647205,
+      0.026827550188111636,
+      0.019856108714227515,
+      0.011035210599528649,
+      0.039998078229532594,
+      0.0125274611659948,
+      0.028163451443824726,
+      0.026121200176011217,
+      0.022551342918128284,
+      0.011387941396363503,
+      0.03223634100144398,
+      0.012778878014373921,
+      0.05168472059689618,
+      0.02113712284017364,
+      0.011583216138486325,
+      0.020482855992796277,
+      0.011844940833098427,
+      0.034171374038199843,
+      0.01125543788601921,
+      0.032199460682150176,
+      0.013108095954678583,
+      0.010691086127093932,
+      0.01766502776595176,
+      0.011842000884605281
+    ],
+    [
+      0.02427312382303899,
+      0.020016811864246926,
+      0.013568285070262835,
+      0.012852781446566475,
+      0.010328761525224498,
+      0.04840348078431289,
+      0.011369168256441152,
+      0.016679602906284577,
+      0.018407262621986345,
+      0.010844069667473692,
+      0.010245710807112143,
+      0.01020571292078362,
+      0.0118629538826733,
+      0.01029411670286841,
+      0.01632813257703183,
+      0.0309746616947843,
+      0.011249026247153175,
+      0.012773822743493361,
+      0.010403903266250287,
+      0.0360363057612735,
+      0.024890123115118314,
+      0.027603755260448795,
+      0.01275304581334941,
+      0.028287772234093546,
+      0.011558902739689049,
+      0.016625271531688815,
+      0.014021776428415964,
+      0.012813933159170513,
+      0.010597633319102262,
+      0.013994683238383312,
+      0.010429293143394218,
+      0.019930421809148835,
+      0.01556830163545439,
+      0.015145783232062941,
+      0.010871677773741218,
+      0.01592577649400969,
+      0.011745508412237851,
+      0.10531696827162317,
+      0.04088079034641261,
+      0.011147660236555047,
+      0.06347815841843972,
+      0.016297154567237578,
+      0.05897639399065723,
+      0.013471767340461108,
+      0.023355231987437046,
+      0.011976361326880486,
+      0.010312266182026606,
+      0.014573285043799986,
+      0.010332608379697933
+    ]
+  ],
+  "results": [
+    {
+      "boardIndex": 0,
+      "preflopSha256": "443f89fc14ae9526fad09886f1acef95c106fc1eafd07595d49fd83b8d9384f5",
+      "role": "fit",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27001-complete/board0.json",
+      "outputSha256": "6144679d50dedfdc7b9a085c11f211de66888c69bcb5482bc1749c7cb98e0288",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 2.435548378660339,
+          "proposalGradientVariance": 1.586358295533589,
+          "varianceRatio": 0.6513351610802974,
+          "expectedCostRatio": 1.2583148673001257,
+          "varianceCostRatio": 0.8195847167826604
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.9581411732463248,
+          "proposalGradientVariance": 0.2986859281834853,
+          "varianceRatio": 0.31173478034713087,
+          "expectedCostRatio": 1.301360621187426,
+          "varianceCostRatio": 0.40567936739826804
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.5810038919800261
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 1.0181920382803147
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.21612675753161226
+        }
+      ]
+    },
+    {
+      "boardIndex": 1,
+      "preflopSha256": "443f89fc14ae9526fad09886f1acef95c106fc1eafd07595d49fd83b8d9384f5",
+      "role": "fit",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27001-complete/board1.json",
+      "outputSha256": "44e6448dee1a9646ac58531f73f07958e240a4447ce07ca1aea9be325936f25c",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 1.010387935719839,
+          "proposalGradientVariance": 0.6217606399028286,
+          "varianceRatio": 0.615368234241497,
+          "expectedCostRatio": 1.2564904296500536,
+          "varianceCostRatio": 0.7732042970350934
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.20092924170582163,
+          "proposalGradientVariance": 0.06086389767616584,
+          "varianceRatio": 0.30291209561859606,
+          "expectedCostRatio": 1.2886717120721376,
+          "varianceCostRatio": 0.3903542488681752
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.5390896588504559
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 1.012222625107154
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.20999308062994615
+        }
+      ]
+    },
+    {
+      "boardIndex": 2,
+      "preflopSha256": "443f89fc14ae9526fad09886f1acef95c106fc1eafd07595d49fd83b8d9384f5",
+      "role": "development_evaluation",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27001-complete/board2.json",
+      "outputSha256": "acb13a82add4bf7032d5c452d19fb5bb3309ddd4bdff90d2902a9d120f26cba4",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 2.520033435851983,
+          "proposalGradientVariance": 1.5884478108405244,
+          "varianceRatio": 0.6303280695573372,
+          "expectedCostRatio": 1.2258965164484366,
+          "varianceCostRatio": 0.7727169846900075
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.5992398280807771,
+          "proposalGradientVariance": 0.19362498806137723,
+          "varianceRatio": 0.3231176884245363,
+          "expectedCostRatio": 1.2020440631712024,
+          "varianceCostRatio": 0.3884016990763162
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.5592851592743463
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 0.9886914005920525
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.2163260345610661
+        }
+      ]
+    },
+    {
+      "boardIndex": 3,
+      "preflopSha256": "443f89fc14ae9526fad09886f1acef95c106fc1eafd07595d49fd83b8d9384f5",
+      "role": "development_evaluation",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27001-complete/board3.json",
+      "outputSha256": "cdd02d5e7aa63746546659780619dcd64e4f2ae76bb912c066009b5b6fd16eee",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 0.717330594320234,
+          "proposalGradientVariance": 0.4751661932805273,
+          "varianceRatio": 0.6624089325658977,
+          "expectedCostRatio": 1.2259508230661191,
+          "varianceCostRatio": 0.8120807760855118
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.15274020929445212,
+          "proposalGradientVariance": 0.05781467273816843,
+          "varianceRatio": 0.37851639070831355,
+          "expectedCostRatio": 1.2076697879792317,
+          "varianceCostRatio": 0.45712280931337307
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.558932614823664
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 0.9626902422052372
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.233528939788623
+        }
+      ]
+    },
+    {
+      "boardIndex": 0,
+      "preflopSha256": "60d8d12a024af983d09ee9fcd1a3049f0c76dd5f03c23144f3782bc439d4abe8",
+      "role": "fit",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27002-complete/board0.json",
+      "outputSha256": "6ef85e6e4f652570ff315240c1319694b41f18dfaf66058f5d7b967ee03b7371",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 3.1261379069662087,
+          "proposalGradientVariance": 2.0175209163327086,
+          "varianceRatio": 0.6453716938836622,
+          "expectedCostRatio": 1.2556543810045273,
+          "varianceCostRatio": 0.8103637948013331
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.7801471665723694,
+          "proposalGradientVariance": 0.3020072701303835,
+          "varianceRatio": 0.3871157687558789,
+          "expectedCostRatio": 1.2991539278426196,
+          "varianceCostRatio": 0.5029229715090153
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.5687841538420656
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 0.6410193411274895
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.30199153921319394
+        }
+      ]
+    },
+    {
+      "boardIndex": 1,
+      "preflopSha256": "60d8d12a024af983d09ee9fcd1a3049f0c76dd5f03c23144f3782bc439d4abe8",
+      "role": "fit",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27002-complete/board1.json",
+      "outputSha256": "8101f14e15434deca20b57d8065991697bb62453730b3201b3901f03ebfbfe92",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 0.8102587698593701,
+          "proposalGradientVariance": 0.5339751786297493,
+          "varianceRatio": 0.6590180797702776,
+          "expectedCostRatio": 1.2526535943497565,
+          "varianceCostRatio": 0.8255213663657128
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.22657550449747052,
+          "proposalGradientVariance": 0.08258874178540698,
+          "varianceRatio": 0.36450869642145717,
+          "expectedCostRatio": 1.2970973222642663,
+          "varianceCostRatio": 0.47280325407031043
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.5948885881550211
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 0.8007938487823272
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.26263598193633625
+        }
+      ]
+    },
+    {
+      "boardIndex": 2,
+      "preflopSha256": "60d8d12a024af983d09ee9fcd1a3049f0c76dd5f03c23144f3782bc439d4abe8",
+      "role": "development_evaluation",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27002-complete/board2.json",
+      "outputSha256": "845da6d65cc160874dc017040b1edb466dbc7e4662db64b624ff99472ae4a5fb",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 2.276459085386662,
+          "proposalGradientVariance": 1.478881267654612,
+          "varianceRatio": 0.6496410487445331,
+          "expectedCostRatio": 1.2424453478131248,
+          "varianceCostRatio": 0.8071434987610846
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.6371856833654435,
+          "proposalGradientVariance": 0.24792086350229298,
+          "varianceRatio": 0.38908730998606506,
+          "expectedCostRatio": 1.2546287383455397,
+          "varianceCostRatio": 0.4881601208340767
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.5945016856475048
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 0.6860798951383261
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.28472966039511693
+        }
+      ]
+    },
+    {
+      "boardIndex": 3,
+      "preflopSha256": "60d8d12a024af983d09ee9fcd1a3049f0c76dd5f03c23144f3782bc439d4abe8",
+      "role": "development_evaluation",
+      "output": "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-frozen-preflop-response-20260907-discountstamp32-27002-complete/board3.json",
+      "outputSha256": "2049bfd8214ab78064ccaa7fb9253286ae2e3f2c49dc55114687b614b7f1fed2",
+      "actors": [
+        {
+          "actor": 0,
+          "uniformGradientVariance": 0.8897013470875211,
+          "proposalGradientVariance": 0.6190753107549388,
+          "varianceRatio": 0.6958237309424232,
+          "expectedCostRatio": 1.2419244039010158,
+          "varianceCostRatio": 0.8641604722708498
+        },
+        {
+          "actor": 1,
+          "uniformGradientVariance": 0.21685602133743384,
+          "proposalGradientVariance": 0.09064322186388522,
+          "varianceRatio": 0.4179880332805789,
+          "expectedCostRatio": 1.256149488663832,
+          "varianceCostRatio": 0.5250554542729999
+        }
+      ],
+      "decisions": [
+        {
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "varianceRatio": 0.6492189559208474
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp"
+          ],
+          "varianceRatio": 0.8523055111996508
+        },
+        {
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "varianceRatio": 0.2925244986968518
+        }
+      ]
+    }
+  ],
+  "nativeQueries": 0,
+  "releaseAccepted": false,
+  "interpretation": "Conditional endpoint-selection gradient variance, not chance variance or policy strength. Fits both seeds on boards 0/1; evaluates reused development boards 2/3. No untouched qualification, exploitability or convergence claim. Timing reuses saved observations."
+}

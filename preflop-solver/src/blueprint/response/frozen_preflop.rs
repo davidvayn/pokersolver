@@ -30,7 +30,8 @@ struct Checkpoint {
     nodes: BTreeMap<u64, FrozenNode>,
 }
 
-pub(super) struct FrozenPreflopPolicy {
+pub(in crate::blueprint) struct FrozenPreflopPolicy {
+    pub artifact_sha256: String,
     pub game: BlueprintConfig,
     pub rounds: u64,
     nodes: BTreeMap<u64, FrozenNode>,
@@ -66,6 +67,7 @@ impl FrozenPreflopPolicy {
             }
         }
         Ok(Self {
+            artifact_sha256: sha256_file(path)?,
             game: checkpoint.config,
             rounds: checkpoint.completed_iterations,
             nodes: checkpoint.nodes,

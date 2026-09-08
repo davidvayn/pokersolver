@@ -25,6 +25,177 @@ pub(in crate::blueprint) struct NativePostflopPolicy {
 }
 
 impl NativePostflopPolicy {
+    pub fn validate_learned_model(
+        game: &BlueprintConfig,
+        model: &PublicValueNetwork,
+    ) -> Result<(), String> {
+        super::super::continuation::Evaluator::Learned(model).model_sha256()?;
+        if game.effective_stack_bb != model.target_scale_bb {
+            return Err("learned continuation stack differs from pinned game".into());
+        }
+        Ok(())
+    }
+
+    /// Same learned trunk as the measured pilots; actual played turn/river
+    /// policies remain native and use the independently pinned response budget.
+    pub fn solve_with_learned_leaves(
+        game: BlueprintConfig,
+        state: PublicBeliefState,
+        options: &NativeFlopOptions,
+        model: &PublicValueNetwork,
+    ) -> Result<Self, String> {
+        Self::validate_learned_model(&game, model)?;
+        if options.response_turn_iterations < 2 {
+            return Err("native playback requires at least two continuation iterations".into());
+        }
+        let mut candidate = super::super::train_with_evaluator(
+            game, state, options.seed, options.iterations,
+            options.training_turn_iterations, false, 1, 1, None,
+            super::super::continuation::Evaluator::Learned(model),
+        )?;
+        candidate.response_turn_iterations = (options.response_turn_iterations
+            != candidate.turn_iterations).then_some(options.response_turn_iterations);
+        Ok(Self::from_frozen(Frozen::new(&candidate)?))
+    }
+
+    /// Training-only root completion. Zero prior holdings retain trained
+    /// counterfactual averages; zero ranges remain zero, never floored.
+    pub fn solve_counterfactual_learned(
+        game: BlueprintConfig,
+        state: PublicBeliefState,
+        options: &NativeFlopOptions,
+        model: &PublicValueNetwork,
+    ) -> Result<Self, String> {
+        Self::solve_counterfactual_learned_with_turn_averages(game,state,options,model,false)
+    }
+
+    pub fn solve_counterfactual_learned_with_turn_averages(
+        game: BlueprintConfig,
+        state: PublicBeliefState,
+        options: &NativeFlopOptions,
+        model: &PublicValueNetwork,
+        root_realization_turn_averages: bool,
+    ) -> Result<Self, String> {
+        Self::validate_learned_model(&game, model)?;
+        if options.response_turn_iterations < 2 {
+            return Err("invalid native counterfactual continuation budget".into());
+        }
+        let mut candidate = super::super::train_with_root_support(
+            game, state, options.seed, options.iterations,
+            options.training_turn_iterations, false, 1, 1, None,
+            super::super::continuation::Evaluator::Learned(model), true,
+        )?;
+        candidate.root_realization_turn_averages = root_realization_turn_averages.then_some(true);
+        candidate.response_turn_iterations = (options.response_turn_iterations
+            != candidate.turn_iterations).then_some(options.response_turn_iterations);
+        Ok(Self::from_frozen(Frozen::new(&candidate)?))
+    }
+
+    /// One uniformly proposed public turn. This is a training estimator, not
+    /// a partial response report: no action maximum is taken after this draw.
+    /// The turn solver completes zero-own-reach targets by counterfactual BR;
+    /// positive-reach profile values use its actual native average policy.
+    pub fn sampled_training_values(&self, turn: u8) -> Result<[Vec<f64>; 2], String> {
+        self.sampled_native_values(turn, true)
+    }
+
+    fn sampled_native_values(&self, turn: u8, training: bool) -> Result<[Vec<f64>; 2], String> {
+        Ok(self.sampled_native_targets(turn, &[training])?.remove(0))
+    }
+
+    fn sampled_native_targets(&self, turn: u8, targets: &[bool]) -> Result<Vec<Ranges>, String> {
+        if !self.frozen.trunk.complete_root_support {
+            return Err("preflop training requires complete counterfactual flop support".into());
+        }
+        let mut leaves = vec![BTreeMap::new(); targets.len()];
+        for config in self.frozen.belief_queries(turn)? {
+            let history = config.state.public_history.clone();
+            let solved = self.frozen.solve_turn(config)?;
+            for (map, training) in leaves.iter_mut().zip(targets) {
+                let values = if *training { &solved.counterfactual_bb } else { &solved.profile_counterfactual_bb };
+                let corrected: Ranges = std::array::from_fn(|p|
+                    values[p].iter().map(|v| v * 49.0 / 45.0).collect());
+                map.insert(history.clone(), (corrected.clone(), corrected));
+            }
+        }
+        let mut results = Vec::new();
+        for map in leaves {
+            let mut result = self.frozen.back_up(self.root().game_state(), self.root().ranges.clone(), None, &map);
+            for combo in all_combos() {
+                if combo.cards().iter().any(|c| self.root().board.contains(c)) {
+                    result[0][combo.key()] = 0.0;
+                    result[1][combo.key()] = 0.0;
+                }
+            }
+            results.push(result);
+        }
+        Ok(results)
+    }
+
+    /// Diagnostic only: both targets from the SAME native solves and predictor
+    /// lottery. Returning the pair does not change training or playing policy.
+    pub fn sampled_training_profile_comparison(&self, turn: u8, model: &PublicValueNetwork)
+        -> Result<(Ranges, Ranges), String> {
+        let native = self.sampled_native_targets(turn, &[true, false])?;
+        let mut predictions = BTreeMap::new();
+        for card in (0..52).filter(|c| !self.root().board.contains(c)) {
+            predictions.insert(card, self.sampled_predicted_training_values(card, model)?);
+        }
+        Ok((corrected_turn_sample(&self.root().board, turn, &native[0], &predictions)?,
+            corrected_turn_sample(&self.root().board, turn, &native[1], &predictions)?))
+    }
+
+    /// Cheap baseline observation under THIS same frozen flop policy. This is
+    /// a prediction, never a native value label. Enumerating all 49 public
+    /// turns supplies its exact chance mean for an unbiased native correction.
+    pub fn sampled_predicted_training_values(&self, turn: u8, model: &PublicValueNetwork)
+        -> Result<[Vec<f64>;2],String> {
+        if !self.frozen.trunk.complete_root_support {
+            return Err("predicted preflop baseline requires complete flop support".into());
+        }
+        Self::validate_learned_model(&self.frozen.trunk.game,model)?;
+        let mut leaves=BTreeMap::new();
+        for config in self.frozen.belief_queries(turn)? {
+            let history=config.state.public_history.clone();
+            let values=match super::super::continuation::Evaluator::Learned(model).evaluate(config)? {
+                super::super::continuation::Leaf::Predicted(values)=>values,
+                _=>return Err("prediction baseline unexpectedly called native solver".into()),
+            };
+            let corrected=std::array::from_fn(|p|values[p].iter().map(|v|v*49.0/45.0).collect::<Vec<_>>());
+            leaves.insert(history,(corrected.clone(),corrected));
+        }
+        let mut result=self.frozen.back_up(self.root().game_state(),self.root().ranges.clone(),None,&leaves);
+        for c in all_combos() { if c.cards().iter().any(|v|self.root().board.contains(v)) {
+            result[0][c.key()]=0.0; result[1][c.key()]=0.0;
+        }}
+        Ok(result)
+    }
+
+    /// Same native target as sampled_training_values; the complete prediction
+    /// mean cancels the predictor's bias. This option changes training variance,
+    /// never the frozen/served flop policy or the played native continuation.
+    pub fn sampled_training_values_with_turn_baseline(&self, turn: u8, model: &PublicValueNetwork)
+        -> Result<[Vec<f64>;2],String> {
+        let native=self.sampled_training_values(turn)?;
+        let mut predictions=BTreeMap::new();
+        for card in (0..52).filter(|c|!self.root().board.contains(c)) {
+            predictions.insert(card,self.sampled_predicted_training_values(card,model)?);
+        }
+        corrected_turn_sample(&self.root().board,turn,&native,&predictions)
+    }
+
+    /// Evaluation of the actual frozen continuation, including zero-own-reach
+    /// holdings. Training's best-response completions must not enter this path.
+    pub fn sampled_profile_values_with_turn_baseline(&self, turn: u8, model: &PublicValueNetwork)
+        -> Result<[Vec<f64>;2],String> {
+        let native=self.sampled_native_values(turn,false)?;
+        let mut predictions=BTreeMap::new();
+        for card in (0..52).filter(|c|!self.root().board.contains(c)) {
+            predictions.insert(card,self.sampled_predicted_training_values(card,model)?);
+        }
+        corrected_turn_sample(&self.root().board,turn,&native,&predictions)
+    }
+
     pub fn solve(
         game: BlueprintConfig,
         state: PublicBeliefState,
@@ -160,7 +331,7 @@ impl NativePostflopPolicy {
                 ranges[1][combo.key()] = 0.0;
             }
         }
-        let rows = frozen_policy(TurnRiverSolveConfig {
+        let rows = self.frozen.freeze_turn(TurnRiverSolveConfig {
             game: self.frozen.trunk.game.clone(),
             state: PublicBeliefState::from_game_state(board, state, ranges),
             iterations: self.frozen.turn_iterations,
@@ -257,6 +428,42 @@ impl NativePostflopPolicy {
     }
 }
 
+fn corrected_turn_sample(board: &[u8], turn: u8, native: &[Vec<f64>;2],
+    predictions: &BTreeMap<u8,[Vec<f64>;2]>) -> Result<[Vec<f64>;2],String> {
+    if board.len()!=3 || board.iter().any(|c|*c>=52)
+        || board.iter().collect::<BTreeSet<_>>().len()!=3 || turn>=52 || board.contains(&turn)
+        || predictions.keys().copied().collect::<BTreeSet<_>>()
+            != (0..52).filter(|c|!board.contains(c)).collect::<BTreeSet<_>>()
+        || native.iter().any(|v|v.len()!=COMBO_COUNT || v.iter().any(|v|!v.is_finite()))
+        || predictions.values().any(|pair|pair.iter().any(|v|v.len()!=COMBO_COUNT || v.iter().any(|v|!v.is_finite()))) {
+        return Err("turn correction requires native values and all 49 finite prediction vectors".into());
+    }
+    let mut mean=[vec![0.0;COMBO_COUNT],vec![0.0;COMBO_COUNT]];
+    for values in predictions.values() { for p in 0..2 { for c in 0..COMBO_COUNT {
+        mean[p][c] += values[p][c]/49.0;
+    }}}
+    for p in 0..2 { for c in 0..COMBO_COUNT {
+        mean[p][c] += native[p][c]-predictions[&turn][p][c];
+    }}
+    if mean.iter().flatten().any(|v|!v.is_finite()) { return Err("turn correction overflow".into()); }
+    Ok(mean)
+}
+
+#[test]
+fn complete_turn_prediction_mean_cancels_predictor_bias_and_preserves_native_expectation() {
+    let board=[0,1,2];
+    let predictions: BTreeMap<_,_>=(3..52).map(|t|
+        (t,[vec![t as f64-7.0;COMBO_COUNT],vec![7.0-t as f64;COMBO_COUNT]])).collect();
+    for t in 3..52 {
+        let native=[vec![t as f64;COMBO_COUNT],vec![-(t as f64);COMBO_COUNT]];
+        let corrected=corrected_turn_sample(&board,t,&native,&predictions).unwrap();
+        assert!((corrected[0][0]-27.0).abs()<1e-12);
+        assert!((corrected[1][0]+27.0).abs()<1e-12);
+    }
+    let mut partial=predictions.clone(); partial.remove(&3);
+    assert!(corrected_turn_sample(&board,4,&[vec![0.0;COMBO_COUNT],vec![0.0;COMBO_COUNT]],&partial).is_err());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +502,141 @@ mod tests {
             .find(|a| a.kind == ActionKind::Check)
             .unwrap();
         state.apply(&action, game)
+    }
+
+    #[test]
+    fn corrected_turn_averages_are_pinned_and_played_without_changing_flop_policy() {
+        let mut model = crate::blueprint::public_belief::tests::zero_shared_value_network();
+        model.schema = "hu-public-belief-combo-value-network-v4".into();
+        model.value_normalization = Some("payoff-exposure".into());
+        model.prediction_contract = Some("native-turn-cfv-full-stack-v1".into());
+        model.artifact_sha256 = Some("e".repeat(64));
+        let game = BlueprintConfig { effective_stack_bb:20.0,..BlueprintConfig::default() };
+        let mut ranges = [vec![0.0;COMBO_COUNT],vec![0.0;COMBO_COUNT]];
+        ranges[0][Combo::new(51,50).key()] = 1.0;
+        ranges[1][Combo::new(47,46).key()] = 1.0;
+        let input = PublicBeliefState::flop_start([0,5,10],1,[18.0,18.0],ranges);
+        let options = NativeFlopOptions { seed:101,iterations:2,
+            training_turn_iterations:2,response_turn_iterations:2 };
+        let old = NativePostflopPolicy::solve_counterfactual_learned(
+            game.clone(),input.clone(),&options,&model).unwrap();
+        let mut fixed = NativePostflopPolicy::solve_counterfactual_learned_with_turn_averages(
+            game,input,&options,&model,true).unwrap();
+        assert_ne!(old.identity(),fixed.identity());
+        assert_eq!(old.frozen.strategies,fixed.frozen.strategies);
+        let old_packet = old.frozen.turn_packet(15).unwrap();
+        let packet = fixed.frozen.turn_packet(15).unwrap();
+        let changed = packet.leaves.iter().find(|leaf| old_packet.leaves.iter()
+            .find(|other|other.history==leaf.history).unwrap().policy_sha256 != leaf.policy_sha256)
+            .expect("sparse fixture must expose corrected turn policies");
+        fixed.ensure_turn(&changed.history,15).unwrap();
+        assert_eq!(fixed.continuation_identity(),Some(changed.policy_sha256.as_str()));
+        let leaves = packet.leaves.iter().map(|leaf| {
+            let values: Ranges = std::array::from_fn(|p|
+                leaf.profile_bb[p].iter().map(|v|v*49.0/45.0).collect());
+            (leaf.history.clone(),(values.clone(),values))
+        }).collect();
+        let mut expected = fixed.frozen.back_up(fixed.root().game_state(),fixed.root().ranges.clone(),None,&leaves);
+        for c in all_combos() { if c.cards().iter().any(|v|fixed.root().board.contains(v)) {
+            expected[0][c.key()]=0.0; expected[1][c.key()]=0.0;
+        }}
+        assert_eq!(fixed.sampled_native_values(15,false).unwrap(),expected);
+        // Even a zero neural network leaves exact terminal values in the
+        // prediction backup. Compare corrected estimates, not raw samples.
+        let predictions = (0..52).filter(|c|!fixed.root().board.contains(c))
+            .map(|c|(c,fixed.sampled_predicted_training_values(c,&model).unwrap()))
+            .collect();
+        let expected = corrected_turn_sample(&fixed.root().board,15,&expected,&predictions).unwrap();
+        assert_eq!(crate::blueprint::preflop_continuation::continuation_target(
+            &fixed,15,&model,true).unwrap(),expected,
+            "corrected preflop targets must use the corrected frozen playback policy");
+        let old_values = old.sampled_profile_values_with_turn_baseline(15,&model).unwrap();
+        assert!(expected.iter().flatten().zip(old_values.iter().flatten())
+            .any(|(a,b)|(a-b).abs()>1e-8),
+            "sparse fixture must distinguish corrected from erased off-support averages");
+    }
+
+    #[test]
+    fn sampled_profile_evaluation_matches_frozen_packets_not_training_completions() {
+        let mut model = crate::blueprint::public_belief::tests::zero_shared_value_network();
+        model.schema = "hu-public-belief-combo-value-network-v4".into();
+        model.value_normalization = Some("payoff-exposure".into());
+        model.prediction_contract = Some("native-turn-cfv-full-stack-v1".into());
+        model.artifact_sha256 = Some("e".repeat(64));
+        let game = BlueprintConfig { effective_stack_bb: 20.0, ..BlueprintConfig::default() };
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        ranges[0][Combo::new(51, 50).key()] = 1.0;
+        ranges[1][Combo::new(47, 46).key()] = 1.0;
+        let input = PublicBeliefState::flop_start([0, 5, 10], 1, [18.0, 18.0], ranges);
+        let options = NativeFlopOptions { seed: 101, iterations: 2,
+            training_turn_iterations: 2, response_turn_iterations: 2 };
+        let policy = NativePostflopPolicy::solve_counterfactual_learned(game,input,&options,&model).unwrap();
+        let packet = policy.frozen.turn_packet(15).unwrap();
+        let leaves = packet.leaves.iter().map(|leaf| {
+            let values: Ranges = std::array::from_fn(|p|
+                leaf.profile_bb[p].iter().map(|v|v*49.0/45.0).collect());
+            (leaf.history.clone(),(values.clone(),values))
+        }).collect();
+        let mut expected = policy.frozen.back_up(policy.root().game_state(),policy.root().ranges.clone(),None,&leaves);
+        for c in all_combos() { if c.cards().iter().any(|v|policy.root().board.contains(v)) {
+            expected[0][c.key()]=0.0; expected[1][c.key()]=0.0;
+        }}
+        let actual = policy.sampled_native_values(15,false).unwrap();
+        assert_eq!(actual,expected);
+        let training = policy.sampled_training_values(15).unwrap();
+        assert!(training.iter().flatten().zip(actual.iter().flatten()).any(|(a,b)|(a-b).abs()>1e-8),
+            "fixture must distinguish the actual profile from off-support training completions");
+        let pair = policy.sampled_training_profile_comparison(15,&model).unwrap();
+        assert_eq!(pair.0,policy.sampled_training_values_with_turn_baseline(15,&model).unwrap());
+        assert_eq!(pair.1,policy.sampled_profile_values_with_turn_baseline(15,&model).unwrap());
+        assert_eq!(pair.0,crate::blueprint::preflop_continuation::continuation_target(
+            &policy,15,&model,false).unwrap());
+        assert_eq!(pair.1,crate::blueprint::preflop_continuation::continuation_target(
+            &policy,15,&model,true).unwrap(), "preflop profile targets must match frozen playback, including zero-reach hands");
+        for p in 0..2 {
+            for c in all_combos() {
+                if policy.root().ranges[p][c.key()]>0.0 {
+                    assert!((pair.0[p][c.key()]-pair.1[p][c.key()]).abs()<1e-10);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn learned_playback_matches_pilot_bytes_and_native_played_continuation() {
+        let mut model = crate::blueprint::public_belief::tests::zero_shared_value_network();
+        model.schema = "hu-public-belief-combo-value-network-v4".into();
+        model.value_normalization = Some("payoff-exposure".into());
+        model.prediction_contract = Some("native-turn-cfv-full-stack-v1".into());
+        model.artifact_sha256 = Some("e".repeat(64));
+        let game = BlueprintConfig { effective_stack_bb: 20.0, ..BlueprintConfig::default() };
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        let combo = Combo::new(51, 50);
+        ranges[0][combo.key()] = 1.0;
+        ranges[1][Combo::new(47, 46).key()] = 1.0;
+        let input = PublicBeliefState::flop_start([0, 5, 10], 1, [18.0, 18.0], ranges);
+        let options = NativeFlopOptions { seed: 101, iterations: 2,
+            training_turn_iterations: 4, response_turn_iterations: 8 };
+        let mut candidate = super::super::super::train_with_evaluator(
+            game.clone(), input.clone(), options.seed, 2, 4, false, 1, 1, None,
+            super::super::super::continuation::Evaluator::Learned(&model),
+        ).unwrap();
+        candidate.response_turn_iterations = Some(8);
+        let mut playback = NativePostflopPolicy::solve_with_learned_leaves(
+            game.clone(), input.clone(), &options, &model,
+        ).unwrap();
+        let expected = Frozen::new(&candidate).unwrap();
+        assert_eq!(playback.identity(), expected.candidate_sha256);
+        let turn = check(&check(&input.game_state(), &game), &game);
+        playback.strategy(&turn, &[0, 5, 10, 15], combo).unwrap();
+        let packet = expected.turn_packet(15).unwrap();
+        let leaf = packet.leaves.iter().find(|l| l.history == turn.public_history).unwrap();
+        assert_eq!(playback.continuation_identity(), Some(leaf.policy_sha256.as_str()));
+        let mut wrong_game = game.clone();
+        wrong_game.effective_stack_bb = 50.0;
+        assert!(NativePostflopPolicy::validate_learned_model(&wrong_game, &model).is_err());
+        model.artifact_sha256 = None;
+        assert!(NativePostflopPolicy::validate_learned_model(&game, &model).is_err());
     }
 
     #[test]

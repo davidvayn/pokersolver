@@ -4,6 +4,7 @@
 use super::*;
 use crate::blueprint::neural::deal_for_policy_combo_on_board;
 mod pilot;
+pub(in crate::blueprint::response) use pilot::paired_lbr_hand;
 mod tests;
 
 struct Belief {

@@ -45,6 +45,19 @@ pub(super) fn iteration(
     turn_iterations: u64,
     workers: usize,
 ) -> Result<Diagnostics, String> {
+    iteration_evaluated(trunk, round, sampled, turn_iterations, workers, &mut None,
+        continuation::Evaluator::Native)
+}
+
+pub(super) fn iteration_evaluated(
+    trunk: &mut Trunk,
+    round: u64,
+    sampled: &[u8],
+    turn_iterations: u64,
+    workers: usize,
+    observer: &mut Option<LeafObservation<'_, '_>>,
+    evaluator: continuation::Evaluator<'_>,
+) -> Result<Diagnostics, String> {
     // Same single discount and immutable-policy snapshot as serial iteration.
     for node in trunk.nodes.values_mut() {
         node.discount_regrets(round, &trunk.game.dcfr);
@@ -64,7 +77,7 @@ pub(super) fn iteration(
             .map(|_| {
                 let leaves = &leaves;
                 let next = &next;
-                scope.spawn(move || -> Result<Vec<(usize, Values)>, String> {
+                scope.spawn(move || -> Result<Vec<(usize, continuation::Leaf)>, String> {
                     let mut output = Vec::new();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
@@ -73,24 +86,14 @@ pub(super) fn iteration(
                         }
                         let (state, reaches) = &leaves[index / sampled.len()];
                         let turn = sampled[index % sampled.len()];
-                        let mut board = trunk_ref.state.board.clone();
-                        board.push(turn);
-                        let mut masked = reaches.clone();
-                        for range in &mut masked {
-                            for combo in all_combos() {
-                                if combo.cards().contains(&turn) {
-                                    range[combo.key()] = 0.0;
-                                }
-                            }
-                        }
-                        let values = solve(TurnRiverSolveConfig {
-                            game: trunk_ref.game.clone(),
-                            state: PublicBeliefState::from_game_state(board, state, masked),
-                            iterations: turn_iterations,
-                            averaging_delay: 0,
-                            river_refinement_iterations: 0,
-                            regret_matching_plus: false,
-                        })?;
+                        let values = evaluator.evaluate(continuation_config(
+                            &trunk_ref.game,
+                            &trunk_ref.state.board,
+                            state,
+                            reaches,
+                            turn,
+                            turn_iterations,
+                        ))?;
                         output.push((index, values));
                     }
                     Ok(output)
@@ -111,6 +114,22 @@ pub(super) fn iteration(
     if ordered.len() != task_count {
         return Err("incomplete parallel continuation batch; no fallback".into());
     }
+    if let Some(observe) = observer.as_mut() {
+        // Stable leaf/chance order, independent of worker scheduling. These are
+        // the exact values about to be backed up, not a second teacher solve.
+        for (index, values) in &ordered {
+            let (state, reaches) = &leaves[index / sampled.len()];
+            let config = continuation_config(
+                &trunk.game,
+                &trunk.state.board,
+                state,
+                reaches,
+                sampled[index % sampled.len()],
+                turn_iterations,
+            );
+            observe.observe(round, &config, values)?;
+        }
+    }
     let mut diagnostics = Diagnostics::default();
     let mut by_history = BTreeMap::new();
     for (leaf_index, (state, reaches)) in leaves.into_iter().enumerate() {
@@ -121,6 +140,10 @@ pub(super) fn iteration(
                 .unwrap();
             position += 1;
             diagnostics.queries += 1;
+            let value = match value {
+                continuation::Leaf::Native(value) => value,
+                continuation::Leaf::Predicted(raw) => return raw,
+            };
             for p in 0..2 {
                 diagnostics.zero_own[p] += value.completed_zero_own_reach[p] as u64;
             }

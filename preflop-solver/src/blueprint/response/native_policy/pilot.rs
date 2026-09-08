@@ -3,6 +3,60 @@ use super::*;
 use std::io::Write;
 use std::time::Instant;
 
+#[test]
+#[ignore = "explicit compact preflop artifact, new output and resource guard; research public-root corpus"]
+fn native_value_authentic_roots() {
+    let path = PathBuf::from(std::env::var("POKER_NATIVE_CHECKPOINT").unwrap());
+    let expected = std::env::var("POKER_NATIVE_CHECKPOINT_SHA").unwrap();
+    assert_eq!(sha256_file(&path).unwrap(), expected);
+    let preflop = Arc::new(FrozenPreflopPolicy::read(&path).unwrap());
+    let game = preflop.game.clone();
+    assert_eq!(game.effective_stack_bb, 20.0);
+    let policy = NativeFullHandPolicy::new(preflop, NativeFlopOptions {
+        seed: 100101, iterations: 2, training_turn_iterations: 64, response_turn_iterations: 128,
+    });
+    let output = PathBuf::from(std::env::var("POKER_NATIVE_ROOTS_OUTPUT").unwrap());
+    assert!(!output.exists());
+    let seed: u64 = std::env::var("POKER_NATIVE_ROOTS_SEED").unwrap().parse().unwrap();
+    let root_count: usize = std::env::var("POKER_NATIVE_ROOTS_COUNT")
+        .unwrap_or_else(|_| "8".into()).parse().unwrap();
+    assert!((8..=128).contains(&root_count));
+    let mut rng = SplitMix64::new(seed);
+    let mut roots = Vec::new();
+    let mut dealt = 0;
+    while roots.len() < root_count && dealt < 10000 {
+        dealt += 1;
+        let deal = Deal::sample(&mut rng);
+        let mut state = GameState::initial(&game);
+        while state.street == Street::Preflop && state.terminal.is_none() {
+            let actions = state.legal_actions(&game);
+            let combo = Combo::new(deal.holes[state.actor][0], deal.holes[state.actor][1]);
+            let mix = policy.preflop.strategy(&state, combo).unwrap();
+            state = state.apply(&actions[sample_index(&mix, &mut rng)], &game);
+        }
+        if state.terminal.is_some() { continue; }
+        assert_eq!(state.street, Street::Flop);
+        let public = policy.root_input(&state, &deal.board[..3]).unwrap();
+        fn leaves(state: GameState, game: &BlueprintConfig) -> usize {
+            if state.terminal.is_some() { return 0; }
+            if state.street == Street::Turn { return 1; }
+            state.legal_actions(game).iter().map(|a| leaves(state.apply(a, game), game)).sum()
+        }
+        roots.push(serde_json::json!({"schema":"native-flop-public-root-v1", "game":game,
+            "public":public,"source_preflop_sha256":expected,"source_deal_index":dealt,
+            "state_distribution":"authentic_random_deal_and_frozen_preflop_policy_conditioned_on_live_flop",
+            "turn_leaf_count":leaves(state, &game)}));
+    }
+    assert_eq!(roots.len(), root_count, "incomplete authentic root sampling");
+    let bytes = serde_json::to_vec(&serde_json::json!({"schema":"native-value-public-roots-v1",
+        "seed":seed,"deals":dealt,"source_preflop_sha256":expected,"roots":roots,
+        "releaseAccepted":false})).unwrap();
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(output).unwrap();
+    file.write_all(&bytes).unwrap();
+    file.sync_all().unwrap();
+    println!("{}", serde_json::json!({"roots":root_count,"deals":dealt,"outputSha256":format!("{:x}",Sha256::digest(&bytes))}));
+}
+
 fn own_prefix_reach(
     policy: &FrozenPreflopPolicy,
     state: &GameState,
@@ -59,6 +113,17 @@ fn native_full_hand_candidate_serving_probe() {
     );
 }
 
+#[test]
+#[ignore = "hash-pinned learned continuation full-hand preflight; external resource guard required"]
+fn learned_full_hand_candidate_serving_probe() {
+    assert!(std::env::var("POKER_NATIVE_VALUE_MODEL").is_ok());
+    retained_checkpoint_probe(
+        NativeFlopOptions { seed: 100101, iterations: 128,
+            training_turn_iterations: 64, response_turn_iterations: 64 },
+        1,
+    );
+}
+
 fn retained_checkpoint_probe(options: NativeFlopOptions, leaf_workers: usize) {
     let source =
         PathBuf::from(std::env::var("POKER_NATIVE_CHECKPOINT").expect("explicit checkpoint"));
@@ -70,14 +135,33 @@ fn retained_checkpoint_probe(options: NativeFlopOptions, leaf_workers: usize) {
     let started = Instant::now();
     let preflop = Arc::new(FrozenPreflopPolicy::read(&source).unwrap());
     let loading_seconds = started.elapsed().as_secs_f64();
-    assert_eq!(preflop.rounds, 800);
+    let compact = std::env::var("POKER_NATIVE_COMPACT_CONTINUATION").ok();
+    if let Some(flag) = &compact {
+        assert_eq!(flag, "1");
+        assert!([2, 4, 8, 16, 32].contains(&preflop.rounds));
+        assert!(std::env::var("POKER_NATIVE_VALUE_MODEL").is_ok());
+    } else {
+        assert_eq!(preflop.rounds, 800);
+    }
     assert_eq!(preflop.game.effective_stack_bb, 20.0);
     let game = preflop.game.clone();
     let solve_budget = serde_json::json!({"flopIterations":options.iterations,
         "trainingTurnIterations":options.training_turn_iterations,
         "responseTurnIterations":options.response_turn_iterations,
         "leafWorkers":leaf_workers});
-    let mut policy = NativeFullHandPolicy::new(preflop, options);
+    let mut policy = if let Ok(path) = std::env::var("POKER_NATIVE_VALUE_MODEL") {
+        let model = Arc::new(PublicValueNetwork::read(Path::new(&path)).unwrap());
+        assert_eq!(model.artifact_sha256().unwrap(),
+            std::env::var("POKER_NATIVE_VALUE_MODEL_SHA").unwrap());
+        if compact.is_some() {
+            NativeFullHandPolicy::with_compact_continuation(preflop, options, model).unwrap()
+        } else {
+            NativeFullHandPolicy::with_learned_continuation(preflop, options, model).unwrap()
+        }
+    } else {
+        assert!(std::env::var("POKER_NATIVE_VALUE_MODEL_SHA").is_err());
+        NativeFullHandPolicy::new(preflop, options)
+    };
     policy.leaf_workers = leaf_workers;
     println!(
         "{}",

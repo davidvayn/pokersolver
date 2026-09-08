@@ -100,7 +100,7 @@ def python_prediction(
     if model["schema"] == training.POOLED_NETWORK_SCHEMA:
         projection_weights = dataset.projection_weights[state_index]
         reach = projection_weights / np.maximum(
-            projection_weights.sum(axis=1, keepdims=True), 1e-8
+            projection_weights.sum(axis=1, keepdims=True), training.RANGE_POOL_EPSILON
         )
         pooled = (query_embedding * reach[:, :, None]).sum(axis=1)
         own_pool = np.broadcast_to(pooled[:, None, :], query_embedding.shape)
@@ -127,6 +127,10 @@ def python_prediction(
             float(model["residualScaleBb"]) / scale_bb
         )
     projection_weights = dataset.projection_weights[state_index]
+    if model.get("predictionContract") == "native-turn-cfv-full-stack-v1":
+        return training.native_values.project_native_predictions(
+            raw * scale_bb, dataset.boards[state_index], dataset.ranges[state_index]
+        )
     joint_mass = max(float(projection_weights[0].sum()), 1e-8)
     aggregate = (raw * projection_weights).sum(axis=1) / joint_mass
     projected = raw - float(aggregate.sum()) / 2.0

@@ -1,0 +1,203 @@
+{
+  "schema": "paired-fixed-importance-response-comparison-v1",
+  "sources": [
+    {
+      "path": "runs/local-frozen-preflop-response-20260907-played32-27001-complete",
+      "sha256": "d477beb8fef24c984dc8ee271451eab9265c438133c739d95a0637b1af171d0e"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27001-complete",
+      "sha256": "1e652b61be8bda6366d01cce39540940f7eeddd7ac5602f6cd4f61e565c97248"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260907-played32-27002-complete",
+      "sha256": "6b2aa6c429233bbf22823808725ce639696cbde334b8bb19433d13c5b3e27dfa"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-importance32-27002-complete",
+      "sha256": "ec3d5a9a8ab5ba34406b9c6ff1bdf9454c13c3d46874a4df1e2b313d3e8f5f8e"
+    }
+  ],
+  "results": [
+    {
+      "seed": 27001,
+      "referenceMeanBb": 0.4226728206691859,
+      "candidateMeanBb": 0.4756530256623739,
+      "candidateStandardErrorBb": 0.1213737569744682,
+      "pairedBoardChangesBb": [
+        0.1669430506218943,
+        -0.06098264063551834
+      ],
+      "meanChangeBb": 0.05298020499318798
+    },
+    {
+      "seed": 27002,
+      "referenceMeanBb": 0.8837146134013003,
+      "candidateMeanBb": 0.5722394267017585,
+      "candidateStandardErrorBb": 0.1790109881034769,
+      "pairedBoardChangesBb": [
+        -0.14516077125233562,
+        -0.4777896021467479
+      ],
+      "meanChangeBb": -0.3114751866995418
+    }
+  ],
+  "attributions": [
+    {
+      "seed": 27001,
+      "largestContributions": [
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_5.000bb"
+          ],
+          "meanGainContributionBb": 0.30367657436816076
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb"
+          ],
+          "meanGainContributionBb": 0.06845697004326427
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.061513874189219504
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_5.000bb"
+          ],
+          "meanGainContributionBb": 0.04373220258829081
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb",
+            "Preflop:p1:raise_to_11.000bb"
+          ],
+          "meanGainContributionBb": 0.024400874929590952
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:limp",
+            "Preflop:p1:raise_to_3.000bb"
+          ],
+          "meanGainContributionBb": 0.02376295601469522
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb"
+          ],
+          "meanGainContributionBb": 0.02097922854825296
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb",
+            "Preflop:p1:raise_to_9.000bb"
+          ],
+          "meanGainContributionBb": 0.01804999634704941
+        }
+      ]
+    },
+    {
+      "seed": 27002,
+      "largestContributions": [
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000"
+          ],
+          "meanGainContributionBb": 0.24047326697372368
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_4.000bb"
+          ],
+          "meanGainContributionBb": 0.17983269260786772
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.000bb"
+          ],
+          "meanGainContributionBb": 0.03790734278956721
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb",
+            "Preflop:p1:raise_to_9.000bb"
+          ],
+          "meanGainContributionBb": 0.037090021353828405
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_2.500bb"
+          ],
+          "meanGainContributionBb": 0.021746737120951896
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb",
+            "Preflop:p1:raise_to_11.000bb"
+          ],
+          "meanGainContributionBb": 0.01871516576805235
+        },
+        {
+          "seat": 1,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb"
+          ],
+          "meanGainContributionBb": 0.011204936962785062
+        },
+        {
+          "seat": 0,
+          "history": [
+            "blinds:0.500/1.000",
+            "Preflop:p0:raise_to_3.000bb",
+            "Preflop:p1:raise_to_7.500bb"
+          ],
+          "meanGainContributionBb": 0.008017363368219427
+        }
+      ]
+    }
+  ],
+  "seedAveragedBoardChangesBb": [
+    0.010891139684779338,
+    -0.26938612139113316
+  ],
+  "meanChangeBb": -0.1292474908531769,
+  "boardClusterStandardErrorBb": 0.14013863053795622,
+  "allSeedBoardChangesImprove": false,
+  "independentEvaluationClusters": 2,
+  "qualifyingConfidenceUpperBound99Bb": null,
+  "releaseAccepted": false,
+  "fullGameGateEvaluated": false,
+  "interpretation": "Restricted preflop response on two reused development evaluation board clusters; not full-game exploitability or a qualifying confidence bound. Continuation settings are identical; the candidate uses a frozen full-support actor-specific importance proposal. The historical played32 reference predates the initialization-stamp correction."
+}

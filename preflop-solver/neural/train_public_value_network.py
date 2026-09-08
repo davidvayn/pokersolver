@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import itertools
 import json
@@ -19,9 +20,12 @@ import mlx.optimizers as optim
 from mlx.utils import tree_map
 import numpy as np
 
+import native_value_dataset as native_values
+
 SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
 POOLED_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v5"
+RANGE_POOL_EPSILON = 1e-9  # Matches blueprint::EPSILON in native pooled inference.
 POT_EXPERT_NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v6"
 FEATURE_SCHEMA = "rank-suit-invariant-combo-query-v1"
 FEATURE_SCHEMA_BOARD_RELATIVE = "rank-suit-invariant-combo-query-v2"
@@ -63,7 +67,7 @@ def feature_sizes(feature_schema: str) -> tuple[int, int]:
 def network_schema_for_architecture(architecture: str) -> str:
     if architecture == "xwide-gelu-pooled-pot-experts":
         return POT_EXPERT_NETWORK_SCHEMA
-    if architecture == "xwide-gelu-pooled":
+    if architecture in ("wide-pooled", "xwide-gelu-pooled"):
         return POOLED_NETWORK_SCHEMA
     return NETWORK_SCHEMA
 
@@ -345,6 +349,7 @@ class SharedComboValueNetwork(nn.Module):
         self.use_ranges = use_ranges
         self.architecture = architecture
         self.pools_exact_ranges = architecture in (
+            "wide-pooled",
             "xwide-gelu-pooled",
             "xwide-gelu-pooled-pot-experts",
         )
@@ -371,7 +376,7 @@ class SharedComboValueNetwork(nn.Module):
                 nn.ReLU(),
                 nn.Linear(head_hidden, 1),
             )
-        elif architecture == "wide":
+        elif architecture in ("wide", "wide-pooled"):
             context_hidden, embedding, query_hidden, head_hidden = 128, 64, 96, 64
             self.context_tower = nn.Sequential(
                 nn.Linear(context_count, context_hidden),
@@ -386,7 +391,7 @@ class SharedComboValueNetwork(nn.Module):
                 nn.ReLU(),
             )
             self.head = nn.Sequential(
-                nn.Linear(embedding * 2, head_hidden),
+                nn.Linear(embedding * (4 if self.pools_exact_ranges else 2), head_hidden),
                 nn.ReLU(),
                 nn.Linear(head_hidden, 1),
             )
@@ -494,7 +499,7 @@ class SharedComboValueNetwork(nn.Module):
         )
         if self.pools_exact_ranges:
             reach = projection_weights / mx.maximum(
-                mx.sum(projection_weights, axis=2, keepdims=True), 1e-8
+                mx.sum(projection_weights, axis=2, keepdims=True), RANGE_POOL_EPSILON
             )
             pooled = mx.sum(query_embedding * reach[:, :, :, None], axis=2)
             own_pool = mx.broadcast_to(pooled[:, :, None, :], query_embedding.shape)
@@ -545,6 +550,11 @@ class SharedComboValueNetwork(nn.Module):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument("--native-split-reference", type=Path,
+                        help="pin an unchanged native target prefix; additional families train only")
+    parser.add_argument("--native-split-reference-sha256")
+    parser.add_argument("--native-training-refresh", action="store_true",
+                        help="allow refreshed training beliefs in the same families; held-out targets remain exact")
     parser.add_argument(
         "--supplemental-dataset",
         type=Path,
@@ -612,10 +622,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--suit-augmentations", type=int, choices=(1, 24), default=1)
     parser.add_argument(
+        "--native-counterfactual-fraction", type=float, default=0.1,
+        help="research native corpus only: fraction of loss support assigned to legal counterfactual holdings; does not change ranges",
+    )
+    parser.add_argument(
         "--architecture",
         choices=(
             "compact",
             "wide",
+            "wide-pooled",
             "deep-gelu",
             "xwide-gelu",
             "xwide-gelu-pooled",
@@ -787,18 +802,23 @@ def load_dataset(
     path: Path,
     suit_augmentation_count: int = 1,
     value_normalization: str = "depth",
+    native_counterfactual_fraction: float = 0.1,
 ) -> Dataset:
     # Hash and parse the same immutable byte snapshot. Hashing the path after
     # parsing would permit a rewrite between the two reads and could stamp a
     # model with the digest of labels it did not train on.
     payload = path.read_bytes()
-    raw = json.loads(payload)
+    raw = json.loads(gzip.decompress(payload) if payload.startswith(b"\x1f\x8b") else payload)
     source_sha256 = hashlib.sha256(payload).hexdigest()
     if raw.get("schema") not in {
         LEGACY_TARGET_SCHEMA,
         COMPLETE_TURN_TARGET_SCHEMA,
+        native_values.SCHEMA,
     }:
         raise ValueError("incompatible public-belief target dataset")
+    is_native = raw.get("schema") == native_values.SCHEMA
+    if is_native:
+        native_values.validate_dataset(raw)
     boards: list[np.ndarray] = []
     actors: list[int] = []
     invested_rows: list[np.ndarray] = []
@@ -807,14 +827,19 @@ def load_dataset(
     targets: list[np.ndarray] = []
     target_scales: list[float] = []
     weights: list[np.ndarray] = []
+    loss_weights: list[np.ndarray] = []
     groups: list[int] = []
     permutations = suit_permutations(suit_augmentation_count)
     mappings = [combo_permutation(permutation) for permutation in permutations]
     for group, state in enumerate(raw["targets"]):
         original_board = [int(card) for card in state["board"]]
-        ranges = np.asarray(state["ranges"], dtype=np.float32)
+        # Native CFR produces sparse exact reaches. Rounding before subtracting
+        # blockers can corrupt tiny compatible masses/equities by whole big
+        # blinds. Build features in f64, then store features/loss tensors in f32.
+        input_dtype = np.float64 if is_native else np.float32
+        ranges = np.asarray(state["ranges"], dtype=input_dtype)
         values = np.asarray(state["counterfactual_values_bb"], dtype=np.float32)
-        masses = np.asarray(state["opponent_compatible_mass"], dtype=np.float32)
+        masses = np.asarray(state["opponent_compatible_mass"], dtype=input_dtype)
         if ranges.shape != (2, COMBO_COUNT) or values.shape != ranges.shape:
             raise ValueError(
                 "public beliefs and values must use exact 1326-combo vectors"
@@ -839,7 +864,7 @@ def load_dataset(
                         )
             boards.append(board)
             actors.append(int(state["actor"]))
-            invested = np.asarray(state["invested_bb"], dtype=np.float32)
+            invested = np.asarray(state["invested_bb"], dtype=input_dtype)
             scale = value_scale_bb(invested, value_normalization)
             invested_rows.append(invested)
             range_rows.append(permuted_ranges)
@@ -847,9 +872,14 @@ def load_dataset(
             targets.append(permuted_values.reshape(-1) / scale)
             target_scales.append(scale)
             weights.append((permuted_ranges * permuted_masses).reshape(-1))
+            loss_weights.append(
+                native_values.training_weights(
+                    board, permuted_ranges, permuted_masses, native_counterfactual_fraction
+                ).reshape(-1) if is_native else weights[-1]
+            )
             groups.append(group)
-    projection_weights = np.stack(weights).reshape((-1, 2, COMBO_COUNT))
-    weight_array = projection_weights.reshape((-1, COMBO_COUNT * 2)).copy()
+    projection_weights = np.stack(weights).reshape((-1, 2, COMBO_COUNT)).astype(np.float32)
+    weight_array = np.stack(loss_weights).astype(np.float32)
     # Every sampled public state receives equal loss mass. Exact combo reach
     # still determines the within-state weighting, but a high-reach pot band
     # cannot drown out another state solely because of blocker-compatible mass.
@@ -921,6 +951,8 @@ def complete_turn_target_reasons(target: dict[str, Any], index: int) -> list[str
 
 def complete_turn_release_reasons(source: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
+    if source.get("schema") == native_values.SCHEMA:
+        return ["native counterfactual corpus is a finite-budget research reference, not release qualification"]
     if source.get("schema") != COMPLETE_TURN_TARGET_SCHEMA:
         reasons.append("source target corpus omits complete turn betting")
         return reasons
@@ -1308,6 +1340,8 @@ def feature_cache_key(dataset: Dataset, feature_schema: str) -> str:
         "rows": int(len(dataset.targets)),
         "groups": int(len(np.unique(dataset.groups))),
     }
+    if dataset.source.get("schema") == native_values.SCHEMA:
+        payload["inputPrecision"] = "native-f64-ranges-masses-investments-v1"
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -1925,6 +1959,15 @@ def train_one(
     metrics["tuningPotBandMetrics"] = pot_band_metrics(
         dataset, tuning_rows, final_tuning_prediction
     )
+    if dataset.source.get("schema") == native_values.SCHEMA:
+        metrics["metricWeighting"] = "counterfactual_training_distribution_not_authentic_reach"
+        metrics["diagnosticOnly"] = True
+        authentic = dataset.projection_weights[validation_rows].reshape((-1, COMBO_COUNT * 2))
+        metrics["onPolicyReachMetrics"] = (
+            weighted_metrics(dataset.targets[validation_rows], prediction, authentic,
+                             dataset.target_scales[validation_rows])
+            if authentic.sum() > 0 else None
+        )
     return model, prediction, final_tuning_prediction, metrics
 
 
@@ -2001,6 +2044,8 @@ def export_model(
                 ),
                 "sourceDatasetSha256": source_dataset_sha256,
                 "sourceDatasetSchema": source_dataset_schema,
+                **({"predictionContract": "native-turn-cfv-full-stack-v1"}
+                   if source_dataset_schema == native_values.SCHEMA else {}),
                 "sourcePolicySha256": source_policy_sha256,
                 "sourceValidationStatus": source_validation_status,
                 "contextPublicCount": CONTEXT_PUBLIC_COUNT,
@@ -2041,6 +2086,7 @@ def main() -> None:
         or args.huber_delta <= 0
         or args.raw_bb_auxiliary_weight < 0
         or args.feature_workers <= 0
+        or not 0.0 < args.native_counterfactual_fraction <= 1.0
         or not 0.0 < args.supplemental_sampling_weight <= 1.0
         or any(
             not np.isfinite(weight) or weight <= 0.0
@@ -2051,10 +2097,27 @@ def main() -> None:
         or not -1.0 <= args.minimum_tuning_cross_seed_correlation <= 1.0
     ):
         raise ValueError("early-stopping and robust-loss settings are invalid")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     primary_dataset = load_dataset(
-        args.dataset, args.suit_augmentations, args.value_normalization
+        args.dataset, args.suit_augmentations, args.value_normalization,
+        args.native_counterfactual_fraction,
     )
+    is_native = primary_dataset.source.get("schema") == native_values.SCHEMA
+    split_reference = None
+    if args.native_split_reference:
+        if not is_native or not args.native_split_reference_sha256:
+            raise ValueError("native split reference requires native data and its pinned SHA")
+        split_reference = load_dataset(args.native_split_reference, 1, args.value_normalization)
+        if (split_reference.source_sha256 != args.native_split_reference_sha256
+                or split_reference.source.get("schema") != native_values.SCHEMA):
+            raise ValueError("native split reference identity/schema mismatch")
+    elif args.native_split_reference_sha256:
+        raise ValueError("native split reference SHA has no input")
+    if args.native_training_refresh and split_reference is None:
+        raise ValueError("native training refresh requires a pinned split reference")
+    if is_native and (args.supplemental_dataset or args.holdout_start_index is not None):
+        raise ValueError("native pilot uses one family-split corpus; legacy supplements/index holdouts are incompatible")
+    if is_native and args.output_dir.exists() and any(args.output_dir.iterdir()):
+        raise ValueError("native research training refuses to overwrite a nonempty output directory")
     primary_state_count = len(primary_dataset.source["targets"])
     supplemental_datasets = [
         load_dataset(path, args.suit_augmentations, args.value_normalization)
@@ -2075,17 +2138,13 @@ def main() -> None:
             ],
         )
     )
+    if split_reference is not None:
+        source_inputs.append((args.native_split_reference, split_reference.source_sha256))
     dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
     source_dataset_schema = str(dataset.source.get("schema", ""))
     source_release_reasons = complete_turn_release_reasons(dataset.source)
     source_release_status = (
         "accepted" if not source_release_reasons else "rejected"
-    )
-    contexts, queries, feature_cache = feature_dataset_cached(
-        dataset,
-        args.feature_schema,
-        args.feature_workers,
-        args.feature_cache_dir,
     )
     primary_state_bands = np.asarray(
         [
@@ -2095,16 +2154,29 @@ def main() -> None:
         dtype=np.int8,
     )
     seeds = [int(seed) for seed in args.seeds.split(",")]
-    if len(seeds) != 2:
+    if len(seeds) != 2 or len(set(seeds)) != 2:
         raise ValueError("paired training requires exactly two independent seeds")
     split_seed = args.split_seed if args.split_seed is not None else seeds[0]
-    train_states, tuning_states, validation_states = three_way_state_split(
-        primary_state_count,
-        split_seed,
-        args.validation_fraction,
-        args.tuning_fraction,
-        args.holdout_start_index,
-        primary_state_bands,
+    if is_native:
+        train_states, tuning_states, validation_states = native_values.family_split(
+            primary_dataset.source, split_seed, args.validation_fraction, args.tuning_fraction,
+            reference=split_reference.source if split_reference is not None else None,
+            refresh_training=args.native_training_refresh,
+        )
+        if args.variant_set != "range-only" or network_schema_for_architecture(args.architecture) not in (NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA):
+            raise ValueError("native pilot requires range-only shared-combo v4/v5 models for the explicit prediction contract")
+    else:
+        train_states, tuning_states, validation_states = three_way_state_split(
+            primary_state_count,
+            split_seed,
+            args.validation_fraction,
+            args.tuning_fraction,
+            args.holdout_start_index,
+            primary_state_bands,
+        )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    contexts, queries, feature_cache = feature_dataset_cached(
+        dataset, args.feature_schema, args.feature_workers, args.feature_cache_dir
     )
     primary_train_states = train_states.copy()
     supplemental_states = np.arange(primary_state_count, len(dataset.source["targets"]))
@@ -2288,7 +2360,12 @@ def main() -> None:
         "architecture": args.architecture,
         "variantSet": args.variant_set,
         "splitSeed": split_seed,
-        "potStratifiedSplit": True,
+        "nativeSplitReferenceSha256": split_reference.source_sha256 if split_reference is not None else None,
+        "nativeTrainingRefresh": args.native_training_refresh,
+        "potStratifiedSplit": not is_native,
+        "splitUnit": "suit_canonical_flop_family_all_turns_histories_iterations" if is_native else "source_target_state",
+        "nativeCounterfactualFraction": args.native_counterfactual_fraction if is_native else None,
+        "metricWeighting": "counterfactual_training_distribution_not_authentic_reach" if is_native else "within_state_joint_reach",
         "splitPotBandStates": {
             name: {
                 "train": int(
@@ -2355,7 +2432,7 @@ def main() -> None:
         "residualUnit": "normalized_state_value_scale",
         "rangeAggregation": (
             "joint-reach-weighted-own-and-opponent-query-pooling"
-            if args.architecture == "xwide-gelu-pooled"
+            if args.architecture in ("wide-pooled", "xwide-gelu-pooled")
             else "handcrafted-public-range-summaries"
         ),
         "loss": {
@@ -2393,7 +2470,7 @@ def main() -> None:
         "meanRangeRmseBb": range_rmse,
         "meanNoRangeRmseBb": no_range_rmse,
         "rangeRelativeImprovement": relative_improvement,
-        "targetSamplingStandardErrorBb": 0.0,
+        "targetSamplingStandardErrorBb": None if is_native else 0.0,
         "corpusDiagnostics": corpus_diagnostics(dataset, contexts, queries),
         "validation": {
             "status": "accepted" if not reasons else "rejected",
