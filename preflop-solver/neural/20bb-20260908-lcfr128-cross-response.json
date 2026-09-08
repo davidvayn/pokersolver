@@ -1,0 +1,144 @@
+{
+  "schema": "lcfr-scaling-cross-response-diagnostic-v1",
+  "sources": [
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr32-27001-complete",
+      "sha256": "63b2ac901e450600c82bbecdf2e8b4d65cb7e9de4314690ebe3a0c7e7f914be0"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr128-27001-complete",
+      "sha256": "48ad200d7bd116d8fccc446e0adac97f7624d20c0f6d11f78e6b88199319ceeb"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr32-27002-complete",
+      "sha256": "2975a47ced98e8df08c23fd0fdbf6759625224e26e4485a5102962b0a30fb9cc"
+    },
+    {
+      "path": "runs/local-frozen-preflop-response-20260908-lcfr128-27002-complete",
+      "sha256": "8ae01e45e652beb123d5e386910a6e8378f1573e3c764e66e6d995c723267a1b"
+    }
+  ],
+  "results": [
+    {
+      "seed": 27001,
+      "crossAttackers": [
+        {
+          "referenceUpdates": 32,
+          "attackerFitUpdates": 32,
+          "evaluationGainsBb": [
+            0.5325221490792849,
+            0.39107824397514757
+          ],
+          "meanBb": 0.4618001965272162
+        },
+        {
+          "referenceUpdates": 32,
+          "attackerFitUpdates": 128,
+          "evaluationGainsBb": [
+            0.29839034931337494,
+            0.07768917492077232
+          ],
+          "meanBb": 0.18803976211707363
+        },
+        {
+          "referenceUpdates": 128,
+          "attackerFitUpdates": 32,
+          "evaluationGainsBb": [
+            0.21294890263733518,
+            0.11445639870492419
+          ],
+          "meanBb": 0.16370265067112968
+        },
+        {
+          "referenceUpdates": 128,
+          "attackerFitUpdates": 128,
+          "evaluationGainsBb": [
+            0.7103155898581222,
+            0.4317948035209716
+          ],
+          "meanBb": 0.5710551966895469
+        }
+      ],
+      "frozenOpeningSwitch": [
+        {
+          "fixedContinuationUpdates": 32,
+          "opening128Minus32ValueBb": [
+            -0.23115688140483986,
+            -0.17241008478654313
+          ],
+          "meanBb": -0.2017834830956915
+        },
+        {
+          "fixedContinuationUpdates": 128,
+          "opening128Minus32ValueBb": [
+            -0.05153617159146384,
+            -0.029648492494126096
+          ],
+          "meanBb": -0.04059233204279497
+        }
+      ]
+    },
+    {
+      "seed": 27002,
+      "crossAttackers": [
+        {
+          "referenceUpdates": 32,
+          "attackerFitUpdates": 32,
+          "evaluationGainsBb": [
+            0.5877320063732798,
+            0.3475240670286702
+          ],
+          "meanBb": 0.467628036700975
+        },
+        {
+          "referenceUpdates": 32,
+          "attackerFitUpdates": 128,
+          "evaluationGainsBb": [
+            0.0677484789067632,
+            -0.0981920893546928
+          ],
+          "meanBb": -0.015221805223964803
+        },
+        {
+          "referenceUpdates": 128,
+          "attackerFitUpdates": 32,
+          "evaluationGainsBb": [
+            -0.14703073354101498,
+            -0.235024126259404
+          ],
+          "meanBb": -0.1910274299002095
+        },
+        {
+          "referenceUpdates": 128,
+          "attackerFitUpdates": 128,
+          "evaluationGainsBb": [
+            0.6249650032378901,
+            0.4059429990702246
+          ],
+          "meanBb": 0.5154540011540574
+        }
+      ],
+      "frozenOpeningSwitch": [
+        {
+          "fixedContinuationUpdates": 32,
+          "opening128Minus32ValueBb": [
+            -0.018868155123041824,
+            -0.030997639066046127
+          ],
+          "meanBb": -0.024932897094543976
+        },
+        {
+          "fixedContinuationUpdates": 128,
+          "opening128Minus32ValueBb": [
+            -0.07716233412068164,
+            -0.059378258592876196
+          ],
+          "meanBb": -0.06827029635677892
+        }
+      ]
+    }
+  ],
+  "nativeQueries": 0,
+  "releaseAccepted": false,
+  "interpretation": "Saved-capture diagnostic only. Values retain each reference policy's original ranges and downstream actions. Opening switches are not re-solved full-game candidates. Cross-attacker gains can be negative; fitted restricted responses are not exact best responses. These measurements localize changing weaknesses but do not distinguish sampling variance from continuation approximation bias."
+}

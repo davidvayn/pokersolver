@@ -1,6 +1,6 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: recovered LCFR128 training complete; matched response evaluation running**.
+Updated: 2026-09-08. Status: **Step 3: LCFR128 response regresses; sampling-drift diagnosis identifies a bounded refresh pilot**.
 The 32 -> 128 matched response comparison is complete for both solver seeds.
 Response gains WORSENED on every seed/board comparison: **0.71960 -> 0.86079bb**
 and **0.93397 -> 1.47283bb**. The predeclared condition for 512/1,024 is false.
@@ -22,9 +22,10 @@ The fixed32 response pair is complete: **0.42267 -> 0.50590bb** and
 That discount-only result did not support a128/512 extension. The subsequent
 all-state, actor-specific fixed importance allocation completed paired32 and
 improved both seed means against the corrected reference (details below).
-Its unchanged checkpointed128 pair has completed; no512/1024 is supported by
-the evidence yet. Compare final128 response captures against importance32 before
-choosing the next training budget.
+Its unchanged checkpointed128 pair and response comparison completed and regressed.
+The subsequent LCFR32 improves on importance32, but LCFR128 also regresses on
+both seeds/both boards. No512/1024 or paid scaling is supported. See the current
+sampling-drift diagnosis below; do not repeat completed comparisons.
 The target diagnosis and corrected32/corrected128 comparisons are complete.
 Do not repeat them. Neither result proves an asymptotic convergence ceiling or GTO qualification.
 
@@ -398,6 +399,42 @@ external/resource issue preventing further bounded local diagnosis and pilots.
   to4.44e-16. Do not infer strength from these values. Seed1 response preflight
   passed93.000s; its full capture and seed2 preflight are now running at
   `local-frozen-preflop-response-20260908-lcfr128-{seed}-{preflight|complete}`.
+- LCFR128 response pair COMPLETE: **0.571055197 / 0.515454001bb**, versus LCFR32
+  **0.461800197 / 0.467628037bb**. ALL FOUR seed/board changes are worse.
+  Pair mean increase0.078540482bb (16.9%), board-cluster SE0.028972737bb.
+  Two reused development board clusters, not full-game exploitability or99% proof.
+  No512/1024. Captures elapsed1971.277/1965.819s, peaks1.146/1.132GB, all8 guards
+  pass. Manifest SHAs `48ad200d7bd116d8fccc446e0adac97f7624d20c0f6d11f78e6b88199319ceeb`
+  and `8ae01e45e652beb123d5e386910a6e8378f1573e3c764e66e6d995c723267a1b`.
+  Comparison SHA `5b740cd75678147ceb30c8f581775dacff7f51847b30ff62d79afe900a722933`.
+- Saved cross-attacker replay: old32 attacker against128 gains0.163703/-0.191027bb,
+  versus newly fitted128 attacker0.571055/0.515454bb. Old weaknesses improve,
+  new ones appear. Switching only the opening mix32->128 loses value under BOTH
+  old and new frozen continuations for both seeds and boards. This localizes
+  drift but does not distinguish noisy updates from continuation bias.
+  Diagnostic SHA `c2c596e901c69d86f51e5c4432b927b3432914138fc23179ba670e10bcb40b84`.
+- Four exact Rust checkdown exports (ZERO native queries), plus saved captures,
+  identify sampling-allocation drift. Old fixed proposal's BB gradient variance
+  is0.95-1.01x uniform at128, versus0.35-0.62x at32. Refitting on128 boards0/1
+  improves variance-times-cost on EVERY128 evaluation seed/board/actor:
+  SB0.826-0.945x, BB0.650-0.724x. But the same refit hurts early32 policies,
+  up to2.107x BB variance-times-cost. Do NOT replace the initial allocation.
+  Report SHA `f5d45b491cb18f85e24f04647ddbb6f6e6f928933b8d2847ee90ed29868314db`;
+  baseline manifest `948b1340a952e24f767072a5de5bd6efb444afa4e7b926b74c383a5bcc40a06f`.
+  These are conditional endpoint-selection variances, not chance variance or
+  policy-strength gains. No native refit pilot has run yet.
+- Next bounded test: keep the original proposal through32, then use the frozen
+  refitted proposal from33 onward. Both are pinned BEFORE training, keep50%
+  uniform support and return the active exact q for the unbiased correction.
+  Verify32 prefix parity and round32/33 selection/correction boundaries. Change
+  no regrets, averaging, continuation, cards or action abstraction. At most128
+  updates; compare response to BOTH retained LCFR32 and unchanged LCFR128.
+  Research: [generalized unbiased sampling](https://ojs.aaai.org/index.php/AAAI/article/view/8241)
+  ties estimator variance to convergence; [predictive baselines](https://proceedings.mlr.press/v119/davis20a.html)
+  reduce sampled variance under their assumptions. Neither guarantees this
+  finite-budget range-conditioned oracle is equilibrium-correct; [depth-limited
+  solving](https://arxiv.org/abs/1805.08195) motivates a separate continuation-
+  robustness comparison if this variance-only change fails.
 
 ## Objective and scope
 

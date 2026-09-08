@@ -1,0 +1,498 @@
+{
+  "schema": "lcfr-sampling-drift-diagnostic-v1",
+  "sources": {
+    "runs/local-frozen-preflop-baseline-20260908-lcfr-scaling/manifest.json": "948b1340a952e24f767072a5de5bd6efb444afa4e7b926b74c383a5bcc40a06f",
+    "runs/local-frozen-preflop-baseline-20260908-discountstamp32/importance-screen.json": "2e43e26a75c2e0f41833d8e34eac3725f69ef1b1234970a70dfe357819289cee",
+    "runs/local-frozen-preflop-response-20260908-lcfr32-27001-complete/manifest.json": "63b2ac901e450600c82bbecdf2e8b4d65cb7e9de4314690ebe3a0c7e7f914be0",
+    "runs/local-frozen-preflop-response-20260908-lcfr32-27002-complete/manifest.json": "2975a47ced98e8df08c23fd0fdbf6759625224e26e4485a5102962b0a30fb9cc",
+    "runs/local-frozen-preflop-response-20260908-lcfr128-27001-complete/manifest.json": "48ad200d7bd116d8fccc446e0adac97f7624d20c0f6d11f78e6b88199319ceeb",
+    "runs/local-frozen-preflop-response-20260908-lcfr128-27002-complete/manifest.json": "8ae01e45e652beb123d5e386910a6e8378f1573e3c764e66e6d995c723267a1b"
+  },
+  "helperSha256": "be8c4bf8d0334e756339e2db178456252476f13a2fecc18b89ed29db6a50a9b6",
+  "fitRounds": 128,
+  "fitBoards": [
+    0,
+    1
+  ],
+  "evaluationBoards": [
+    2,
+    3
+  ],
+  "probabilitiesByActor": [
+    [
+      0.022159969278015938,
+      0.030698819824928975,
+      0.016378121897032943,
+      0.017850071367204134,
+      0.010466985428158524,
+      0.017482825189649408,
+      0.010769784826220583,
+      0.05697703865828232,
+      0.023253519389512103,
+      0.014756920073488718,
+      0.026140536700906415,
+      0.011237539451179446,
+      0.03294641098219501,
+      0.010788170134601371,
+      0.02023680691300445,
+      0.011857671656272536,
+      0.010298381795894328,
+      0.014005406309855284,
+      0.010565669513494538,
+      0.03379957043476521,
+      0.026318606613075564,
+      0.03265774122493622,
+      0.01285615015666371,
+      0.022809927645872655,
+      0.011806903115336168,
+      0.03370567537148958,
+      0.024652361387877818,
+      0.02557614153576313,
+      0.011860475933139537,
+      0.0223878237514325,
+      0.011707241483324533,
+      0.04143111826495901,
+      0.013226304295008803,
+      0.044617872797725534,
+      0.014786532728620846,
+      0.014386874879834293,
+      0.010281711184246228,
+      0.023220406076739933,
+      0.016225038927249035,
+      0.010603482434385476,
+      0.014637945259854504,
+      0.010377422597042987,
+      0.045862838820049705,
+      0.01183811654182199,
+      0.0378138007474794,
+      0.014991162204844519,
+      0.010702450730629854,
+      0.015166992674875292,
+      0.010820660791058838
+    ],
+    [
+      0.030289390507336984,
+      0.020133108268979176,
+      0.012290813547024921,
+      0.02067244900433196,
+      0.011463531877290552,
+      0.023982260357654335,
+      0.011011962263938671,
+      0.017088076536336042,
+      0.012604136191511975,
+      0.010380799573408822,
+      0.02782640147154883,
+      0.012388111993547174,
+      0.04168517204729453,
+      0.012049711327582686,
+      0.025421398850977918,
+      0.017265663753339787,
+      0.010410984283051627,
+      0.013206665733705828,
+      0.010296181501943419,
+      0.0409733927027718,
+      0.032227105678701726,
+      0.023933538002572273,
+      0.01391117639708904,
+      0.023813310389297737,
+      0.012052273725105247,
+      0.03644440281688911,
+      0.01718271788333626,
+      0.017696873301760396,
+      0.011750474678696665,
+      0.013959322490322244,
+      0.011967301271374103,
+      0.06321380357874862,
+      0.022674862461650496,
+      0.026297064009369722,
+      0.01271972068839912,
+      0.026683897318457793,
+      0.011644621248453104,
+      0.04287894024116056,
+      0.022185209403638682,
+      0.012297873952474808,
+      0.01953205042833368,
+      0.012251182725923898,
+      0.035228125961985594,
+      0.01439594252387045,
+      0.02779685378276129,
+      0.016558291433736775,
+      0.010353917079529335,
+      0.016591604595885493,
+      0.01031733013689868
+    ]
+  ],
+  "results": [
+    {
+      "rounds": 32,
+      "seed": 27001,
+      "board": 0,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 1.8464745885101814,
+          "existingVsUniform": 0.692001697581608,
+          "refitVsExisting": 1.2586181796786806,
+          "refitVsExistingCost": 1.0884420514853457,
+          "refitVsExistingVarianceCost": 1.3699329535262146
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.26984475829313015,
+          "existingVsUniform": 0.38013897463867985,
+          "refitVsExisting": 1.7474136873887258,
+          "refitVsExistingCost": 1.123163585214229,
+          "refitVsExistingVarianceCost": 1.9626314219799372
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27001,
+      "board": 1,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.6100045971656527,
+          "existingVsUniform": 0.6950131705821507,
+          "refitVsExisting": 1.2041080608100787,
+          "refitVsExistingCost": 1.0885860562562486,
+          "refitVsExistingVarianceCost": 1.3107752452236028
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.04359556125382453,
+          "existingVsUniform": 0.3498324469307611,
+          "refitVsExisting": 1.713271293156334,
+          "refitVsExistingCost": 1.1229400702964514,
+          "refitVsExistingVarianceCost": 1.9239009863738659
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27001,
+      "board": 2,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 1.5615816521785046,
+          "existingVsUniform": 0.695271802176714,
+          "refitVsExisting": 1.1301941181600594,
+          "refitVsExistingCost": 1.0918058755933722,
+          "refitVsExistingVarianceCost": 1.2339525787682228
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.14101228610918604,
+          "existingVsUniform": 0.35145786495501197,
+          "refitVsExisting": 1.751178029857103,
+          "refitVsExistingCost": 1.1456730146789547,
+          "refitVsExistingVarianceCost": 2.0062774127059395
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27001,
+      "board": 3,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.5145463949518765,
+          "existingVsUniform": 0.710028526458125,
+          "refitVsExisting": 1.2319037437423344,
+          "refitVsExistingCost": 1.0976586671702806,
+          "refitVsExistingVarianceCost": 1.3522098214382896
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.05085575227877156,
+          "existingVsUniform": 0.3716596025472596,
+          "refitVsExisting": 1.8121467988143176,
+          "refitVsExistingCost": 1.162773893219263,
+          "refitVsExistingVarianceCost": 2.1071169883421486
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27002,
+      "board": 0,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 2.0496653940969765,
+          "existingVsUniform": 0.7287389959179466,
+          "refitVsExisting": 0.9583845183126566,
+          "refitVsExistingCost": 1.0884878728472362,
+          "refitVsExistingVarianceCost": 1.0431899257078667
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.29274222549407847,
+          "existingVsUniform": 0.5407542980914666,
+          "refitVsExisting": 1.062423478993043,
+          "refitVsExistingCost": 1.1224160161211887,
+          "refitVsExistingVarianceCost": 1.1924811287249846
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27002,
+      "board": 1,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.48432553651037624,
+          "existingVsUniform": 0.6612697657419487,
+          "refitVsExisting": 1.0446262696138346,
+          "refitVsExistingCost": 1.0885911251950546,
+          "refitVsExistingVarianceCost": 1.1371708862472367
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.045598173065056896,
+          "existingVsUniform": 0.6351426977107401,
+          "refitVsExisting": 1.047350068743543,
+          "refitVsExistingCost": 1.120481586423493,
+          "refitVsExistingVarianceCost": 1.1735364665665196
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27002,
+      "board": 2,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 1.953230218669387,
+          "existingVsUniform": 0.7690040943388282,
+          "refitVsExisting": 0.8561214389815223,
+          "refitVsExistingCost": 1.093550515654754,
+          "refitVsExistingVarianceCost": 0.9362120410613337
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.20410948881129384,
+          "existingVsUniform": 0.5910331131034238,
+          "refitVsExisting": 1.0445350661485497,
+          "refitVsExistingCost": 1.1281921325833817,
+          "refitVsExistingVarianceCost": 1.178436243836256
+        }
+      ]
+    },
+    {
+      "rounds": 32,
+      "seed": 27002,
+      "board": 3,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.4439015002333863,
+          "existingVsUniform": 0.7082708093348314,
+          "refitVsExisting": 0.9901810232202468,
+          "refitVsExistingCost": 1.089721060224863,
+          "refitVsExistingVarianceCost": 1.079021114438107
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.061571852080653876,
+          "existingVsUniform": 0.6215358977769052,
+          "refitVsExisting": 0.9899499679108098,
+          "refitVsExistingCost": 1.1260183268955022,
+          "refitVsExistingVarianceCost": 1.114701806577186
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27001,
+      "board": 0,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 3.858510759176093,
+          "existingVsUniform": 0.7250276424852817,
+          "refitVsExisting": 0.7244847753900051,
+          "refitVsExistingCost": 1.0802142110966295,
+          "refitVsExistingVarianceCost": 0.7825987500994332
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.38463723536582467,
+          "existingVsUniform": 0.8391165307039682,
+          "refitVsExisting": 0.6880563151834141,
+          "refitVsExistingCost": 1.1221824704210657,
+          "refitVsExistingVarianceCost": 0.7721247355613391
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27001,
+      "board": 1,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 1.162543975907586,
+          "existingVsUniform": 0.7693124801699371,
+          "refitVsExisting": 0.7535864797951338,
+          "refitVsExistingCost": 1.0796734498664597,
+          "refitVsExistingVarianceCost": 0.8136273144131333
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.10653991769746071,
+          "existingVsUniform": 0.9403055141512897,
+          "refitVsExisting": 0.6340503689110996,
+          "refitVsExistingCost": 1.1212827379325185,
+          "refitVsExistingVarianceCost": 0.7109497336397611
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27001,
+      "board": 2,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 3.308318302099581,
+          "existingVsUniform": 0.7493709668350957,
+          "refitVsExisting": 0.7611033637246948,
+          "refitVsExistingCost": 1.0851772365223293,
+          "refitVsExistingVarianceCost": 0.8259320449546136
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.3286713214169888,
+          "existingVsUniform": 0.9541165340611076,
+          "refitVsExisting": 0.6067475450012163,
+          "refitVsExistingCost": 1.1206273454362254,
+          "refitVsExistingVarianceCost": 0.6799378907046598
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27001,
+      "board": 3,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.835947456891725,
+          "existingVsUniform": 0.7449783354634185,
+          "refitVsExisting": 0.7972171391852669,
+          "refitVsExistingCost": 1.086177145296397,
+          "refitVsExistingVarianceCost": 0.8659190364216137
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.11371820334571942,
+          "existingVsUniform": 0.9595752872742868,
+          "refitVsExisting": 0.6252672012189001,
+          "refitVsExistingCost": 1.1143396739919131,
+          "refitVsExistingVarianceCost": 0.696760049164105
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27002,
+      "board": 0,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 1.6732958092605206,
+          "existingVsUniform": 0.7595108824970211,
+          "refitVsExisting": 0.8339545936819777,
+          "refitVsExistingCost": 1.0854575474767638,
+          "refitVsExistingVarianceCost": 0.9052223079650206
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.5184155864991012,
+          "existingVsUniform": 1.0481475362095285,
+          "refitVsExisting": 0.5358231491812557,
+          "refitVsExistingCost": 1.1194501602955584,
+          "refitVsExistingVarianceCost": 0.5998273102410276
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27002,
+      "board": 1,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.5080132380587724,
+          "existingVsUniform": 0.8139653583965698,
+          "refitVsExisting": 0.8281482447992946,
+          "refitVsExistingCost": 1.0839752620097582,
+          "refitVsExistingVarianceCost": 0.8976922106392368
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.1340174676688492,
+          "existingVsUniform": 1.033391522247555,
+          "refitVsExisting": 0.5290822187643168,
+          "refitVsExistingCost": 1.1175711356958602,
+          "refitVsExistingVarianceCost": 0.5912870161009232
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27002,
+      "board": 2,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 1.5061863412533156,
+          "existingVsUniform": 0.8011774222412982,
+          "refitVsExisting": 0.8508034684867963,
+          "refitVsExistingCost": 1.097879825918622,
+          "refitVsExistingVarianceCost": 0.9340799638732438
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.3626360939683422,
+          "existingVsUniform": 1.0053164578643583,
+          "refitVsExisting": 0.5605037996760176,
+          "refitVsExistingCost": 1.1604654507471834,
+          "refitVsExistingVarianceCost": 0.6504452945365388
+        }
+      ]
+    },
+    {
+      "rounds": 128,
+      "seed": 27002,
+      "board": 3,
+      "actors": [
+        {
+          "actor": 0,
+          "existingVariance": 0.40429746183495546,
+          "existingVsUniform": 0.7767877892932163,
+          "refitVsExisting": 0.8610303251114034,
+          "refitVsExistingCost": 1.0975468978770322,
+          "refitVsExistingVarianceCost": 0.9450211623040733
+        },
+        {
+          "actor": 1,
+          "existingVariance": 0.12495576759064898,
+          "existingVsUniform": 1.0130104608358528,
+          "refitVsExisting": 0.6283856865504496,
+          "refitVsExistingCost": 1.1524949966457438,
+          "refitVsExistingVarianceCost": 0.7242113597131938
+        }
+      ]
+    }
+  ],
+  "nativeQueries": 0,
+  "releaseAccepted": false,
+  "interpretation": "Conditional endpoint-selection variance at frozen captured board/turn/ranges, not chance variance or policy strength. Refitted allocation is a diagnostic, not admitted training. Reused development boards are not untouched validation."
+}
