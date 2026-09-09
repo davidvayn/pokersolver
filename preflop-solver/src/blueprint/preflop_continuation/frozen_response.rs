@@ -2,14 +2,14 @@
 //! before preflop response selection; held-out captures never select actions.
 use super::*;
 
-struct Classes {
-    labels: Vec<String>,
+pub(super) struct Classes {
+    pub(super) labels: Vec<String>,
     index: Vec<usize>,
-    counts: Vec<usize>,
+    pub(super) counts: Vec<usize>,
 }
 
 impl Classes {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let labels: Vec<_> = all_combos()
             .iter()
             .map(|c| c.label())
@@ -31,7 +31,7 @@ impl Classes {
         }
     }
 
-    fn reduce(&self, values: &[f64]) -> Vec<f64> {
+    pub(super) fn reduce(&self, values: &[f64]) -> Vec<f64> {
         assert_eq!(values.len(), 1326);
         let mut result = vec![0.0; 169];
         for (c, v) in values.iter().enumerate() {
@@ -169,7 +169,9 @@ fn frozen_preflop_response_capture() {
         std::env::var("POKER_NOISE_PREFLOP_SHA").unwrap()
     );
     assert_eq!(preflop.game.effective_stack_bb, 20.0);
-    assert!([32, 128, 512, 1024].contains(&preflop.rounds));
+    // The equal-query independent-board pilot uses16 two-board updates.
+    // This permits its evaluation, not weaker response or release thresholds.
+    assert!([16, 32, 128, 512, 1024].contains(&preflop.rounds));
     assert_eq!(preflop.node_count(), 16900);
     let model = PublicValueNetwork::read(Path::new(&std::env::var("POKER_COMPACT_MODEL").unwrap()))
         .unwrap();
@@ -232,8 +234,25 @@ fn frozen_preflop_response_capture() {
     let turns: Vec<u8> = (0..52).filter(|c| !board.contains(c)).collect();
     let turn = turns[rng.index(turns.len())];
     let flop_kernel = exact_flop_kernel(board).unwrap();
+    let endpoint_cache = std::env::var("POKER_RESPONSE_ENDPOINT_CACHE").ok().map(PathBuf::from);
+    let cache_identity = serde_json::json!({"preflopSha256":preflop.artifact_sha256,
+        "modelSha256":model.artifact_sha256(),"kernelSha256":kernel_sha,
+        "binarySha256":std::env::var("POKER_RESPONSE_BINARY_SHA").ok(),
+        "chanceSeed":32001,"boardIndex":index,"board":board,"turn":turn,
+        "flopIterations":128,"turnIterations":64,"rootTurnAverages":root_turn_averages});
+    assert!(endpoint_cache.is_none() || cache_identity["binarySha256"].as_str()
+        .is_some_and(|s| s.len()==64 && s.bytes().all(|c| c.is_ascii_hexdigit())));
     let mut captures = Vec::new();
     for history in &selected {
+        if let Some(root) = &endpoint_cache {
+            if let Some(saved) = endpoint_checkpoint::load(root,&cache_identity,history).unwrap() {
+                *values.get_mut(history).unwrap()=saved.values;
+                eprintln!("{}",serde_json::json!({"stage":"frozen_response_endpoint_recovered",
+                    "boardIndex":index,"completed":captures.len()+1,"total":selected.len()}));
+                captures.push(saved.record);
+                continue;
+            }
+        }
         let before = Instant::now();
         let (state, prior) = &snapshot.endpoints[history];
         let input = snapshot.flop_input(history, board).unwrap();
@@ -271,6 +290,12 @@ fn frozen_preflop_response_capture() {
         }
         let record = serde_json::json!({"history":history, "investedBb":state.invested,
             "policySha256":policy.identity(), "seconds":before.elapsed().as_secs_f64()});
+        if let Some(root) = &endpoint_cache {
+            endpoint_checkpoint::save(root,&endpoint_checkpoint::Endpoint {
+                identity:cache_identity.clone(),history:history.clone(),
+                values:mean.clone(),record:record.clone(),
+            }).unwrap();
+        }
         eprintln!(
             "{}",
             serde_json::json!({"stage":"frozen_response_endpoint_complete",

@@ -1,0 +1,173 @@
+{
+  "schema": "matched-continuation-allocation-report-v1",
+  "source": "runs/local-matched-continuation-20260908-a/manifest.json",
+  "sourceSha256": "373dfd1f5c9067e23d30843eb75fc029ebda508ef46445bd428154ea1c021857",
+  "elapsedSeconds": 2292.0154889589176,
+  "effects": [
+    {
+      "name": "more_boards_current_budget",
+      "seedMeanChangesBb": [
+        0.036628845610275365,
+        0.027050668684618327
+      ],
+      "pairedBoardChangesBb": [
+        0.07084547615782412,
+        0.051372846402713446,
+        0.036334772971465895,
+        -0.031194066942216065
+      ],
+      "meanChangeBb": 0.03183975714744685,
+      "boardClusterStandardErrorBb": 0.02216689693739193
+    },
+    {
+      "name": "more_boards_stronger_budget",
+      "seedMeanChangesBb": [
+        0.033369832508127834,
+        0.027614300443388022
+      ],
+      "pairedBoardChangesBb": [
+        0.06985704344880973,
+        0.04995268073585584,
+        0.03391671960360525,
+        -0.03175817788523914
+      ],
+      "meanChangeBb": 0.030492066475757924,
+      "boardClusterStandardErrorBb": 0.022013514961494198
+    },
+    {
+      "name": "deeper_two_boards",
+      "seedMeanChangesBb": [
+        0.0033078999484334117,
+        0.0
+      ],
+      "pairedBoardChangesBb": [
+        0.0016070385496625914,
+        0.0017029920398034144,
+        0.001746718609237992,
+        0.0015590506981628255
+      ],
+      "meanChangeBb": 0.0016539499742167058,
+      "boardClusterStandardErrorBb": 4.302876769283797e-05
+    },
+    {
+      "name": "deeper_four_boards",
+      "seedMeanChangesBb": [
+        4.8886846285867494e-05,
+        0.0005636317587696909
+      ],
+      "pairedBoardChangesBb": [
+        0.0006186058406482051,
+        0.00028282637294581303,
+        -0.0006713347586226569,
+        0.0009949397551397557
+      ],
+      "meanChangeBb": 0.0003062593025277792,
+      "boardClusterStandardErrorBb": 0.00035684735021563577
+    }
+  ],
+  "cells": [
+    [
+      {
+        "strength": 1,
+        "fittingBoards": 2,
+        "evaluationGainsBb": [
+          -0.0019638617768851273,
+          -0.025509668417294448,
+          0.010014829228048798,
+          0.09086959869449851
+        ],
+        "meanEvaluationGainBb": 0.018352724432091932,
+        "boardClusterStandardErrorBb": 0.02527332376717262
+      },
+      {
+        "strength": 1,
+        "fittingBoards": 4,
+        "evaluationGainsBb": [
+          0.08899024812285128,
+          0.02795335456019104,
+          0.0555783317768115,
+          0.047404345709615395
+        ],
+        "meanEvaluationGainBb": 0.0549815700423673,
+        "boardClusterStandardErrorBb": 0.01273081913471363
+      },
+      {
+        "strength": 2,
+        "fittingBoards": 2,
+        "evaluationGainsBb": [
+          0.0012502153224400554,
+          -0.02210368433768762,
+          0.013508266446524782,
+          0.09398770009082416
+        ],
+        "meanEvaluationGainBb": 0.021660624380525344,
+        "boardClusterStandardErrorBb": 0.025215019228277385
+      },
+      {
+        "strength": 2,
+        "fittingBoards": 4,
+        "evaluationGainsBb": [
+          0.0891546025088502,
+          0.02796870297959817,
+          0.05554847507065887,
+          0.047450046995505445
+        ],
+        "meanEvaluationGainBb": 0.05503045688865318,
+        "boardClusterStandardErrorBb": 0.012762336502144653
+      }
+    ],
+    [
+      {
+        "strength": 1,
+        "fittingBoards": 2,
+        "evaluationGainsBb": [
+          -0.018049736630170593,
+          -0.013015945662679395,
+          -0.0022885429811886,
+          0.03344193058398125
+        ],
+        "meanEvaluationGainBb": 2.192632748566556e-05,
+        "boardClusterStandardErrorBb": 0.011614667670010926
+      },
+      {
+        "strength": 1,
+        "fittingBoards": 4,
+        "evaluationGainsBb": [
+          0.032687105785741244,
+          0.036266724165262,
+          0.024817500412980493,
+          0.01451904968443223
+        ],
+        "meanEvaluationGainBb": 0.02707259501210399,
+        "boardClusterStandardErrorBb": 0.004819506320301767
+      },
+      {
+        "strength": 2,
+        "fittingBoards": 2,
+        "evaluationGainsBb": [
+          -0.018049736630170593,
+          -0.013015945662679395,
+          -0.0022885429811886,
+          0.03344193058398125
+        ],
+        "meanEvaluationGainBb": 2.192632748566556e-05,
+        "boardClusterStandardErrorBb": 0.011614667670010926
+      },
+      {
+        "strength": 2,
+        "fittingBoards": 4,
+        "evaluationGainsBb": [
+          0.033759963081038735,
+          0.03681702849174649,
+          0.02350468760188781,
+          0.016463227908821692
+        ],
+        "meanEvaluationGainBb": 0.027636226770873684,
+        "boardClusterStandardErrorBb": 0.004687685872854311
+      }
+    ]
+  ],
+  "releaseAccepted": false,
+  "fullGameGateEvaluated": false,
+  "interpretation": "Higher gain is better for the same restricted fold/call adjustment under a common finite-budget continuation reference. Not full-game exploitability, a bound, or a deployed policy. Four evaluation board clusters, not 169 classes, are independent."
+}

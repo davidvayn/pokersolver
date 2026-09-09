@@ -1,0 +1,269 @@
+{
+  "schema": "decision-directed-local-pilots-v1",
+  "status": "complete_retained_reference",
+  "sources": {
+    "runs/local-native-value-20260907-student-ace-coverage-a/manifest.json": "0313d5e15c5d3e14920a7182222bfbac4ae7bf58f25454ffd77df40a024d8e02",
+    "runs/local-path-a-students-20260908-a/manifest.json": "e47b17dc9d550433d21890116b5134c59e53926891e9ea6d8a894cd1fc0e9e7e",
+    "runs/local-player-bias-students-20260908-a/manifest.json": "d02997728c9a35e677d6da572e737550ddfc3007005e94994a267fa26dfbc556",
+    "runs/local-player-bias-response-facing-20260908-a/manifest.json": "22517a59dfe8c03244ed0c746ed1d07d048a2feaa1d5623a6fba2324fced246e",
+    "runs/local-compact-preflop-20260908-lcfr32-b/manifest.json": "1b129e4f7843766114833415064f9f36472b297d7667f620c370c632b649f876",
+    "runs/local-independent-boards-reference-20260908-a/manifest.json": "6c4d28934eab5f87a673f9ab0ef44f14070fef6f1f6ceb4e0c29964852cc090c",
+    "runs/local-independent-boards-pair-20260908-a/manifest.json": "cb5f5a976b5870ea39c0ae20228087030d07e7c9d53e2d1a754625cdcf3385c1",
+    "runs/local-player-bias-frozen-ranking-20260908-a/100101/action-values.json": "4015840c3e4050d74305d091e10f44817e26d4bd0bf3dc0794ed91005b2ceac0",
+    "runs/local-player-bias-frozen-ranking-20260908-a/100102/action-values.json": "a4a71da4ec016bd8776ce3b9e3b3894f552ee7e5dd4bdea22aa51a2fd2ef97e3",
+    "runs/local-compact-preflop-20260908-lcfr32-b/seed27001.json": "ca096a8a43905654287787387c1cd76d51f27c1ed7fe2c7fc8888f79baafbc94",
+    "runs/local-independent-boards-pair-20260908-a/seed27001.json": "20dc584a1f4e211483d26fa5f6468867e6ee444e3019291baea1c10e57033faa",
+    "runs/local-compact-preflop-20260908-lcfr32-b/seed27002.json": "691c95b1620ea270b1234300ded9bbe86a42b1a54c1299b8b6024b03b532d71b",
+    "runs/local-independent-boards-pair-20260908-a/seed27002.json": "95460a811449700bdd364dce577f6b3f35207954693af0ac5a7ab250d7718c5b",
+    "runs/local-independent-boards-response-20260908-27001-cache-replay/parity.json": "e34c6e5ebf2d218ccea8c419216cc7241ae73fcb11f0685aa8d859b9446f5a0f",
+    "runs/local-independent-boards-response-20260908-27002-cache-replay/parity.json": "b37cda280e7dc21b8fed90654bcfc37a4613e1c6a1e19e38102bbbf172a1ccbd",
+    "runs/local-independent-boards-response-20260908-27001-reboot-complete/manifest.json": "b7b87efecb2002d9f37abb793fae8e4b9eb6a3ed4826a067031ee5cd2dab3770",
+    "runs/local-independent-boards-response-20260908-27002-reboot-complete/manifest.json": "ac616f51477294f61683edfcd6a8f8a0aba473129fcd199e9d2d6b24afa71c0f",
+    "runs/local-independent-boards-response-20260908-27001-reboot-complete/prospective-response.json": "7f0c3244079a8c9a969ab71fbf95fc4441095aa32a3244bea179b37bff93e01e",
+    "runs/local-independent-boards-response-20260908-27002-reboot-complete/prospective-response.json": "a0970a1b9c24bfdbfbd193e0669e9d69d0c308286f8be12446d81f2efbc6c802",
+    "runs/local-independent-boards-response-20260908-27001-reboot-complete/paired-comparison.json": "b4cd6547169aaf4e1f4725c7d24574b87426b393be8d1e798c5373ee20428532",
+    "runs/local-crash-recovery-release-tests-20260908-a/manifest.json": "c1277479d373b74fa303651ae3c18f1b39b6531f9e9754e65e444d27d7bb9f15"
+  },
+  "releaseAccepted": false,
+  "fullGameGateEvaluated": false,
+  "verification": {
+    "focusedControllerAndRecoveryPythonTestsPassed": 11,
+    "valueNetworkDatasetBudgetAndPathAPythonTestsPassed": 69,
+    "rustReleaseTestsPassed": 351,
+    "rustReleaseTestsIgnored": 52,
+    "rustReleaseTestsFailed": 0,
+    "rustReleaseSeconds": 220.316,
+    "rustReleaseSampledPeakMemoryBytes": 2003257360,
+    "rustReleaseMemoryGuardBytes": 2147483648,
+    "diffCheckPassed": true,
+    "noNativeJobsRemain": true,
+    "websiteChanged": false
+  },
+  "valueBias": {
+    "weight": 1,
+    "baselineWeight": 0,
+    "steps": 600,
+    "states": 636,
+    "candidateAccepted": false,
+    "pairedRows": [
+      {
+        "seed": 10601,
+        "modelSha256": "280ede000df8665967f2cf31b309a1ceec1eff9ee652502babd8746a98023ee0",
+        "maximumParityErrorBb": 5.806605717140201e-06,
+        "retainedHoldoutRmseBb": 1.472388298926682,
+        "pathAHoldoutRmseBb": 1.4218504918615502,
+        "holdoutRmseBb": 1.5807070129904128,
+        "retainedConditionalHalfSummedGainBb": 0.12597892559245905,
+        "conditionalHalfSummedGainBb": 0.1608806124800628,
+        "conditionalDeltaBb": 0.034901686887603756,
+        "frozenBeliefRanking": {
+          "nativeBestAgreement": 0.4008063691998008,
+          "nativeLossFromPredictedBestBb": 0.37206667498193513,
+          "actionContrastRmseBb": 0.6920789818509557
+        }
+      },
+      {
+        "seed": 10602,
+        "modelSha256": "81b9bb0866a0f8c11cfcdbd387d9c8064d2b1fbe77c017cbd0c50836f64dda54",
+        "maximumParityErrorBb": 4.768202163774049e-06,
+        "retainedHoldoutRmseBb": 1.4608428025466387,
+        "pathAHoldoutRmseBb": 1.4087573568283573,
+        "holdoutRmseBb": 1.9705567247640872,
+        "retainedConditionalHalfSummedGainBb": 0.12076363571449278,
+        "conditionalHalfSummedGainBb": 0.2433546904573014,
+        "conditionalDeltaBb": 0.12259105474280863,
+        "frozenBeliefRanking": {
+          "nativeBestAgreement": 0.29875135201834274,
+          "nativeLossFromPredictedBestBb": 0.47520823756483166,
+          "actionContrastRmseBb": 0.9983216835906369
+        }
+      }
+    ],
+    "trainingSeconds": 540.362,
+    "verificationAndTrainingSeconds": 2054.3963618278503,
+    "interpretation": "Calibration proxy failed actual conditional response on both seeds; not direct action-contrast training. No promotion."
+  },
+  "independentBoards": {
+    "training": [
+      {
+        "seed": 27001,
+        "oneBoardReferenceByteIdentical": true,
+        "reference": {
+          "rounds": 32,
+          "maximumSolveBudget": 32,
+          "actualSolves": 30,
+          "uniqueEndpointsPerActor": [
+            14,
+            12
+          ],
+          "frozenPolicySha256": "ca791b4a9fdc320ff903ee9e9ea1140270090f857d6ef07d4fad59ccb9323e87"
+        },
+        "twoBoards": {
+          "rounds": 16,
+          "maximumSolveBudget": 32,
+          "actualSolves": 32,
+          "uniqueEndpointsPerActor": [
+            8,
+            8
+          ],
+          "frozenPolicySha256": "871d09a3342b9e622012ee1e1bd1f7b2fb6bb93ace93388399f5ad9890288f61"
+        }
+      },
+      {
+        "seed": 27002,
+        "oneBoardReferenceByteIdentical": true,
+        "reference": {
+          "rounds": 32,
+          "maximumSolveBudget": 32,
+          "actualSolves": 32,
+          "uniqueEndpointsPerActor": [
+            12,
+            12
+          ],
+          "frozenPolicySha256": "79373cc75185d75012323e9baf227ed80164c41341f7131bec23754cc3a7e7e8"
+        },
+        "twoBoards": {
+          "rounds": 16,
+          "maximumSolveBudget": 32,
+          "actualSolves": 32,
+          "uniqueEndpointsPerActor": [
+            8,
+            6
+          ],
+          "frozenPolicySha256": "e4d1a33b571ae6ff84bf66c2fe69803cc77b1d7025a5604111c67d6457548d5d"
+        }
+      }
+    ],
+    "retainedRootStability": {
+      "available": true,
+      "rootHandClassesPerSeed": [
+        169,
+        169
+      ],
+      "maximumProbabilitySumError": 4.440892098500626e-16,
+      "maximumAggregateActionFrequencyDelta": 0.141895541229244,
+      "maximumComboWeightedPerActionMae": 0.23177094562197184,
+      "minimumPrimaryActionAgreement": 0.47337278106508873,
+      "minimumComboWeightedPrimaryActionAgreement": 0.502262443438914,
+      "thresholds": {
+        "maximumAggregateActionFrequencyDelta": 0.03,
+        "maximumComboWeightedPerActionMae": 0.05,
+        "minimumPrimaryActionAgreement": 0.85,
+        "maximumProbabilitySumError": 1e-06
+      },
+      "gates": {
+        "completeRootCoverage": true,
+        "compatibleActionSets": true,
+        "validProbabilitySums": true,
+        "aggregateActionFrequencyDelta": false,
+        "comboWeightedPerActionMae": false,
+        "primaryActionAgreement": false
+      },
+      "passed": false
+    },
+    "batchedRootStability": {
+      "available": true,
+      "rootHandClassesPerSeed": [
+        169,
+        169
+      ],
+      "maximumProbabilitySumError": 4.440892098500626e-16,
+      "maximumAggregateActionFrequencyDelta": 0.31926871007132607,
+      "maximumComboWeightedPerActionMae": 0.3428813382441957,
+      "minimumPrimaryActionAgreement": 0.23668639053254437,
+      "minimumComboWeightedPrimaryActionAgreement": 0.2730015082956259,
+      "thresholds": {
+        "maximumAggregateActionFrequencyDelta": 0.03,
+        "maximumComboWeightedPerActionMae": 0.05,
+        "minimumPrimaryActionAgreement": 0.85,
+        "maximumProbabilitySumError": 1e-06
+      },
+      "gates": {
+        "completeRootCoverage": true,
+        "compatibleActionSets": true,
+        "validProbabilitySums": true,
+        "aggregateActionFrequencyDelta": false,
+        "comboWeightedPerActionMae": false,
+        "primaryActionAgreement": false
+      },
+      "passed": false
+    },
+    "trainingSeconds": 850.4477262077853,
+    "candidateAccepted": false,
+    "responseComparison": {
+      "metric": "summed restricted preflop response gain in bb; lower is better",
+      "pairedRows": [
+        {
+          "seed": 27001,
+          "referenceMeanSummedGainBb": 0.46180019652721627,
+          "candidateMeanSummedGainBb": 0.6408782840845704,
+          "deltaBb": 0.1790780875573541,
+          "evaluationBoardDeltasBb": [0.17318518437036223, 0.1849709907443458]
+        },
+        {
+          "seed": 27002,
+          "referenceMeanSummedGainBb": 0.4676280367009751,
+          "candidateMeanSummedGainBb": 0.291235881164846,
+          "deltaBb": -0.17639215553612908,
+          "evaluationBoardDeltasBb": [-0.18384152929039044, -0.16894278178186764]
+        }
+      ],
+      "referencePairedMeanSummedGainBb": 0.4647141166140957,
+      "candidatePairedMeanSummedGainBb": 0.4660570826247082,
+      "pairedMeanDeltaBb": 0.001342966010612491,
+      "pairedBoardClusterStandardErrorBb": 0.0066711384706265925,
+      "independentEvaluationBoardClusters": 2,
+      "confidenceUpperBound99Bb": null,
+      "prospectivelyFrozenResponsesVerified": true,
+      "summariesRecomputedExactly": true
+    },
+    "interpretation": "Matched maximum32 native solves, not identical actual solves or wall time. Shared endpoint per batch, independent chance, single frozen-snapshot update. Seed27001 worsens on both evaluation boards;27002 improves on both. Paired mean essentially unchanged and stability worse: no reproducible gain, no promotion or post-evaluation seed selection. This does not establish equivalence or measure full-game exploitability."
+  },
+  "recovery": {
+    "completedArtifactHashesVerified": [
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-reference-20260908-a/seed27001.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-reference-20260908-a/seed27001.preflop.json.gz",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-reference-20260908-a/seed27002.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-reference-20260908-a/seed27002.preflop.json.gz",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-pair-20260908-a/seed27001.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-pair-20260908-a/seed27001.preflop.json.gz",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-pair-20260908-a/seed27002.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-independent-boards-pair-20260908-a/seed27002.preflop.json.gz",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-player-bias-students-20260908-a/models/turn-value-range-seed10601.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-player-bias-students-20260908-a/predictions-10601.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-player-bias-students-20260908-a/models/turn-value-range-seed10602.json",
+      "/Users/davidvayntrub/pokersolver/preflop-solver/neural/runs/local-player-bias-students-20260908-a/predictions-10602.json"
+    ],
+    "trainingNeedsRerun": false,
+    "interruptedEvaluations": [
+      "runs/local-independent-boards-response-20260908-27001-complete/manifest.json",
+      "runs/local-independent-boards-response-20260908-27002-complete/manifest.json"
+    ],
+    "completeBoardArtifactsRecovered": 0,
+    "completedButUnsavedEndpointsPerActiveBoard": 19,
+    "interruptedActiveBoards": 4,
+    "crashCause": "not established",
+    "newMaximumTotalNativeWorkers": 2,
+    "newMaximumWorkerMemoryMiB": 1536,
+    "endpointCheckpoints": "validated: exact numerical parity on both seeds; three cached endpoints each replayed with zero native solves",
+    "maximumWorkerSeconds": 7200,
+    "preflightProjectedSecondsPerBoard": [
+      6707.200148366999,
+      6742.873639626002
+    ],
+    "actualPreflightSeconds": [
+      283.629925375,
+      285.023866917
+    ],
+    "maximumConcurrentWorkersPerSeed": 1,
+    "solverIterationsUnchanged": true,
+    "evaluationStatus": "complete",
+    "completedEndpointCount": 392,
+    "evaluationElapsedSeconds": [6037.685445167, 6037.043165749999],
+    "maximumWorkerPeakMemoryBytes": [1050248800, 1081116208],
+    "currentEvaluationDirectories": [
+      "runs/local-independent-boards-response-20260908-27001-reboot-complete",
+      "runs/local-independent-boards-response-20260908-27002-reboot-complete"
+    ]
+  }
+}

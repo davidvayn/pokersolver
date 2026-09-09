@@ -1,0 +1,90 @@
+{
+  "schema": "path-a-paired-pilot-report-v1",
+  "sources": {
+    "labels": {
+      "path": "runs/local-path-a-values-20260908-a/manifest.json",
+      "sha256": "b8c66b426bb3bb9aedf522d1f65bd5a89740e22587cbccf338c6444f9baf7173"
+    },
+    "students": {
+      "path": "runs/local-path-a-students-20260908-a/manifest.json",
+      "sha256": "e47b17dc9d550433d21890116b5134c59e53926891e9ea6d8a894cd1fc0e9e7e"
+    },
+    "response": {
+      "path": "runs/local-path-a-response-facing-20260908-a/manifest.json",
+      "sha256": "2c737f413f9f7512a11f6c9533136e49c023b57564149a8b47562aea18e346c3"
+    },
+    "referenceStudents": {
+      "path": "runs/local-native-value-20260907-student-ace-coverage-a/manifest.json",
+      "sha256": "0313d5e15c5d3e14920a7182222bfbac4ae7bf58f25454ffd77df40a024d8e02"
+    },
+    "rankingReference": {
+      "path": "runs/local-path-a-reference-ranking-20260908-a/manifest.json",
+      "sha256": "8ad64bd4082f7af536f2adcdef2a37f12d2fe80f7ad802210de4a094bbd683e6"
+    },
+    "rankingCandidate": {
+      "path": "runs/local-path-a-frozen-ranking-20260908-a/manifest.json",
+      "sha256": "6cbc9ab24e8e215dc3d832c7a77e6b52154a0ff821c87c4f5decaa19e6e027c8"
+    }
+  },
+  "results": [
+    {
+      "seed": 100101,
+      "oldHoldoutRmseBb": 1.472388298926682,
+      "newHoldoutRmseBb": 1.4218504918615502,
+      "maximumParityErrorBb": 5.766363130987884e-06,
+      "response": {
+        "controlGainBb": 0.17190459170547068,
+        "learnedGainBb": 0.15637021745230273,
+        "learnedMinusControlBb": -0.015534374253167949,
+        "responseSha256": "d58de09cbb8a6050cfc9f1457eb707d4710fbfc792ea294ea2160e1dc660969e",
+        "controlResponseSha256": "ee65bf7b421f1d3f3cbc4729913ff7fd986a746c96002f9c81d624f942fee680",
+        "learnedReferenceGainBb": 0.12597892559245905,
+        "learnedMinusReferenceBb": 0.030391291859843683
+      },
+      "frozenRankingReference": {
+        "nativeBestAgreement": 0.5946401693709614,
+        "nativeLossFromPredictedBestBb": 0.20341408140842235,
+        "actionContrastRmseBb": 0.5408872888881269
+      },
+      "frozenRankingCandidate": {
+        "nativeBestAgreement": 0.452887212231254,
+        "nativeLossFromPredictedBestBb": 0.35090027739394586,
+        "actionContrastRmseBb": 0.5598504006975077
+      }
+    },
+    {
+      "seed": 100102,
+      "oldHoldoutRmseBb": 1.4608428025466387,
+      "newHoldoutRmseBb": 1.4087573568283573,
+      "maximumParityErrorBb": 5.512477912361646e-06,
+      "response": {
+        "controlGainBb": 0.08927272858705626,
+        "learnedGainBb": 0.11881483608832699,
+        "learnedMinusControlBb": 0.02954210750127073,
+        "responseSha256": "c390406df8703a959252205fd7724659c1e7e44669f249df645dc16c63fa5a09",
+        "controlResponseSha256": "5d2010b2b5718bfcf79d4a53a0ed0463c91f0a12a227e79da8a0813e24d545d5",
+        "learnedReferenceGainBb": 0.12076363571449278,
+        "learnedMinusReferenceBb": -0.001948799626165787
+      },
+      "frozenRankingReference": {
+        "nativeBestAgreement": 0.7086615523799352,
+        "nativeLossFromPredictedBestBb": 0.12638064152587133,
+        "actionContrastRmseBb": 0.41746471752365105
+      },
+      "frozenRankingCandidate": {
+        "nativeBestAgreement": 0.747898163032055,
+        "nativeLossFromPredictedBestBb": 0.11774531383441576,
+        "actionContrastRmseBb": 0.349875828935837
+      }
+    }
+  ],
+  "meanResponseChangeBb": 0.014221246116838948,
+  "relativeMeanResponseChange": 0.1152719339664103,
+  "labelGenerationSeconds": 404.4461055002175,
+  "fittingAndParitySeconds": 1661.9228150844574,
+  "policyResponseSeconds": 47.76414762530476,
+  "candidateAccepted": false,
+  "releaseAccepted": false,
+  "fullGameGateEvaluated": false,
+  "decision": "Reject this candidate: lower held-out RMSE did not translate into paired conditional response improvement. Do not extend it or replace the reference. Keep the next action-contrast/sampling pilot local; no paid unchanged/deeper run justified. Portfolio/safety work remains an alternative, not implemented in this bounded sequence."
+}

@@ -71,7 +71,9 @@ def read_capture(path):
     return source
 
 
-def merge_captures(paths, search_proposals=False, reference=None):
+def merge_captures(paths, search_proposals=False, reference=None, maximum_states=512):
+    if maximum_states not in (512, 640):
+        raise ValueError("unbudgeted native corpus extension")
     sources, targets, manifests = [], [], []
     if reference is not None:
         native.validate_dataset(reference)
@@ -109,8 +111,8 @@ def merge_captures(paths, search_proposals=False, reference=None):
             manifests[-1].update(proposal_model_sha256=source["proposal_model_sha256"],
                                  sampling_seed=source["sampling_seed"], native_label_queries=len(source["targets"]))
         targets.extend({**row, "source_capture_index": index} for row in source["targets"])
-    if not sources or not 256 <= len(targets) <= 512:
-        raise ValueError("native feasibility corpus requires 256-512 complete states")
+    if not sources or not 256 <= len(targets) <= maximum_states:
+        raise ValueError("native feasibility corpus exceeds its declared state budget")
     result = dict(schema=native.SCHEMA, game=sources[0]["game"],
                   source_identity_semantics="ordered_capture_manifest_not_one_policy", source_captures=manifests,
                   source_public_input_sha256=native.identity_hash([s["input_sha256"] for s in manifests]),

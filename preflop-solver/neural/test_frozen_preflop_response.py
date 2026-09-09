@@ -10,11 +10,38 @@ from run_frozen_preflop_response import tree_values, summarize
 
 
 class FrozenPreflopResponseTests(unittest.TestCase):
+    def test_extended_time_does_not_silently_increase_concurrency_or_memory(self):
+        argv=["runner","--maximum-worker-seconds","7200","--output","unused"]
+        for name in ("binary","preflop","model","kernel"):
+            argv += ["--"+name,"unused","--"+name+"-sha256","unused"]
+        with patch("sys.argv",argv), patch.object(runner,"guarded") as worker:
+            with self.assertRaisesRegex(ValueError,"single-worker low-memory"):
+                runner.main()
+            worker.assert_not_called()
+
+    def test_endpoint_recovery_pins_completed_files_not_temporary_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/"endpoints"
+            identity=dict(policy="fixed",binary="fixed")
+            pins=runner.prepare_endpoint_cache(root,identity,False)
+            self.assertEqual(len(pins),1)
+            board=root/"board0";board.mkdir()
+            completed=board/("a"*64+".json");completed.write_text("fixture checkpoint")
+            (board/("b"*64+".tmp")).write_text("interrupted write")
+            pins=runner.prepare_endpoint_cache(root,identity,True)
+            self.assertEqual(pins[str(completed)],sha256(completed))
+            self.assertEqual(len(pins),2)
+            with self.assertRaisesRegex(ValueError,"identity"):
+                runner.prepare_endpoint_cache(root,dict(policy="changed"),True)
+            with self.assertRaises(FileExistsError):
+                runner.prepare_endpoint_cache(root,identity,False)
+
     def test_interrupted_capture_reuses_finished_boards_and_runs_only_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             inputs = {}
-            argv = ["runner", "--complete", "--turn-root-averages"]
+            argv = ["runner", "--complete", "--turn-root-averages", "--workers", "1",
+                    "--maximum-worker-memory-mib", "1536"]
             for name in ("binary", "preflop", "model", "kernel"):
                 path = root/name
                 path.write_text(name)
@@ -64,6 +91,9 @@ class FrozenPreflopResponseTests(unittest.TestCase):
             called = []
             def guarded(command, env, *args):
                 index = int(env["POKER_NOISE_BOARD_INDEX"])
+                self.assertEqual(args[2],1536*1024**2)
+                self.assertEqual(env["POKER_RESPONSE_BINARY_SHA"],inputs[str(root/"binary")])
+                self.assertEqual(Path(env["POKER_RESPONSE_ENDPOINT_CACHE"]).name,f"board{index}")
                 called.append(index)
                 atomic_json(Path(env["POKER_COMPACT_OUTPUT"]), capture(index))
                 return dict(status="complete")
@@ -80,6 +110,8 @@ class FrozenPreflopResponseTests(unittest.TestCase):
             record = json.loads((output/"manifest.json").read_text())
             self.assertEqual(sorted(called), [2, 3])
             self.assertEqual(record["status"], "complete")
+            self.assertEqual(record["maximumConcurrentWorkers"],1)
+            self.assertEqual(record["maximumWorkerMemoryBytes"],1536*1024**2)
             self.assertEqual(record["summary"]["boards"], [0, 1, 2, 3])
             self.assertEqual(manifest.read_bytes(), original)
             for job in record["jobs"][:2]:

@@ -674,6 +674,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--huber-delta", type=float, default=0.05)
     parser.add_argument("--raw-bb-auxiliary-weight", type=float, default=0.25)
+    parser.add_argument("--player-bias-weight", type=float, default=0.0,
+                        help="Training-only per-player signed value-bias penalty; not action labels")
     return parser.parse_args()
 
 
@@ -1795,6 +1797,21 @@ def corpus_diagnostics(
     }
 
 
+def player_value_bias_loss(errors: mx.array, reach: mx.array) -> mx.array:
+    """Penalize each player's conditional value bias before squaring.
+
+    A zero-sum projection cancels the *sum* of player errors, not opposite
+    player biases. Work in raw depth units and use authentic joint reach.
+    This is a value-calibration proxy, NOT a per-turn flop action-ranking loss:
+    chance still must be integrated before choosing any pre-turn action.
+    """
+    values = errors.reshape(reach.shape)
+    mass = mx.sum(reach, axis=-1)
+    mean = mx.sum(values * reach, axis=-1) / mx.maximum(mass, 1e-8)
+    valid = mass > 0
+    return .5 * mx.sum(mx.where(valid, mean * mean, 0.)) / mx.maximum(mx.sum(valid), 1)
+
+
 def train_one(
     dataset: Dataset,
     contexts: np.ndarray,
@@ -1820,6 +1837,7 @@ def train_one(
     row_sampling_weights: np.ndarray,
     minimum_primary_batch_fraction: float,
     feature_schema: str,
+    player_bias_weight: float = 0.0,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1860,7 +1878,11 @@ def train_one(
         raw = mx.sum(weights * huber(raw_depth_units)) / mx.maximum(
             mx.sum(weights), 1e-8
         )
-        return normalized + raw_bb_auxiliary_weight * raw
+        result = normalized + raw_bb_auxiliary_weight * raw
+        if player_bias_weight:
+            result = result + player_bias_weight * player_value_bias_loss(
+                raw_depth_units, projection_weights)
+        return result
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     best_tuning_rmse = float("inf")
@@ -2085,6 +2107,8 @@ def main() -> None:
         or args.early_stopping_patience <= 0
         or args.huber_delta <= 0
         or args.raw_bb_auxiliary_weight < 0
+        or not np.isfinite(args.player_bias_weight)
+        or args.player_bias_weight < 0
         or args.feature_workers <= 0
         or not 0.0 < args.native_counterfactual_fraction <= 1.0
         or not 0.0 < args.supplemental_sampling_weight <= 1.0
@@ -2239,6 +2263,7 @@ def main() -> None:
                 row_sampling_weights,
                 args.minimum_primary_batch_fraction,
                 args.feature_schema,
+                args.player_bias_weight,
             )
             model_path = args.output_dir / f"turn-value-{variant}-seed{seed}.json"
             verify_source_hashes(source_inputs)
@@ -2442,6 +2467,8 @@ def main() -> None:
             ),
             "huberDelta": args.huber_delta,
             "rawBbAuxiliaryWeight": args.raw_bb_auxiliary_weight,
+            "playerBiasWeight": args.player_bias_weight,
+            "playerBiasInterpretation": "Authentic per-player conditional mean value calibration, not action supervision or a safety bound",
             "potStratifiedBatches": True,
             "authenticPrimaryReplay": args.minimum_primary_batch_fraction > 0.0,
         },

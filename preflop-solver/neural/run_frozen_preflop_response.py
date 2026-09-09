@@ -216,6 +216,24 @@ def recover_captures(manifest, digest, pinned, expected):
     return values, reports
 
 
+def prepare_endpoint_cache(root, identity, resume):
+    """Pin completed immutable entries; temporary writes are never recovered."""
+    receipt = root / "identity.json"
+    if resume:
+        if not receipt.is_file() or json.loads(receipt.read_text()) != identity:
+            raise ValueError("endpoint cache identity differs")
+    else:
+        root.mkdir(parents=True, exist_ok=False)
+        atomic_json(receipt, identity)
+    pinned = {str(receipt): sha256(receipt)}
+    for path in root.glob("board[0-3]/*.json"):
+        if (path.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}\.json", path.name)
+                or path.stat().st_size > 512*1024):
+            raise ValueError("invalid endpoint checkpoint file")
+        pinned[str(path)] = sha256(path)
+    return pinned
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ("binary", "preflop", "model", "kernel"):
@@ -228,7 +246,17 @@ def main():
     p.add_argument("--recover-from", type=Path, help="Pinned interrupted controller manifest; use a new output directory")
     p.add_argument("--recover-sha256")
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--workers", type=int, choices=(1,2), default=2)
+    p.add_argument("--maximum-worker-memory-mib", type=int, choices=(1536,2048), default=2048)
+    p.add_argument("--maximum-worker-seconds", type=int, choices=(3600,7200), default=3600)
+    p.add_argument("--endpoint-cache-root", type=Path)
+    p.add_argument("--resume-endpoint-cache", action="store_true")
     args = p.parse_args()
+    if args.resume_endpoint_cache and args.endpoint_cache_root is None:
+        raise ValueError("endpoint recovery requires its explicit cache root")
+    if args.maximum_worker_seconds > 3600 and (not args.complete or args.workers!=1
+            or args.maximum_worker_memory_mib!=1536 or not args.resume_endpoint_cache):
+        raise ValueError("extended wall time requires single-worker low-memory checkpoint recovery")
     if (args.recover_from is not None) != (args.recover_sha256 is not None) or (args.recover_from and not args.complete):
         raise ValueError("recovery requires complete mode and a manifest hash")
     pinned = {}
@@ -253,8 +281,8 @@ def main():
             raise ValueError("preflight endpoint output changed")
         preflight_value = json.loads(source.read_text())
         projection = projected_board_seconds(preflight_value)
-        if projection > 3600:
-            raise ValueError("projected board capture exceeds one-hour worker cap")
+        if projection > args.maximum_worker_seconds:
+            raise ValueError("projected board capture exceeds declared worker time cap")
         pinned[str(args.preflight.resolve())] = args.preflight_sha256
         pinned[str(source.resolve())] = prior["jobs"][0]["outputSha256"]
     for name in ("run_native_value_pilot.py", "run_native_value_preflight.py", "worker_resources.py"):
@@ -270,6 +298,14 @@ def main():
             args.recover_from, args.recover_sha256, pinned, preflight_value)
     args.output = args.output.resolve()
     args.output.mkdir(exist_ok=False)
+    cache_root = (args.endpoint_cache_root or args.output / "endpoint-cache").resolve()
+    cache_identity = dict(schema="frozen-response-endpoint-cache-controller-v1",
+        binarySha256=args.binary_sha256,preflopSha256=args.preflop_sha256,
+        modelSha256=args.model_sha256,kernelSha256=args.kernel_sha256,
+        chanceSeed=32001,flopIterations=128,turnIterations=64,
+        rootRealizationTurnAverages=args.turn_root_averages)
+    cache_pins = prepare_endpoint_cache(cache_root,cache_identity,args.resume_endpoint_cache)
+    pinned.update(cache_pins)
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
@@ -278,8 +314,12 @@ def main():
         completeCapture=args.complete, pinnedInputs=pinned, runnerSha256=sha256(Path(__file__)),
         rootRealizationTurnAverages=args.turn_root_averages,
         projectedSecondsPerBoard=projection,
-        maximumWorkerSeconds=3600 if args.complete else 600, maximumWorkerMemoryBytes=2*1024**3,
-        maximumConcurrentWorkers=2 if args.complete else 1, jobs=recovered_jobs, releaseAccepted=False)
+        maximumWorkerSeconds=args.maximum_worker_seconds if args.complete else 600,
+        maximumWorkerMemoryBytes=args.maximum_worker_memory_mib*1024**2,
+        maximumConcurrentWorkers=args.workers if args.complete else 1,
+        endpointCacheRoot=str(cache_root),resumedEndpointCache=args.resume_endpoint_cache,
+        initialEndpointCacheFiles=max(0,len(cache_pins)-1),
+        jobs=recovered_jobs, releaseAccepted=False)
     if args.recover_from:
         record["recoveredFrom"] = str(args.recover_from.resolve())
     atomic_json(args.output/"manifest.json", record)
@@ -293,6 +333,8 @@ def main():
             POKER_COMPACT_CHECKDOWN=str(args.kernel), POKER_COMPACT_CHECKDOWN_SHA=args.kernel_sha256,
             POKER_NOISE_BOARD_INDEX=str(index), POKER_RESPONSE_PREFLIGHT="0" if args.complete else "1",
             POKER_COMPACT_TURN_ROOT_AVERAGES="1" if args.turn_root_averages else "0",
+            POKER_RESPONSE_ENDPOINT_CACHE=str(cache_root/f"board{index}"),
+            POKER_RESPONSE_BINARY_SHA=args.binary_sha256,
             POKER_COMPACT_OUTPUT=str(output)), args.output/f"board{index}-worker",
             record["maximumWorkerSeconds"], record["maximumWorkerMemoryBytes"], stop)
         value = json.loads(output.read_text())

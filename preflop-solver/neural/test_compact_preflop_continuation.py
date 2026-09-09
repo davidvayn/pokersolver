@@ -28,7 +28,7 @@ class CompactComparisonTests(unittest.TestCase):
         result = compare([a,b])
         self.assertTrue(result["establishedRootStability"]["passed"])
         self.assertEqual(result["withinPublicState"]["completePublicStates"],100)
-        for mutation in ("missing", "untrained", "model", "seed", "baseline", "sampling", "proposal", "history_baseline", "turn_baseline", "scale", "simultaneous", "turn_averages", "played_targets", "schedule", "refresh"):
+        for mutation in ("missing", "untrained", "model", "seed", "baseline", "sampling", "proposal", "history_baseline", "turn_baseline", "scale", "simultaneous", "turn_averages", "played_targets", "schedule", "refresh", "boards"):
             bad = copy.deepcopy(b)
             if mutation=="missing": bad["rows"].pop()
             elif mutation=="untrained": bad["rows"][0]["trained"]=False
@@ -44,6 +44,7 @@ class CompactComparisonTests(unittest.TestCase):
             elif mutation=="played_targets": bad["playedProfileTargets"]=True
             elif mutation=="schedule": bad["regretSchedule"]="lcfr"
             elif mutation=="refresh": bad["endpointProposalRefreshAfterRound"]=32
+            elif mutation=="boards": bad["independentBoards"]=2
             else: bad["config"]["seed"]=27001
             with self.assertRaises(ValueError): compare([a,bad])
 
@@ -61,6 +62,7 @@ class CompactComparisonTests(unittest.TestCase):
                 frozen = root/f"seed{seed}.gz"
                 frozen.write_bytes(str(seed).encode())
                 result = dict(config=dict(seed=seed,iterations=int(environment["POKER_COMPACT_ROUNDS"])),continuationSeed=28001,
+                    independentBoards=int(environment["POKER_COMPACT_INDEPENDENT_BOARDS"]),
                     regretSchedule=environment.get("POKER_COMPACT_REGRET_SCHEDULE","dcfr"),
                     valueModelSha256=sha256(model),frozenPolicy=str(frozen),
                     frozenPolicySha256=sha256(frozen),progress=[dict(round=i+1) for i in range(int(environment["POKER_COMPACT_ROUNDS"]))],trainingSeconds=0.1,totalNodes=16900,
@@ -75,6 +77,11 @@ class CompactComparisonTests(unittest.TestCase):
                     completeTurnBaseline=environment["POKER_COMPACT_TURN_BASELINE"]=="1",
                     playedProfileTargets=environment["POKER_COMPACT_PLAYED_TARGETS"]=="1",
                     rootUpdateTraceEnabled=environment["POKER_COMPACT_TRACE_ROOT"]=="1")
+                if result["independentBoards"]==2:
+                    for tick in result["progress"]:
+                        r=tick["round"]
+                        tick.update(independentBoards=2,boardSamples=[dict(chanceRound=((r-1)//2)*4+(r-1)%2+2*b+1) for b in range(2)],
+                                    endpointSamples=[dict(selectedHistory=["same-endpoint"],boardIndex=b) for b in range(2)])
                 Path(environment["POKER_COMPACT_OUTPUT"]).write_text(json.dumps(result))
                 return dict(status="complete")
             argv = ["pilot", "--binary", str(binary), "--binary-sha256", sha256(binary),
@@ -119,6 +126,18 @@ class CompactComparisonTests(unittest.TestCase):
                     patch("run_compact_preflop_continuation.compare",return_value={}):
                 main()
             self.assertEqual(json.loads((root/"lcfr/manifest.json").read_text())["regretSchedule"],"lcfr")
+            batched = [str(root/"boards") if x==str(root/"lcfr") else x for x in linear if x!="--trace-root-updates"]
+            batched += ["--independent-boards","2"]
+            with patch("sys.argv",batched), patch("run_compact_preflop_continuation.guarded",side_effect=worker), \
+                    patch("run_compact_preflop_continuation.signal.signal"), \
+                    patch("run_compact_preflop_continuation.compare",return_value={}):
+                main()
+            self.assertEqual(json.loads((root/"boards/manifest.json").read_text())["independentBoards"],2)
+            with patch("sys.argv",argv+["--independent-boards","2"]), \
+                    patch("run_compact_preflop_continuation.guarded") as rejected:
+                with self.assertRaisesRegex(ValueError,"independent boards"):
+                    main()
+                rejected.assert_not_called()
             invalid_linear = argv+["--regret-schedule","lcfr"]
             with patch("sys.argv",invalid_linear), patch("run_compact_preflop_continuation.guarded") as rejected:
                 with self.assertRaisesRegex(ValueError,"LCFR screen"):

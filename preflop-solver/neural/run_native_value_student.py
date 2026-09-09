@@ -31,13 +31,16 @@ def main():
     parser.add_argument("--refresh-training", action="store_true")
     parser.add_argument("--architecture", choices=("compact", "wide", "wide-pooled"), default="compact")
     parser.add_argument("--steps", choices=(600, 1200), type=int, default=600)
+    parser.add_argument("--player-bias-weight", choices=(0.0, 1.0), type=float, default=0.0)
     parser.add_argument("--feature-schema", choices=(training.FEATURE_SCHEMA_BOARD_RELATIVE, training.FEATURE_SCHEMA_EXACT_RUNOUT), default=training.FEATURE_SCHEMA_BOARD_RELATIVE)
     args = parser.parse_args()
     for key in ("corpus", "binary", "output"): setattr(args, key, getattr(args, key).resolve())
     if args.output.exists() or sha256(args.corpus) != args.corpus_sha256 or sha256(args.binary) != args.binary_sha256:
         raise ValueError("existing output or pinned input mismatch")
     source = read_capture(args.corpus)
-    if not 256 <= len(source["targets"]) <= 512 or not source.get("source_captures"):
+    # 508 retained states plus the bounded 128-label Path A extension. Existing
+    # 256MiB decoded-input and 6GiB fitting guards remain unchanged.
+    if not 256 <= len(source["targets"]) <= 640 or not source.get("source_captures"):
         raise ValueError("complete multi-family feasibility corpus required")
     reference = None
     if args.split_reference:
@@ -68,6 +71,8 @@ def main():
         command.extend(["--native-split-reference", str(args.split_reference),
                         "--native-split-reference-sha256", args.split_reference_sha256])
     if args.refresh_training: command.append("--native-training-refresh")
+    if args.player_bias_weight:
+        command.extend(["--player-bias-weight", str(args.player_bias_weight)])
     record = dict(schema="native-value-student-pair-controller-v1", status="running", releaseAccepted=False,
                   corpusSha256=args.corpus_sha256, binarySha256=args.binary_sha256,
                   codeSha256=identities, runnerSha256=sha256(Path(__file__)), command=command,
@@ -79,6 +84,8 @@ def main():
     try:
         record["training"] = guarded(command, {}, args.output / "training", 1800, 6 * 1024**3, stop)
         report = json.loads((models / "turn-value-paired-report.json").read_text())
+        if report["loss"].get("playerBiasWeight", 0.0) != args.player_bias_weight:
+            raise ValueError("training changed the declared value-bias objective")
         if report["datasetSha256"] != args.corpus_sha256 or report["splitUnit"] != "suit_canonical_flop_family_all_turns_histories_iterations":
             raise ValueError("training input or split contract drift")
         if (report.get("nativeSplitReferenceSha256") != args.split_reference_sha256

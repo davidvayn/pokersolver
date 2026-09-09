@@ -56,6 +56,8 @@ def compare(outputs):
         raise ValueError("paired continuation target definition differs")
     if outputs[0].get("regretSchedule", "dcfr") != outputs[1].get("regretSchedule", "dcfr"):
         raise ValueError("paired regret weighting differs")
+    if outputs[0].get("independentBoards", 1) != outputs[1].get("independentBoards", 1):
+        raise ValueError("paired public chance batch differs")
     if [v["config"]["seed"] for v in outputs] != [27001,27002]:
         raise ValueError("unexpected paired solver seeds")
     return dict(establishedRootStability=policy_stability_summary(roots),
@@ -70,6 +72,7 @@ def main():
         parser.add_argument("--"+name+"-sha256", required=True)
     parser.add_argument("--rounds", type=int, choices=[2,4,8,16,32,128], default=2)
     parser.add_argument("--workers", type=int, choices=[1,2], default=1)
+    parser.add_argument("--independent-boards", type=int, choices=[1,2], default=1)
     parser.add_argument("--checkdown",type=Path)
     parser.add_argument("--checkdown-sha256")
     parser.add_argument("--continuation-seed", type=int, choices=[28001,28002], default=28001)
@@ -91,6 +94,11 @@ def main():
     parser.add_argument("--maximum-worker-memory-mib", type=int, choices=[2048,2560], default=2048)
     parser.add_argument("--resume", action="append", nargs=3, default=[], metavar=("SEED","RECEIPT","SHA256"))
     args = parser.parse_args()
+    if args.independent_boards != 1 and (args.rounds > 32 or not args.played_profile_targets
+            or not args.turn_baseline or args.endpoint_sampling != "fixed_importance"
+            or args.history_baseline or args.simultaneous_updates or args.turn_root_averages
+            or args.diagnose_targets or args.trace_root_updates or args.flop_baseline_scale != 1.0):
+        raise ValueError("independent boards require isolated <=32-update fixed-proposal played-target pilot")
     proposal_refresh_round = None
     pinned = {}
     for name in ("binary", "model"):
@@ -185,11 +193,12 @@ def main():
     for sig in (signal.SIGINT,signal.SIGTERM): signal.signal(sig,lambda *_:stop.set())
     started = time.monotonic()
     endpoint_budget = 1 if args.endpoint_sampling in ("uniform_one", "opponent_reach", "fixed_importance") else 6
-    seconds_budget = args.maximum_worker_seconds or min(3600, 150*args.rounds*endpoint_budget)
+    seconds_budget = args.maximum_worker_seconds or min(3600, 150*args.rounds*endpoint_budget*args.independent_boards)
     record = dict(schema="compact-preflop-continuation-controller-v1", status="running",
         pinnedInputs=pinned, runnerSha256=sha256(Path(__file__)), rounds=args.rounds,
         continuationSeed=args.continuation_seed, maximumWorkerSeconds=seconds_budget,
         endpointSampling=args.endpoint_sampling, maximumEndpointsPerRound=endpoint_budget,
+        independentBoards=args.independent_boards,
         endpointProposalSha256=args.endpoint_proposal_sha256,
         endpointProposalRefreshAfterRound=proposal_refresh_round,
         historyBaseline=args.history_baseline,
@@ -230,6 +239,7 @@ def main():
             "POKER_COMPACT_REGRET_SCHEDULE":args.regret_schedule,
             "POKER_COMPACT_CHECKPOINT_INTERVAL":str(args.checkpoint_interval),
             "POKER_COMPACT_BINARY_SHA":args.binary_sha256,
+            "POKER_COMPACT_INDEPENDENT_BOARDS":str(args.independent_boards),
         }
         if args.checkdown:
             environment.update(POKER_COMPACT_CHECKDOWN=str(args.checkdown),
@@ -259,6 +269,7 @@ def main():
                 or result.get("playedProfileTargets", False)!=args.played_profile_targets
                 or result.get("rootUpdateTraceEnabled", False)!=args.trace_root_updates
                 or result.get("regretSchedule", "dcfr")!=args.regret_schedule
+                or result.get("independentBoards", 1)!=args.independent_boards
                 or result.get("checkpointInterval",0)!=args.checkpoint_interval
                 or result.get("resumedFromRound",0)!=resumes.get(seed,{}).get("round",0)
                 or result.get("resumeReceiptSha256")!=resumes.get(seed,{}).get("sha256")
@@ -268,9 +279,17 @@ def main():
             raise ValueError("incomplete or discontinuous training progress")
         for tick in result["progress"]:
             samples=tick.get("endpointSamples")
-            if samples is not None and (len(samples)!=endpoint_budget
+            if samples is not None and (len(samples)!=endpoint_budget*args.independent_boards
                     or len({tuple(s["selectedHistory"]) for s in samples})!=endpoint_budget):
                 raise ValueError("incomplete sampled endpoint batch")
+            if args.independent_boards > 1:
+                boards = tick.get("boardSamples", [])
+                if len(boards) != args.independent_boards or tick.get("independentBoards") != args.independent_boards:
+                    raise ValueError("missing independent chance provenance")
+                expected = [((tick["round"]-1)//2)*(2*args.independent_boards)
+                            +(tick["round"]-1)%2+2*b+1 for b in range(args.independent_boards)]
+                if [b["chanceRound"] for b in boards] != expected:
+                    raise ValueError("independent chance stream changed")
         return result, dict(seed=seed,output=str(output),outputSha256=sha256(output),worker=worker)
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:

@@ -13,6 +13,9 @@ mod fixed_control;
 mod fixed_noise;
 mod frozen_response;
 mod history_baseline;
+mod matched_continuation;
+mod board_batch;
+mod endpoint_checkpoint;
 mod sampling;
 mod target_diagnostic;
 use sampling::EndpointSampling;
@@ -330,6 +333,7 @@ fn continuation_step(
     diagnose_targets: bool,
     played_profile: bool,
     trace_root_updates: bool,
+    independent_boards: usize,
 ) -> Result<serde_json::Value, String> {
     let started = Instant::now();
     let round = trainer.completed_iterations + 1;
@@ -360,8 +364,18 @@ fn continuation_step(
             &mut trainer.rng,
         )?
     };
-    // Shared across paired solver seeds; independent from endpoint sampling.
-    let mut chance = SplitMix64::new(batch_iteration_seed(continuation_seed, round));
+    // One policy/endpoint draw and one regret/average update per batch. Keep
+    // the proposal fixed; only public chance is integrated more accurately.
+    let mut batch_values = Vec::new();
+    let mut board_samples = Vec::new();
+    let mut samples = Vec::new();
+    let mut baseline_observations = Vec::new();
+    let mut target_observation = None;
+    let mut kernel_seconds = 0.0;
+    for board_index in 0..independent_boards {
+    // Preserve the reference's per-traverser chance stream at matched compute.
+    let chance_round = board_batch::chance_round(round, board_index, independent_boards)?;
+    let mut chance = SplitMix64::new(batch_iteration_seed(continuation_seed, chance_round));
     let deal = Deal::sample(&mut chance);
     let board: [u8; 3] = deal.board[..3].try_into().unwrap();
     let turns: Vec<_> = (0..52).filter(|c| !board.contains(c)).collect();
@@ -373,12 +387,11 @@ fn continuation_step(
         "sampledEndpointCount":selected.len(),"endpointSampling":sampling.label(),
         "liveFlopEndpoints":live.len()})
     );
+    board_samples.push(serde_json::json!({"board":board,"turn":turn,"chanceRound":chance_round}));
+    let kernel_started = Instant::now();
     let kernel = exact_flop_kernel(board)?;
-    let kernel_seconds = started.elapsed().as_secs_f64();
+    kernel_seconds += kernel_started.elapsed().as_secs_f64();
     let mut values = BTreeMap::new();
-    let mut samples = Vec::new();
-    let mut baseline_observations = Vec::new();
-    let mut target_observation = None;
     let conflicts = public_belief::combo_conflicts();
     for (history, (state, prior)) in &snapshot.endpoints {
         if let Some(Terminal::Fold { winner }) = state.terminal {
@@ -506,12 +519,16 @@ fn continuation_step(
                 }
             }
             samples.push(serde_json::json!({"selectedHistory":history,
+                "boardIndex":board_index,"board":board,"turn":turn,
                 "endpointProposal":probability,"selectedRawRangeTotals":totals,
                 "strategicResidualSquaredMean":residual_mse,
                 "flopPolicySha256":selected_policy,"seconds":before.elapsed().as_secs_f64()}));
         }
         values.insert(history.clone(), baseline);
     }
+    batch_values.push(values);
+    }
+    let values = board_batch::mean_values(batch_values)?;
     let target_report = target_observation.map(|v| v.describe(&snapshot,&trainer.config,
         &values,trainer.completed_iterations as usize%2)).transpose()?;
     let mut root_report = trace_root_updates.then(||
@@ -546,7 +563,8 @@ fn continuation_step(
     let first = samples.first().ok_or("no sampled continuation values")?;
     Ok(
         serde_json::json!({"round":round,"seconds":started.elapsed().as_secs_f64(),
-        "kernelSeconds":kernel_seconds,"board":board,"turn":turn,
+        "kernelSeconds":kernel_seconds,"board":board_samples[0]["board"],"turn":board_samples[0]["turn"],
+        "independentBoards":independent_boards,"boardSamples":board_samples,
         "selectedHistory":first["selectedHistory"],"endpointProposal":first["endpointProposal"],
         "selectedRawRangeTotals":first["selectedRawRangeTotals"],"flopPolicySha256":first["flopPolicySha256"],
         "endpointSamples":samples,"endpointSampling":sampling.label(),
@@ -584,6 +602,9 @@ fn compact_preflop_continuation_pilot() {
     assert!([27001, 27002].contains(&seed));
     assert!([28001, 28002].contains(&continuation_seed));
     assert!([2, 4, 8, 16, 32, 128].contains(&rounds));
+    let independent_boards: usize = std::env::var("POKER_COMPACT_INDEPENDENT_BOARDS")
+        .unwrap_or_else(|_| "1".into()).parse().unwrap();
+    assert!([1,2].contains(&independent_boards));
     let model = PublicValueNetwork::read(Path::new(&std::env::var("POKER_COMPACT_MODEL").unwrap()))
         .unwrap();
     assert_eq!(
@@ -649,6 +670,10 @@ fn compact_preflop_continuation_pilot() {
         .map(|v| { assert!(v=="0" || v=="1"); v=="1" }).unwrap_or(false);
     let trace_root_updates = std::env::var("POKER_COMPACT_TRACE_ROOT")
         .map(|v| { assert!(v=="0" || v=="1"); v=="1" }).unwrap_or(false);
+    assert!(independent_boards==1 || (rounds<=32 && played_profile && turn_baseline
+        && !use_history_baseline && !simultaneous && !root_turn_averages
+        && !diagnose_targets && !trace_root_updates && flop_checkdown_scale==1.0
+        && sampling==EndpointSampling::FixedImportance));
     assert!(!trace_root_updates || (rounds<=32 && played_profile && turn_baseline
         && !root_turn_averages && !simultaneous && !diagnose_targets
         && !use_history_baseline && flop_checkdown_scale==1.0));
@@ -709,6 +734,10 @@ fn compact_preflop_continuation_pilot() {
         "sampling":sampling.label(),"playedProfile":played_profile,
         "turnBaseline":turn_baseline,"rootTrace":trace_root_updates,"regretSchedule":regret_schedule,
         "flopIterations":128,"turnIterations":64});
+    let mut recovery_identity = recovery_identity;
+    if independent_boards != 1 {
+        recovery_identity["independentBoards"] = serde_json::json!(independent_boards);
+    }
     if checkpoint_interval>0 || resume_path.is_some() {
         assert!(recovery_identity["binarySha256"].as_str().is_some_and(|s|
             s.len()==64 && s.bytes().all(|c|c.is_ascii_hexdigit())));
@@ -734,6 +763,7 @@ fn compact_preflop_continuation_pilot() {
             diagnose_targets,
             played_profile,
             trace_root_updates,
+            independent_boards,
         )
         .unwrap();
         eprintln!("{tick}");
@@ -776,6 +806,7 @@ fn compact_preflop_continuation_pilot() {
         "endpointProposalSha256":proposal_sha,
         "endpointProposalRefreshAfterRound":fixed_proposal.as_ref().and_then(|p|p.refresh_after_round()),
         "regretSchedule":regret_schedule,
+        "independentBoards":independent_boards,
         "historyBaseline":use_history_baseline,
         "completeTurnBaseline":turn_baseline,
         "flopCheckdownScale":flop_checkdown_scale,

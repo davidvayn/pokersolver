@@ -1,6 +1,273 @@
 # Native full-hand policy improvement plan
 
-Updated: 2026-09-08. Status: **Step 3: both128 comparisons complete; scaling rejected; continuation-robustness diagnosis next**.
+Updated: 2026-09-09. Status: **Recovery, bounded follow-up pilots and final tests
+complete; retain LCFR32/ace-coverage and stay local. No native jobs remain.**
+
+Recovery notice (September8, ~15:26 local): the machine rebooted during the
+four-worker response evaluation. No evaluation process survived. Completed
+training, exported policies, student weights and native prediction files pass
+their saved SHA256 checks; no retraining is required. The four active boards
+had each logged19/49 endpoints, but no final board CFV artifact existed. Those
+timing-only logs cannot recover values. Preserve them as interrupted evidence.
+Before retrying, added immutable checksummed per-endpoint CFV checkpoints with
+source/board/binary identities, and validated restore parity. Resumed with TWO
+native workers total (one per seed),1536MiB per worker. Crash cause is not
+established; the observed slowdown motivates the reduced concurrency. No
+acceptance metric or solver update budget changes. All nine previously local
+commits were successfully pushed; origin/main and HEAD are b677190.
+
+Recovery validation complete: binary73c39f06910adde2e779980f24512068d0b0eb1f55efa3f035733b873c4f34df
+passes the endpoint integrity/identity/float-roundtrip test. Both new preflights
+exactly match the pre-crash numerical captures; cached replay restores all
+three endpoints with zero native solves, also exactly equal. Checkpoints are
+immutable checksummed atomic JSON files with file/directory sync, pinned
+policy/model/kernel/binary/board/history identities and full combo CFVs.
+Fresh preflights took283.63/285.02s; conservative board projections6707/6743s
+exceeded the default3600s cap. The explicit7200s wall-time option is restricted
+to single-worker,1536MiB endpoint-cache recovery. Default cap remains3600s;
+no increase in solver iterations, memory or acceptance tolerance. Current
+controllers: `local-independent-boards-response-20260908-{27001,27002}-reboot-complete`.
+Both completed in6037s (~101min), with one native worker each (TWO total).
+All392 endpoints are now saved. Maximum sampled worker footprints were
+1,050,248,800/1,081,116,208 bytes, below their1536MiB guards. Both summaries
+recompute exactly from the final board artifacts, and both final response
+tables exactly match choices saved BEFORE evaluation-board artifacts existed.
+
+If interrupted again, retain the pinned73c39f binary and the corresponding
+`reboot-preflight/endpoint-cache` directory. Use a NEW output directory, the
+same pinned preflight and primary inputs, `--workers 1`,
+`--maximum-worker-memory-mib 1536 --maximum-worker-seconds 7200`,
+`--endpoint-cache-root <saved-root> --resume-endpoint-cache`.
+Do not use whole-board `--recover-from` for timing-only partial board logs;
+endpoint recovery reconstructs completed numerical work directly. No policy
+promotion or new training is part of this recovery.
+
+## September 8 follow-up: decision-directed calibration and board averaging
+
+1. Reproduce the Path A ranking regression on saved unchanged beliefs (done:
+   seed100101 native action loss0.203414 ->0.350900bb). Do not train on this
+   reused development root. It diagnoses ranking, not full-game exploitability.
+2. Test a single training change: authentic joint-reach-weighted per-player
+   signed value-bias penalty, squared separately by player. Zero-sum projection
+   cannot eliminate opposite player biases. Use weight1 in depth units, retain
+   existing Huber objective,636-label corpus,600-step seeds10601/10602, splits,
+   architecture and tuning selection. This is explicitly a calibration proxy,
+   NOT chance-clairvoyant per-turn flop action supervision. Run full parity,
+   then actual paired policy response and fixed-belief action diagnostics.
+   Output: `preflop-solver/neural/runs/local-player-bias-students-20260908-a`.
+3. Independent-board pilot: one frozen iteration snapshot and one endpoint draw;
+   average separately importance-corrected CFVs over two independent boards
+   BEFORE the single regret/average update. Keep the exact baseline once and
+   preserve each traverser's reference chance stream at matched native-query
+   count. First validate reference parity, replay, accounting and recovery;
+   then compare16 two-board updates against retained32 one-board updates on
+   both seeds using identical response evaluation. This isolates board averaging
+   plus fewer updates at equal queries, not a same-update-count speedup claim.
+4. Reject regressions, retain existing LCFR32/ace-coverage route. No paid run,
+   website promotion or approximate-GTO claim from these conditional screens.
+
+Hypotheses in priority order: systematic player value bias, public-board chance
+variance, then an inadequate finite-budget continuation target. The first two
+have separate pilots; if neither improves actual actions/responses, do not
+extend unchanged training simply because RMSE falls.
+
+Follow-up results so far:
+
+- Optional bias penalty implemented with tests for player-error cancellation,
+  authentic reach weighting, empty reach and gradients. Default weight stays0.
+  Paired600-step training finished540.362s, peak3,235,449,568 bytes; full native/
+  Python verification2054.396s including fitting. Parity5.80661e-6/4.76820e-6bb.
+  Held-out RMSE worsens to1.580707/1.970557bb. Actual conditional half-summed
+  response gains0.160881/0.243355bb versus retained0.125979/0.120764bb: both
+  worse. Reject; no extra epochs or broader transfer. Frozen-belief native
+  action losses0.372067/0.475208bb also worse than retained0.203414/0.126381bb.
+- Independent-board implementation passes its expectation/stream tests and
+  full Rust release suite350passed/52explicitlyignored. Neural/value suite68
+  passed, compact/matched/PathA suite9passed. Default32-update paired replay
+  reproduces BOTH retained frozen-policy files and round8 checkpoints byte
+  for byte. Two-board16-update training finished850.448s for the pair.
+  Both variants have a maximum32-solve budget: actual reference solves30/32,
+  batched32/32 (unreachable reference endpoints skip two solves). Do not call
+  their actual computation identical. Distinct sampled endpoints per actor
+  fall14/12 ->8/8 and12/12 ->8/6. Primary agreement47.34% ->23.67%; probability
+  sums and all16900 rows valid. Actual response comparison is now complete.
+- Response capture initially refused16-round input due to its old allowlist.
+  Added16 without changing solver math, solve budget or acceptance thresholds.
+  Both corrected pre-crash preflights passed (~141s). The interrupted complete
+  responses used four native workers total, each2GiB cap. Recovery now uses
+  TWO total and1536MiB per worker, as documented above.
+
+Completed independent-board response comparison (lower summed restricted
+preflop response gain is better; NOT full-game exploitability):
+
+| Preflop seed | Retained32 x1 board | Experimental16 x2 boards | Delta |
+| --- | ---: | ---: | ---: |
+| 27001 | 0.461800bb | 0.640878bb | +0.179078bb |
+| 27002 | 0.467628bb | 0.291236bb | -0.176392bb |
+| Paired mean | 0.464714bb | 0.466057bb | +0.001343bb |
+
+Seed27001 worsens on BOTH evaluation boards;27002 improves on BOTH. The
+paired-board-cluster SE of the mean delta is0.006671bb, based on only TWO
+evaluation clusters shared by the seeds. There is no qualifying99% bound.
+This is no reproducible paired improvement, not proof of exact equivalence.
+Reject this configuration for promotion; do not select27002 after looking at
+these evaluation boards. Keep both artifacts for diagnosis and retain the
+existing LCFR32/ace-coverage route. No website/model change has been made.
+
+The tested batching reduces independent endpoint draws and update/average
+sweeps while increasing boards per chosen endpoint. Its lower endpoint
+diversity and worse cross-seed stability are consistent with an endpoint/update
+coverage bottleneck, but this comparison does not isolate its causal share.
+It does NOT show that independent board coverage in general is useless.
+A possible next bounded experiment is independent ENDPOINT-and-board draws
+under the same frozen update, preserving query diversity; not implemented or
+started here. Direct chance-integrated action-contrast supervision remains a
+separate unimplemented alternative to the failed mean-bias penalty. These
+results do not support paid scaling of either tested change. Full-hand
+exploitability, coverage, EV-confidence, resolver safety and serving acceptance
+remain unqualified; this recovery is not a release.
+
+Final verification: focused controller/recovery suite11passed; value/network/
+dataset/budget/PathA suite69passed; exact source-hash and prospective-response
+verification passed for both completed evaluations. Current-binary full Rust
+release suite351passed,52explicitlyignored,0failed in220.316s, sampled peak
+2,003,257,360 bytes under its2GiB guard. It ran after the evaluations, not
+concurrently. `git diff --check` passes. No browser/TypeScript/serving code
+changed, so no frontend build/browser acceptance was claimed for this work.
+All previously committed work was pushed at b677190. On September9 the user
+authorized committing and pushing the experimental/recovery changes together.
+Rejected experimental modes stay opt-in; the retained policy and website are
+unchanged. Large local run artifacts and unrelated report/UI work are excluded.
+
+September9 diagnosis replay recomputed both final response summaries exactly
+from their pinned board outputs. The assertion that BOTH seeds improved fails
+as expected; neither a crash-corrupted result nor a reproducible paired gain
+was found. The next recommended experiments are proposals, not started:
+
+1. First isolate endpoint diversity: compare16 frozen updates with two
+   independent endpoint-and-board draws against the completed16-update,
+   shared-endpoint/two-board arm and the retained32-update/one-draw reference.
+   Keep the same maximum32 native-query budget, continuation model, exact
+   baseline correction and existing response metric. Test whether broader
+   endpoint draws reduce seed sensitivity and improve actual response gains.
+   Sampling baselines address variance without implying instant convergence:
+   https://proceedings.mlr.press/v119/davis20a.html . We already have a baseline;
+   this proposal changes sample allocation, not merely adds another baseline.
+2. If necessary, separately test update count using32 two-draw updates. This
+   costs up to64 native queries and is explicitly NOT compute-matched to the
+   retained32-query reference. It tests whether fewer regret/average updates
+   erased the benefit of batching; do not conflate this with endpoint diversity.
+3. For the value network, test action-value DIFFERENCES on training-only
+   beliefs instead of another mean-bias penalty. Integrate future chance before
+   forming a current-street action target; keep legal card removal and ranges
+   consistent. This is our proposed objective, not a demonstrated fix. Judge
+   it by native action loss and actual paired responses, not lower RMSE alone.
+   Only a promising development result warrants a fresh-board confirmation;
+   do not select seed27002 using the already-consumed evaluation boards.
+
+Do not start paid scaling of either rejected configuration. A reproducibly
+improving pilot would support extending the same configuration locally before
+deciding whether its measured throughput justifies paid compute. These tests
+still cannot establish full-game exploitability or release acceptance.
+
+Current report: `preflop-solver/neural/20bb-20260908-decision-directed-pilots.json`.
+
+## Current authorized sequence (September 8, continuation follow-up)
+
+1. Run a bounded fixed-policy 2x2 comparison: two/four independent fitting
+   boards and 128/64 versus 256/128 flop/turn continuation iterations. Keep
+   both LCFR32 preflop seeds frozen. Diagnose call/fold allocation at BB facing
+   4bb and SB after limp/BB5bb; preserve all other action mass. Fit on new
+   chance71201 indices0–3, evaluate every choice under the same stronger
+   continuation on indices4–7. Average chance/private classes BEFORE choosing
+   actions. This is a restricted action-ranking screen, not exploitability;
+   both continuation budgets remain approximate and reuse reference ranges.
+2. Path A: target native value supervision at actual solver ranges and explicit
+   deviations on training families only. Prioritize action-relevant failures,
+   retain existing held-out targets, fit paired models, and measure actual
+   response gains. Do not claim lower RMSE alone is stronger poker play.
+3. If Path A gives no credible action/response improvement, choose a bounded
+   continuation-portfolio or cross-street-consistency pilot, or recommend paid
+   compute if measured sample/solve scaling supports it. No paid provisioning
+   is authorized. Preserve LCFR32 and the website throughout these pilots.
+
+Implementation: dedicated read-only native capture and guarded Python runner;
+two concurrent workers, 2GiB each, 20GiB disk reserve, 900s per worker and a
+two-hour stage cap with strongest-cell cost preflight. Completed artifacts in
+`preflop-solver/neural/runs/local-matched-continuation-20260908-a`.
+The strongest-cell preflight passed in132.508s, peak447,070,952 bytes; conservative
+two-worker projection2385s (~40min). Binary SHA256
+`c45c2349778808d75f0c961a8596ed2f8a3881f8512fdf57b99a9bdc6c563abf`.
+Three matched-analysis tests and forced-call range-restoration test pass; the
+focused native root/legal-action test passes. Full guarded Rust release suite:
+348 passed,52 intentionally ignored,0 failed;547.590s, peak1,676,052,280 bytes
+(ran concurrently with comparison workers; not a standalone throughput measure).
+Matched comparison complete:24/24 cells,2292.015s (~38min). Local fold/call
+adjustment gains (higher is better here, NOT exploitability):
+
+| Solve budget / fitting boards | Preflop seed27001 | Preflop seed27002 |
+| --- | ---: | ---: |
+| 128/64,2 boards | 0.0183527bb | 0.0000219bb |
+| 128/64,4 boards | 0.0549816bb | 0.0270726bb |
+| 256/128,2 boards | 0.0216606bb | 0.0000219bb |
+| 256/128,4 boards | 0.0550305bb | 0.0276362bb |
+
+More fitting boards at the current solve budget improve both seed means;
+paired mean+0.0318398bb, board-cluster SE0.0221669bb (3/4 paired board deltas
+positive). Stronger solves at four boards give only+0.0003063bb, SE0.0003568bb.
+This favors independent chance coverage over deeper local optimization on these
+two branches, not proof of the dominant full-game error or paid-run success.
+The finite-budget evaluation continuation remains approximate. Both preflop
+seeds use the retained10601 continuation weights, matching their reference route.
+Report: `preflop-solver/neural/20bb-20260908-matched-continuation.json`.
+Path A collected128 native labels at current and forced-call ranges, in
+`preflop-solver/neural/runs/local-path-a-values-20260908-a`. Append to the508
+retained targets, leaving the entire old prefix and held-outs unchanged. The
+bounded extension is636 states (640 cap), still <=256MiB decoded,128MiB gzip;
+native workers2GiB and subsequent fitting6GiB guards unchanged. First test paired
+policy responses on the cheap existing facing-bet context, then more expensive
+flop-start transfer if the result supports it. No promotion or paid provisioning.
+
+Path A capture complete in404.446s:8 captures/128 new native labels;636 total
+states; entire508-target prefix and held-out splits exact. Corpus SHA256
+`94d47008c9eace28fd3d9043de77f7a6f02189ba1ba61c5fb896615cae667472`,
+84,974,756 gzip bytes /202,495,116 decoded bytes, below unchanged byte limits.
+Paired600-step wide-model fitting/inference validation completed at
+`preflop-solver/neural/runs/local-path-a-students-20260908-a`, same architecture,
+feature schema, optimizer, training seeds10601/10602 and split as retained pair.
+
+Path A outcome: fitting537.186s, peak3,231,353,592 bytes; fitting plus full
+native/Python parity1661.923s. Both parity checks pass (maximum5.7664e-6 /
+5.5125e-6bb). Held-out authentic RMSE improves1.472388/1.460843 ->
+1.421850/1.408757bb. However the independent fixed-budget facing-bet policy
+screen (47.764s, all49 public turns) gives conditional half-summed response gains
+0.125979 ->0.156370bb for seed100101 (worse),0.120764 ->0.118815bb for100102.
+Pair mean worsens0.0142212bb (~11.53%). Reject this candidate; no expensive
+flop-start transfer run, no extra epochs, no preflop retraining or promotion.
+
+Fast fixed-belief replay pinpoints an action-ranking failure: on the unchanged
+retained facing root, new seed10601 values reduce native-best agreement59.46%
+to45.29% and increase native loss of the predicted best action0.203414 ->
+0.350900bb. Seed10602 improves70.87% ->74.79%, loss0.126381 ->0.117745bb.
+One captured holding has native-reference call EV-8.80734bb versus fold-7.5bb, while
+the new network predicts call-7.42368bb. Thus general RMSE improved while a
+decision-critical call value became overly optimistic. These are diagnostics
+on the same frozen source beliefs, not newly trained policies or full-game bounds.
+Report: `preflop-solver/neural/20bb-20260908-path-a-pilot.json`.
+
+Compute decision: **keep the next pilot local**. The data extension took6.7min
+and fitting9min (full parity adds18.7min); the matched comparison favors more
+independent public boards over deeper local solves. Paid compute could accelerate
+independent batches, but there is no evidence supporting a paid unchanged/deeper
+long training run or promising Approximate GTO. The next policy-directed change
+should target action-value contrasts/overvalued calls on training-only beliefs,
+and test independent-public-board averaging before a large iteration extension.
+Do not repeat the rejected same-board six-endpoint batching or assert that this
+fixed-policy screen proves minibatched CFR will converge faster. Continuation
+portfolios and coherent safe re-solving remain alternatives, not implemented here.
+This authorized bounded comparison/Path A/compute-decision sequence is complete.
+**Nothing is running.** The broader release plan remains incomplete; retain
+LCFR32 and the prior ace-coverage weights; website and full-game status unchanged.
 
 Current decision: retain the paired LCFR32 research reference, not either128
 extension. Restricted preflop response gains by seed:
@@ -12,8 +279,8 @@ extension. Restricted preflop response gains by seed:
 | Late-refresh LCFR128 | 0.612373bb | 0.463114bb |
 
 These are NOT full-game exploitability values. No512/1024, no paid compute,
-no model promotion. All training and evaluations in this bounded sequence are
-complete; **nothing is currently running**. The release plan is NOT complete.
+no model promotion. The preceding LCFR128 training/evaluations are complete;
+the newly authorized bounded sequence above is also complete. The release plan is NOT complete.
 Two reused evaluation board clusters do not provide a qualifying99% bound.
 The next policy-directed action is to isolate continuation robustness at the
 costly opening/limp/raise branches, not repeat optimizer/sampler parameter sweeps.
