@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { AnalystRail } from '@/components/practice/AnalystRail';
 import { DEFAULT_PRACTICE_SETTINGS } from '@/lib/practice-types';
-import type { PracticeDecisionRecord } from '@/lib/practice-types';
+import type { PolicyManifest, PracticeDecisionRecord } from '@/lib/practice-types';
+import { PUSH_FOLD_MANIFEST } from '@/lib/practice-models';
+import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 
 const feedback: PracticeDecisionRecord = {
   id: 'decision-1',
@@ -55,7 +57,8 @@ const feedback: PracticeDecisionRecord = {
 
 function renderFeedback(
   value: PracticeDecisionRecord | null,
-  tab: 'feedback' | 'settings' = 'feedback'
+  tab: 'feedback' | 'settings' = 'feedback',
+  manifest: PolicyManifest | null = null
 ): string {
   (globalThis as typeof globalThis & { React: typeof React }).React = React;
   return renderToStaticMarkup(
@@ -68,7 +71,7 @@ function renderFeedback(
       pendingSettings: null,
       onSettingsChange: vi.fn(),
       fullDepths: [],
-      manifest: null,
+      manifest,
       sessionDecisions: [],
       historyWarning: '',
       opponentModel: null,
@@ -166,5 +169,32 @@ describe('AnalystRail decision feedback', () => {
     const pureMixHtml = renderFeedback(pureMix);
     expect(pureMixHtml).toContain('width:0%');
     expect(pureMixHtml).toContain('100%');
+  });
+
+  it('renders prominent Model & assumptions disclosure with concise summary for push-fold', () => {
+    const html = renderFeedback(null, 'feedback', PUSH_FOLD_MANIFEST);
+    expect(html).toContain('Model &amp; assumptions');
+    expect(html).toContain('Click to view model details');
+    expect(html).toContain('Hide');
+    expect(html).toContain('Approximate GTO');
+    expect(html).toContain('hu-push-fold-v1');
+    expect(html).toContain('169 preflop hand classes');
+    expect(html).toContain('showdown equity');
+    // Ensure the old long essay list and notes are not dumped
+    expect(html).not.toContain('All eight bundled depths pass the v1');
+  });
+
+  it('renders concise 2-paragraph summary for full-hand experimental resolver', () => {
+    const fullHandManifest = (fullHandManifests as PolicyManifest[])[0];
+    const html = renderFeedback(null, 'feedback', fullHandManifest);
+    expect(html).toContain('Model &amp; assumptions');
+    expect(html).toContain('Experimental self-play');
+    expect(html).toContain('server-side Rust continual resolver');
+    expect(html).toContain('engine fails closed');
+    expect(html).toContain('primary agreement');
+    expect(html).toContain('Full-game exploitability certification is deferred');
+    // Ensure the old verbose raw notes dump is eliminated
+    expect(html).not.toContain('Active experimental practice model: exploitability is deferred, not passed.');
+    expect(html).not.toContain('Complete per-round logs measure 10.282785437');
   });
 });

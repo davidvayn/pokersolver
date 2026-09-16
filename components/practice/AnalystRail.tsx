@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   BarChart3,
   Check,
+  ChevronDown,
   ClipboardList,
   Info,
   Settings2,
@@ -571,56 +572,42 @@ export function AnalystRail({
       </div>
 
       {manifest && (
-        <details className="border-t border-border p-4 text-xs">
-          <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-            Model & assumptions
+        <details className="group border-t border-border p-4 text-xs">
+          <summary className="flex min-h-11 cursor-pointer items-center justify-between rounded-lg px-2.5 py-1.5 -mx-2.5 transition-colors hover:bg-muted/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none list-none [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <Info className="h-4 w-4 text-muted shrink-0 group-hover:text-foreground transition-colors" />
+              <div className="text-left">
+                <span className="font-semibold text-foreground block leading-4">Model & assumptions</span>
+                <span className="text-[11px] text-muted block group-open:hidden">
+                  Click to view model details
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 text-muted group-hover:text-foreground transition-colors">
+              <span className="text-[11px] font-medium hidden group-open:inline">Hide</span>
+              <ChevronDown className="h-4 w-4 transition-transform duration-200 group-open:rotate-180" />
+            </div>
           </summary>
-          <div className="mt-3 space-y-2 leading-5 text-muted">
-            <p>{manifest.label} · {manifest.version}</p>
-            {manifest.runtime?.kind === 'neural-deep-cfr-v1' && (
-              <p>
-                Frozen Deep CFR baseline plus a confidence-capped exploit response. Weights are immutable static artifacts; opponent evidence stays in local IndexedDB.
-              </p>
+          <div className="mt-3 space-y-2.5 leading-relaxed text-muted border-t border-border/50 pt-3">
+            {manifest.subtype === 'push-fold' ? (
+              <>
+                <p>
+                  Built on <strong className="text-foreground">{manifest.label}</strong> (<code className="text-[11px] text-foreground">{manifest.version}</code>), this drill simulates heads-up push/fold spots across {manifest.depthsBb.join(', ')}bb stack depths ({manifest.abstraction.blindsBb.join('/')}bb blinds, no rake). Decisions are evaluated across 169 preflop hand classes with exact-card removal.
+                </p>
+                <p>
+                  Strategy frequencies and action EVs derive from deterministic Monte Carlo showdown equity against the validated push/fold corpus. Call-decision uncertainties carry conservative standard-error bounds and are graded accordingly.
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  Built on <strong className="text-foreground">{manifest.label}</strong> (<code className="text-[11px] text-foreground">{manifest.version}</code>), this table plays heads-up Hold&apos;em at {manifest.abstraction.blindsBb.join('/')}bb blinds with zero rake and complete public action recall. Preflop uses pinned discrete sizing ({manifest.abstraction.actionSizing}) with exact card removal, while postflop decisions are dynamically resolved from public belief states using {manifest.runtime?.kind === 'rust-continual-resolver-v1' ? 'the server-side Rust continual resolver' : manifest.runtime?.kind === 'neural-deep-cfr-v1' ? 'a deep CFR neural network' : 'the pinned strategy engine'}. The engine fails closed: if weights are unavailable or resolving fails, the table pauses rather than scoring a fabricated fallback.
+                </p>
+                <p>
+                  Strategy reflects consensus validation across two independent training seeds{manifest.validation.primaryActionAgreement ? ` (${(manifest.validation.primaryActionAgreement * 100).toFixed(1)}% primary agreement` : ''}{manifest.validation.crossSeedFrequencyMae ? `, ${(manifest.validation.crossSeedFrequencyMae * 100).toFixed(1)}% MAE` : ''}{manifest.validation.policyCoverage ? `, ${(manifest.validation.policyCoverage * 100).toFixed(1)}% coverage)` : ')'}. {manifest.validation.exploitabilityGateDeferred ? 'Full-game exploitability certification is deferred; this model is an experimental benchmark rather than certified Approximate GTO.' : manifest.validation.exploitabilityEstimateBb !== undefined ? `Estimated exploitability is ${manifest.validation.exploitabilityEstimateBb.toFixed(3)}bb/hand.` : ''} Action EVs carry conservative standard-error bounds, and opponent adaptations stay strictly local to your browser.
+                </p>
+              </>
             )}
-            {manifest.runtime?.kind === 'rust-continual-resolver-v1' && (
-              <p>
-                The server replays this hand through the pinned Rust policy and resolves each postflop decision from exact public ranges. Missing weights or a failed resolve pause the table; no fallback strategy is scored.
-              </p>
-            )}
-            {manifest.validation.exploitabilityGateDeferred && (
-              <p className="font-semibold text-amber-700 dark:text-amber-300">
-                Experimental: the exploitability release gate is deferred. This model is not labeled Approximate GTO.
-              </p>
-            )}
-            <p>
-              {manifest.abstraction.blindsBb.join('/')}bb blinds · {manifest.abstraction.rake} rake · {manifest.abstraction.recall} recall
-            </p>
-            <p>{manifest.abstraction.actionSizing}</p>
-            <p>{manifest.abstraction.cardAbstraction}</p>
-            {manifest.validation.exploitabilityEstimateBb !== undefined && (
-              <p>
-                Estimated exploitability {manifest.validation.exploitabilityEstimateBb.toFixed(3)}bb/hand
-                {manifest.validation.exploitabilityUpper99Bb !== undefined
-                  ? ` · 99% upper ${manifest.validation.exploitabilityUpper99Bb.toFixed(3)}bb/hand`
-                  : ''}
-              </p>
-            )}
-            {manifest.validation.crossSeedFrequencyMae !== undefined && (
-              <p>
-                Cross-seed MAE {(manifest.validation.crossSeedFrequencyMae * 100).toFixed(1)}% · primary agreement {((manifest.validation.primaryActionAgreement ?? 0) * 100).toFixed(1)}%
-              </p>
-            )}
-            {manifest.validation.policyCoverage !== undefined && (
-              <p>
-                Lookup coverage {(manifest.validation.policyCoverage * 100).toFixed(3)}% · precise action-EV coverage {((manifest.validation.actionEvStandardErrorCoverage ?? 0) * 100).toFixed(1)}%
-              </p>
-            )}
-            {manifest.validation.projectedStorageBytes !== undefined && (
-              <p>
-                Projected hosted policy {(manifest.validation.projectedStorageBytes / 1024 ** 3).toFixed(2)}GiB
-              </p>
-            )}
-            {manifest.validation.notes.map((note) => <p key={note}>{note}</p>)}
           </div>
         </details>
       )}
