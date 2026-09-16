@@ -7,7 +7,7 @@
     "dev": "next dev -p 3000",
     "predev": "npm run build:solver",
     "build": "npm run build:solver && npm run practice:verify-resolver-artifacts && next build",
-    "build:solver": "cargo build --release --manifest-path preflop-solver/Cargo.toml",
+    "build:solver": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo build --release --manifest-path preflop-solver/Cargo.toml",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",

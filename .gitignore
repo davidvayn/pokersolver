@@ -14,3 +14,5 @@ next-env.d.ts
 /preflop-solver/.venv-neural
 /preflop-solver/neural/runs
 __pycache__/
+blueprint-artifact.json
+/public/reports

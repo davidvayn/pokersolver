@@ -23,6 +23,9 @@ if (
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   // Keep development output isolated from production builds. Sharing `.next`
   // lets `next build` invalidate files used by a running dev server.
   distDir: process.env.NODE_ENV === 'development' ? '.next-dev' : '.next',

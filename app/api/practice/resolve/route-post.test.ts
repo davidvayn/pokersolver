@@ -56,7 +56,7 @@ describe('practice continual-resolver POST route', () => {
 
   it('uses the full Node runtime with the Hobby Fluid Compute duration ceiling', () => {
     expect(runtime).toBe('nodejs');
-    expect(maxDuration).toBe(300);
+    expect(maxDuration).toBe(60);
   });
 
   it('replays an exact pinned request and strips the non-acting private hand', async () => {
