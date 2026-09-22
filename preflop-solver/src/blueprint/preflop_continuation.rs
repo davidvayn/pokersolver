@@ -16,6 +16,7 @@ mod history_baseline;
 mod matched_continuation;
 mod board_batch;
 mod endpoint_checkpoint;
+mod postflop_benchmark;
 mod sampling;
 mod target_diagnostic;
 use sampling::EndpointSampling;
