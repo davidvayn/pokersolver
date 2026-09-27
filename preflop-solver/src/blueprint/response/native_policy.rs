@@ -308,13 +308,16 @@ mod tests {
             }
             pending.extend(actions.iter().map(|a| state.apply(a, &game)));
         }
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "native-full-hand-fixture-{}.msgpack",
-            std::process::id()
+            "native-full-hand-fixture-{}-{}.msgpack",
+            std::process::id(),
+            FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         trainer.write_checkpoint(&path).unwrap();
         let preflop = Arc::new(FrozenPreflopPolicy::read(&path).unwrap());
-        fs::remove_file(path).unwrap();
+        let _ = fs::remove_file(path);
         NativeFullHandPolicy::new(
             preflop,
             NativeFlopOptions {
