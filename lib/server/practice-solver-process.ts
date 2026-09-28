@@ -322,6 +322,15 @@ class PracticeSolverProcess implements PracticeResolverWorker {
     };
     child.stdin.write(`${JSON.stringify(batch)}\n`, (error) => {
       if (!error) return;
+      if (this.child === child) {
+        this.child = null;
+        this.starting = null;
+        try {
+          child.kill();
+        } catch {
+          // Process may already have terminated
+        }
+      }
       for (const { requestId } of queued) {
         const pending = this.pending.get(requestId);
         if (!pending) continue;
@@ -334,6 +343,7 @@ class PracticeSolverProcess implements PracticeResolverWorker {
         );
       }
     });
+
   }
 
   async stop(): Promise<void> {

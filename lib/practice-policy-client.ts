@@ -3,6 +3,10 @@ import {
   policyNodeFromShard,
 } from '@/lib/policy-codec';
 import { canonicalPolicyHash } from '@/lib/practice-engine';
+import {
+  getStoredPracticeManifests,
+  storePracticeManifests,
+} from '@/lib/practice-models';
 import type { NeuralPolicyResult } from '@/lib/neural-policy';
 import { neuralLegalActions } from '@/lib/neural-policy';
 import { NeuralPolicyWorkerClient } from '@/lib/neural-policy-worker-client';
@@ -35,12 +39,21 @@ export class PracticePolicyClient {
   private fetcher: Fetcher;
   private neuralExecutor: NeuralPolicyExecutor | null;
 
-  constructor(fetcher?: Fetcher, neuralExecutor?: NeuralPolicyExecutor) {
+  constructor(
+    fetcher?: Fetcher,
+    neuralExecutor?: NeuralPolicyExecutor,
+    initialManifests?: PolicyManifest[]
+  ) {
     // Browser-native fetch requires its global receiver. Tests normally pass a
     // plain mock, which is why keeping the unbound function here can otherwise
     // escape unit coverage and fail only in a real browser.
     this.fetcher = fetcher ?? globalThis.fetch.bind(globalThis);
     this.neuralExecutor = neuralExecutor ?? null;
+    if (initialManifests && initialManifests.length > 0) {
+      this.manifests = initialManifests;
+    } else if (!fetcher) {
+      this.manifests = getStoredPracticeManifests();
+    }
   }
 
   private neural(): NeuralPolicyExecutor {
@@ -49,20 +62,47 @@ export class PracticePolicyClient {
   }
 
   async loadManifests(force = false): Promise<PolicyManifest[]> {
-    if (this.manifests && !force) return this.manifests;
-    const response = await this.fetcher('/api/practice/models', {
-      cache: force ? 'no-store' : 'default',
-    });
-    if (!response.ok) throw new PolicyUnavailableError('Model manifest service is unavailable');
-    const body: unknown = await response.json();
-    if (!body || typeof body !== 'object' || !Array.isArray((body as { manifests?: unknown }).manifests)) {
-      throw new PolicyUnavailableError('Model manifest response is invalid');
+    if (this.manifests && this.manifests.length > 0 && !force) {
+      return this.manifests;
     }
-    this.manifests = (body as { manifests: PolicyManifest[] }).manifests.filter(
-      (manifest) =>
-        manifest.active && manifest.validation?.status === 'accepted'
-    );
-    return this.manifests;
+    try {
+      const response = await this.fetcher('/api/practice/models', {
+        cache: force ? 'no-store' : 'default',
+      });
+      if (response.ok) {
+        const body: unknown = await response.json();
+        if (
+          body &&
+          typeof body === 'object' &&
+          Array.isArray((body as { manifests?: unknown }).manifests)
+        ) {
+          const validated = (
+            body as { manifests: PolicyManifest[] }
+          ).manifests.filter(
+            (manifest) =>
+              manifest.active && manifest.validation?.status === 'accepted'
+          );
+          if (validated.length > 0) {
+            this.manifests = validated;
+            storePracticeManifests(validated);
+            return this.manifests;
+          }
+        }
+      }
+    } catch {
+      // Fall through to resilient fallback when offline or service is unavailable
+    }
+
+    // Resilient fallback: never fail closed if valid manifests exist in memory or storage
+    if (this.manifests && this.manifests.length > 0) {
+      return this.manifests;
+    }
+    const fallback = getStoredPracticeManifests();
+    if (fallback.length > 0) {
+      this.manifests = fallback;
+      return this.manifests;
+    }
+    throw new PolicyUnavailableError('Model manifest service is unavailable');
   }
 
   async pinFullHandModel(depthBb: number): Promise<PinnedPracticeModel> {
@@ -168,17 +208,40 @@ export class PracticePolicyClient {
     }
     if (runtime?.kind === 'rust-continual-resolver-v1') {
       const stateHash = await canonicalPolicyHash(input.state);
-      const response = await this.fetcher(runtime.endpoint, {
-        method: 'POST',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          modelVersion: input.pinned.manifest.version,
-          depthBb: input.pinned.depthBb,
-          stateHash,
-          state: input.state,
-        }),
+      const postBody = JSON.stringify({
+        modelVersion: input.pinned.manifest.version,
+        depthBb: input.pinned.depthBb,
+        stateHash,
+        state: input.state,
       });
+      const sendQuery = () =>
+        this.fetcher(runtime.endpoint, {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: postBody,
+        });
+
+      let response: Response;
+      try {
+        response = await sendQuery();
+        if (!response.ok && [502, 503, 504].includes(response.status)) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          response = await sendQuery();
+        }
+      } catch (networkError) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        try {
+          response = await sendQuery();
+        } catch {
+          throw new PolicyUnavailableError(
+            networkError instanceof Error
+              ? networkError.message
+              : 'The pinned continual resolver is unreachable'
+          );
+        }
+      }
+
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           error?: unknown;
@@ -189,6 +252,7 @@ export class PracticePolicyClient {
             : 'The pinned continual resolver is unavailable'
         );
       }
+
       const body = (await response.json()) as {
         stateHash?: unknown;
         modelVersion?: unknown;

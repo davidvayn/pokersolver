@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { SiteHeader } from '@/components/SiteHeader';
 import { SettingsModal } from '@/components/settings/SettingsModal';
+import { PracticeModelWarmer } from '@/components/practice/PracticeModelWarmer';
 
 export const metadata: Metadata = {
   title: 'Poker Lab - Texas Hold\'em Training',
@@ -44,6 +45,7 @@ export default function RootLayout({
           {children}
         </main>
         <SettingsModal />
+        <PracticeModelWarmer />
       </body>
     </html>
   );

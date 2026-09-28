@@ -253,4 +253,129 @@ describe('practice policy client', () => {
     expect(result.node.bestActionId).toBe(legal.at(-1)?.id);
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it('falls back gracefully to stored manifests when models service encounters network failure', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/models')) {
+        throw new TypeError('Failed to fetch');
+      }
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    const client = new PracticePolicyClient(fetcher, undefined, [manifest]);
+    const manifests = await client.loadManifests(true);
+    expect(manifests).toEqual([manifest]);
+    const pinned = await client.pinFullHandModel(20);
+    expect(pinned.manifest.version).toBe('full-v1');
+  });
+
+  it('retries transient 504 gateway timeout when querying continual resolver', async () => {
+    let callCount = 0;
+    const actionAbstraction = {
+      openSizesBb: [2, 2.5, 3, 4, 5],
+      limpRaiseSizesBb: [3, 4, 5],
+      threeBetSizesBb: [7.5, 9, 11],
+      fourBetSizesBb: [18, 22, 26],
+      deeperRaisePotFractions: [0.75, 1, 1.25],
+      preflopRaiseCap: 4,
+      flopBetPotFractions: [1 / 3, 0.75, 1.25],
+      turnRiverBetPotFractions: [0.5, 1],
+      postflopRaisePotFractions: [1],
+      postflopRaiseCap: 1,
+      includeAllIn: true,
+    };
+    const resolverManifest: PolicyManifest = {
+      ...manifest,
+      version: 'resolver-v1',
+      label: 'Experimental self-play',
+      runtime: {
+        kind: 'rust-continual-resolver-v1',
+        endpoint: '/api/practice/resolve',
+        artifactFiles: {
+          networks: 'networks.json.gz',
+          rangePolicy: 'range-policy.json.gz',
+          preflopActionValues: 'preflop-action-values.json.gz',
+          flopValueNetwork: 'flop-value-network.json.gz',
+        },
+        networkSha256: 'a'.repeat(64),
+        rangePolicySha256: 'b'.repeat(64),
+        valueNetworkSha256: 'c'.repeat(64),
+        preflopActionValuesSha256: 'd'.repeat(64),
+        stateFeatureSchema: 'hu-cash-trajectory-poker-aware-v4',
+        rangeFeatureSchema: 'rank-suit-invariant-combo-policy-query-v2',
+        actionFeatureSchema: 'hu-cash-legal-action-v1',
+        actionAbstraction,
+        dcfr: {
+          positiveRegretExponent: 1.5,
+          negativeRegretExponent: 0,
+          strategyExponent: 0,
+        },
+        resolver: {
+          flopIterations: 2,
+          flopResolvedActor: 1,
+          flopDeploySolvedPolicy: true,
+          turnIterations: 2,
+          turnResolvedActor: 1,
+          riverIterations: 2,
+          riverResolvedActor: 1,
+          riverSafeResolving: false,
+          riverSafeMaxmargin: false,
+          riverSafeIterations: null,
+          riverSafeResolvedActor: null,
+          deterministic: true,
+        },
+      },
+    };
+    const state = createHand({
+      modelVersion: resolverManifest.version,
+      depthBb: 20,
+      button: 'button-small-blind',
+      hero: 'button-small-blind',
+      random: seededRandom(9),
+    });
+    const legal = neuralLegalActions(state, actionAbstraction);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/models')) {
+        return Response.json({ schemaVersion: 1, manifests: [resolverManifest] });
+      }
+      callCount++;
+      if (callCount === 1) {
+        return new Response('Gateway Timeout', { status: 504 });
+      }
+      const request = JSON.parse(String(init?.body)) as {
+        stateHash: string;
+      };
+      return Response.json({
+        schema: 'hu-practice-continual-resolver-query-v1',
+        stateHash: request.stateHash,
+        modelVersion: resolverManifest.version,
+        depthBb: 20,
+        networkSha256: 'a'.repeat(64),
+        rangePolicySha256: 'b'.repeat(64),
+        valueNetworkSha256: 'c'.repeat(64),
+        preflopActionValuesSha256: 'd'.repeat(64),
+        maximumProbabilitySumError: 0,
+        actions: legal.map((action, index) => ({
+          kind: action.kind === 'all-in' ? 'all_in' : action.kind,
+          amountToBb: action.amountToBb ?? null,
+          probability: 1 / legal.length,
+          evBb: index,
+          standardErrorBb: null,
+          confidence: 'low',
+        })),
+      });
+    }) as typeof fetch;
+    const client = new PracticePolicyClient(fetcher);
+    const pinned = await client.pinFullHandModel(20);
+    const result = await client.lookupState({
+      pinned,
+      state,
+      profile: buildOpponentModel([], 'baseline'),
+      usage: 'grading',
+    });
+    expect(result.node.actions).toHaveLength(legal.length);
+    expect(callCount).toBe(2);
+  });
 });
+

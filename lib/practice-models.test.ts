@@ -298,3 +298,34 @@ describe('database-free full-hand activation registry', () => {
     ).toBe(false);
   });
 });
+
+describe('practice model storage and warming', () => {
+  it('stores, retrieves, and warms manifests in local storage and memory', async () => {
+    const {
+      getStoredPracticeManifests,
+      storePracticeManifests,
+      warmPracticeModels,
+      activePracticeManifests,
+      PRACTICE_MANIFESTS_STORAGE_KEY,
+    } = await import('@/lib/practice-models');
+
+    const embedded = activePracticeManifests();
+    expect(embedded.length).toBeGreaterThanOrEqual(2);
+    expect(embedded.some((m) => m.subtype === 'full-hand')).toBe(true);
+
+    const warmed = warmPracticeModels();
+    expect(warmed).toEqual(embedded);
+
+    const retrieved = getStoredPracticeManifests();
+    expect(retrieved).toEqual(embedded);
+
+    // Verify stored in localStorage when window is available
+    if (typeof window !== 'undefined') {
+      const storedJson = window.localStorage.getItem(PRACTICE_MANIFESTS_STORAGE_KEY);
+      expect(storedJson).not.toBeNull();
+      const parsed = JSON.parse(storedJson!);
+      expect(parsed.length).toBe(embedded.length);
+    }
+  });
+});
+

@@ -41,7 +41,10 @@ import {
   adaptationConfigForRuntime,
   buildOpponentModel,
 } from '@/lib/opponent-model';
-import { PUSH_FOLD_MANIFEST } from '@/lib/practice-models';
+import {
+  getStoredPracticeManifests,
+  PUSH_FOLD_MANIFEST,
+} from '@/lib/practice-models';
 import {
   PolicyUnavailableError,
   PracticePolicyClient,
@@ -276,15 +279,15 @@ export default function PracticePage() {
   const [spot, setSpot] = useState<PushFoldSpot | null>(null);
   const [state, setState] = useState<HandState | null>(null);
   const [activeNode, setActiveNode] = useState<PolicyNode | null>(null);
-  const [manifests, setManifests] = useState<PolicyManifest[]>([
-    PUSH_FOLD_MANIFEST,
-  ]);
+  const [manifests, setManifests] = useState<PolicyManifest[]>(() =>
+    getStoredPracticeManifests()
+  );
   const [handManifest, setHandManifest] =
     useState<PolicyManifest | null>(null);
   const [currentHandDecisions, setCurrentHandDecisions] = useState<
     PracticeDecisionRecord[]
   >([]);
-  const [status, setStatus] = useState<TableStatus>('unavailable');
+  const [status, setStatus] = useState<TableStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [feedback, setFeedback] =
@@ -316,7 +319,11 @@ export default function PracticePage() {
   const mobileSheetRef = useRef<HTMLElement | null>(null);
   const mobileCloseRef = useRef<HTMLButtonElement | null>(null);
   if (!policyClientRef.current) {
-    policyClientRef.current = new PracticePolicyClient();
+    policyClientRef.current = new PracticePolicyClient(
+      undefined,
+      undefined,
+      manifests
+    );
   }
 
   const prepareContinuation = useCallback(
@@ -480,14 +487,15 @@ export default function PracticePage() {
   useEffect(() => {
     const initialize = async () => {
       const loaded = loadPracticeSettings();
-      let availableManifests = [PUSH_FOLD_MANIFEST];
+      let availableManifests = getStoredPracticeManifests();
       try {
         availableManifests =
           (await policyClientRef.current?.loadManifests()) ??
           availableManifests;
       } catch {
-        // beginHand will show a fail-closed unavailable state below.
+        // Fall back gracefully to existing stored manifests
       }
+
       setManifests(availableManifests);
       const hands = await loadPracticeHands(500);
       recentHandsRef.current = hands;
@@ -863,6 +871,24 @@ export default function PracticePage() {
     }
     void beginHand(settings, completedHands);
   }
+
+  const retryRef = useRef(retry);
+  retryRef.current = retry;
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        if (status === 'error' || status === 'unavailable') {
+          retryRef.current();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [status]);
+
 
   const depths = fullHandDepths(manifests);
   const manifest = handManifest;

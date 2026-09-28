@@ -280,3 +280,75 @@ export function modelForFullDepth(depthBb: number): PolicyManifest | null {
     ) ?? null
   );
 }
+
+export const PRACTICE_MANIFESTS_STORAGE_KEY = 'poker_lab_practice_manifests_v1';
+
+let memoryManifestsCache: PolicyManifest[] | null = null;
+
+export function storePracticeManifests(manifests: PolicyManifest[]): void {
+  const valid = manifests.filter(
+    (m) =>
+      m &&
+      typeof m === 'object' &&
+      m.active === true &&
+      m.validation?.status === 'accepted' &&
+      (m.subtype === 'push-fold' || isServableFullHandManifest(m))
+  );
+  if (valid.length === 0) return;
+  memoryManifestsCache = valid;
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      PRACTICE_MANIFESTS_STORAGE_KEY,
+      JSON.stringify(valid)
+    );
+  } catch {
+    // Ignore storage quota or disabled storage in privacy modes.
+  }
+}
+
+export function getStoredPracticeManifests(): PolicyManifest[] {
+  if (memoryManifestsCache && memoryManifestsCache.length > 0) {
+    return memoryManifestsCache;
+  }
+  const embedded = activePracticeManifests();
+  if (typeof window === 'undefined') {
+    memoryManifestsCache = embedded;
+    return embedded;
+  }
+  try {
+    const raw = window.localStorage.getItem(PRACTICE_MANIFESTS_STORAGE_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const validated = parsed.filter(
+          (m): m is PolicyManifest =>
+            Boolean(
+              m &&
+                typeof m === 'object' &&
+                (m as PolicyManifest).active === true &&
+                (m as PolicyManifest).validation?.status === 'accepted' &&
+                ((m as PolicyManifest).subtype === 'push-fold' ||
+                  isServableFullHandManifest(m))
+            )
+        );
+        const hasFullHand = validated.some((m) => m.subtype === 'full-hand');
+        if (hasFullHand) {
+          memoryManifestsCache = validated;
+          return validated;
+        }
+      }
+    }
+  } catch {
+    // Ignore read or parse errors and fall back to embedded manifests
+  }
+  storePracticeManifests(embedded);
+  return embedded;
+}
+
+export function warmPracticeModels(): PolicyManifest[] {
+  const manifests = getStoredPracticeManifests();
+  storePracticeManifests(manifests);
+  return manifests;
+}
+
