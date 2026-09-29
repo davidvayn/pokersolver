@@ -19,6 +19,7 @@ import {
   gradePolicyFrequency,
   gradePolicyChoice,
   hasClearPracticeDecision,
+  playableActionChoices,
   practiceActionChoices,
   validatePolicyNode,
 } from '@/lib/practice-grading';
@@ -273,6 +274,27 @@ describe('EV grading and settings', () => {
         { id: 'bet', probability: 0.474 },
       ])
     ).toBe(true);
+  });
+
+  it('provides playable action choices even when frequencies are closely contested', () => {
+    const tiedChoices = playableActionChoices([
+      { id: 'check', probability: 0.525 },
+      { id: 'bet', probability: 0.475 },
+    ]);
+    expect(tiedChoices).toEqual([
+      { id: 'check', probability: 0.525 },
+      { id: 'bet', probability: 0.475 },
+    ]);
+
+    const allClose = playableActionChoices([
+      { id: 'fold', probability: 0.40 },
+      { id: 'call', probability: 0.38 },
+      { id: 'raise', probability: 0.36 },
+    ]);
+    expect(allClose).toEqual([
+      { id: 'fold', probability: 0.40 },
+      { id: 'call', probability: 0.38 },
+    ]);
   });
 
   it('accepts explicitly low-confidence EVs without invented uncertainty', () => {

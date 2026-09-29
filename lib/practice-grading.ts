@@ -115,6 +115,19 @@ export function hasClearPracticeDecision<T extends {
   return practiceActionChoices(actions).length === 2;
 }
 
+export function playableActionChoices<T extends { id: string; probability: number }>(
+  actions: T[]
+): T[] {
+  const choices = practiceActionChoices(actions);
+  if (choices.length > 0) return choices;
+  if (actions.length <= 2) return actions;
+  const ranked = [...actions].sort(
+    (first, second) => second.probability - first.probability
+  );
+  const topTwo = new Set([ranked[0].id, ranked[1].id]);
+  return actions.filter((action) => topTwo.has(action.id));
+}
+
 export function validatePolicyNode(node: PolicyNode): string[] {
   const errors: string[] = [];
   if (!/^[a-f0-9]{64}$/.test(node.stateHash)) {

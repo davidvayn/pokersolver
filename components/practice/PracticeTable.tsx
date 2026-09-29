@@ -22,7 +22,7 @@ import {
   unlockPracticeAudio,
 } from '@/lib/practice-sounds';
 import { totalPotBb } from '@/lib/practice-engine';
-import { practiceActionChoices } from '@/lib/practice-grading';
+import { playableActionChoices } from '@/lib/practice-grading';
 import type {
   HandState,
   LegalAction,
@@ -479,7 +479,7 @@ export function PracticeTable({
       <div className="practice-action-dock">
         {status === 'decision' && node ? (
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:justify-center">
-            {practiceActionChoices(node.actions).map((action) => (
+            {playableActionChoices(node.actions).map((action) => (
               <button
                 key={action.id}
                 type="button"

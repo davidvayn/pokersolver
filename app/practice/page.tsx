@@ -20,6 +20,7 @@ import {
 import {
   gradePolicyChoice,
   hasClearPracticeDecision,
+  playableActionChoices,
   practiceActionChoices,
   samplePolicyAction,
   validatePolicyNode,
@@ -179,8 +180,14 @@ async function advancePolicyToHero(input: {
       heroTurn ? 'grading' : 'opponent'
     );
     if (lookup.trace) input.onOpponentPolicy(lookup.trace);
-    if (heroTurn && hasClearPracticeDecision(lookup.node.actions)) {
-      return { state, node: lookup.node };
+    if (heroTurn) {
+      if (
+        input.mode === 'full-hand' ||
+        state.street !== 'preflop' ||
+        hasClearPracticeDecision(lookup.node.actions)
+      ) {
+        return { state, node: lookup.node };
+      }
     }
     const previous = state;
     state = applyAction(state, samplePolicyAction(lookup.node.actions));
@@ -452,7 +459,7 @@ export default function PracticePage() {
           setState(advanced.state);
           setActiveNode(advanced.node);
           if (nextSettings.mode === 'full-hand' && advanced.node) {
-            const branches = practiceActionChoices(advanced.node.actions).sort(
+            const branches = playableActionChoices(advanced.node.actions).sort(
               (first, second) => second.probability - first.probability
             );
             for (const action of branches) {
@@ -701,7 +708,7 @@ export default function PracticePage() {
         board: [...next.board],
         heroCards: [...state.holeCards[state.hero]],
         chosenAction: action,
-        offeredActionIds: practiceActionChoices(node.actions).map(
+        offeredActionIds: playableActionChoices(node.actions).map(
           (offered) => offered.id
         ),
         policyActions: node.actions,
