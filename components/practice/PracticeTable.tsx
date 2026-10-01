@@ -32,7 +32,7 @@ import type {
   Seat,
 } from '@/lib/practice-types';
 
-type TableStatus =
+export type TableStatus =
   | 'loading'
   | 'transitioning'
   | 'solving'
@@ -205,7 +205,7 @@ export function PracticeTable({
   onOpenAnalyst,
 }: PracticeTableProps) {
   const [soundsEnabled, setSoundsEnabled] = useState(true);
-  usePracticeTableSounds(state, soundsEnabled);
+  usePracticeTableSounds(state, status, soundsEnabled);
 
   function toggleSounds() {
     const next = !soundsEnabled;

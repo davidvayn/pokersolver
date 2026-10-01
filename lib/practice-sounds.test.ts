@@ -48,3 +48,26 @@ describe('practice sound cues', () => {
     expect(practiceSoundCues(previous, null)).toEqual([]);
   });
 });
+
+describe('isTableSoundActive', () => {
+  it('disables sounds during loading, solving, and error overlays', async () => {
+    const { isTableSoundActive } = await import(
+      '@/components/practice/usePracticeTableSounds'
+    );
+    expect(isTableSoundActive('loading')).toBe(false);
+    expect(isTableSoundActive('solving')).toBe(false);
+    expect(isTableSoundActive('unavailable')).toBe(false);
+    expect(isTableSoundActive('error')).toBe(false);
+  });
+
+  it('enables sounds for visible decision, transitioning, feedback, and review states', async () => {
+    const { isTableSoundActive } = await import(
+      '@/components/practice/usePracticeTableSounds'
+    );
+    expect(isTableSoundActive('decision')).toBe(true);
+    expect(isTableSoundActive('transitioning')).toBe(true);
+    expect(isTableSoundActive('feedback')).toBe(true);
+    expect(isTableSoundActive('review')).toBe(true);
+    expect(isTableSoundActive()).toBe(true);
+  });
+});

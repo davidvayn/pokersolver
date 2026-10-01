@@ -422,11 +422,8 @@ export default function PracticePage() {
             hero: nextHeroSeat(nextSettings.heroSeat, handNumber),
           });
           if (currentRequest !== requestId.current) return;
-          setState(initial);
           const sharedCallbacks = {
-            onProgress: (progress: HandState) => {
-              if (currentRequest === requestId.current) setState(progress);
-            },
+            onProgress: () => undefined,
             onOpponentPolicy: (trace: OpponentPolicyTrace) => {
               if (currentRequest === requestId.current) {
                 opponentQueriesRef.current.push(trace);

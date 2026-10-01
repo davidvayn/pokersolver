@@ -11,11 +11,27 @@ import {
   type PracticeSoundSnapshot,
 } from '@/lib/practice-sounds';
 import type { HandState } from '@/lib/practice-types';
+import type { TableStatus } from '@/components/practice/PracticeTable';
+
+export function isTableSoundActive(status?: TableStatus): boolean {
+  return (
+    status !== 'loading' &&
+    status !== 'solving' &&
+    status !== 'unavailable' &&
+    status !== 'error'
+  );
+}
 
 export function usePracticeTableSounds(
   state: HandState | null,
-  enabled: boolean
+  statusOrEnabled: TableStatus | boolean = 'decision',
+  maybeEnabled = true
 ): void {
+  const status: TableStatus =
+    typeof statusOrEnabled === 'boolean' ? 'decision' : statusOrEnabled;
+  const enabled =
+    typeof statusOrEnabled === 'boolean' ? statusOrEnabled : maybeEnabled;
+
   const previous = useRef<PracticeSoundSnapshot | null>(null);
 
   useEffect(() => {
@@ -37,10 +53,17 @@ export function usePracticeTableSounds(
   }, [enabled]);
 
   useEffect(() => {
+    if (!enabled || !isTableSoundActive(status)) {
+      if (status === 'loading') {
+        clearPendingPracticeSounds();
+      }
+      return;
+    }
+    if (!state) return;
+
     const current = practiceSoundSnapshot(state);
     const cues = practiceSoundCues(previous.current, current);
     previous.current = current;
-    if (!enabled) return;
     cues.forEach((cue, index) => playPracticeSound(cue, index * 0.07));
-  }, [enabled, state]);
+  }, [enabled, state, status]);
 }
