@@ -37,6 +37,78 @@ describe('StrategyView hand inspection', () => {
     expect(html).toContain('Bet 75% &lt;0.1%');
     expect(html).toContain('hand-class EV 1.24bb');
   });
+
+  it('renders ComboInspector with individual suited combinations and board blockers', async () => {
+    const { ComboInspector } = await import(
+      '@/components/solver/ComboInspector'
+    );
+    const { parseBoard } = await import('@/lib/cards');
+
+    const html = renderToStaticMarkup(
+      React.createElement(ComboInspector, {
+        label: 'AKs',
+        row: {
+          class: 'AKs',
+          combos: 3,
+          actions: [
+            { action: 'Check', freq: 0.3, ev: 2.1 },
+            { action: 'Bet 75%', freq: 0.7, ev: 2.1 },
+          ],
+        },
+        board: parseBoard('Ah 7s 2c'),
+        colors: { Check: '#3b82f6', 'Bet 75%': '#f59e0b' },
+        onClose: () => undefined,
+      })
+    );
+
+    expect(html).toContain('AKs');
+    expect(html).toContain('Ace-King Suited');
+    expect(html).toContain('Suited');
+    expect(html).toContain('3.0 / 4 combos');
+    expect(html).toContain('1 blocked');
+    expect(html).toContain('Blocked by board');
+    expect(html).toContain('data-solver-combo-inspector');
+  });
+
+  it('renders ComboInspector with 12 combinations for offsuit hands', async () => {
+    const { ComboInspector } = await import(
+      '@/components/solver/ComboInspector'
+    );
+    const { parseBoard, parseCard } = await import('@/lib/cards');
+
+    const html = renderToStaticMarkup(
+      React.createElement(ComboInspector, {
+        label: 'AKo',
+        row: {
+          class: 'AKo',
+          combos: 12,
+          actions: [{ action: 'Check', freq: 1.0, ev: 1.5 }],
+          combos_data: [
+            {
+              card0: parseCard('As'),
+              card1: parseCard('Kh'),
+              weight: 1.0,
+              actions: [
+                { action: 'Check', freq: 0.2, ev: 3.1 },
+                { action: 'Bet 75%', freq: 0.8, ev: 3.1 },
+              ],
+              ev: 3.1,
+              equity: 0.72,
+            },
+          ],
+        },
+        board: parseBoard('Qd 7c 2s'),
+        colors: { Check: '#3b82f6', 'Bet 75%': '#f59e0b' },
+        onClose: () => undefined,
+      })
+    );
+
+    expect(html).toContain('AKo');
+    expect(html).toContain('Ace-King Offsuit');
+    expect(html).toContain('Offsuit');
+    expect(html).toContain('+3.10bb');
+    expect(html).toContain('72%');
+  });
 });
 
 describe('SolverNerdStats', () => {

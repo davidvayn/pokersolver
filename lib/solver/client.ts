@@ -23,10 +23,19 @@ export interface ActionStrategy {
   freq: number;
   ev: number;
 }
+export interface ComboStrategy {
+  card0: number;
+  card1: number;
+  weight: number;
+  actions: ActionStrategy[];
+  ev: number;
+  equity: number;
+}
 export interface ClassRow {
   class: string;
   combos: number;
   actions: ActionStrategy[];
+  combos_data?: ComboStrategy[];
 }
 export interface NodeStrategy {
   title: string;

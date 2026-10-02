@@ -47,17 +47,28 @@ fn default_max_combos() -> usize {
     200
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ActionStrategy {
     action: String,
     freq: f64,
     ev: f64,
+}
+#[derive(Serialize, Clone)]
+struct ComboStrategy {
+    card0: u8,
+    card1: u8,
+    weight: f64,
+    actions: Vec<ActionStrategy>,
+    ev: f64,
+    equity: f64,
 }
 #[derive(Serialize)]
 struct ClassRow {
     class: String,
     combos: f64,
     actions: Vec<ActionStrategy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    combos_data: Vec<ComboStrategy>,
 }
 #[derive(Serialize)]
 struct NodeStrategy {
@@ -293,6 +304,8 @@ struct Solver {
     ip_cards: Vec<(u8, u8)>,
     oop_prob: Vec<f64>,
     ip_prob: Vec<f64>,
+    oop_combos: f64,
+    ip_combos: f64,
     // eq[i*n_ip + j] = OOP hand i equity share (win + tie/2) vs IP hand j
     eq: Vec<f32>,
     // compat[i*n_ip + j] = hands share no card
@@ -1095,6 +1108,8 @@ fn run(input: Input) -> Result<Output, String> {
         ip_cards,
         oop_prob: oop_prob.clone(),
         ip_prob: ip_prob.clone(),
+        oop_combos,
+        ip_combos,
         eq,
         compat,
         joint_mass,
@@ -1278,10 +1293,11 @@ fn node_strategy_root(
     let ev_vec = solver.evaluate_profile_value(root, player, opp, n, profile, false);
 
     use std::collections::BTreeMap;
-    let mut classes: BTreeMap<String, (f64, Vec<f64>, f64)> = BTreeMap::new();
+    let mut classes: BTreeMap<String, (f64, Vec<f64>, f64, Vec<ComboStrategy>)> = BTreeMap::new();
+    let total_combos = if player == 0 { solver.oop_combos } else { solver.ip_combos };
     for i in 0..n {
         let cls = hand_class(cards[i].0, cards[i].1);
-        let entry = classes.entry(cls).or_insert((0.0, vec![0.0; na], 0.0));
+        let entry = classes.entry(cls).or_insert((0.0, vec![0.0; na], 0.0, Vec::new()));
         let opponent_mass = solver.opponent_compatible_mass(player, i);
         if opponent_mass <= 1e-15 {
             continue;
@@ -1293,10 +1309,51 @@ fn node_strategy_root(
         for a in 0..na {
             entry.1[a] += w * avg[i * na + a];
         }
-        entry.2 += w * (ev_vec[i] / opponent_mass);
+        let combo_ev = ev_vec[i] / opponent_mass;
+        entry.2 += w * combo_ev;
+
+        // Combo equity vs opponent range
+        let mut eq_sum = 0.0;
+        let mut opp_mass = 0.0;
+        if player == 0 {
+            let base = i * solver.n_ip;
+            for j in 0..solver.n_ip {
+                if solver.compat[base + j] && solver.ip_prob[j] > 0.0 {
+                    eq_sum += (solver.ip_prob[j] as f64) * (solver.eq[base + j] as f64);
+                    opp_mass += solver.ip_prob[j] as f64;
+                }
+            }
+        } else {
+            for j in 0..solver.n_oop {
+                let idx = j * solver.n_ip + i;
+                if solver.compat[idx] && solver.oop_prob[j] > 0.0 {
+                    eq_sum += (solver.oop_prob[j] as f64) * (1.0 - solver.eq[idx] as f64);
+                    opp_mass += solver.oop_prob[j] as f64;
+                }
+            }
+        }
+        let equity = if opp_mass > 1e-12 { eq_sum / opp_mass } else { 0.0 };
+
+        let combo_actions: Vec<ActionStrategy> = (0..na)
+            .map(|a| ActionStrategy {
+                action: labels[a].clone(),
+                freq: (avg[i * na + a] * 10000.0).round() / 10000.0,
+                ev: round2(combo_ev),
+            })
+            .collect();
+
+        let input_weight = probs[i] * total_combos;
+        entry.3.push(ComboStrategy {
+            card0: cards[i].0,
+            card1: cards[i].1,
+            weight: round2(input_weight),
+            actions: combo_actions,
+            ev: round2(combo_ev),
+            equity: (equity * 10000.0).round() / 10000.0,
+        });
     }
     let mut rows = Vec::new();
-    for (cls, (mass, acts, evsum)) in classes {
+    for (cls, (mass, acts, evsum, combos_data)) in classes {
         if mass < 1e-12 {
             continue;
         }
@@ -1312,6 +1369,7 @@ fn node_strategy_root(
             class: cls,
             combos: mass,
             actions,
+            combos_data,
         });
     }
     NodeStrategy {

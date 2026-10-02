@@ -304,9 +304,10 @@ function StrategySurface({ context }: { context: WorkspaceContext }) {
         <AiPanel getSpot={context.getAnalysisSpot} embedded />
       </div>
       {!analysisOpen && node && context.result && !context.result.error ? (
-        <div className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col justify-start overflow-y-auto overflow-x-hidden">
           <StrategyView
             node={node}
+            board={context.board}
             framed={false}
             compact
             matrixClassName="solver-workspace-matrix"

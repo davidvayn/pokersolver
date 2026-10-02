@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { HandMatrix, StrategySegment } from '@/components/hand-matrix/HandMatrix';
+import { ComboInspector } from '@/components/solver/ComboInspector';
+import type { Card } from '@/lib/cards';
 import type {
   ActionStrategy,
   ClassRow,
@@ -126,11 +128,13 @@ function HandMixReadout({
 
 export function StrategyView({
   node,
+  board,
   framed = true,
   compact = false,
   matrixClassName = '',
 }: {
   node: NodeStrategy;
+  board?: Card[];
   framed?: boolean;
   compact?: boolean;
   matrixClassName?: string;
@@ -153,6 +157,16 @@ export function StrategyView({
   useEffect(() => {
     setSelectedHand(null);
   }, [node]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedHand(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   if (!node.rows.length) return null;
 
@@ -186,24 +200,49 @@ export function StrategyView({
         actions={selectedRow?.actions ?? []}
         colors={colors}
       />
-      <div className={`mx-auto w-full ${matrixClassName}`}>
-        <HandMatrix
-          mode="display"
-          strategy={strategy}
-          annotation={annotation}
-          selectedLabel={selectedRow?.class}
-          cellDescription={(label) => {
-            const row = rowsByClass.get(label);
-            return row ? handDescription(row) : undefined;
-          }}
-          onCellClick={(label) =>
-            setSelectedHand((current) => (current === label ? null : label))
+      <div
+        className={
+          selectedHand
+            ? 'flex flex-col md:flex-row items-start gap-3 w-full min-h-0'
+            : `mx-auto w-full ${matrixClassName}`
+        }
+      >
+        <div
+          className={
+            selectedHand
+              ? 'shrink-0 w-full md:w-[310px] lg:w-[350px] xl:w-[390px] max-w-full'
+              : 'w-full'
           }
-        />
+        >
+          <HandMatrix
+            mode="display"
+            strategy={strategy}
+            annotation={annotation}
+            selectedLabel={selectedRow?.class}
+            cellDescription={(label) => {
+              const row = rowsByClass.get(label);
+              return row ? handDescription(row) : undefined;
+            }}
+            onCellClick={(label) =>
+              setSelectedHand((current) => (current === label ? null : label))
+            }
+          />
+        </div>
+        {selectedHand && (
+          <div className="flex-1 min-w-0 w-full h-full max-h-[520px] flex flex-col">
+            <ComboInspector
+              label={selectedHand}
+              row={selectedRow}
+              board={board}
+              colors={colors}
+              onClose={() => setSelectedHand(null)}
+            />
+          </div>
+        )}
       </div>
       {!compact && (
         <p className="mt-2 text-[11px] text-muted">
-          Select a hand for exact action frequencies; the small number is its EV
+          Select a hand for exact action frequencies and individual combo breakdown; the small number is its EV
           (bb).
         </p>
       )}
