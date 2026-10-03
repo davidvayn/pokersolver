@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSpotThreadKey,
+  buildUserPrompt,
   describeSpot,
   normalizeConversation,
   type SpotContext,
@@ -22,6 +23,21 @@ const SPOT: SpotContext = {
 };
 
 describe('AI conversation context', () => {
+  it('includes measured strategies without changing the conversation identity', () => {
+    const solved: SpotContext = {
+      ...SPOT,
+      solver: {
+        truncated: true,
+        nodes: [{ title: 'OOP root', rows: [{ class: 'AA', actions: [
+          { action: 'Check', freq: 0.25 },
+          { action: 'Bet 33%', freq: 0.75 },
+        ] }] }],
+      },
+    };
+    expect(buildSpotThreadKey(solved)).toBe(buildSpotThreadKey(SPOT));
+    expect(buildUserPrompt(solved)).toContain('AA: Check 25.0%, Bet 33% 75.0%');
+    expect(buildUserPrompt(solved)).toContain('Ranges were sampled');
+  });
   it('keeps a thread open when only asynchronous solver diagnostics change', () => {
     const next = {
       ...SPOT,

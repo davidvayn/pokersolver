@@ -13,6 +13,7 @@ import {
   saveSettings,
 } from '@/lib/ai/settings';
 import { useUi } from '@/lib/ui-store';
+import { ChatGptConnection } from './ChatGptConnection';
 
 interface SettingsFormProps {
   sectionHeadingLevel?: 'h2' | 'h3';
@@ -34,12 +35,20 @@ export function SettingsForm({
   const SectionHeading = sectionHeadingLevel;
 
   useEffect(() => {
-    setSettings(loadSettings());
+    const refresh = () => setSettings(loadSettings());
+    refresh();
+    window.addEventListener('storage', refresh);
+    window.addEventListener('poker-ai-settings-changed', refresh);
+    return () => {
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener('poker-ai-settings-changed', refresh);
+    };
   }, []);
 
   if (!settings) return null;
 
   const provider = PROVIDERS[settings.provider];
+  const chatGptAuth = settings.provider === 'openai' && settings.openaiAuth === 'chatgpt';
 
   function update(next: Partial<AiSettings>) {
     const merged = { ...settings!, ...next };
@@ -136,6 +145,22 @@ export function SettingsForm({
           ))}
         </div>
 
+        {settings.provider === 'openai' && (
+          <>
+            <div className="mb-4 flex gap-2" role="group" aria-label="OpenAI connection method">
+              {(['chatgpt', 'key'] as const).map((method) => (
+                <button key={method} type="button" onClick={() => update({ openaiAuth: method, model: provider.defaultModel })}
+                  aria-pressed={(settings.openaiAuth ?? 'key') === method}
+                  className="min-h-11 rounded-md border border-border px-3 py-2 text-sm aria-pressed:border-accent focus-visible:ring-2 focus-visible:ring-accent">
+                  {method === 'chatgpt' ? 'ChatGPT login' : 'API key'}
+                </button>
+              ))}
+            </div>
+            {chatGptAuth && <ChatGptConnection settings={settings} update={update} />}
+          </>
+        )}
+
+        {!chatGptAuth && <>
         <label htmlFor={aiModelId} className="mb-2 block text-sm font-medium">
           Model
         </label>
@@ -185,6 +210,20 @@ export function SettingsForm({
           Your key is stored only in this browser and forwarded through a
           serverless proxy to the provider. It is never persisted on the server.
         </p>
+        {settings.provider === 'gemini' && (
+          <p className="mt-3 text-xs leading-relaxed text-muted">
+            Google login requires an OAuth client and Cloud project registered for this app.
+            A Gemini subscription does not provide API access automatically.{' '}
+            <a href="https://ai.google.dev/gemini-api/docs/oauth" target="_blank" rel="noreferrer" className="underline">Google OAuth setup</a>
+          </p>
+        )}
+        {settings.provider === 'anthropic' && (
+          <p className="mt-3 text-xs leading-relaxed text-muted">
+            Claude account login is not available for this app. Use a Console API key.{' '}
+            <a href="https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account" target="_blank" rel="noreferrer" className="underline">Claude integration options</a>
+          </p>
+        )}
+        </>}
       </section>
     </div>
   );

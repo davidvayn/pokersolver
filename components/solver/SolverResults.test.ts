@@ -8,6 +8,40 @@ import {
 import type { NodeStrategy, SolverResult } from '@/lib/solver/client';
 
 describe('StrategyView hand inspection', () => {
+  it('keeps the matrix and settings while hiding stale results during a solve', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const node: NodeStrategy = {
+      title: 'OOP — first to act',
+      actions: ['Check'],
+      rows: [
+        {
+          class: 'AA',
+          combos: 6,
+          actions: [{ action: 'Check', freq: 1, ev: 9.25 }],
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(StrategyView, {
+        node,
+        pending: true,
+        settings: React.createElement(
+          'section',
+          { 'aria-label': 'Solver settings' },
+          'Board Qh 7s 2c'
+        ),
+      })
+    );
+
+    expect(html).toContain('Board Qh 7s 2c');
+    expect(html).toContain('title="AA"');
+    expect(html).toContain('title="AKs"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain('9.25');
+    expect(html).not.toContain('data-solver-combo-inspector');
+    expect(html).not.toContain('data-solver-hand-mix');
+  });
+
   it('renders clickable grid cells with the complete action mix in their accessible description', () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const node: NodeStrategy = {
@@ -30,7 +64,9 @@ describe('StrategyView hand inspection', () => {
       React.createElement(StrategyView, { node })
     );
 
-    expect(html).toContain('Select a hand to inspect its mix');
+    expect(html).toContain('data-solver-combo-inspector');
+    expect(html).toContain('Combination details for Pocket Aces');
+    expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('aria-pressed="false"');
     expect(html).toContain('Check 60%');
     expect(html).toContain('Bet 33% 40%');
@@ -39,9 +75,8 @@ describe('StrategyView hand inspection', () => {
   });
 
   it('renders ComboInspector with individual suited combinations and board blockers', async () => {
-    const { ComboInspector } = await import(
-      '@/components/solver/ComboInspector'
-    );
+    const { ComboInspector } =
+      await import('@/components/solver/ComboInspector');
     const { parseBoard } = await import('@/lib/cards');
 
     const html = renderToStaticMarkup(
@@ -57,7 +92,7 @@ describe('StrategyView hand inspection', () => {
         },
         board: parseBoard('Ah 7s 2c'),
         colors: { Check: '#3b82f6', 'Bet 75%': '#f59e0b' },
-        onClose: () => undefined,
+        showMetrics: true,
       })
     );
 
@@ -71,9 +106,8 @@ describe('StrategyView hand inspection', () => {
   });
 
   it('renders ComboInspector with 12 combinations for offsuit hands', async () => {
-    const { ComboInspector } = await import(
-      '@/components/solver/ComboInspector'
-    );
+    const { ComboInspector } =
+      await import('@/components/solver/ComboInspector');
     const { parseBoard, parseCard } = await import('@/lib/cards');
 
     const html = renderToStaticMarkup(
@@ -99,7 +133,7 @@ describe('StrategyView hand inspection', () => {
         },
         board: parseBoard('Qd 7c 2s'),
         colors: { Check: '#3b82f6', 'Bet 75%': '#f59e0b' },
-        onClose: () => undefined,
+        showMetrics: true,
       })
     );
 

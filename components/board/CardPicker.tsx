@@ -1,10 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  CARD_SUIT_GLYPHS,
-  PokerCard,
-} from '@/components/cards/PokerCard';
+import { CARD_SUIT_GLYPHS, PokerCard } from '@/components/cards/PokerCard';
 import { Card, RANKS, makeCard, cardToStr } from '@/lib/cards';
 
 const SUIT_SYMBOL = CARD_SUIT_GLYPHS;
@@ -47,9 +44,12 @@ export function CardGrid({
   onPick: (c: Card) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex w-[412px] max-w-full flex-col gap-1">
       {[3, 2, 1, 0].map((suit) => (
-        <div key={suit} className="flex gap-1">
+        <div
+          key={suit}
+          className="grid grid-cols-[repeat(13,minmax(0,1fr))] gap-1"
+        >
           {Array.from({ length: 13 }).map((_, i) => {
             const rank = 12 - i;
             const card = makeCard(rank, suit);
@@ -61,7 +61,7 @@ export function CardGrid({
                 onClick={() => onPick(card)}
                 aria-label={cardToStr(card)}
                 className={
-                  'flex h-8 w-7 items-center justify-center rounded border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+                  'flex h-8 min-w-0 items-center justify-center rounded border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                   (isUsed
                     ? 'cursor-not-allowed border-border bg-surface-2 text-muted opacity-40'
                     : 'border-border bg-white text-gray-900 hover:ring-2 hover:ring-accent')
@@ -216,7 +216,7 @@ export function CardSlots({
             role="dialog"
             aria-label="Pick a card"
             tabIndex={-1}
-            className="absolute left-0 top-full z-50 mt-2 rounded-lg border-2 border-accent bg-surface p-3 shadow-card outline-none ring-1 ring-black/20"
+            className="absolute left-0 top-full z-50 mt-2 w-[440px] max-w-[calc(100vw-2rem)] rounded-lg border-2 border-accent bg-surface p-3 shadow-card outline-none ring-1 ring-black/20"
           >
             <div className="mb-2 flex items-center justify-between text-xs text-muted">
               <span>Pick a card</span>
