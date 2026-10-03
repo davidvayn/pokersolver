@@ -106,9 +106,16 @@ impl Sampler {
     }
 }
 
-fn label(queries: &[Query], workers: usize) -> Result<Vec<value_targets::Target>, String> {
+fn label(
+    queries: &[Query],
+    workers: usize,
+    reference_iterations: u64,
+) -> Result<Vec<value_targets::Target>, String> {
     if !(1..=4).contains(&workers) {
         return Err("native label workers must be 1..4".into());
+    }
+    if ![64, 256, 1024].contains(&reference_iterations) {
+        return Err("native reference iterations must be 64, 256 or 1024".into());
     }
     let mut output = std::thread::scope(|scope| {
         let handles = (0..workers)
@@ -120,9 +127,11 @@ fn label(queries: &[Query], workers: usize) -> Result<Vec<value_targets::Target>
                         .skip(worker)
                         .step_by(workers)
                         .map(|(index, query)| {
-                            let values = solve(query.config.clone())?;
+                            let mut reference = query.config.clone();
+                            reference.iterations = reference_iterations;
+                            let values = solve(reference.clone())?;
                             let target =
-                                value_targets::Target::new(query.round, &query.config, &values)?
+                                value_targets::Target::new(query.round, &reference, &values)?
                                     .with_distribution(query.distribution);
                             Ok((index, target))
                         })
@@ -145,6 +154,15 @@ fn label(queries: &[Query], workers: usize) -> Result<Vec<value_targets::Target>
         return Err("incomplete native belief labels".into());
     }
     Ok(output.into_iter().map(|(_, target)| target).collect())
+}
+
+#[test]
+fn native_search_label_budget_is_explicitly_bounded() {
+    assert!(label(&[], 1, 64).unwrap().is_empty());
+    assert!(label(&[], 1, 256).unwrap().is_empty());
+    assert!(label(&[], 1, 1024).unwrap().is_empty());
+    assert!(label(&[], 1, 65).is_err());
+    assert!(label(&[], 0, 256).is_err());
 }
 
 #[test]
@@ -327,6 +345,11 @@ fn saved_search_distribution_native_capture() {
         .unwrap()
         .parse()
         .unwrap();
+    let label_iterations: u64 = std::env::var("POKER_SEARCH_LABEL_TURN_ITERATIONS")
+        .unwrap_or_else(|_| "64".into())
+        .parse()
+        .unwrap();
+    assert!([64, 256, 1024].contains(&label_iterations));
     let output = PathBuf::from(std::env::var("POKER_SEARCH_OUTPUT").unwrap());
     let policy_path = PathBuf::from(std::env::var("POKER_SEARCH_POLICY_OUTPUT").unwrap());
     assert!(
@@ -393,7 +416,7 @@ fn saved_search_distribution_native_capture() {
     let queries = sampler
         .finish(frozen.belief_queries(turn).unwrap())
         .unwrap();
-    let targets = label(&queries, workers).unwrap();
+    let targets = label(&queries, workers, label_iterations).unwrap();
     let policy_sha = format!("{:x}", Sha256::digest(&policy_bytes));
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -405,7 +428,8 @@ fn saved_search_distribution_native_capture() {
     let corpus = serde_json::json!({"schema":"hu-native-turn-cfv-dataset-v1", "game":game,
         "source_public_input_sha256":root_sha, "source_policy_sha256":policy_sha,
         "proposal_model_sha256":model.artifact_sha256(), "proposal_policy_kind":"frozen_learned_leaf_search_only",
-        "seed":seed,"sampling_seed":sample_seed,"flop_iterations":iterations,"turn_iterations":64,
+        "seed":seed,"sampling_seed":sample_seed,"flop_iterations":iterations,
+        "proposal_turn_iterations":64,"turn_iterations":label_iterations,
         "maximum_states":targets.len(),"observed_queries":observed,"native_label_queries":targets.len(),
         "capture_selection":"stratified_learned_search_and_final_average_beliefs_with_native_labels",
         "policy_observation_parity_checked":verify,
