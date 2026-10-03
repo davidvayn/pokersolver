@@ -1,9 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { HandMatrix, StrategySegment } from '@/components/hand-matrix/HandMatrix';
+import type { ReactNode } from 'react';
+import {
+  HandMatrix,
+  StrategySegment,
+} from '@/components/hand-matrix/HandMatrix';
 import { ComboInspector } from '@/components/solver/ComboInspector';
-import type { Card } from '@/lib/cards';
+import { handClassLabel, type Card } from '@/lib/cards';
 import type {
   ActionStrategy,
   ClassRow,
@@ -41,7 +45,11 @@ function toStrategy(
     const segs: StrategySegment[] = [];
     for (const a of row.actions) {
       if (a.freq > 0.005)
-        segs.push({ color: colors[a.action], fraction: a.freq, label: a.action });
+        segs.push({
+          color: colors[a.action],
+          fraction: a.freq,
+          label: a.action,
+        });
     }
     if (segs.length) out[row.class] = segs;
   }
@@ -132,21 +140,39 @@ export function StrategyView({
   framed = true,
   compact = false,
   matrixClassName = '',
+  settings,
+  pending = false,
 }: {
   node: NodeStrategy;
   board?: Card[];
   framed?: boolean;
   compact?: boolean;
   matrixClassName?: string;
+  settings?: ReactNode;
+  pending?: boolean;
 }) {
   const [selectedHand, setSelectedHand] = useState<string | null>(null);
+  const [previewHand, setPreviewHand] = useState<string | null>(null);
+  const [showMetrics, setShowMetrics] = useState(false);
   const colors = useMemo(() => colorForActions(node.actions), [node.actions]);
   const strategy = useMemo(() => toStrategy(node, colors), [node, colors]);
   const rowsByClass = useMemo(
     () => new Map(node.rows.map((row) => [row.class, row])),
     [node.rows]
   );
-  const selectedRow = selectedHand ? rowsByClass.get(selectedHand) : undefined;
+  const firstHand = useMemo(() => {
+    for (let row = 0; row < 13; row++) {
+      for (let column = 0; column < 13; column++) {
+        const label = handClassLabel(row, column);
+        if (rowsByClass.has(label)) return label;
+      }
+    }
+    return undefined;
+  }, [rowsByClass]);
+  const activeHand = pending
+    ? undefined
+    : (selectedHand ?? previewHand ?? firstHand);
+  const selectedRow = activeHand ? rowsByClass.get(activeHand) : undefined;
   const annotation = useMemo(() => {
     const evByClass: Record<string, number> = {};
     for (const r of node.rows) evByClass[r.class] = r.actions[0]?.ev ?? 0;
@@ -155,8 +181,13 @@ export function StrategyView({
   }, [node.rows]);
 
   useEffect(() => {
-    setSelectedHand(null);
-  }, [node]);
+    setSelectedHand((current) =>
+      current && rowsByClass.has(current) ? current : null
+    );
+    setPreviewHand((current) =>
+      current && rowsByClass.has(current) ? current : null
+    );
+  }, [rowsByClass]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -168,82 +199,99 @@ export function StrategyView({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  if (!node.rows.length) return null;
-
   return (
     <div
+      aria-busy={pending}
       className={
         framed
           ? `rounded-lg border border-border bg-surface ${compact ? 'p-3' : 'p-4'}`
           : 'min-h-0'
       }
     >
-      <div
-        data-solver-strategy-heading
-        className={`${compact ? 'mb-2' : 'mb-3'} flex items-center justify-between gap-3`}
-      >
-        <div className="text-sm font-semibold">{node.title}</div>
-        <div className="flex flex-wrap justify-end gap-x-2 gap-y-1 text-xs">
-          {node.actions.map((a) => (
-            <span key={a} className="flex items-center gap-1.5">
-              <span
-                className="h-3 w-3 rounded-sm"
-                style={{ background: colors[a] }}
-              />
-              {a}
-            </span>
-          ))}
-        </div>
-      </div>
-      <HandMixReadout
-        label={selectedRow?.class ?? null}
-        actions={selectedRow?.actions ?? []}
-        colors={colors}
-      />
-      <div
-        className={
-          selectedHand
-            ? 'flex flex-col md:flex-row items-start gap-3 w-full min-h-0'
-            : `mx-auto w-full ${matrixClassName}`
-        }
-      >
-        <div
-          className={
-            selectedHand
-              ? 'shrink-0 w-full md:w-[310px] lg:w-[350px] xl:w-[390px] max-w-full'
-              : 'w-full'
-          }
-        >
+      <div className="solver-strategy-layout">
+        {settings && (
+          <div className="solver-strategy-settings min-w-0">{settings}</div>
+        )}
+        <div className={`solver-strategy-main min-w-0 ${matrixClassName}`}>
+          <div
+            data-solver-strategy-heading
+            className={`${compact ? 'mb-2' : 'mb-3'} flex items-center justify-between gap-3`}
+          >
+            <div className="shrink-0 text-xs text-muted">{node.title}</div>
+            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs">
+              <button
+                type="button"
+                disabled={pending}
+                aria-pressed={showMetrics}
+                onClick={() => setShowMetrics((shown) => !shown)}
+                className="min-h-9 text-muted underline-offset-4 hover:text-fg aria-pressed:text-accent aria-pressed:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                EV / equity
+              </button>
+              {!pending &&
+                node.actions.map((a) => (
+                  <span key={a} className="flex items-center gap-1.5">
+                    <span
+                      className="h-3 w-3 rounded-sm"
+                      style={{ background: colors[a] }}
+                    />
+                    {a}
+                  </span>
+                ))}
+            </div>
+          </div>
           <HandMatrix
             mode="display"
-            strategy={strategy}
-            annotation={annotation}
-            selectedLabel={selectedRow?.class}
-            cellDescription={(label) => {
-              const row = rowsByClass.get(label);
-              return row ? handDescription(row) : undefined;
-            }}
-            onCellClick={(label) =>
-              setSelectedHand((current) => (current === label ? null : label))
+            strategy={pending ? {} : strategy}
+            annotation={!pending && showMetrics ? annotation : undefined}
+            selectedLabel={activeHand}
+            squareCells
+            cellDescription={
+              pending
+                ? undefined
+                : (label) => {
+                    const row = rowsByClass.get(label);
+                    return row ? handDescription(row) : 'Not in solved range';
+                  }
+            }
+            onCellPreview={pending ? undefined : setPreviewHand}
+            onCellClick={
+              pending
+                ? undefined
+                : (label) => {
+                    setPreviewHand(label);
+                    setSelectedHand((current) =>
+                      current === label ? null : label
+                    );
+                  }
             }
           />
-        </div>
-        {selectedHand && (
-          <div className="flex-1 min-w-0 w-full h-full max-h-[520px] flex flex-col">
-            <ComboInspector
-              label={selectedHand}
-              row={selectedRow}
-              board={board}
-              colors={colors}
-              onClose={() => setSelectedHand(null)}
-            />
+          <div className="mt-3">
+            {!pending && (
+              <HandMixReadout
+                label={selectedRow?.class ?? activeHand ?? null}
+                actions={selectedRow?.actions ?? []}
+                colors={colors}
+              />
+            )}
           </div>
+        </div>
+        {activeHand && (
+          <ComboInspector
+            key={activeHand}
+            label={activeHand}
+            row={selectedRow}
+            board={board}
+            colors={colors}
+            showMetrics={showMetrics}
+            className="solver-strategy-combos"
+          />
         )}
       </div>
       {!compact && (
         <p className="mt-2 text-[11px] text-muted">
-          Select a hand for exact action frequencies and individual combo breakdown; the small number is its EV
-          (bb).
+          Select a hand for action frequencies and individual combos. Enable EV
+          / equity to see additional metrics.
         </p>
       )}
     </div>

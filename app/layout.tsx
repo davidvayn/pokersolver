@@ -3,6 +3,7 @@ import './globals.css';
 import { SiteHeader } from '@/components/SiteHeader';
 import { SettingsModal } from '@/components/settings/SettingsModal';
 import { PracticeModelWarmer } from '@/components/practice/PracticeModelWarmer';
+import { ChatGptReturn } from '@/components/ai/ChatGptReturn';
 
 export const metadata: Metadata = {
   title: 'Poker Lab - Texas Hold\'em Training',
@@ -31,6 +32,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
       <body className="min-h-full">
+        <ChatGptReturn />
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-accent focus:px-4 focus:py-2 focus:text-accent-fg"

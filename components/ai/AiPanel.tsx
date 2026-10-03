@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { SendHorizontal } from "lucide-react";
+import { SendHorizontal, X } from "lucide-react";
 import { AiMarkdown } from "@/components/ai/AiMarkdown";
 import { GeminiMark } from "@/components/ai/GeminiMark";
 import {
@@ -11,6 +11,7 @@ import {
   type SpotContext,
 } from "@/lib/ai/prompt";
 import { loadSettings, currentKey } from "@/lib/ai/settings";
+import { chatGptConnection } from "@/lib/ai/chatgpt";
 import { useUi } from "@/lib/ui-store";
 
 interface AiPanelProps {
@@ -18,6 +19,7 @@ interface AiPanelProps {
   getSpot: () => SpotContext | null;
   /** Removes the outer card when the panel is mounted inside another surface. */
   embedded?: boolean;
+  onClose?: () => void;
 }
 
 interface ChatMessage extends AiConversationMessage {
@@ -42,7 +44,7 @@ const SUGGESTED_QUESTIONS = [
   "What changes on the turn?",
 ];
 
-export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
+export function AiPanel({ getSpot, embedded = false, onClose }: AiPanelProps) {
   const currentSpot = getSpot();
   const currentSpotKey = currentSpot ? buildSpotThreadKey(currentSpot) : null;
   const currentSpotLabel = describeSpot(currentSpot);
@@ -56,6 +58,7 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
   const [archivedThreads, setArchivedThreads] = useState<ArchivedThread[]>([]);
   const [newSpotReady, setNewSpotReady] = useState(false);
   const [pendingReplyId, setPendingReplyId] = useState<string | null>(null);
+  const [hasConnection, setHasConnection] = useState(false);
   const requestRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const analysisRef = useRef(analysis);
@@ -63,6 +66,30 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
   const threadLabelRef = useRef(threadSpotLabel);
   const messageIdRef = useRef(0);
   const openSettings = useUi((state) => state.openSettings);
+  const settingsOpen = useUi((state) => state.settingsOpen);
+
+  useEffect(() => {
+    let active = true;
+    let refreshVersion = 0;
+    async function refresh() {
+      const version = ++refreshVersion;
+      const settings = loadSettings();
+      const ready = settings.provider === 'openai' && settings.openaiAuth === 'chatgpt'
+        ? await chatGptConnection().then((connection) => connection.connected).catch(() => false)
+        : Boolean(currentKey(settings));
+      if (!active || version !== refreshVersion) return;
+      setHasConnection(ready);
+      if (ready) setError((current) => current.startsWith("No API key set.") ? "" : current);
+    }
+    void refresh();
+    window.addEventListener('poker-ai-settings-changed', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      active = false;
+      window.removeEventListener('poker-ai-settings-changed', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [settingsOpen]);
 
   analysisRef.current = analysis;
   messagesRef.current = messages;
@@ -149,7 +176,8 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
   ): Promise<StreamOutcome> {
     const settings = loadSettings();
     const key = currentKey(settings);
-    if (!key) {
+    const chatGptAuth = settings.provider === 'openai' && settings.openaiAuth === 'chatgpt';
+    if (!key && !chatGptAuth) {
       setStatus("idle");
       setError("No API key set. Add one in Settings.");
       return "failed";
@@ -177,13 +205,13 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
     setStatus("streaming");
 
     try {
-      const response = await fetch("/api/ai/analyze", {
+      const response = await fetch(chatGptAuth ? "/api/ai/chatgpt/analyze" : "/api/ai/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
           provider: settings.provider,
-          apiKey: key,
+          ...(chatGptAuth ? {} : { apiKey: key }),
           model: settings.model,
           spot,
           messages: conversation,
@@ -264,8 +292,9 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
       return;
     }
 
-    const key = currentKey(loadSettings());
-    if (!key) {
+    const settings = loadSettings();
+    const key = currentKey(settings);
+    if (!key && !(settings.provider === 'openai' && settings.openaiAuth === 'chatgpt')) {
       setStatus("idle");
       setError("No API key set. Add one in Settings.");
       return;
@@ -338,11 +367,13 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
       ? "Cancel"
       : status === "switching"
         ? "New thread…"
-        : analysis
-          ? "Reanalyze"
-          : newSpotReady
-            ? "Analyze new spot"
-            : "Analyze this spot";
+        : !hasConnection
+          ? "Set up AI"
+          : analysis
+            ? "Reanalyze"
+            : newSpotReady
+              ? "Analyze new spot"
+              : "Analyze this spot";
 
   return (
     <div
@@ -364,23 +395,40 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={
-            status === "streaming" ? cancelRequest : () => void analyze()
-          }
-          disabled={status === "switching"}
-          aria-label={
-            status === "streaming" ? "Cancel AI response" : actionLabel
-          }
-          className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 ${
-            status === "streaming"
-              ? "border border-border bg-surface text-fg hover:bg-surface-2"
-              : "bg-accent text-accent-fg hover:opacity-90"
-          }`}
-        >
-          {actionLabel}
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={
+              status === "streaming"
+                ? cancelRequest
+                : hasConnection
+                  ? () => void analyze()
+                  : openSettings
+            }
+            disabled={status === "switching"}
+            aria-label={
+              status === "streaming" ? "Cancel AI response" : actionLabel
+            }
+            className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50 ${
+              status === "streaming"
+                ? "border border-border bg-surface text-fg hover:bg-surface-2"
+                : "bg-accent text-accent-fg hover:opacity-90"
+            }`}
+          >
+            {actionLabel}
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close AI analysis"
+              title="Close (Esc)"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -535,8 +583,9 @@ export function AiPanel({ getSpot, embedded = false }: AiPanelProps) {
           </div>
         ) : status === "idle" && !newSpotReady ? (
           <p className="text-xs leading-relaxed text-muted">
-            Analyze this spot, then ask follow-up questions without leaving the
-            solver. Uses your API key from{" "}
+            {hasConnection
+              ? "Analyze this spot, then ask follow-up questions without leaving the solver. Uses your connection from "
+              : "Connect an AI provider to analyze this spot and ask follow-up questions. Add a key or sign in with ChatGPT in "}
             <button type="button" onClick={openSettings} className="underline">
               Settings
             </button>

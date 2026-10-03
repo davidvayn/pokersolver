@@ -14,6 +14,16 @@ export interface SpotContext {
   potBB?: number;
   stackBB?: number;
   extra?: Record<string, string>;
+  solver?: {
+    truncated: boolean;
+    nodes: {
+      title: string;
+      rows: {
+        class: string;
+        actions: { action: string; freq: number }[];
+      }[];
+    }[];
+  };
 }
 
 export interface AiConversationMessage {
@@ -82,7 +92,9 @@ export const SYSTEM_PROMPT =
   'using GTO and exploitative reasoning. Be concise and specific: reference ' +
   'concrete hands, board textures, ranges, and equities. Prefer bullet points. ' +
   'When equity or solver numbers are provided, ground your reasoning in them ' +
-  'rather than contradicting them. Format responses as Markdown with short ' +
+  'rather than contradicting them. Only quote exact action frequencies when ' +
+  'they are supplied; distinguish coaching suggestions from measured solver ' +
+  'output. Respect the solver model\'s limitations. Format responses as Markdown with short ' +
   'headings and bullet lists. Use plain card notation such as Qh, 7s, and 2c; ' +
   'do not use LaTeX. Avoid generic advice.';
 
@@ -106,6 +118,21 @@ export function buildUserPrompt(spot: SpotContext): string {
   if (spot.stackBB != null) lines.push(`Effective stack: ${spot.stackBB}bb`);
   if (spot.extra) {
     for (const [k, v] of Object.entries(spot.extra)) lines.push(`${k}: ${v}`);
+  }
+  if (spot.solver) {
+    lines.push('Measured solver action frequencies by hand class:');
+    if (spot.solver.truncated) {
+      lines.push('Ranges were sampled; these results cover the sampled combos.');
+    }
+    for (const node of spot.solver.nodes) {
+      lines.push(node.title);
+      for (const row of node.rows) {
+        const actions = row.actions
+          .map(({ action, freq }) => `${action} ${(freq * 100).toFixed(1)}%`)
+          .join(', ');
+        lines.push(`${row.class}: ${actions}`);
+      }
+    }
   }
   lines.push('');
   lines.push(

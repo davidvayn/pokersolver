@@ -31,39 +31,100 @@
   cursor: pointer;
 }
 
-.solver-workspace-matrix {
-  max-width: min(100%, 60vh, calc(100dvh - 380px));
+/* The solver uses the available page width; other routes keep their spacing. */
+main:has([data-solver-workspace]) {
+  max-width: 1600px;
+  padding-top: 12px;
 }
 
-.solver-workspace-range-matrix {
-  max-width: min(100%, 58vh, calc(100dvh - 413px));
+.solver-strategy-layout {
+  display: grid;
+  align-items: start;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'settings' 'strategy' 'combos';
 }
 
-@media (max-width: 767px) {
+.solver-strategy-main {
+  grid-area: strategy;
+}
+
+.solver-strategy-settings {
+  grid-area: settings;
+}
+
+.solver-strategy-combos {
+  grid-area: combos;
+}
+
+.solver-board > .relative {
+  position: static;
+}
+
+.solver-ai-panel {
+  --solver-ai-max-height: min(440px, calc(100dvh - 160px));
+  right: 16px;
+  bottom: calc(5rem + env(safe-area-inset-bottom));
+  width: min(440px, calc(100vw - 32px));
+  max-height: var(--solver-ai-max-height);
+}
+
+.solver-ai-panel > div {
+  max-height: calc(var(--solver-ai-max-height) - 2rem);
+}
+
+@media (min-width: 768px) {
+  .solver-ai-panel {
+    --solver-ai-max-height: min(680px, calc(100dvh - 136px));
+    top: 112px;
+    right: max(16px, calc((100vw - 1600px) / 2 + 16px));
+    bottom: auto;
+    width: min(440px, calc((min(100vw, 1600px) - 32px) * 0.44 - 24px));
+  }
+
+  .solver-strategy-layout {
+    grid-template-columns: minmax(0, min(56%, max(380px, calc(100dvh - 240px)))) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: 'strategy settings' 'strategy combos';
+    column-gap: 24px;
+    row-gap: 12px;
+  }
+
   .solver-workspace-matrix {
-    max-width: min(100%, 34vh) !important;
+    width: 100%;
+    max-width: 100%;
   }
 
-  .solver-workspace [data-solver-hand-mix] {
-    display: none;
+  .solver-settings [aria-label='Pick a card'] {
+    left: auto;
+    right: 0;
   }
 }
 
-@media (max-height: 600px) {
-  .solver-workspace-matrix {
-    max-width: min(100%, 22vh, calc(100dvh - 318px)) !important;
-  }
+.solver-progress {
+  height: 2px;
+  overflow: hidden;
+  background: rgb(var(--accent) / 0.12);
+}
 
-  .solver-workspace-range-matrix {
-    max-width: min(100%, 22vh) !important;
-  }
+.solver-progress::after {
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: rgb(var(--accent));
+  content: '';
+  animation: solver-progress 1.5s ease-in-out infinite;
+}
 
-  .solver-workspace [data-solver-hand-mix] {
-    display: none;
-  }
+@keyframes solver-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(390%); }
+}
 
-  .solver-workspace [data-solver-strategy-heading] {
-    display: none;
+@media (prefers-reduced-motion: reduce) {
+  .solver-progress::after {
+    width: 100%;
+    animation: none;
   }
 }
 

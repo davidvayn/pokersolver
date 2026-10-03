@@ -17,6 +17,78 @@ afterEach(() => {
 });
 
 describe("AI analysis route conversation", () => {
+  it("retries a temporary provider overload before streaming the answer", async () => {
+    const upstreamFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Busy", { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(
+          'data: {"candidates":[{"content":{"parts":[{"text":"Recovered reply"}]},"finishReason":"STOP"}]}\n\n',
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+      );
+    vi.stubGlobal("fetch", upstreamFetch);
+    const response = await POST(
+      new NextRequest("http://localhost/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "gemini",
+          apiKey: "test-key",
+          model: "test-model",
+          spot: SPOT,
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("Recovered reply");
+    expect(upstreamFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes an Anthropic follow-up with the spot and prior analysis", async () => {
+    const reply = "The smaller sizing lets more marginal hands bet.";
+    const upstreamFetch = vi.fn().mockResolvedValue(
+      new Response(
+        `data: ${JSON.stringify({
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: reply },
+        })}\n\n` + 'data: {"type":"message_stop"}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      ),
+    );
+    vi.stubGlobal("fetch", upstreamFetch);
+
+    const response = await POST(
+      new NextRequest("http://localhost/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "anthropic",
+          apiKey: "test-key",
+          model: "test-model",
+          spot: SPOT,
+          messages: [
+            { role: "assistant", content: "Initial analysis" },
+            { role: "user", content: "Why this sizing?" },
+          ],
+        }),
+      }),
+    );
+
+    expect(await response.text()).toBe(reply);
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+    expect(upstreamFetch.mock.calls[0][0]).toBe(
+      "https://api.anthropic.com/v1/messages",
+    );
+    const request = upstreamFetch.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(String(request.body));
+    expect(payload.messages).toEqual([
+      { role: "user", content: expect.stringContaining("Board: Qh7s2c") },
+      { role: "assistant", content: "Initial analysis" },
+      { role: "user", content: "Why this sizing?" },
+    ]);
+  });
+
   it("sends the spot followed by the existing thread to OpenAI", async () => {
     const upstreamFetch = vi
       .fn()
@@ -95,11 +167,26 @@ describe("AI analysis route conversation", () => {
     );
     const payload = JSON.parse(String(request.body));
     expect(payload.system_instruction.parts[0].text).toContain("poker coach");
+    expect(payload.generationConfig).toEqual({
+      maxOutputTokens: 8192,
+      thinkingConfig: { thinkingLevel: "low" },
+    });
     expect(payload.contents).toEqual([
       expect.objectContaining({ role: "user" }),
       { role: "model", parts: [{ text: "Initial analysis" }] },
       { role: "user", parts: [{ text: "Why this sizing?" }] },
     ]);
+  });
+
+  it("reports a truncated Gemini response instead of silently ending mid-sentence", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response('data: {"candidates":[{"content":{"parts":[{"text":"Incomplete answer"}]},"finishReason":"MAX_TOKENS"}]}\n\n'),
+    ));
+    const response = await POST(new NextRequest("http://localhost/api/ai/analyze", {
+      method: "POST",
+      body: JSON.stringify({ provider: "gemini", apiKey: "test-key", model: "gemini-2.5-pro", spot: SPOT }),
+    }));
+    expect(await response.text()).toContain("Ask a follow-up to continue.");
   });
 
   it("forwards a CRLF-framed Gemini event before the upstream stream closes", async () => {

@@ -1,7 +1,7 @@
 'use client';
 
-import { useId, useState } from 'react';
-import { CircleDot, LoaderCircle, Trash2 } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Check, ChevronDown, LoaderCircle, Trash2 } from 'lucide-react';
 import { AiPanel } from '@/components/ai/AiPanel';
 import { GeminiMark } from '@/components/ai/GeminiMark';
 import { CardSlots } from '@/components/board/CardPicker';
@@ -10,9 +10,14 @@ import {
   SolverNerdStats,
   StrategyView,
 } from '@/components/solver/SolverResults';
-import { handClassLabel, type Card } from '@/lib/cards';
+import {
+  handClassLabel,
+  rangeComboCount,
+  weightsToRange,
+  type Card,
+} from '@/lib/cards';
 import type { SpotContext } from '@/lib/ai/prompt';
-import type { SolverResult } from '@/lib/solver/client';
+import type { NodeStrategy, SolverResult } from '@/lib/solver/client';
 
 type Player = 'oop' | 'ip';
 
@@ -43,6 +48,8 @@ export interface SolverWorkspaceProps {
 }
 
 interface WorkspaceContext extends SolverWorkspaceProps {
+  rangeOpen: boolean;
+  setRangeOpen: (open: boolean) => void;
   rangeTab: Player;
   setRangeTab: (player: Player) => void;
   strategyTab: Player;
@@ -66,17 +73,20 @@ function PlayerTabs({
   suffix?: string;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-1 rounded-md bg-surface-2 p-1" role="group">
+    <div
+      className="flex items-center gap-4 border-b border-border"
+      role="group"
+    >
       {(['oop', 'ip'] as const).map((player) => (
         <button
           key={player}
           type="button"
           onClick={() => onChange(player)}
           aria-pressed={value === player}
-          className={`min-h-10 rounded px-2 text-xs font-semibold uppercase transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`min-h-11 border-b-2 px-1 text-xs font-semibold uppercase transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
             value === player
-              ? 'bg-surface text-fg shadow-sm'
-              : 'text-muted hover:text-fg'
+              ? 'border-accent text-fg'
+              : 'border-transparent text-muted hover:text-fg'
           }`}
         >
           <span className="inline-flex items-center gap-1.5">
@@ -99,69 +109,89 @@ function CompactField({
   value,
   onChange,
   number = false,
+  unit,
 }: {
   label: string;
   value: string | number;
   onChange: (value: string) => void;
   number?: boolean;
+  unit: 'bb' | '% pot';
 }) {
   const id = useId();
 
   return (
     <label
       htmlFor={id}
-      className="flex h-11 min-w-0 items-center gap-2 rounded-md border border-border bg-surface-2 px-2"
+      className="flex min-h-11 min-w-0 flex-col justify-center gap-1 border-b border-border focus-within:border-accent"
     >
-      <span className="shrink-0 text-[10px] font-semibold uppercase text-muted">
+      <span className="shrink-0 whitespace-nowrap text-xs font-medium text-muted">
         {label}
       </span>
-      <input
-        id={id}
-        type={number ? 'number' : 'text'}
-        inputMode={number ? 'decimal' : 'text'}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 flex-1 bg-transparent text-right font-mono text-xs font-semibold tabular-nums text-fg outline-none"
-      />
+      <span className="flex min-w-0 items-baseline gap-1">
+        <input
+          id={id}
+          aria-label={`${label} (${unit})`}
+          type={number ? 'number' : 'text'}
+          inputMode={number ? 'decimal' : 'text'}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="w-full min-w-0 bg-transparent text-sm font-semibold tabular-nums text-fg outline-none"
+        />
+        <span className="shrink-0 text-xs text-muted" aria-hidden="true">
+          {unit === '% pot' ? '%' : unit}
+        </span>
+      </span>
     </label>
   );
 }
 
 function BoardControls({ context }: { context: WorkspaceContext }) {
   return (
-    <div className="flex min-w-0 items-center gap-3">
-      <CardSlots
-        count={5}
-        cards={context.board}
-        used={context.used}
-        onChange={context.onBoardChange}
-        size="xl"
-      />
-      <div className="hidden min-w-0 flex-1 grid-cols-4 gap-2 md:grid">
-        <CompactField
-          label="Pot"
-          value={context.pot}
-          number
-          onChange={(value) => context.onPotChange(parseFloat(value) || 0)}
-        />
-        <CompactField
-          label="Stack"
-          value={context.stack}
-          number
-          onChange={(value) => context.onStackChange(parseFloat(value) || 0)}
-        />
-        <CompactField
-          label="Bet %"
-          value={context.betSizes}
-          onChange={context.onBetSizesChange}
-        />
-        <CompactField
-          label="Raise %"
-          value={context.raiseSizes}
-          onChange={context.onRaiseSizesChange}
-        />
+    <section
+      aria-label="Solver settings"
+      className="solver-settings min-w-0 border-b border-border pb-3"
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="solver-board relative flex shrink-0 items-center gap-3">
+          <span className="text-xs font-medium text-muted">Board</span>
+          <CardSlots
+            count={5}
+            cards={context.board}
+            used={context.used}
+            onChange={context.onBoardChange}
+            size="md"
+          />
+        </div>
+        <div className="grid min-w-0 flex-1 basis-[340px] grid-cols-4 gap-x-3">
+          <CompactField
+            label="Pot"
+            unit="bb"
+            value={context.pot}
+            number
+            onChange={(value) => context.onPotChange(parseFloat(value) || 0)}
+          />
+          <CompactField
+            label="Stack"
+            unit="bb"
+            value={context.stack}
+            number
+            onChange={(value) => context.onStackChange(parseFloat(value) || 0)}
+          />
+          <CompactField
+            label="Bet sizes"
+            unit="% pot"
+            value={context.betSizes}
+            onChange={context.onBetSizesChange}
+          />
+          <CompactField
+            label="Raise sizes"
+            unit="% pot"
+            value={context.raiseSizes}
+            onChange={context.onRaiseSizesChange}
+          />
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -182,11 +212,32 @@ function RangeSurface({ context }: { context: WorkspaceContext }) {
 
   return (
     <section
+      id="solver-range-editor"
       aria-label="Range editor"
-      className="hidden min-h-0 flex-col gap-2 rounded-lg border border-border bg-surface p-3 lg:flex"
+      className="min-w-0 border-b border-border bg-surface py-3"
     >
-      <PlayerTabs value={context.rangeTab} onChange={context.setRangeTab} />
-      <div className="solver-workspace-range-matrix mx-auto min-h-0 w-full">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <PlayerTabs
+          value={context.rangeTab}
+          onChange={context.setRangeTab}
+          suffix=" range"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            context.setRangeOpen(false);
+            document
+              .querySelector<HTMLButtonElement>(
+                `[aria-label="Edit ${context.rangeTab.toUpperCase()} range"]`
+              )
+              ?.focus();
+          }}
+          className="inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <Check className="h-4 w-4" aria-hidden="true" /> Done
+        </button>
+      </div>
+      <div className="mx-auto w-full max-w-[440px]">
         <RangeEditor
           weights={weights}
           onChange={onChange}
@@ -229,115 +280,197 @@ function RangeSurface({ context }: { context: WorkspaceContext }) {
   );
 }
 
-function EmptyStrategy({ context }: { context: WorkspaceContext }) {
-  const message = context.solverError
-    ? context.solverError
-    : context.running
-      ? 'Solving'
-      : !context.available
-        ? 'Starting solver'
-        : context.missing ?? 'Ready';
-
-  return (
-    <div
-      role={context.solverError ? 'alert' : 'status'}
-      className="grid min-h-0 flex-1 place-items-center rounded-lg border border-dashed border-border bg-surface-2/50 p-6 text-center"
-    >
-      <div className="flex flex-col items-center gap-3 text-sm text-muted">
-        {context.running || !context.available ? (
-          <LoaderCircle className="h-5 w-5 animate-spin" aria-hidden="true" />
-        ) : (
-          <CircleDot className="h-5 w-5" aria-hidden="true" />
-        )}
-        <span>{message}</span>
-      </div>
-    </div>
-  );
-}
+const EMPTY_NODES: Record<Player, NodeStrategy> = {
+  oop: { title: 'OOP — first to act', actions: [], rows: [] },
+  ip: { title: 'IP — vs check', actions: [], rows: [] },
+};
 
 function StrategySurface({ context }: { context: WorkspaceContext }) {
   const [analysisOpen, setAnalysisOpen] = useState(false);
-  const node = context.result
-    ? context.strategyTab === 'oop'
-      ? context.result.oop
-      : context.result.ip
-    : null;
+  const analysisTrigger = useRef<HTMLButtonElement>(null);
+  const analysisPanel = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (analysisOpen) {
+      analysisPanel.current
+        ?.querySelector<HTMLButtonElement>('button')
+        ?.focus();
+    }
+  }, [analysisOpen]);
+
+  function closeAnalysis() {
+    setAnalysisOpen(false);
+    analysisTrigger.current?.focus();
+  }
+  const node =
+    context.result && !context.result.error
+      ? context.strategyTab === 'oop'
+        ? context.result.oop
+        : context.result.ip
+      : EMPTY_NODES[context.strategyTab];
+  const pending =
+    context.running || !context.result || Boolean(context.result.error);
+  const solving = !context.missing && !context.solverError && !context.result?.error &&
+    (context.running || !context.result);
 
   return (
     <section
       aria-label="Solved strategy"
-      className="flex min-h-0 flex-col gap-2 overflow-hidden rounded-lg border border-border bg-surface p-3"
+      className="flex min-w-0 flex-col gap-3"
     >
-      <div className="flex shrink-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
+      <div className="relative flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="min-w-0">
           <PlayerTabs
             value={context.strategyTab}
             onChange={(player) => {
               context.setStrategyTab(player);
-              setAnalysisOpen(false);
+              context.setRangeOpen(false);
             }}
             suffix=" strategy"
           />
         </div>
+        <div className="order-3 basis-full sm:order-none sm:ml-auto sm:basis-auto">
+          <RangeSummaries context={context} />
+        </div>
         <button
+          ref={analysisTrigger}
           type="button"
           onClick={() => setAnalysisOpen((open) => !open)}
           aria-label="AI analysis"
           aria-pressed={analysisOpen}
+          aria-expanded={analysisOpen}
+          aria-controls="solver-ai-analysis"
           title="AI analysis"
-          className={`grid h-11 w-11 shrink-0 place-items-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`ml-auto grid h-11 w-11 shrink-0 place-items-center rounded sm:ml-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
             analysisOpen
-              ? 'border-accent bg-surface-2'
-              : 'border-border hover:border-accent'
+              ? 'bg-surface-2 text-accent'
+              : 'text-muted hover:text-accent'
           }`}
         >
           <GeminiMark className="h-5 w-5" />
         </button>
+        {solving && <div className="solver-progress absolute inset-x-0 -bottom-1" aria-hidden="true" />}
       </div>
-      <div
-        className={
-          analysisOpen
-            ? 'min-h-0 flex-1 overflow-hidden rounded-md bg-surface-2/40 p-3'
-            : 'hidden'
-        }
+      {context.rangeOpen && <RangeSurface context={context} />}
+      <aside
+        ref={analysisPanel}
+        id="solver-ai-analysis"
+        aria-label="AI analysis panel"
+        hidden={!analysisOpen}
+        className="solver-ai-panel fixed z-30 overflow-hidden rounded-lg border border-border bg-surface p-4 shadow-card"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            closeAnalysis();
+          }
+        }}
       >
-        <AiPanel getSpot={context.getAnalysisSpot} embedded />
-      </div>
-      {!analysisOpen && node && context.result && !context.result.error ? (
-        <div className="flex min-h-0 flex-1 flex-col justify-start overflow-y-auto overflow-x-hidden">
-          <StrategyView
-            node={node}
-            board={context.board}
-            framed={false}
-            compact
-            matrixClassName="solver-workspace-matrix"
-          />
-          {context.result.truncated && (
-            <span className="mt-1 text-center text-[10px] font-medium uppercase text-muted">
-              Range capped
-            </span>
-          )}
-        </div>
-      ) : !analysisOpen ? (
-        <EmptyStrategy context={context} />
-      ) : null}
-      {!analysisOpen &&
-        context.showSolverStats &&
-        context.result &&
-        !context.result.error && (
-          <div className="shrink-0">
-            <SolverNerdStats result={context.result} compact />
-          </div>
+        <AiPanel
+          getSpot={context.getAnalysisSpot}
+          embedded
+          onClose={closeAnalysis}
+        />
+      </aside>
+      <div className="flex min-w-0 flex-col">
+        <StrategyView
+          key={context.strategyTab}
+          node={node}
+          board={context.board}
+          framed={false}
+          compact
+          matrixClassName="solver-workspace-matrix"
+          settings={<BoardControls context={context} />}
+          pending={pending}
+        />
+        {!pending && context.result?.truncated && (
+          <span className="mt-1 text-center text-[10px] font-medium uppercase text-muted">
+            Range capped
+          </span>
         )}
+      </div>
+      {context.showSolverStats && context.result && !context.result.error && (
+        <div className="shrink-0">
+          <SolverNerdStats result={context.result} compact />
+        </div>
+      )}
     </section>
   );
 }
 
+function RangeSummaries({ context }: { context: WorkspaceContext }) {
+  const error = context.solverError || context.result?.error;
+  const solving = !error && !context.missing && (context.running || !context.result);
+  return (
+    <div className="flex flex-wrap items-center gap-x-5">
+      {(['oop', 'ip'] as const).map((player) => {
+        const count = rangeComboCount(weightsToRange(context[player]));
+        return (
+          <button
+            key={player}
+            type="button"
+            aria-label={`Edit ${player.toUpperCase()} range`}
+            aria-expanded={context.rangeOpen && context.rangeTab === player}
+            aria-controls="solver-range-editor"
+            onClick={() => {
+              context.setRangeTab(player);
+              context.setRangeOpen(
+                !context.rangeOpen || context.rangeTab !== player
+              );
+            }}
+            className="inline-flex min-h-11 items-center gap-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ background: playerColor(player) }}
+              aria-hidden="true"
+            />
+            <span className="font-semibold">{player.toUpperCase()} range</span>
+            <span className="text-muted">
+              {count.toFixed(0)}
+              <span className="sr-only sm:not-sr-only"> combos</span>
+            </span>
+            <ChevronDown
+              className={`h-3.5 w-3.5 text-muted ${context.rangeOpen && context.rangeTab === player ? 'rotate-180' : ''}`}
+              aria-hidden="true"
+            />
+          </button>
+        );
+      })}
+      <span
+        role={error ? 'alert' : 'status'}
+        aria-live="polite"
+        className={`ml-auto inline-flex items-center gap-2 ${solving ? 'text-sm font-semibold text-accent' : 'text-[10px] text-muted'}`}
+        title={!solving && !error && !context.missing ? 'Strategy ready' : undefined}
+      >
+        {error || context.missing || (solving ? (
+          <>
+            <LoaderCircle className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
+            {context.available ? 'Solving…' : 'Starting solver…'}
+          </>
+        ) : (
+          <>
+            <Check className="h-3 w-3" aria-hidden="true" />
+            <span className="sr-only">Solved</span>
+          </>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 export function SolverWorkspace(props: SolverWorkspaceProps) {
+  const [rangeOpen, setRangeOpen] = useState(
+    () =>
+      !Object.values(props.oop).some(Boolean) ||
+      !Object.values(props.ip).some(Boolean)
+  );
   const [rangeTab, setRangeTab] = useState<Player>('oop');
   const [strategyTab, setStrategyTab] = useState<Player>('oop');
   const context: WorkspaceContext = {
     ...props,
+    rangeOpen,
+    setRangeOpen,
     rangeTab,
     setRangeTab,
     strategyTab,
@@ -345,18 +478,9 @@ export function SolverWorkspace(props: SolverWorkspaceProps) {
   };
 
   return (
-    <section
-      data-solver-workspace
-      className="solver-workspace grid h-[calc(100dvh-17rem)] grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-hidden rounded-lg border border-border bg-bg p-2 text-fg md:h-[calc(100dvh-7.125rem)]"
-    >
+    <section data-solver-workspace className="solver-workspace min-w-0 text-fg">
       <h1 className="sr-only">Postflop solver</h1>
-      <header className="min-w-0 rounded-lg border border-border bg-surface px-3 py-2">
-        <BoardControls context={context} />
-      </header>
-      <div className="grid min-h-0 gap-2 lg:grid-cols-[minmax(470px,0.95fr)_minmax(0,1.45fr)]">
-        <RangeSurface context={context} />
-        <StrategySurface context={context} />
-      </div>
+      <StrategySurface context={context} />
     </section>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { ProviderId, PROVIDERS } from './providers';
+import type { ChatGptRegistration } from './chatgpt';
 
 // AI settings live only in the browser's localStorage. The key is sent to our
 // serverless proxy per-request and never persisted server-side.
@@ -11,6 +12,9 @@ export interface AiSettings {
   provider: ProviderId;
   model: string;
   apiKeys: Partial<Record<ProviderId, string>>;
+  openaiAuth?: 'key' | 'chatgpt';
+  chatgptHostId?: string;
+  chatgptAccounts?: ChatGptRegistration[];
 }
 
 export function loadSettings(): AiSettings {
@@ -32,6 +36,7 @@ export function loadSettings(): AiSettings {
 export function saveSettings(s: AiSettings) {
   try {
     localStorage.setItem(KEY, JSON.stringify(s));
+    window.dispatchEvent(new Event('poker-ai-settings-changed'));
   } catch {
     /* ignore */
   }

@@ -23,6 +23,8 @@ export interface HandMatrixProps {
   /** optional accessible/hover detail that is not rendered inside the cell */
   cellDescription?: (label: string) => string | undefined;
   onCellClick?: (label: string) => void;
+  onCellPreview?: (label: string) => void;
+  squareCells?: boolean;
   /** display mode: currently inspected hand class */
   selectedLabel?: string;
   className?: string;
@@ -38,6 +40,8 @@ export function HandMatrix({
   annotation,
   cellDescription,
   onCellClick,
+  onCellPreview,
+  squareCells = false,
   selectedLabel,
   className,
 }: HandMatrixProps) {
@@ -84,11 +88,12 @@ export function HandMatrix({
   return (
     <div
       className={'select-none ' + (className ?? '')}
+      style={squareCells ? { containerType: 'inline-size' } : undefined}
       onMouseLeave={endPaint}
       onMouseUp={endPaint}
     >
       <div
-        className="grid aspect-square w-full gap-[2px]"
+        className={`grid aspect-square w-full ${squareCells ? 'gap-px' : 'gap-[2px]'}`}
         style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr))' }}
       >
         {Array.from({ length: 13 }).map((_, row) =>
@@ -104,7 +109,8 @@ export function HandMatrix({
               (isSelected
                 ? 'z-10 ring-2 ring-accent ring-offset-1 ring-offset-surface '
                 : '') +
-              'bg-surface-2';
+              'bg-surface-2' +
+              (squareCells ? ' !rounded-none !border-0' : '');
             const annotationText = annotation?.(label);
             const descriptionText = cellDescription?.(label);
             const title = [label, annotationText, descriptionText]
@@ -122,12 +128,15 @@ export function HandMatrix({
                     }}
                   />
                 ) : segs && segs.length ? (
-                  <span className="pointer-events-none absolute inset-0 flex flex-col-reverse">
+                  <span
+                    className={`pointer-events-none absolute inset-0 flex ${squareCells ? '' : 'flex-col-reverse'}`}
+                  >
                     {segs.map((s, i) => (
                       <span
                         key={i}
                         style={{
-                          height: `${s.fraction * 100}%`,
+                          [squareCells ? 'width' : 'height']:
+                            `${s.fraction * 100}%`,
                           background: s.color,
                         }}
                       />
@@ -139,10 +148,17 @@ export function HandMatrix({
                   className={
                     'pointer-events-none relative z-10 ' +
                     (mode === 'display' && segs?.length
-                      ? 'bg-black/70 px-0.5 py-px text-white'
+                      ? squareCells
+                        ? 'font-semibold text-black/90'
+                        : 'bg-black/70 px-0.5 py-px text-white'
                       : w > 0.4
                         ? 'text-white/95'
                         : 'text-fg/80')
+                  }
+                  style={
+                    squareCells
+                      ? { fontSize: 'clamp(11px, 3cqw, 18px)' }
+                      : undefined
                   }
                 >
                   {label}
@@ -172,7 +188,11 @@ export function HandMatrix({
                 key={label}
                 type="button"
                 onMouseDown={(event) => handleDown(label, event)}
-                onMouseEnter={() => handleEnter(label)}
+                onMouseEnter={() => {
+                  handleEnter(label);
+                  onCellPreview?.(label);
+                }}
+                onFocus={() => onCellPreview?.(label)}
                 onKeyDown={(event) => handleKeyDown(label, event)}
                 onClick={
                   mode === 'display' ? () => onCellClick?.(label) : undefined

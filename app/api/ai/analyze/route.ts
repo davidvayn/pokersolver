@@ -6,6 +6,7 @@ import {
   type AiConversationMessage,
   type SpotContext,
 } from "@/lib/ai/prompt";
+import { normalizeStream } from "@/lib/ai/stream";
 import type { ProviderId } from "@/lib/ai/providers";
 
 export const runtime = "edge";
@@ -36,12 +37,25 @@ export async function POST(req: NextRequest) {
   const conversation = normalizeConversation(body.messages);
 
   try {
-    const upstream =
+    const requestProvider = () =>
       provider === "anthropic"
-        ? await callAnthropic(apiKey, model, userPrompt, conversation)
+        ? callAnthropic(apiKey, model, userPrompt, conversation)
         : provider === "gemini"
-          ? await callGemini(apiKey, model, userPrompt, conversation)
-          : await callOpenAI(apiKey, model, userPrompt, conversation);
+          ? callGemini(apiKey, model, userPrompt, conversation)
+          : callOpenAI(apiKey, model, userPrompt, conversation);
+    let upstream = await requestProvider();
+    // Retry rejected requests before any response text reaches the browser.
+    // Keep the delay short enough for the client's first-token timeout.
+    for (
+      let attempt = 0;
+      attempt < 2 && [429, 503].includes(upstream.status);
+      attempt += 1
+    ) {
+      await upstream.body?.cancel();
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      if (req.signal.aborted) throw new Error("Request canceled");
+      upstream = await requestProvider();
+    }
 
     if (!upstream.ok || !upstream.body) {
       const text = await upstream.text().catch(() => "");
@@ -145,117 +159,16 @@ function callGemini(
       body: JSON.stringify({
         system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents,
-        generationConfig: { maxOutputTokens: 2048 },
+        // Gemini's output limit includes its internal reasoning tokens.
+        generationConfig: {
+          maxOutputTokens: 8192,
+          ...(model.startsWith("gemini-3")
+            ? { thinkingConfig: { thinkingLevel: "low" } }
+            : model.startsWith("gemini-2.5")
+              ? { thinkingConfig: { thinkingBudget: 2048 } }
+              : {}),
+        },
       }),
     },
   );
-}
-
-/** Parse provider SSE and emit only the text deltas as a UTF-8 stream. */
-function normalizeStream(
-  body: ReadableStream<Uint8Array>,
-  provider: ProviderId,
-): ReadableStream<Uint8Array> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-  let pendingCarriageReturn = false;
-
-  // SSE permits CRLF, lone LF, and lone CR line endings. Canonicalize them
-  // without mistaking a CRLF pair split across network chunks for a blank line.
-  const normalizeLineEndings = (chunk: string, flush = false): string => {
-    let text = chunk;
-    if (pendingCarriageReturn) {
-      if (text.startsWith("\n")) text = text.slice(1);
-      text = `\n${text}`;
-      pendingCarriageReturn = false;
-    }
-    if (!flush && text.endsWith("\r")) {
-      text = text.slice(0, -1);
-      pendingCarriageReturn = true;
-    }
-    return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  };
-
-  const processEvents = (
-    block: string,
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): boolean => {
-    for (const evt of block.split("\n\n")) {
-      const data = evt
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n")
-        .trim();
-      if (!data) continue;
-      if (data === "[DONE]") {
-        controller.close();
-        void reader.cancel();
-        return true;
-      }
-      try {
-        const obj = JSON.parse(data);
-        // Surface provider-side errors instead of silently dropping them.
-        const errMsg =
-          obj?.type === "error"
-            ? obj.error?.message || "provider stream error"
-            : obj?.error
-              ? obj.error.message || String(obj.error)
-              : null;
-        if (errMsg) {
-          controller.enqueue(
-            encoder.encode(`\n\n⚠️ AI provider error: ${errMsg}`),
-          );
-          controller.close();
-          reader.cancel();
-          return true; // stop
-        }
-        const text =
-          provider === "anthropic"
-            ? obj.type === "content_block_delta"
-              ? (obj.delta?.text ?? "")
-              : ""
-            : provider === "gemini"
-              ? (obj.candidates?.[0]?.content?.parts ?? [])
-                  .map((part: { text?: string }) => part.text ?? "")
-                  .join("")
-              : (obj.choices?.[0]?.delta?.content ?? "");
-        if (text) controller.enqueue(encoder.encode(text));
-        const streamFinished =
-          (provider === "gemini" &&
-            Boolean(obj.candidates?.[0]?.finishReason)) ||
-          (provider === "anthropic" && obj.type === "message_stop");
-        if (streamFinished) {
-          controller.close();
-          void reader.cancel();
-          return true;
-        }
-      } catch {
-        /* skip non-JSON keepalive events */
-      }
-    }
-    return false;
-  };
-
-  return new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        // Flush any residual buffered event before closing.
-        buffer += normalizeLineEndings(decoder.decode(), true);
-        if (buffer.trim() && processEvents(buffer, controller)) return;
-        controller.close();
-        return;
-      }
-      buffer += normalizeLineEndings(decoder.decode(value, { stream: true }));
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
-      if (processEvents(events.join("\n\n"), controller)) return;
-    },
-    cancel() {
-      reader.cancel();
-    },
-  });
 }

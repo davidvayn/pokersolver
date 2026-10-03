@@ -107,8 +107,9 @@ export default function SolverPage() {
   // the page shows a result on load and updates as you edit, no hunting for a
   // button.
   useEffect(() => {
-    if (!ready || !available) return;
     const version = ++solveVersion.current;
+    setResult(null);
+    if (!ready || !available) return;
     const t = setTimeout(() => runSolve(version), 500);
     return () => clearTimeout(t);
   }, [ready, available, runSolve]);
@@ -119,16 +120,30 @@ export default function SolverPage() {
       kind: 'postflop',
       description:
         'Postflop spot solved with an in-browser CFR+ one-street all-in-equity abstraction.',
+      hero: 'OOP',
+      villain: 'IP',
       board: board.map(cardToStr).join(''),
       heroRange: serializeRange(weightsToRange(oop)) || '(empty)',
       villainRange: serializeRange(weightsToRange(ip)) || '(empty)',
       potBB: pot,
       stackBB: stack,
+      ...(result && !result.error ? {
+        solver: {
+          truncated: result.truncated,
+          nodes: [result.oop, result.ip].map((node) => ({
+            title: node.title,
+            rows: node.rows.map((row) => ({
+              class: row.class,
+              actions: row.actions.map(({ action, freq }) => ({ action, freq })),
+            })),
+          })),
+        },
+      } : {}),
       extra: {
         'Bet sizes (% pot)': betSizes,
         'Raise sizes (% pot)': raiseSizes,
         'Solver model': SOLVER_LABEL,
-        ...(result
+        ...(result && !result.error
           ? {
               Exploitability: `${result.exploitability_pct}% of pot`,
               'OOP EV': `${result.oop_ev} bb`,
