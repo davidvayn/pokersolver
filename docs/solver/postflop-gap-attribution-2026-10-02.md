@@ -23,6 +23,12 @@ The most costly *local* action-ranking comparisons are:
 The single-raised node's native-best agreement is similarly low with the
 *crossed* model (51.3% and 56.5%, respectively). Replacing the value model on
 unchanged final-policy beliefs therefore does not make the mismatch disappear.
+For a concrete example, on the `2s 8c Ad` flop, BTN's `2c 2d` set after BB
+checks has native-reference action EVs of **10.578bb check** versus
+**6.903bb smallest bet**; the matched network predicts **5.615bb check**
+versus **6.748bb smallest bet**, reversing their order. Those are conditional
+EVs against the frozen continuation, not population frequencies or a proof
+that checking is globally optimal.
 But these are **prediction comparisons**, not trained cross-seed policies.
 Neither they nor local losses isolate chance-seed effects, establish that the
 native64 reference is accurate, or measure full-game exploitability. Local

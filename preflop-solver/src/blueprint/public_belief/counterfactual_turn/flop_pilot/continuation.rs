@@ -274,3 +274,73 @@ fn saved_native_prediction_probe() {
         "seconds":started.elapsed().as_secs_f64(),"predictions":predictions,"releaseAccepted":false})).unwrap();
     file.sync_all().unwrap();
 }
+
+#[test]
+#[ignore = "hash-pinned frozen belief and external resource guard; finite-budget native label comparison only"]
+fn saved_fixed_belief_native_label_probe() {
+    let path = PathBuf::from(std::env::var("POKER_FIXED_BELIEF_CANDIDATE").unwrap());
+    assert!(fs::metadata(&path).unwrap().len() <= 8 * 1024 * 1024);
+    let bytes = fs::read(path).unwrap();
+    let candidate_sha = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        candidate_sha,
+        std::env::var("POKER_FIXED_BELIEF_CANDIDATE_SHA").unwrap()
+    );
+    let candidate: Solution = serde_json::from_slice(&bytes).unwrap();
+    let frozen = frozen_response::Frozen::new(&candidate).unwrap();
+    let turn: u8 = std::env::var("POKER_FIXED_BELIEF_TURN")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(turn < 52 && !candidate.state.board.contains(&turn));
+    let index: usize = std::env::var("POKER_FIXED_BELIEF_LEAF_INDEX")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let iterations: u64 = std::env::var("POKER_FIXED_BELIEF_ITERATIONS")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!([64, 256, 1024].contains(&iterations));
+    let mut queries = frozen.belief_queries(turn).unwrap();
+    assert!(index < queries.len());
+    let mut config = queries.swap_remove(index);
+    let belief_sha = format!("{:x}", Sha256::digest(serde_json::to_vec(&config.state).unwrap()));
+    let history = config.state.public_history.clone();
+    let own_reach = config.state.ranges.clone();
+    let combos = all_combos();
+    let opponent_mass: [Vec<f64>; 2] = std::array::from_fn(|p| {
+        compatible_masses_from_card_marginals(&combos, &own_reach[1 - p])
+    });
+    config.iterations = iterations;
+    let started = std::time::Instant::now();
+    let values = solve(config).unwrap();
+    let output = PathBuf::from(std::env::var("POKER_FIXED_BELIEF_OUTPUT").unwrap());
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "schema": "hu-fixed-belief-native-label-probe-v1",
+        "candidateSha256": candidate_sha,
+        "beliefSha256": belief_sha,
+        "turn": turn,
+        "leafIndex": index,
+        "publicHistory": history,
+        "ownReach": own_reach,
+        "opponentCompatibleMass": opponent_mass,
+        "nativeIterations": iterations,
+        "counterfactualBb": values.counterfactual_bb,
+        "profileCounterfactualBb": values.profile_counterfactual_bb,
+        "conditionalResponseGainBb": values.conditional_response_gain_bb,
+        "policySha256": values.policy_sha256,
+        "completedZeroOwnReach": values.completed_zero_own_reach,
+        "policyRows": values.policy_rows,
+        "seconds": started.elapsed().as_secs_f64(),
+        "releaseAccepted": false,
+    })).unwrap();
+    assert!(payload.len() <= 1024 * 1024);
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .unwrap();
+    file.write_all(&payload).unwrap();
+    file.sync_all().unwrap();
+}
