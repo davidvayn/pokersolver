@@ -8,6 +8,17 @@ import run_action_contrast_students as module
 
 
 class ContrastStudentContractTests(unittest.TestCase):
+    def test_cost_only_cadence_preserves_equal_family_counts_and_stops_if_unaffordable(self):
+        for seconds, expected in [(1., 4), (8., 8), (20., 20)]:
+            cadence, projected = module.budgeted_cadence([seconds] * 3, 7200)
+            self.assertEqual(cadence, expected)
+            self.assertEqual((600 // cadence) % 3, 0)
+            self.assertLessEqual(projected, 7200)
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            module.budgeted_cadence([60.] * 3, 7200)
+        for bad in ([1., 2.], [1., float("nan"), 2.], [1., 0., 2.]):
+            with self.assertRaises(ValueError): module.budgeted_cadence(bad, 7200)
+
     def test_prepare_uses_existing_training_refresh_but_protects_frozen_eval_split(self):
         source, reference = {"source": True}, {"reference": True}
         args = SimpleNamespace(corpus="corpus", split_reference="reference")

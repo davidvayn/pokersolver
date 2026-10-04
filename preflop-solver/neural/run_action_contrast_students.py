@@ -42,7 +42,7 @@ def prepare(args):
     if tuple(map(len, split)) != (474, 69, 72): raise ValueError("frozen split changed")
     dataset = training.load_dataset(args.corpus, 1, "payoff-exposure")
     contexts, queries, cache = training.feature_dataset_cached(dataset,
-        training.FEATURE_SCHEMA_EXACT_RUNOUT, 1, args.feature_cache)
+        training.FEATURE_SCHEMA_EXACT_RUNOUT, args.feature_workers, args.feature_cache)
     manifest = json.loads(args.bundles.read_text())
     if manifest.get("status") != "complete" or manifest.get("calibrationOnly"):
         raise ValueError("completed training bundles required")
@@ -56,10 +56,10 @@ def prepare(args):
             if sha256(Path(receipt["path"])) != receipt["sha256"]: raise ValueError("bundle source changed")
         prefix = json.loads(Path(family["prefix"]["path"]).read_text())
         packets = [json.loads(Path(r["path"]).read_text()) for r in family["labels"]]
-        groups, ordered = build_groups(prefix, packets)
+        groups, ordered = build_groups(prefix, packets, require_full_chance=bool(family.get("all49Turns")))
         data = training.load_dataset(Path(family["calibrationCorpus"]["path"]), 1, "payoff-exposure")
         if data.source["targets"] != ordered: raise ValueError("bundle feature/affine leaf ordering differs")
-        c, q, _ = training.feature_dataset_cached(data, training.FEATURE_SCHEMA_EXACT_RUNOUT, 1, args.feature_cache)
+        c, q, _ = training.feature_dataset_cached(data, training.FEATURE_SCHEMA_EXACT_RUNOUT, args.feature_workers, args.feature_cache)
         if any(float((g.weights * g.support).sum()) <= 0 for g in groups):
             raise ValueError("training bundle has no profile-consistent authentic contrast support")
         bundles.append(TrainingBundle(data, c, q, groups, tuple(family["family"])))
@@ -67,7 +67,21 @@ def prepare(args):
     return dataset, contexts, queries, split, bundles, cache
 
 
+def budgeted_cadence(family_seconds, available_seconds):
+    """Resolve equal-arm work BEFORE fitting, never from response/holdout scores."""
+    times = np.asarray(family_seconds, dtype=float)
+    if times.shape != (3,) or not np.isfinite(times).all() or (times <= 0).any():
+        raise ValueError("three finite positive complete-family timings required")
+    for cadence in (4, 8, 20):
+        # 600/cadence is divisible by three, preserving equal family counts.
+        projected = 1.5 * (float(np.mean(times)) * (600 // cadence) * 4 + 405 * 2 + 1200)
+        if projected <= available_seconds:
+            return cadence, projected
+    raise ValueError("even reduced equal-arm bundle cadence exceeds remaining two-hour cap")
+
+
 def preflight(args):
+    started = time.monotonic()
     dataset, contexts, queries, split, bundles, cache = prepare(args)
     mx.random.seed(10601)
     model = training.SharedComboValueNetwork(True, "wide", "payoff-exposure", training.FEATURE_SCHEMA_EXACT_RUNOUT)
@@ -94,17 +108,19 @@ def preflight(args):
     coefficient = min(10., .25 * value_norm / contrast_norm)
     # Measured ordinary pair fitting was 405s; reserve 1,200s for exhaustive
     # cached-feature NumPy/Rust parity of all four students, plus 50% margin.
-    projected = 1.5 * (float(np.mean(times)) * 150 * 4 + 405 * 2 + 1200)
+    conditioning = time.monotonic() - started
+    cadence, projected = budgeted_cadence(times, 7200 - conditioning)
     settings = dict(schema="action-contrast-fit-settings-v1", status="complete", releaseAccepted=False,
         contrastWeight=coefficient, requestedContrastGradientFraction=.25,
         measuredContrastGradientFraction=coefficient*contrast_norm/value_norm,
         gradientWeightCap=10., valueGradientNorm=value_norm, contrastGradientNorm=contrast_norm,
         trainingSeedForConditioning=10601, frozenSplitTrainingRefresh=True,
         familyNorms=norms, familyGradientSeconds=times,
-        projectedFitAndParitySeconds=projected, cadence=4, chunkSize=4, fixedFinalStep=600,
+        projectedFitAndParitySeconds=projected, conditioningSeconds=conditioning,
+        cadence=cadence, requestedCadence=4, reducedCadenceForResources=cadence != 4,
+        chunkSize=4, fixedFinalStep=600, featureWorkers=args.feature_workers,
         pairedSeeds=[10601, 10602], featureCache=cache, armDifference="contrast_weight_only")
     atomic_json(args.output / "fit-settings.json", settings)
-    if projected > 7200: raise ValueError("projected matched fits/parity exceed two-hour cap; adjust equal cadence before fitting")
     return settings
 
 
@@ -128,7 +144,8 @@ def fit(args):
         model_path = work / f"turn-value-range-seed{seed}.json"
         training.export_model(current, model_path, seed, dataset.source_sha256, native.SCHEMA,
             "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")
-        if metrics["selectedStep"] != 600 or metrics["actionBundleObjective"]["bundleUpdates"] != 150:
+        if (metrics["selectedStep"] != 600
+                or metrics["actionBundleObjective"]["bundleUpdates"] != 600 // settings["cadence"]):
             raise ValueError("matched checkpoint/cadence drift")
         rows.append(dict(seed=seed, model=str(model_path), modelSha256=sha256(model_path), metrics=metrics))
         atomic_json(work / "fit-report.json", dict(arm=args.arm, variants=rows, settings=settings, status="running"))
@@ -178,6 +195,7 @@ def main():
         p.add_argument("--" + name, type=Path, required=True)
         p.add_argument("--" + name + "-sha256", required=True)
     p.add_argument("--feature-cache", type=Path, required=True); p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--feature-workers", type=int, choices=(1, 2), default=1)
     p.add_argument("--preflight-only", action="store_true")
     p.add_argument("--quality-decision", type=Path)
     p.add_argument("--quality-decision-sha256")

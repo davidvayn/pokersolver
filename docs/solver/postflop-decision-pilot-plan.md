@@ -1,14 +1,15 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Pilot boundary reached: replay rejected; Stage 2 data inconclusive.**
+Status: **Replay rejected; sampled Stage 2 data inconclusive; focused exact-chance continuation underway.**
 No model has been promoted. Execution is recorded in
 [the replay pilot report](postflop-replay-pilot-2026-10-03.md) and
 [the action-contrast report](postflop-action-contrast-pilot-2026-10-04.md).
 The reserved chance block exposed action-ranking instability larger than the
 intended improvement. Per Section 6B, no C0/C1 fit or conditional expansion
 was started. The next experiment needs more reliable chance-integrated targets,
-not another unchanged fitting run.
+not another unchanged fitting run. The user authorized continuing on October 4;
+the focused experiment below changes chance coverage only.
 
 This refines Step 3 of [the postflop gap plan](postflop-gap-implementation-plan.md).
 It specifies what to implement, how to avoid another expensive false positive,
@@ -460,3 +461,29 @@ primary branch or discard its dirty files.
 reject, or inconclusive; paired actual-policy numbers; known-regression checks;
 action diagnosis; compute/RAM/disk costs; and immutable artifact identities.
 No guaranteed convergence time and no promotion based on a better surrogate.
+
+## 10. Focused continuation after the inconclusive chance pilot
+
+October 4 continuation: first complete original TRAIN root 2 (the cheap
+three-bet family) at unchanged native64. Reuse all 16 hash-verified native64
+turns from the two previous blocks and solve only the remaining 33. Keep its
+frozen policies, ranges, legal action tree, and continuation contract identical.
+Use two guarded workers and a 45-minute cap; project cost from the saved turn
+receipts before starting. Do not add new boards or optimizer updates yet.
+
+Compare the original 8/8/16-card action rankings to the all49 reference using
+the same authentic parent reach. Compare the existing native64/256 sentinel
+both alone and as a one-turn upgrade inside the all49 target. Exact integration
+removes sampled public-turn noise, not native64 continuation error, abstraction
+error, or exploitable play. Report those distinctions explicitly.
+
+If sampled rankings materially disagree with all49 while the measured teacher
+sentinel is comparatively stable, the next actionable change is full-chance
+training bundles for the same three TRAIN families, stored as separate bounded
+calibration shards. Before C0/C1, require complete coverage, consistent support,
+finite targets, hash/parity checks and a measured fitting-cost preflight. Both
+arms must integrate the same complete chance set and see identical calibration
+data. Reduce their bundle cadence equally *before* fitting if needed for the
+existing resource cap. If teacher drift or costs are the blocker instead,
+preserve the evidence and choose a targeted reference or validated chance
+control-variate pilot; do not launch another unchanged fit.
