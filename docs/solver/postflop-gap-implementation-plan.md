@@ -1,7 +1,20 @@
 # Implementation plan: close the postflop policy gap
 
-Date: September 22, 2026 (PDT).
-Status: **Planning only. No new training, solver implementation, or deployment authorized by this document.**
+Date: September 22, 2026 (PDT). Updated October 3, 2026.
+Status: **Implementation in progress; no model promotion or deployment.**
+
+Step 1's frozen-policy diagnosis is recorded in
+[the attribution report](postflop-gap-attribution-2026-10-02.md). The matched
+32-update leaf comparison and fixed-belief native-label check from Step 2 are
+recorded in [the pilot report](postflop-gap-pilot-2026-10-03.md). The paired
+128→256 flop-update test, training-only 64/256-label control, and paired
+student response tests are recorded in
+[the update/label report](postflop-gap-update-label-pilot-2026-10-03.md).
+Confirmation on the other declared development roots is complete. Both
+data-only student pairs showed a material regression on the lower-gap
+three-bet high-rainbow control, so neither is promoted; action-relevant
+diagnosis is the next Step 3 task. Selected-root results are not full-game
+release evidence.
 
 ## 1. What the evidence actually identifies
 
@@ -161,4 +174,7 @@ JS
 
 Replayed twice during planning: **14.3418587486%**, **0.7170929374bb**, the same expected failing verdict each time; approximately one second for both replays together. The 1% assertion demonstrates the observed symptom, not a claim that this is the user's full-game gate. Minimization stops at one existing frozen root: removing legal branches or chance packets would change the measured game. Causal intervention, fix, and regression-test phases are deliberately deferred because the request is for a plan only.
 
-Only this plan is to be committed for the present request; pre-existing benchmark/resource and UI-test working-tree changes are outside this document-only commit. No training, schedule, policy, or website was changed during planning.
+The original planning request committed only this document. Subsequent
+implementation is tracked by the linked reports and pinned local manifests;
+pre-existing benchmark/resource and UI-test working-tree changes remain out of
+scope. No policy or website model has been promoted by the current pilots.
