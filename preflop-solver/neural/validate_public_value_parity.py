@@ -72,9 +72,10 @@ def dense_forward(values: np.ndarray, layers: list[dict[str, Any]]) -> np.ndarra
 
 
 def python_prediction(
-    dataset: training.Dataset, model: dict[str, Any], state_index: int
+    dataset: training.Dataset, model: dict[str, Any], state_index: int,
+    features: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
-    context, queries = training.build_features(
+    context, queries = features if features is not None else training.build_features(
         dataset.boards[state_index],
         int(dataset.actors[state_index]),
         dataset.invested[state_index],
@@ -82,6 +83,9 @@ def python_prediction(
         dataset.masses[state_index],
         model.get("featureSchema", training.FEATURE_SCHEMA),
     )
+    if features is not None and not model["usesExactRanges"]:
+        # Content-addressed feature arrays may be read-only/shared by both arms.
+        context, queries = context.copy(), queries.copy()
     equity = (
         queries[:, :, 94].copy()
         if model["usesExactRanges"]

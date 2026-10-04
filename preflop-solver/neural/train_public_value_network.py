@@ -1846,6 +1846,9 @@ def train_one(
     player_bias_weight: float = 0.0,
     native_replay_boundary: int | None = None,
     native_retained_batch_fraction: float = 0.0,
+    fixed_final_checkpoint: bool = False,
+    bundle_objective: Any = None,
+    checkpoint_callback: Any = None,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1927,9 +1930,19 @@ def train_one(
             mx.array(dataset.targets[selected]),
             mx.array(dataset.weights[selected]),
         )
+        if bundle_objective is not None:
+            gradients = bundle_objective.accumulate(model, gradients, loss_fn, step)
+        if bundle_objective is not None or fixed_final_checkpoint:
+            # Explicit experimental path fails closed before poisoning weights.
+            from mlx.utils import tree_flatten
+            if not np.isfinite(float(loss)) or any(not bool(mx.all(mx.isfinite(v)))
+                    for _, v in tree_flatten(gradients)):
+                raise ValueError("nonfinite calibrated/contrast loss or gradient")
         optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state, loss)
         completed_steps = step
+        if checkpoint_callback is not None and step in (200, 400):
+            checkpoint_callback(model, step)
         if step % evaluation_interval == 0 or step == steps:
             tuning_prediction = np.asarray(
                 model(
@@ -1956,11 +1969,12 @@ def train_one(
                 stale_evaluations = 0
             else:
                 stale_evaluations += 1
-                if stale_evaluations >= early_stopping_patience:
+                if not fixed_final_checkpoint and stale_evaluations >= early_stopping_patience:
                     break
     if best_parameters is None:
         raise RuntimeError("training did not produce an early-stopping checkpoint")
-    model.update(best_parameters)
+    if not fixed_final_checkpoint:
+        model.update(best_parameters)
     mx.eval(model.parameters())
     prediction = np.asarray(
         model(
@@ -1979,6 +1993,11 @@ def train_one(
     metrics["bestTuningRmseBb"] = best_tuning_rmse
     metrics["bestStep"] = best_step
     metrics["completedSteps"] = completed_steps
+    if fixed_final_checkpoint:
+        metrics["selectedStep"] = completed_steps
+        metrics["checkpointRule"] = "fixed_final_step_not_tuning_rmse"
+    if bundle_objective is not None:
+        metrics["actionBundleObjective"] = bundle_objective.report()
     metrics["tuningHistory"] = tuning_history
     if replay_sampler is not None:
         metrics["nativeReplaySampling"] = replay_sampler.report()

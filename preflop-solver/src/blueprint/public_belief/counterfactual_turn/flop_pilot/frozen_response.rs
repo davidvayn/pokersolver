@@ -4,6 +4,8 @@
 //! integrated BEFORE a flop action is maximized; no future-card observation.
 use super::*;
 pub(super) mod playback;
+#[cfg(test)]
+mod action_bundles;
 
 type Ranges = [Vec<f64>; 2];
 type History = Vec<String>;
@@ -393,7 +395,7 @@ impl Frozen {
 mod tests {
     use super::*;
 
-    fn royal_fixture() -> Solution {
+    pub(super) fn royal_fixture() -> Solution {
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 2.0;
         let mut ranges = std::array::from_fn(|_| vec![0.0; COMBO_COUNT]);
@@ -573,7 +575,7 @@ mod tests {
         assert_eq!(packet.leaves.len(), frozen.turns.len());
     }
 
-    fn read_candidate() -> Frozen {
+    pub(super) fn read_candidate() -> Frozen {
         let path = std::env::var("POKER_NATIVE_FLOP_CANDIDATE").unwrap();
         let bytes = fs::read(path).unwrap();
         let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -590,7 +592,7 @@ mod tests {
         frozen
     }
 
-    fn exclusive_output<T: Serialize>(value: &T) -> String {
+    pub(super) fn exclusive_output<T: Serialize>(value: &T) -> String {
         let bytes = serde_json::to_vec(value).unwrap();
         let path = std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap();
         let mut file = fs::OpenOptions::new()
