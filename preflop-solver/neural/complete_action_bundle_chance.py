@@ -33,6 +33,15 @@ def verified_json(receipt):
     return json.loads(path.read_text())
 
 
+def begin_finalization(stop, timer):
+    """No native work after the label cap; bounded validation gets its own phase."""
+    if stop.is_set(): raise ValueError("resource stop before finalization")
+    timer.cancel()
+    final_timer = threading.Timer(180, stop.set)
+    final_timer.daemon = True; final_timer.start()
+    return final_timer
+
+
 def inventory(prefix, receipts):
     """No duplicate native64 turn, wrong candidate, or forbidden card can resume."""
     legal = set(range(52)) - set(prefix["root"]["board"])
@@ -130,7 +139,8 @@ def main():
                   labels=[cached[t][0] for t in sorted(cached)], all49Turns=False)
     record = dict(schema="full-chance-action-bundle-pilot-v1", status="running", releaseAccepted=False,
         sourceManifestSha256=a.source_sha256, pinnedInputs=pinned, families=[family],
-        reusedNative64Turns=16, newNative64Turns=33, maximumSeconds=2700,
+        reusedNative64Turns=16, newNative64Turns=33, maximumSeconds=2880,
+        maximumLabelingSeconds=2700, maximumFinalizationSeconds=180,
         maximumWorkers=2, maximumWorkerMemoryBytes=2*1024**3, projectedLabelSeconds=projected)
     atomic_json(a.output / "manifest.json", record)
 
@@ -155,6 +165,8 @@ def main():
                 atomic_json(a.output / "manifest.json", record)
                 print(json.dumps(dict(event="full-chance-turn", root=a.root, completeTurns=len(family["labels"]))), flush=True)
         if stop.is_set(): raise ValueError("resource stop")
+        record["labelingElapsedSeconds"] = time.monotonic() - started
+        timer = begin_finalization(stop, timer)
         complete = [verified_json(r) for r in family["labels"]]
         groups, ordered = build_groups(prefix, complete, require_full_chance=True)
         high = [verified_json(r) for r in original["sentinels"]
@@ -175,8 +187,8 @@ def main():
         family.update(all49Turns=True, groups=[g.report() for g in groups], calibrationCorpus=dict(
             path=str(path), sha256=sha256(path), states=len(ordered)))
         record["quality"] = dict(path=str(a.output / "quality.json"), sha256=sha256(a.output / "quality.json"))
-        if any(sha256(Path(path)) != digest for path, digest in pinned.items()):
-            raise ValueError("immutable input changed during reference")
+        if stop.is_set() or any(sha256(Path(path)) != digest for path, digest in pinned.items()):
+            raise ValueError("finalization stopped or immutable input changed during reference")
         record["status"] = "complete"
     except Exception as error:
         record["status"] = "failed"; record["failure"] = str(error); stop.set(); raise
