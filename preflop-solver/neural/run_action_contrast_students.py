@@ -40,14 +40,17 @@ def prepare(args):
     # labels remain byte-identical to the original 284 split reference.
     split = native.family_split(source, 10601, .25, .25, reference=reference, refresh_training=True)
     if tuple(map(len, split)) != (474, 69, 72): raise ValueError("frozen split changed")
+    forbidden = {native.board_family(source["targets"][i]["board"]) for i in np.concatenate(split[1:])}
+    allowed = {native.board_family(source["targets"][i]["board"]) for i in split[0]}
+    # The arrays and Dataset.source preserve training/export metadata. Do not
+    # retain two extra parsed copies of the 615/284 targets during preprocessing.
+    del source, reference
     dataset = training.load_dataset(args.corpus, 1, "payoff-exposure")
     contexts, queries, cache = training.feature_dataset_cached(dataset,
         training.FEATURE_SCHEMA_EXACT_RUNOUT, args.feature_workers, args.feature_cache)
     manifest = json.loads(args.bundles.read_text())
     if manifest.get("status") != "complete" or manifest.get("calibrationOnly"):
         raise ValueError("completed training bundles required")
-    forbidden = {native.board_family(source["targets"][i]["board"]) for i in np.concatenate(split[1:])}
-    allowed = {native.board_family(source["targets"][i]["board"]) for i in split[0]}
     bundles = []
     for family in sorted(manifest["families"], key=lambda f: f["root"]):
         if tuple(family["family"]) not in allowed or tuple(family["family"]) in forbidden:
@@ -59,6 +62,9 @@ def prepare(args):
         groups, ordered = build_groups(prefix, packets, require_full_chance=bool(family.get("all49Turns")))
         data = training.load_dataset(Path(family["calibrationCorpus"]["path"]), 1, "payoff-exposure")
         if data.source["targets"] != ordered: raise ValueError("bundle feature/affine leaf ordering differs")
+        # Affine tensors no longer depend on the separately decoded packets.
+        # Retain the complete validated calibration source, not both copies.
+        del ordered, packets, prefix
         c, q, _ = training.feature_dataset_cached(data, training.FEATURE_SCHEMA_EXACT_RUNOUT, args.feature_workers, args.feature_cache)
         if any(float((g.weights * g.support).sum()) <= 0 for g in groups):
             raise ValueError("training bundle has no profile-consistent authentic contrast support")
