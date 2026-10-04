@@ -1,7 +1,7 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Stage 0 complete; Stage 1 implemented and paired replay fit running.**
+Status: **Stages 0–1 complete; replay rejected; Stage 2 contract preflight underway.**
 No model has been promoted. Execution is recorded in
 [the replay pilot report](postflop-replay-pilot-2026-10-03.md).
 
