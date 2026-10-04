@@ -136,11 +136,53 @@ def calibrate(output: Path):
         raise SystemExit(1)
 
 
+def score_policy(response_path: Path, expected_sha: str, output: Path,
+                 matched_path: Path | None = None, matched_sha: str | None = None):
+    if output.exists() or bool(matched_path) != bool(matched_sha):
+        raise ValueError("existing score output or incomplete matched-control identity")
+    _, baseline = check_baseline(DEFAULT_BASELINE, BASELINE_SHA, list(SPOTS))
+    old = {(spot["id"], model["seed"]): row["halfSummedGainBb"] for spot, model, row in baseline}
+    manifest, rows = verified_rows(response_path, expected_sha)
+    if manifest.get("flopIterations") != 128:
+        raise ValueError("student screen requires unchanged 128-update flop budget")
+    matched = {}
+    if matched_path is not None:
+        matched_manifest, matched_rows = verified_rows(matched_path, matched_sha)
+        if matched_manifest.get("flopIterations") != 128:
+            raise ValueError("matched student screen changed the flop budget")
+        matched = {(r["spot"], r["seed"]): r["gainBb"] for r in matched_rows}
+    selected = [dict(spot=r["spot"], seed=r["seed"], gainBb=r["gainBb"],
+                     oldGainBb=old[(r["spot"], r["seed"])],
+                     **(dict(matchedGainBb=matched[(r["spot"], r["seed"])]) if matched else {}))
+                for r in rows]
+    result = dict(schema="decision-pilot-policy-screen-v1", status="complete",
+                  responseManifestSha256=expected_sha, matchedManifestSha256=matched_sha,
+                  baselineSha256=BASELINE_SHA, codeSha256=sha256(Path(__file__)),
+                  responseElapsedSeconds=manifest["elapsedSeconds"],
+                  screen=screen(selected), releaseAccepted=False)
+    output.mkdir()
+    atomic_json(output / "manifest.json", result)
+    print(json.dumps(result))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--calibrate", action="store_true")
+    parser.add_argument("--response-manifest", type=Path)
+    parser.add_argument("--response-manifest-sha256")
+    parser.add_argument("--matched-manifest", type=Path)
+    parser.add_argument("--matched-manifest-sha256")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if not args.calibrate:
-        parser.error("use --calibrate; policy scoring is imported by controllers")
-    calibrate(args.output.resolve())
+    if args.calibrate:
+        if any((args.response_manifest, args.response_manifest_sha256,
+                args.matched_manifest, args.matched_manifest_sha256)):
+            parser.error("calibration cannot mix policy-scoring inputs")
+        calibrate(args.output.resolve())
+    elif args.response_manifest and args.response_manifest_sha256:
+        score_policy(args.response_manifest.resolve(), args.response_manifest_sha256,
+                     args.output.resolve(),
+                     args.matched_manifest.resolve() if args.matched_manifest else None,
+                     args.matched_manifest_sha256)
+    else:
+        parser.error("use --calibrate or a pinned --response-manifest")
