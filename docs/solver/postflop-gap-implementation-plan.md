@@ -16,6 +16,12 @@ three-bet high-rainbow control, so neither is promoted; action-relevant
 diagnosis is the next Step 3 task. Selected-root results are not full-game
 release evidence.
 
+The next Step 3 experiment is specified in
+[the cheap decision-pilot plan](postflop-decision-pilot-plan.md): first test
+native replay balancing using existing labels, then coherent action-contrast
+supervision only if needed. It defines cost-ordered exact policy screens,
+resource caps, and conditional expansion; no new run is started by that plan.
+
 ## 1. What the evidence actually identifies
 
 The immediate priority is **flop decision quality and the future values used to choose those decisions**, not another river-only rewrite or an unchanged overnight training run.
