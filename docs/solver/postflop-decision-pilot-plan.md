@@ -1,9 +1,14 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Stages 0–1 complete; replay rejected; Stage 2 contract preflight underway.**
+Status: **Pilot boundary reached: replay rejected; Stage 2 data inconclusive.**
 No model has been promoted. Execution is recorded in
-[the replay pilot report](postflop-replay-pilot-2026-10-03.md).
+[the replay pilot report](postflop-replay-pilot-2026-10-03.md) and
+[the action-contrast report](postflop-action-contrast-pilot-2026-10-04.md).
+The reserved chance block exposed action-ranking instability larger than the
+intended improvement. Per Section 6B, no C0/C1 fit or conditional expansion
+was started. The next experiment needs more reliable chance-integrated targets,
+not another unchanged fitting run.
 
 This refines Step 3 of [the postflop gap plan](postflop-gap-implementation-plan.md).
 It specifies what to implement, how to avoid another expensive false positive,
@@ -225,6 +230,14 @@ a second normalization convention.
 - Training targets are native **profile** values for the declared continuation,
   not best-response values mixed into a self-play value target. Best-response
   values remain evaluation diagnostics.
+  Implementation clarification: the existing calibration contract deliberately
+  completes zero-own-reach holdings by best response. Preserve that contract
+  and its counterfactual calibration coverage. The contrast auxiliary uses
+  profile labels only for holdings with positive own support at every
+  contributing leaf; report excluded authentic reach. Do not feed contradictory
+  off-support profile targets into the same value head or floor the ranges.
+  The cached high-rainbow control has essentially 100% consistent authentic
+  support, so this distinction alone does not explain its observed regression.
 - Prefix policies/ranges are frozen during differentiation. No hidden future
   card or opponent holding may select an earlier action. Include every legal
   action even when its current frequency is small.

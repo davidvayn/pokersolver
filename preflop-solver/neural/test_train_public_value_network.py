@@ -381,6 +381,31 @@ class PublicValueNetworkTests(unittest.TestCase):
         self.assertEqual(metrics["playerWeightedMeanErrorBb"], [1.0, -0.5])
         self.assertAlmostEqual(metrics["maximumAbsolutePlayerWeightedMeanErrorBb"], 1.0)
 
+    def test_fixed_final_checkpoint_ignores_tuning_staleness_and_calls_bundle_once(self):
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        contexts = np.zeros((1, 2, module.CONTEXT_COUNT), dtype=np.float32)
+        queries = np.zeros((1, 2, module.COMBO_COUNT, module.QUERY_COUNT), dtype=np.float32)
+        rows = np.array([0]); original = module.weighted_metrics
+        for fixed, expected in [(False, 2), (True, 3)]:
+            calls = []
+            def increasing(*args, **kwargs):
+                result = original(*args, **kwargs)
+                calls.append(1); result["weightedRmseBb"] = len(calls)
+                return result
+            bundle = mock.Mock()
+            bundle.accumulate.side_effect = lambda current, gradients, loss, step: gradients
+            bundle.report.return_value = {"test": True}
+            with mock.patch.object(module, "weighted_metrics", side_effect=increasing):
+                _, _, _, metrics = module.train_one(dataset, contexts, queries, rows, rows,
+                    np.array([], dtype=np.int64), rows, rows, True, 19, 3, 1, .0003, .00003,
+                    True, 1, 1, "compact", "payoff-exposure", .05, .25, np.ones(1), 0.,
+                    module.FEATURE_SCHEMA, fixed_final_checkpoint=fixed, bundle_objective=bundle)
+            self.assertEqual(metrics["completedSteps"], expected)
+            self.assertEqual(bundle.accumulate.call_count, expected)
+            if fixed:
+                self.assertEqual(metrics["selectedStep"], 3)
+                self.assertEqual(metrics["checkpointRule"], "fixed_final_step_not_tuning_rmse")
+
     def test_absolute_rmse_gate_requires_every_seed(self) -> None:
         variants = [
             {"metrics": {"weightedRmseBb": 0.24}},
