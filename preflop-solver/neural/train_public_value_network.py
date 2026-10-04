@@ -21,6 +21,7 @@ from mlx.utils import tree_map
 import numpy as np
 
 import native_value_dataset as native_values
+import native_replay
 
 SCHEMA = "hu-turn-public-belief-value-network-pilot-v4"
 NETWORK_SCHEMA = "hu-public-belief-combo-value-network-v4"
@@ -555,6 +556,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--native-split-reference-sha256")
     parser.add_argument("--native-training-refresh", action="store_true",
                         help="allow refreshed training beliefs in the same families; held-out targets remain exact")
+    parser.add_argument("--native-replay-reference", type=Path,
+                        help="pin an unchanged native target/capture prefix for retained-data replay")
+    parser.add_argument("--native-replay-reference-sha256")
+    parser.add_argument("--native-retained-batch-fraction", type=float, default=0.0,
+                        help="native-only retained-prefix draw fraction; preserves pot quotas")
     parser.add_argument(
         "--supplemental-dataset",
         type=Path,
@@ -1838,6 +1844,8 @@ def train_one(
     minimum_primary_batch_fraction: float,
     feature_schema: str,
     player_bias_weight: float = 0.0,
+    native_replay_boundary: int | None = None,
+    native_retained_batch_fraction: float = 0.0,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1891,8 +1899,17 @@ def train_one(
     stale_evaluations = 0
     completed_steps = 0
     tuning_history: list[dict[str, float | int]] = []
+    replay_sampler = None
+    if native_replay_boundary is not None:
+        retained = train_rows[dataset.groups[train_rows] < native_replay_boundary]
+        appended = train_rows[dataset.groups[train_rows] >= native_replay_boundary]
+        replay_sampler = native_replay.NativeReplaySampler(
+            retained, appended, dataset.invested,
+            min(batch_size, max(len(train_rows), 1)),
+            native_retained_batch_fraction, row_sampling_weights,
+        )
     for step in range(1, steps + 1):
-        selected = primary_replay_batch_rows(
+        selected = replay_sampler.sample(rng, step - 1) if replay_sampler else primary_replay_batch_rows(
             rng,
             primary_train_rows,
             supplemental_train_rows,
@@ -1963,6 +1980,8 @@ def train_one(
     metrics["bestStep"] = best_step
     metrics["completedSteps"] = completed_steps
     metrics["tuningHistory"] = tuning_history
+    if replay_sampler is not None:
+        metrics["nativeReplaySampling"] = replay_sampler.report()
     metrics["potBandMetrics"] = pot_band_metrics(dataset, validation_rows, prediction)
     final_tuning_prediction = np.asarray(
         model(
@@ -2140,6 +2159,18 @@ def main() -> None:
         raise ValueError("native training refresh requires a pinned split reference")
     if is_native and (args.supplemental_dataset or args.holdout_start_index is not None):
         raise ValueError("native pilot uses one family-split corpus; legacy supplements/index holdouts are incompatible")
+    replay_reference = None
+    replay_boundary = None
+    if args.native_replay_reference:
+        if (not is_native or not args.native_replay_reference_sha256
+                or not 0 < args.native_retained_batch_fraction <= 1
+                or args.minimum_primary_batch_fraction):
+            raise ValueError("native replay requires a pinned native prefix/fraction and no legacy replay")
+        replay_reference, replay_sha = native_replay.load_reference(
+            args.native_replay_reference, args.native_replay_reference_sha256)
+        replay_boundary = native_replay.reference_boundary(primary_dataset.source, replay_reference)
+    elif args.native_replay_reference_sha256 or args.native_retained_batch_fraction:
+        raise ValueError("native replay reference/fraction arguments are incomplete")
     if is_native and args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise ValueError("native research training refuses to overwrite a nonempty output directory")
     primary_state_count = len(primary_dataset.source["targets"])
@@ -2164,6 +2195,8 @@ def main() -> None:
     )
     if split_reference is not None:
         source_inputs.append((args.native_split_reference, split_reference.source_sha256))
+    if replay_reference is not None:
+        source_inputs.append((args.native_replay_reference, replay_sha))
     dataset = combine_training_datasets(primary_dataset, supplemental_datasets)
     source_dataset_schema = str(dataset.source.get("schema", ""))
     source_release_reasons = complete_turn_release_reasons(dataset.source)
@@ -2207,6 +2240,9 @@ def main() -> None:
     if len(supplemental_states):
         train_states = np.concatenate((train_states, supplemental_states))
     train_rows = np.flatnonzero(np.isin(dataset.groups, train_states))
+    if replay_boundary is not None:
+        native_retained_rows, native_appended_rows = native_replay.partition_rows(
+            dataset.groups, train_states, tuning_states, validation_states, replay_boundary)
     primary_train_rows = np.flatnonzero(np.isin(dataset.groups, primary_train_states))
     supplemental_train_rows = np.flatnonzero(
         np.isin(dataset.groups, supplemental_states)
@@ -2264,6 +2300,8 @@ def main() -> None:
                 args.minimum_primary_batch_fraction,
                 args.feature_schema,
                 args.player_bias_weight,
+                replay_boundary,
+                args.native_retained_batch_fraction,
             )
             model_path = args.output_dir / f"turn-value-{variant}-seed{seed}.json"
             verify_source_hashes(source_inputs)
@@ -2387,6 +2425,11 @@ def main() -> None:
         "splitSeed": split_seed,
         "nativeSplitReferenceSha256": split_reference.source_sha256 if split_reference is not None else None,
         "nativeTrainingRefresh": args.native_training_refresh,
+        "nativeReplay": (dict(referenceSha256=replay_sha, retainedStateBoundary=replay_boundary,
+                              retainedBatchFraction=args.native_retained_batch_fraction,
+                              retainedTrainingRows=len(native_retained_rows),
+                              appendedTrainingRows=len(native_appended_rows))
+                         if replay_boundary is not None else None),
         "potStratifiedSplit": not is_native,
         "splitUnit": "suit_canonical_flop_family_all_turns_histories_iterations" if is_native else "source_target_state",
         "nativeCounterfactualFraction": args.native_counterfactual_fraction if is_native else None,
