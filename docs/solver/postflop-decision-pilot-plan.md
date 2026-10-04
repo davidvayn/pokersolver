@@ -1,7 +1,9 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Planning only. No new training run or model promotion.**
+Status: **Stage 0 complete; Stage 1 implemented and paired replay fit running.**
+No model has been promoted. Execution is recorded in
+[the replay pilot report](postflop-replay-pilot-2026-10-03.md).
 
 This refines Step 3 of [the postflop gap plan](postflop-gap-implementation-plan.md).
 It specifies what to implement, how to avoid another expensive false positive,

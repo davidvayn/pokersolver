@@ -13,6 +13,7 @@ import time
 import numpy as np
 
 import native_value_dataset as native
+import native_replay
 from run_native_value_pilot import guarded, read_capture, test_command, PREDICT_TEST
 from run_native_value_preflight import atomic_json, sha256
 import train_public_value_network as training
@@ -29,6 +30,9 @@ def main():
     parser.add_argument("--split-reference", type=Path)
     parser.add_argument("--split-reference-sha256")
     parser.add_argument("--refresh-training", action="store_true")
+    parser.add_argument("--replay-reference", type=Path)
+    parser.add_argument("--replay-reference-sha256")
+    parser.add_argument("--retained-batch-fraction", type=float, default=0.0)
     parser.add_argument("--architecture", choices=("compact", "wide", "wide-pooled"), default="compact")
     parser.add_argument("--steps", choices=(600, 1200), type=int, default=600)
     parser.add_argument("--player-bias-weight", choices=(0.0, 1.0), type=float, default=0.0)
@@ -52,11 +56,26 @@ def main():
         raise ValueError("split reference SHA has no input")
     expected_split = native.family_split(source, 10601, .25, .25, reference=reference,
                                          refresh_training=args.refresh_training)
+    replay = None
+    if args.replay_reference:
+        args.replay_reference = args.replay_reference.resolve()
+        replay_source, replay_sha = native_replay.load_reference(
+            args.replay_reference, args.replay_reference_sha256)
+        boundary = native_replay.reference_boundary(source, replay_source)
+        retained_rows, appended_rows = native_replay.partition_rows(
+            np.arange(len(source["targets"])), *expected_split, boundary)
+        if not 0 < args.retained_batch_fraction <= 1:
+            raise ValueError("replay fraction must be positive and at most one")
+        replay = dict(referenceSha256=replay_sha, retainedStateBoundary=boundary,
+                      retainedBatchFraction=args.retained_batch_fraction,
+                      retainedTrainingRows=len(retained_rows), appendedTrainingRows=len(appended_rows))
+    elif args.replay_reference_sha256 or args.retained_batch_fraction:
+        raise ValueError("replay arguments require a pinned reference")
     args.output.mkdir()
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, lambda *_: stop.set())
     neural = Path(__file__).resolve().parent
-    code = [neural / name for name in ("train_public_value_network.py", "native_value_dataset.py", "validate_public_value_parity.py")]
+    code = [neural / name for name in ("train_public_value_network.py", "native_value_dataset.py", "validate_public_value_parity.py", "native_replay.py")]
     identities = {str(path): sha256(path) for path in code}
     models = args.output / "models"
     command = [sys.executable, str(neural / "train_public_value_network.py"), "--dataset", str(args.corpus),
@@ -71,6 +90,10 @@ def main():
         command.extend(["--native-split-reference", str(args.split_reference),
                         "--native-split-reference-sha256", args.split_reference_sha256])
     if args.refresh_training: command.append("--native-training-refresh")
+    if replay is not None:
+        command.extend(["--native-replay-reference", str(args.replay_reference),
+                        "--native-replay-reference-sha256", replay_sha,
+                        "--native-retained-batch-fraction", str(args.retained_batch_fraction)])
     if args.player_bias_weight:
         command.extend(["--player-bias-weight", str(args.player_bias_weight)])
     record = dict(schema="native-value-student-pair-controller-v1", status="running", releaseAccepted=False,
@@ -79,6 +102,7 @@ def main():
                   startedAtUnix=time.time(), predictions=[])
     record["splitReferenceSha256"] = args.split_reference_sha256
     record["trainingRefresh"] = args.refresh_training
+    record["nativeReplay"] = replay
     record["split"] = {k: v.tolist() for k, v in zip(("train", "tuning", "holdout"), expected_split)}
     atomic_json(args.output / "manifest.json", record)
     try:
@@ -86,6 +110,8 @@ def main():
         report = json.loads((models / "turn-value-paired-report.json").read_text())
         if report["loss"].get("playerBiasWeight", 0.0) != args.player_bias_weight:
             raise ValueError("training changed the declared value-bias objective")
+        if report.get("nativeReplay") != replay:
+            raise ValueError("training changed the pinned native replay contract")
         if report["datasetSha256"] != args.corpus_sha256 or report["splitUnit"] != "suit_canonical_flop_family_all_turns_histories_iterations":
             raise ValueError("training input or split contract drift")
         if (report.get("nativeSplitReferenceSha256") != args.split_reference_sha256
@@ -137,6 +163,7 @@ def main():
                                   holdoutRmseBb=metrics["holdout"]["authentic"]["weightedRmseBb"])), flush=True)
         if (sha256(args.binary) != args.binary_sha256 or sha256(args.corpus) != args.corpus_sha256
                 or (reference is not None and sha256(args.split_reference) != args.split_reference_sha256)
+                or (replay is not None and sha256(args.replay_reference) != replay_sha)
                 or any(sha256(Path(p)) != h for p,h in identities.items())):
             raise ValueError("pinned inputs/code changed during student pilot")
         record["status"] = "complete"

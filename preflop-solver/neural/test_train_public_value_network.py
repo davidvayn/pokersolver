@@ -335,6 +335,37 @@ class PublicValueNetworkTests(unittest.TestCase):
                 )
             )
 
+    def test_disabled_native_replay_keeps_actual_trainer_rng_and_legacy_sampler(self) -> None:
+        dataset = self.synthetic_dataset([0, 5, 10, 15], "a" * 64)
+        contexts = np.zeros((1, 2, module.CONTEXT_COUNT), dtype=np.float32)
+        queries = np.zeros((1, 2, module.COMBO_COUNT, module.QUERY_COUNT), dtype=np.float32)
+        expected_rng = np.random.default_rng(19)
+        rows = np.array([0])
+        expected = []
+        for _ in range(2):
+            expected.append(module.primary_replay_batch_rows(
+                expected_rng, rows, np.array([], dtype=np.int64), dataset.invested,
+                1, 0., np.ones(1)))
+        original = module.primary_replay_batch_rows
+        observed, states = [], []
+
+        def observe(*args, **kwargs):
+            result = original(*args, **kwargs)
+            observed.append(result)
+            states.append(args[0].bit_generator.state)
+            return result
+
+        with mock.patch.object(module, "primary_replay_batch_rows", side_effect=observe), \
+             mock.patch.object(module.native_replay, "NativeReplaySampler",
+                               side_effect=AssertionError("disabled replay constructed sampler")):
+            _, _, _, metrics = module.train_one(
+                dataset, contexts, queries, rows, rows, np.array([], dtype=np.int64),
+                rows, rows, True, 19, 2, 1, .0003, .00003, True, 1, 6,
+                "compact", "payoff-exposure", .05, .25, np.ones(1), 0., module.FEATURE_SCHEMA)
+        np.testing.assert_array_equal(observed, expected)
+        self.assertEqual(states[-1], expected_rng.bit_generator.state)
+        self.assertNotIn("nativeReplaySampling", metrics)
+
     def test_weighted_metrics_report_strategic_signed_bias(self) -> None:
         truth = np.zeros((1, 2 * module.COMBO_COUNT), dtype=np.float32)
         prediction = np.zeros_like(truth)

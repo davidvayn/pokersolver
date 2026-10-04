@@ -66,6 +66,8 @@ def summarize(cases, scored):
 
 
 def run(args):
+    if not 1 <= args.packet_workers <= WORKER_LIMIT or not 0 < args.maximum_seconds <= STAGE_SECONDS:
+        raise ValueError("student pilot worker/time limits are outside measured bounds")
     root, output, binary = args.baseline_root.resolve(), args.output.resolve(), args.binary.resolve()
     students_path, preflight_path = args.students.resolve(), args.preflight_manifest.resolve()
     if (not output.parent.is_dir() or sha256(binary) != args.binary_sha256
@@ -91,7 +93,8 @@ def run(args):
                     preflightSha256=args.preflight_sha256,
                     binarySha256=args.binary_sha256, sourceHashes=sources,
                     spots=args.spots.split(","), flopIterations=128,
-                    playedTurnIterations=64, packetWorkers=WORKER_LIMIT,
+                    playedTurnIterations=64, packetWorkers=args.packet_workers,
+                    maximumSeconds=args.maximum_seconds,
                     releaseAccepted=False)
     if output.exists() and not (output / "manifest.json").is_file():
         raise ValueError("output exists without student pilot manifest")
@@ -105,7 +108,7 @@ def run(args):
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
-    timer = threading.Timer(STAGE_SECONDS, stop.set)
+    timer = threading.Timer(args.maximum_seconds, stop.set)
     timer.daemon = True
     started = time.monotonic()
     with controller_lock(output):
@@ -143,7 +146,7 @@ def run(args):
                     return turn
 
                 turns = [card for card in range(52) if card not in spot["board"]]
-                with ThreadPoolExecutor(max_workers=WORKER_LIMIT) as pool:
+                with ThreadPoolExecutor(max_workers=args.packet_workers) as pool:
                     futures = [pool.submit(packet, turn) for turn in turns]
                     try:
                         for number, future in enumerate(as_completed(futures), 1):
@@ -206,6 +209,8 @@ def main():
     parser.add_argument("--preflight-manifest", type=Path, required=True)
     parser.add_argument("--preflight-sha256", required=True)
     parser.add_argument("--spots", default=",".join(SPOTS))
+    parser.add_argument("--packet-workers", type=int, default=WORKER_LIMIT)
+    parser.add_argument("--maximum-seconds", type=int, default=STAGE_SECONDS)
     parser.add_argument("--output", type=Path, required=True)
     run(parser.parse_args())
 
