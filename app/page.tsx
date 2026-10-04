@@ -1,4 +1,4 @@
-import { HomeVariantDeck } from '@/components/home/HomeVariantDeck';
+import { StudyHome } from '@/components/home/StudyHome';
 export default function Home() {
-  return <HomeVariantDeck />;
+  return <StudyHome />;
 }

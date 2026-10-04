@@ -17,6 +17,7 @@ import type {
   PracticeSettings,
 } from '@/lib/practice-types';
 import { pushFoldDepths } from '@/lib/push-fold-policy';
+import { Select } from '@/components/ui/Select';
 import { summarizePracticeDecisions } from '@/lib/practice-stats';
 
 export type RailTab = 'feedback' | 'history' | 'settings' | 'stats';
@@ -41,7 +42,7 @@ const TABS: Array<{ value: RailTab; label: string; icon: typeof Info }> = [
   { value: 'feedback', label: 'Feedback', icon: Sparkles },
   { value: 'history', label: 'History', icon: ClipboardList },
   { value: 'settings', label: 'Settings', icon: Settings2 },
-  { value: 'stats', label: 'Run stats', icon: BarChart3 },
+  { value: 'stats', label: 'Stats', icon: BarChart3 },
 ];
 
 function pct(value: number): string {
@@ -79,14 +80,19 @@ function gradeLabel(grade: PracticeDecisionRecord['grade']): string {
   return grade.charAt(0).toUpperCase() + grade.slice(1);
 }
 
-function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }) {
+function FeedbackPanel({
+  feedback,
+}: {
+  feedback: PracticeDecisionRecord | null;
+}) {
   if (!feedback) {
     return (
       <div className="px-4 py-10 text-center">
         <Sparkles className="mx-auto h-5 w-5 text-accent" aria-hidden="true" />
         <p className="mt-3 text-sm font-medium">Your review appears here</p>
         <p className="mt-1 text-xs leading-5 text-muted">
-          Choose an action to see the complete policy mix, action values, and confidence.
+          Choose an action to see the complete policy mix, action values, and
+          confidence.
         </p>
       </div>
     );
@@ -111,7 +117,8 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
     (action) => action.probability < bestProbability - 1e-9
   );
   const offered = new Set(
-    feedback.offeredActionIds ?? feedback.policyActions.map((action) => action.id)
+    feedback.offeredActionIds ??
+      feedback.policyActions.map((action) => action.id)
   );
   return (
     <div className="space-y-5 p-4">
@@ -133,9 +140,12 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
 
       <div>
         <p className="text-xs font-semibold uppercase text-muted">Decision</p>
-        <p className="mt-2 text-lg font-semibold">{feedback.chosenAction.label}</p>
+        <p className="mt-2 text-lg font-semibold">
+          {feedback.chosenAction.label}
+        </p>
         <p className="mt-1 font-mono text-xs text-muted">
-          {feedback.handBucket} · {feedback.position === 'button-small-blind' ? 'BTN / SB' : 'BB'}
+          {feedback.handBucket} ·{' '}
+          {feedback.position === 'button-small-blind' ? 'BTN / SB' : 'BB'}
         </p>
       </div>
 
@@ -150,14 +160,16 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
             action.evBb
           );
           const isBestEstimate = loss !== null && loss <= 1e-9;
-          const isTopFrequency =
-            action.probability >= bestProbability - 1e-9;
+          const isTopFrequency = action.probability >= bestProbability - 1e-9;
           return (
             <div key={action.id}>
               <div className="flex items-center justify-between gap-2 text-xs">
                 <span className="flex flex-wrap items-center gap-1.5 font-medium">
                   {action.id === feedback.chosenAction.id && (
-                    <Check className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                    <Check
+                      className="h-3.5 w-3.5 text-accent"
+                      aria-hidden="true"
+                    />
                   )}
                   {action.label}
                   {isTopFrequency && (
@@ -205,7 +217,9 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
         </div>
         <div>
           <p className="text-muted">Your policy frequency</p>
-          <p className="mt-1 font-mono font-semibold">{pct(chosenProbability)}</p>
+          <p className="mt-1 font-mono font-semibold">
+            {pct(chosenProbability)}
+          </p>
         </div>
         <div>
           <p className="text-muted">Top policy frequency</p>
@@ -214,12 +228,16 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
         <div>
           <p className="text-muted">Your estimated EV loss</p>
           <p className="mt-1 font-mono font-semibold">
-            {feedback.evLossBb === null ? 'Not graded' : `${feedback.evLossBb.toFixed(3)}bb`}
+            {feedback.evLossBb === null
+              ? 'Not graded'
+              : `${feedback.evLossBb.toFixed(3)}bb`}
           </p>
         </div>
         <div>
           <p className="text-muted">Response</p>
-          <p className="mt-1 font-mono font-semibold">{(feedback.responseMs / 1000).toFixed(1)}s</p>
+          <p className="mt-1 font-mono font-semibold">
+            {(feedback.responseMs / 1000).toFixed(1)}s
+          </p>
         </div>
       </div>
 
@@ -238,13 +256,16 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
 
       {feedback.lowConfidence && (
         <div className="flex gap-2 rounded-md border border-amber-500/35 bg-amber-500/10 p-3 text-xs leading-5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300"
+            aria-hidden="true"
+          />
           <p>
             {feedback.confidence === 'unavailable'
               ? 'This model version does not contain a usable EV estimate. The frequency grade is still available.'
               : policyValueDisagreement
                 ? 'The frozen policy and approximate continuation-value oracle disagree at this low-confidence node. Use the frequency grade as the strategy target; treat the EV ordering as diagnostic only.'
-              : 'This action value has a wider sampling or low-reach uncertainty bound. Treat the EV-loss estimate as approximate; the frequency grade uses the frozen policy mix.'}
+                : 'This action value has a wider sampling or low-reach uncertainty bound. Treat the EV-loss estimate as approximate; the frequency grade uses the frozen policy mix.'}
           </p>
         </div>
       )}
@@ -253,8 +274,8 @@ function FeedbackPanel({ feedback }: { feedback: PracticeDecisionRecord | null }
         <div className="rounded-md border border-border bg-surface-2 p-3 text-xs leading-5">
           <p className="font-semibold">Opponent adaptation for this hand</p>
           <p className="mt-1 text-muted">
-            {feedback.opponentModel.observations} local observations · response weight{' '}
-            {pct(feedback.opponentModel.responseWeight)} · confidence{' '}
+            {feedback.opponentModel.observations} local observations · response
+            weight {pct(feedback.opponentModel.responseWeight)} · confidence{' '}
             {pct(feedback.opponentModel.confidence)}
           </p>
           <p className="mt-1 text-muted">
@@ -278,17 +299,16 @@ function SettingsPanel({
   const shown = pendingSettings ?? settings;
   const patch = (next: Partial<PracticeSettings>) =>
     onSettingsChange({ ...shown, ...next });
+  const depths = shown.mode === 'push-fold' ? pushFoldDepths() : fullDepths;
   return (
-    <div className="space-y-5 p-4">
+    <div className="practice-settings">
       {pendingSettings && (
-        <div className="rounded-md border border-accent/35 bg-accent/10 p-3 text-xs leading-5">
-          <p className="font-semibold">Settings queued</p>
-          <p className="mt-1 text-muted">Structural changes apply after the current hand.</p>
-        </div>
+        <p className="text-sm text-accent" role="status">
+          Changes apply after this hand.
+        </p>
       )}
-
       <fieldset>
-        <legend className="text-xs font-semibold uppercase text-muted">Mode</legend>
+        <legend>Mode</legend>
         <div className="mt-2 grid grid-cols-2 gap-2">
           {(
             [
@@ -303,145 +323,131 @@ function SettingsPanel({
               type="button"
               aria-pressed={shown.mode === value}
               onClick={() => patch({ mode: value })}
-              className={`min-h-11 rounded-md border px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${shown.mode === value ? 'border-accent bg-accent text-accent-fg' : 'border-border hover:border-accent/60'}`}
+              className={`min-h-11 border-b-2 px-2 font-medium focus-visible:ring-2 focus-visible:ring-accent ${shown.mode === value ? 'border-accent text-fg' : 'border-transparent text-muted'}`}
             >
               {label}
             </button>
           ))}
         </div>
       </fieldset>
-
-      {shown.mode === 'push-fold' ? (
-        <label className="block text-xs font-semibold uppercase text-muted">
-          Effective stack
-          <select
-            value={shown.pushFoldDepthBb}
-            onChange={(event) =>
-              patch({ pushFoldDepthBb: Number(event.target.value) as PracticeSettings['pushFoldDepthBb'] })
-            }
-            className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            {pushFoldDepths().map((depth) => (
-              <option key={depth} value={depth}>{depth}bb</option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <div>
-          <label className="block text-xs font-semibold uppercase text-muted">
-            Effective stack
-            <select
-              value={shown.depthBb}
-              disabled={fullDepths.length === 0}
-              onChange={(event) =>
-                patch({ depthBb: Number(event.target.value) as PracticeSettings['depthBb'] })
-              }
-              className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {fullDepths.length > 0 ? (
-                fullDepths.map((depth) => <option key={depth} value={depth}>{depth}bb</option>)
-              ) : (
-                <option value={20}>No validated depth</option>
-              )}
-            </select>
-          </label>
-          {fullDepths.length === 0 && (
-            <p className="mt-2 text-xs leading-5 text-muted">
-              20/50/100bb stay hidden until their independent two-seed validation passes.
-            </p>
-          )}
-        </div>
+      <Select
+        label="Effective stack"
+        value={String(
+          shown.mode === 'push-fold' ? shown.pushFoldDepthBb : shown.depthBb
+        )}
+        options={
+          depths.length
+            ? depths.map((depth) => ({
+                value: String(depth),
+                label: `${depth} bb`,
+              }))
+            : [{ value: '20', label: 'No validated depth' }]
+        }
+        disabled={!depths.length}
+        onChange={(value) =>
+          shown.mode === 'push-fold'
+            ? patch({
+                pushFoldDepthBb: Number(
+                  value
+                ) as PracticeSettings['pushFoldDepthBb'],
+              })
+            : patch({ depthBb: Number(value) as PracticeSettings['depthBb'] })
+        }
+      />
+      {!depths.length && (
+        <p className="text-sm text-muted">
+          Full-hand models are not available yet.
+        </p>
       )}
-
       {shown.mode === 'postflop' && (
         <fieldset>
-          <legend className="text-xs font-semibold uppercase text-muted">Streets</legend>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {(['flop', 'turn', 'river'] as const).map((street) => {
-              const selected = shown.postflopStreets.includes(street);
-              return (
-                <button
-                  key={street}
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => {
-                    const next = selected
-                      ? shown.postflopStreets.filter((item) => item !== street)
-                      : [...shown.postflopStreets, street];
-                    if (next.length > 0) patch({ postflopStreets: next });
-                  }}
-                  className={`min-h-11 rounded-md border px-3 text-sm capitalize ${selected ? 'border-accent bg-accent/10' : 'border-border'}`}
-                >
-                  {street}
-                </button>
-              );
-            })}
+          <legend>Streets</legend>
+          <div className="mt-2 flex gap-3">
+            {(['flop', 'turn', 'river'] as const).map((street) => (
+              <button
+                key={street}
+                type="button"
+                aria-pressed={shown.postflopStreets.includes(street)}
+                onClick={() => {
+                  const next = shown.postflopStreets.includes(street)
+                    ? shown.postflopStreets.filter((item) => item !== street)
+                    : [...shown.postflopStreets, street];
+                  if (next.length) patch({ postflopStreets: next });
+                }}
+                className="min-h-11 border-b-2 border-transparent px-2 capitalize aria-pressed:border-accent"
+              >
+                {street}
+              </button>
+            ))}
           </div>
         </fieldset>
       )}
-
-      <label className="block text-xs font-semibold uppercase text-muted">
-        Hero seat
-        <select
-          value={shown.heroSeat}
-          onChange={(event) => patch({ heroSeat: event.target.value as PracticeSettings['heroSeat'] })}
-          className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg"
-        >
-          <option value="alternate">Alternate</option>
-          <option value="button-small-blind">BTN / SB only</option>
-          <option value="big-blind">BB only</option>
-        </select>
-      </label>
-
+      <Select
+        label="Hero seat"
+        value={shown.heroSeat}
+        onChange={(value) =>
+          patch({ heroSeat: value as PracticeSettings['heroSeat'] })
+        }
+        options={[
+          { value: 'alternate', label: 'Alternate' },
+          { value: 'button-small-blind', label: 'BTN / SB' },
+          { value: 'big-blind', label: 'Big blind' },
+        ]}
+      />
       {shown.mode !== 'push-fold' && (
-        <label className="block text-xs font-semibold uppercase text-muted">
-          Opponent policy
-          <select
+        <div>
+          <Select
+            label="Opponent policy"
             value={shown.opponentStyle}
-            onChange={(event) =>
+            onChange={(value) =>
               patch({
-                opponentStyle: event.target
-                  .value as PracticeSettings['opponentStyle'],
+                opponentStyle: value as PracticeSettings['opponentStyle'],
               })
             }
-            className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg"
-          >
-            <option value="adaptive-exploitative">Adaptive exploitative</option>
-            <option value="baseline">Frozen baseline</option>
-          </select>
-          <span className="mt-2 block text-xs font-normal normal-case leading-5 text-muted">
-            Adaptation uses only local history, starts at zero, and remains capped by the pinned model.
-          </span>
-        </label>
+            options={[
+              {
+                value: 'adaptive-exploitative',
+                label: 'Adaptive',
+                description: 'Uses capped local history',
+              },
+              { value: 'baseline', label: 'Frozen baseline' },
+            ]}
+          />
+          <p className="mt-2 text-sm text-muted">
+            Grades always use the frozen baseline.
+          </p>
+        </div>
       )}
-
-      <label className="block text-xs font-semibold uppercase text-muted">
-        Optional goal
-        <select
-          value={shown.decisionGoal}
-          onChange={(event) =>
-            patch({
-              decisionGoal:
-                event.target.value === 'continuous'
-                  ? 'continuous'
-                  : (Number(event.target.value) as 25 | 50 | 100),
-            })
-          }
-          className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg"
-        >
-          <option value="continuous">Continuous</option>
-          <option value={25}>25 decisions</option>
-          <option value={50}>50 decisions</option>
-          <option value={100}>100 decisions</option>
-        </select>
-      </label>
+      <Select
+        label="Decision goal"
+        value={String(shown.decisionGoal)}
+        onChange={(value) =>
+          patch({
+            decisionGoal:
+              value === 'continuous'
+                ? 'continuous'
+                : (Number(value) as 25 | 50 | 100),
+          })
+        }
+        options={[
+          { value: 'continuous', label: 'Continuous' },
+          ...[25, 50, 100].map((goal) => ({
+            value: String(goal),
+            label: `${goal} decisions`,
+          })),
+        ]}
+      />
     </div>
   );
 }
 
 function HistoryPanel({ recentHands }: { recentHands: PracticeHandRecord[] }) {
   if (recentHands.length === 0) {
-    return <p className="px-4 py-10 text-center text-sm text-muted">No hands in the new practice history yet.</p>;
+    return (
+      <p className="px-4 py-10 text-center text-sm text-muted">
+        No hands in the new practice history yet.
+      </p>
+    );
   }
   return (
     <ol className="divide-y divide-border">
@@ -449,12 +455,17 @@ function HistoryPanel({ recentHands }: { recentHands: PracticeHandRecord[] }) {
         <li key={hand.id} className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold capitalize">{hand.mode.replace('-', ' ')}</p>
+              <p className="text-sm font-semibold capitalize">
+                {hand.mode.replace('-', ' ')}
+              </p>
               <p className="mt-1 font-mono text-xs text-muted">
                 {hand.heroCards.map(cardToStr).join(' ')} · {hand.depthBb}bb
               </p>
             </div>
-            <span className="text-xs text-muted">{hand.decisions.length} decision{hand.decisions.length === 1 ? '' : 's'}</span>
+            <span className="text-xs text-muted">
+              {hand.decisions.length} decision
+              {hand.decisions.length === 1 ? '' : 's'}
+            </span>
           </div>
           <p className="mt-2 text-xs text-muted">
             {hand.result.winner === 'split'
@@ -485,8 +496,18 @@ function StatsPanel({ decisions }: { decisions: PracticeDecisionRecord[] }) {
         {[
           ['Decisions', String(stats.decisions)],
           ['Strong decisions', pct(stats.strongDecisionPercentage)],
-          ['Avg EV loss', stats.averageEvLossBb === null ? '—' : `${stats.averageEvLossBb.toFixed(3)}bb`],
-          ['Average response', stats.averageResponseMs ? `${(stats.averageResponseMs / 1_000).toFixed(1)}s` : '—'],
+          [
+            'Avg EV loss',
+            stats.averageEvLossBb === null
+              ? '—'
+              : `${stats.averageEvLossBb.toFixed(3)}bb`,
+          ],
+          [
+            'Average response',
+            stats.averageResponseMs
+              ? `${(stats.averageResponseMs / 1_000).toFixed(1)}s`
+              : '—',
+          ],
         ].map(([label, value]) => (
           <div key={label} className="bg-surface p-3">
             <p className="text-[11px] text-muted">{label}</p>
@@ -495,10 +516,12 @@ function StatsPanel({ decisions }: { decisions: PracticeDecisionRecord[] }) {
         ))}
       </div>
       <p className="mt-3 font-mono text-[11px] text-muted">
-        {stats.gradedDecisions}/{stats.decisions} EV graded · {pct(stats.lowConfidencePercentage)} low confidence
+        {stats.gradedDecisions}/{stats.decisions} EV graded ·{' '}
+        {pct(stats.lowConfidencePercentage)} low confidence
       </p>
       <p className="mt-4 text-xs leading-5 text-muted">
-        Goals finish the current hand before showing a summary. Continuing keeps this table and run intact.
+        Goals finish the current hand before showing a summary. Continuing keeps
+        this table and run intact.
       </p>
     </div>
   );
@@ -520,16 +543,44 @@ export function AnalystRail({
   opponentModel,
 }: AnalystRailProps) {
   return (
-    <aside className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm" aria-label="Table analyst">
-      <div className="grid grid-cols-4 border-b border-border" role="tablist" aria-label="Analyst panels">
+    <aside
+      className="study-analyst overflow-hidden rounded-lg border border-border bg-surface shadow-sm"
+      aria-label="Table analyst"
+    >
+      <div
+        className="grid grid-cols-4 border-b border-border"
+        role="tablist"
+        aria-label="Analyst panels"
+      >
         {TABS.map(({ value, label, icon: Icon }) => (
           <button
             key={value}
             type="button"
             role="tab"
+            id={`${idPrefix}-${value}-tab`}
             aria-selected={tab === value}
+            tabIndex={tab === value ? 0 : -1}
             aria-controls={`${idPrefix}-${value}`}
             onClick={() => onTabChange(value)}
+            onKeyDown={(event) => {
+              const index = TABS.findIndex((item) => item.value === value);
+              const next =
+                event.key === 'ArrowRight'
+                  ? (index + 1) % TABS.length
+                  : event.key === 'ArrowLeft'
+                    ? (index + TABS.length - 1) % TABS.length
+                    : event.key === 'Home'
+                      ? 0
+                      : event.key === 'End'
+                        ? TABS.length - 1
+                        : -1;
+              if (next < 0) return;
+              event.preventDefault();
+              onTabChange(TABS[next].value);
+              event.currentTarget.parentElement
+                ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                [next]?.focus();
+            }}
             className={`min-h-14 px-1 text-[10px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${tab === value ? 'bg-surface-2 text-fg' : 'text-muted hover:text-fg'}`}
           >
             <Icon className="mx-auto mb-1 h-4 w-4" aria-hidden="true" />
@@ -538,9 +589,16 @@ export function AnalystRail({
         ))}
       </div>
 
-      <div id={`${idPrefix}-${tab}`} role="tabpanel" className="max-h-[min(680px,70vh)] overflow-y-auto">
+      <div
+        id={`${idPrefix}-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`${idPrefix}-${tab}-tab`}
+        className="max-h-[min(680px,70vh)] overflow-y-auto"
+      >
         {historyWarning && (
-          <p className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs">{historyWarning}</p>
+          <p className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs">
+            {historyWarning}
+          </p>
         )}
         {tab === 'feedback' && <FeedbackPanel feedback={feedback} />}
         {tab === 'history' && <HistoryPanel recentHands={recentHands} />}
@@ -552,20 +610,22 @@ export function AnalystRail({
               onSettingsChange={onSettingsChange}
               fullDepths={fullDepths}
             />
-            {opponentModel && manifest?.runtime?.kind === 'neural-deep-cfr-v1' && (
-              <div className="border-t border-border p-4 text-xs leading-5">
-                <p className="font-semibold">Local opponent evidence</p>
-                <p className="mt-1 text-muted">
-                  {opponentModel.observations} observations ·{' '}
-                  {opponentModel.stableEvidence} stable · confidence{' '}
-                  {pct(opponentModel.confidence)}
-                </p>
-                <p className="mt-1 text-muted">
-                  Current response weight {pct(opponentModel.responseWeight)} (cap{' '}
-                  {pct(opponentModel.maximumResponseWeight)}). No hand data leaves this browser.
-                </p>
-              </div>
-            )}
+            {opponentModel &&
+              manifest?.runtime?.kind === 'neural-deep-cfr-v1' && (
+                <div className="border-t border-border p-4 text-xs leading-5">
+                  <p className="font-semibold">Local opponent evidence</p>
+                  <p className="mt-1 text-muted">
+                    {opponentModel.observations} observations ·{' '}
+                    {opponentModel.stableEvidence} stable · confidence{' '}
+                    {pct(opponentModel.confidence)}
+                  </p>
+                  <p className="mt-1 text-muted">
+                    Current response weight {pct(opponentModel.responseWeight)}{' '}
+                    (cap {pct(opponentModel.maximumResponseWeight)}). No hand
+                    data leaves this browser.
+                  </p>
+                </div>
+              )}
           </>
         )}
         {tab === 'stats' && <StatsPanel decisions={sessionDecisions} />}
@@ -577,14 +637,18 @@ export function AnalystRail({
             <div className="flex items-center gap-2">
               <Info className="h-4 w-4 text-muted shrink-0 group-hover:text-foreground transition-colors" />
               <div className="text-left">
-                <span className="font-semibold text-foreground block leading-4">Model & assumptions</span>
+                <span className="font-semibold text-foreground block leading-4">
+                  Model & assumptions
+                </span>
                 <span className="text-[11px] text-muted block group-open:hidden">
                   Click to view model details
                 </span>
               </div>
             </div>
             <div className="flex items-center gap-1 text-muted group-hover:text-foreground transition-colors">
-              <span className="text-[11px] font-medium hidden group-open:inline">Hide</span>
+              <span className="text-[11px] font-medium hidden group-open:inline">
+                Hide
+              </span>
               <ChevronDown className="h-4 w-4 transition-transform duration-200 group-open:rotate-180" />
             </div>
           </summary>
@@ -592,19 +656,69 @@ export function AnalystRail({
             {manifest.subtype === 'push-fold' ? (
               <>
                 <p>
-                  Built on <strong className="text-foreground">{manifest.label}</strong> (<code className="text-[11px] text-foreground">{manifest.version}</code>), this drill simulates heads-up push/fold spots across {manifest.depthsBb.join(', ')}bb stack depths ({manifest.abstraction.blindsBb.join('/')}bb blinds, no rake). Decisions are evaluated across 169 preflop hand classes with exact-card removal.
+                  Built on{' '}
+                  <strong className="text-foreground">{manifest.label}</strong>{' '}
+                  (
+                  <code className="text-[11px] text-foreground">
+                    {manifest.version}
+                  </code>
+                  ), this drill simulates heads-up push/fold spots across{' '}
+                  {manifest.depthsBb.join(', ')}bb stack depths (
+                  {manifest.abstraction.blindsBb.join('/')}bb blinds, no rake).
+                  Decisions are evaluated across 169 preflop hand classes with
+                  exact-card removal.
                 </p>
                 <p>
-                  Strategy frequencies and action EVs derive from deterministic Monte Carlo showdown equity against the validated push/fold corpus. Call-decision uncertainties carry conservative standard-error bounds and are graded accordingly.
+                  Strategy frequencies and action EVs derive from deterministic
+                  Monte Carlo showdown equity against the validated push/fold
+                  corpus. Call-decision uncertainties carry conservative
+                  standard-error bounds and are graded accordingly.
                 </p>
               </>
             ) : (
               <>
                 <p>
-                  Built on <strong className="text-foreground">{manifest.label}</strong> (<code className="text-[11px] text-foreground">{manifest.version}</code>), this table plays heads-up Hold&apos;em at {manifest.abstraction.blindsBb.join('/')}bb blinds with zero rake and complete public action recall. Preflop uses pinned discrete sizing ({manifest.abstraction.actionSizing}) with exact card removal, while postflop decisions are dynamically resolved from public belief states using {manifest.runtime?.kind === 'rust-continual-resolver-v1' ? 'the server-side Rust continual resolver' : manifest.runtime?.kind === 'neural-deep-cfr-v1' ? 'a deep CFR neural network' : 'the pinned strategy engine'}. The engine fails closed: if weights are unavailable or resolving fails, the table pauses rather than scoring a fabricated fallback.
+                  Built on{' '}
+                  <strong className="text-foreground">{manifest.label}</strong>{' '}
+                  (
+                  <code className="text-[11px] text-foreground">
+                    {manifest.version}
+                  </code>
+                  ), this table plays heads-up Hold&apos;em at{' '}
+                  {manifest.abstraction.blindsBb.join('/')}bb blinds with zero
+                  rake and complete public action recall. Preflop uses pinned
+                  discrete sizing ({manifest.abstraction.actionSizing}) with
+                  exact card removal, while postflop decisions are dynamically
+                  resolved from public belief states using{' '}
+                  {manifest.runtime?.kind === 'rust-continual-resolver-v1'
+                    ? 'the server-side Rust continual resolver'
+                    : manifest.runtime?.kind === 'neural-deep-cfr-v1'
+                      ? 'a deep CFR neural network'
+                      : 'the pinned strategy engine'}
+                  . The engine fails closed: if weights are unavailable or
+                  resolving fails, the table pauses rather than scoring a
+                  fabricated fallback.
                 </p>
                 <p>
-                  Strategy reflects consensus validation across two independent training seeds{manifest.validation.primaryActionAgreement ? ` (${(manifest.validation.primaryActionAgreement * 100).toFixed(1)}% primary agreement` : ''}{manifest.validation.crossSeedFrequencyMae ? `, ${(manifest.validation.crossSeedFrequencyMae * 100).toFixed(1)}% MAE` : ''}{manifest.validation.policyCoverage ? `, ${(manifest.validation.policyCoverage * 100).toFixed(1)}% coverage)` : ')'}. {manifest.validation.exploitabilityGateDeferred ? 'Full-game exploitability certification is deferred; this model is an experimental benchmark rather than certified Approximate GTO.' : manifest.validation.exploitabilityEstimateBb !== undefined ? `Estimated exploitability is ${manifest.validation.exploitabilityEstimateBb.toFixed(3)}bb/hand.` : ''} Action EVs carry conservative standard-error bounds, and opponent adaptations stay strictly local to your browser.
+                  Strategy reflects consensus validation across two independent
+                  training seeds
+                  {manifest.validation.primaryActionAgreement
+                    ? ` (${(manifest.validation.primaryActionAgreement * 100).toFixed(1)}% primary agreement`
+                    : ''}
+                  {manifest.validation.crossSeedFrequencyMae
+                    ? `, ${(manifest.validation.crossSeedFrequencyMae * 100).toFixed(1)}% MAE`
+                    : ''}
+                  {manifest.validation.policyCoverage
+                    ? `, ${(manifest.validation.policyCoverage * 100).toFixed(1)}% coverage)`
+                    : ')'}
+                  .{' '}
+                  {manifest.validation.exploitabilityGateDeferred
+                    ? 'Full-game exploitability certification is deferred; this model is an experimental benchmark rather than certified Approximate GTO.'
+                    : manifest.validation.exploitabilityEstimateBb !== undefined
+                      ? `Estimated exploitability is ${manifest.validation.exploitabilityEstimateBb.toFixed(3)}bb/hand.`
+                      : ''}{' '}
+                  Action EVs carry conservative standard-error bounds, and
+                  opponent adaptations stay strictly local to your browser.
                 </p>
               </>
             )}

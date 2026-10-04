@@ -1,12 +1,12 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import { SiteHeader } from '@/components/SiteHeader';
-import { SettingsModal } from '@/components/settings/SettingsModal';
+import './redesign.css';
+import { DesignShell } from '@/components/design/DesignShell';
 import { PracticeModelWarmer } from '@/components/practice/PracticeModelWarmer';
 import { ChatGptReturn } from '@/components/ai/ChatGptReturn';
 
 export const metadata: Metadata = {
-  title: 'Poker Lab - Texas Hold\'em Training',
+  title: "Poker Lab - Texas Hold'em Training",
   description:
     'Private preflop practice, performance analysis, range charts, and local postflop solving.',
 };
@@ -39,14 +39,7 @@ export default function RootLayout({
         >
           Skip to content
         </a>
-        <SiteHeader />
-        <main
-          id="main"
-          className="mx-auto w-full max-w-[1400px] px-4 py-6 pb-[calc(6rem+env(safe-area-inset-bottom))] md:pb-6"
-        >
-          {children}
-        </main>
-        <SettingsModal />
+        <DesignShell>{children}</DesignShell>
         <PracticeModelWarmer />
       </body>
     </html>

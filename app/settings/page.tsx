@@ -1,17 +1,28 @@
 import { SettingsForm } from '@/components/settings/SettingsForm';
+import { PageHeading } from '@/components/design/DesignShell';
 
 export default function SettingsPage() {
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted">
-          Configure solver details and the AI provider used for spot analysis.
-          You can also open this from the gear icon in the header.
-        </p>
-      </div>
-      <div className="rounded-lg border border-border bg-surface p-5">
-        <SettingsForm />
+    <div className="settings-study">
+      <PageHeading title="Settings" meta="Your workspace, your preferences." />
+      <div className="settings-layout">
+        <SettingsForm page />
+        <aside className="settings-help">
+          <div>
+            <h2>Private by default</h2>
+            <p>
+              Practice history stays on this device. API keys stay in this
+              browser.
+            </p>
+          </div>
+          <div>
+            <h2>Connect your analysis</h2>
+            <p>
+              Choose a provider and model. Your key is sent only with analysis
+              requests.
+            </p>
+          </div>
+        </aside>
       </div>
     </div>
   );

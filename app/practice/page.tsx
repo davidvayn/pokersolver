@@ -1,12 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { PageHeading } from '@/components/design/DesignShell';
+import { PracticeToolbar } from '@/components/practice/PracticeToolbar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BarChart3, Info, Settings2, Target, X } from 'lucide-react';
-import {
-  AnalystRail,
-  type RailTab,
-} from '@/components/practice/AnalystRail';
+import { BarChart3, Info, Settings2, X } from 'lucide-react';
+import { AnalystRail, type RailTab } from '@/components/practice/AnalystRail';
 import { PracticeTable } from '@/components/practice/PracticeTable';
 import {
   applyAction,
@@ -192,10 +191,7 @@ async function advancePolicyToHero(input: {
     const previous = state;
     state = applyAction(state, samplePolicyAction(lookup.node.actions));
     input.onProgress(state);
-    if (
-      input.mode === 'preflop' &&
-      isPreflopRoundComplete(previous, state)
-    ) {
+    if (input.mode === 'preflop' && isPreflopRoundComplete(previous, state)) {
       state = stopAfterPreflop(state);
       input.onProgress(state);
       return { state, node: null };
@@ -289,16 +285,14 @@ export default function PracticePage() {
   const [manifests, setManifests] = useState<PolicyManifest[]>(() =>
     getStoredPracticeManifests()
   );
-  const [handManifest, setHandManifest] =
-    useState<PolicyManifest | null>(null);
+  const [handManifest, setHandManifest] = useState<PolicyManifest | null>(null);
   const [currentHandDecisions, setCurrentHandDecisions] = useState<
     PracticeDecisionRecord[]
   >([]);
   const [status, setStatus] = useState<TableStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
-  const [feedback, setFeedback] =
-    useState<PracticeDecisionRecord | null>(null);
+  const [feedback, setFeedback] = useState<PracticeDecisionRecord | null>(null);
   const [recentHands, setRecentHands] = useState<PracticeHandRecord[]>([]);
   const [opponentModel, setOpponentModel] =
     useState<OpponentModelSnapshot | null>(null);
@@ -339,16 +333,14 @@ export default function PracticePage() {
       pinned: PinnedPracticeModel,
       profile: OpponentModelSnapshot
     ) =>
-      continuationCacheRef.current.prepare(
-        continuationState,
-        (onProgress) =>
-          prepareFullHandContinuation({
-            client: policyClientRef.current as PracticePolicyClient,
-            pinned,
-            state: continuationState,
-            profile,
-            onProgress,
-          })
+      continuationCacheRef.current.prepare(continuationState, (onProgress) =>
+        prepareFullHandContinuation({
+          client: policyClientRef.current as PracticePolicyClient,
+          pinned,
+          state: continuationState,
+          profile,
+          onProgress,
+        })
       ),
     []
   );
@@ -481,7 +473,9 @@ export default function PracticePage() {
             : 'unavailable'
         );
         setErrorMessage(
-          error instanceof Error ? error.message : 'Could not load the practice spot.'
+          error instanceof Error
+            ? error.message
+            : 'Could not load the practice spot.'
         );
       }
     },
@@ -517,9 +511,7 @@ export default function PracticePage() {
       setSettings(effective);
       if (effective !== loaded) savePracticeSettings(effective);
       goalTargetRef.current =
-        effective.decisionGoal === 'continuous'
-          ? null
-          : effective.decisionGoal;
+        effective.decisionGoal === 'continuous' ? null : effective.decisionGoal;
       void beginHand(effective, 0);
     };
     void initialize();
@@ -543,14 +535,23 @@ export default function PracticePage() {
 
   useEffect(() => {
     if (!mobileRailOpen) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     const close = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setMobileRailOpen(false);
         return;
       }
       if (event.key !== 'Tab') return;
-      const focusable = mobileSheetRef.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), select:not(:disabled), summary, a[href], [tabindex]:not([tabindex="-1"])'
+      const focusable = Array.from(
+        mobileSheetRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), select:not(:disabled), summary, a[href], [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter(
+        (element) =>
+          element.tabIndex >= 0 && element.getClientRects().length > 0
       );
       if (!focusable?.length) return;
       const first = focusable[0];
@@ -564,8 +565,11 @@ export default function PracticePage() {
       }
     };
     window.addEventListener('keydown', close);
-    mobileCloseRef.current?.focus();
-    return () => window.removeEventListener('keydown', close);
+    mobileCloseRef.current?.focus({ preventScroll: true });
+    return () => {
+      window.removeEventListener('keydown', close);
+      previouslyFocused?.focus({ preventScroll: true });
+    };
   }, [mobileRailOpen]);
 
   function updateSettings(next: PracticeSettings) {
@@ -599,7 +603,8 @@ export default function PracticePage() {
     decisions: PracticeDecisionRecord[],
     decisionCount: number
   ) {
-    if (!finished.result) throw new Error('Completed practice hand has no result');
+    if (!finished.result)
+      throw new Error('Completed practice hand has no result');
     const completedAt = Date.now();
     const opponent = otherSeat(finished.hero);
     const handRecord: PracticeHandRecord = {
@@ -699,8 +704,8 @@ export default function PracticePage() {
             ? state.hero === 'button-small-blind'
               ? 'first in'
               : 'BTN / SB all-in'
-            : latestOpponentAction?.label ??
-              (state.street === 'preflop' ? 'first in' : 'checked to'),
+            : (latestOpponentAction?.label ??
+              (state.street === 'preflop' ? 'first in' : 'checked to')),
         stateHash: node.stateHash,
         board: [...next.board],
         heroCards: [...state.holeCards[state.hero]],
@@ -749,7 +754,9 @@ export default function PracticePage() {
       setSelectedActionId(null);
       setStatus('error');
       setErrorMessage(
-        error instanceof Error ? error.message : 'The action could not be applied.'
+        error instanceof Error
+          ? error.message
+          : 'The action could not be applied.'
       );
     }
   }
@@ -850,8 +857,7 @@ export default function PracticePage() {
     const next = pendingSettings ?? settings;
     if (goalSummary && next.decisionGoal !== 'continuous') {
       goalTargetRef.current =
-        (goalTargetRef.current ?? sessionDecisions.length) +
-        next.decisionGoal;
+        (goalTargetRef.current ?? sessionDecisions.length) + next.decisionGoal;
       goalReachedRef.current = false;
     }
     if (pendingSettings) {
@@ -893,40 +899,38 @@ export default function PracticePage() {
     };
   }, [status]);
 
-
   const depths = fullHandDepths(manifests);
   const manifest = handManifest;
   const visibleFeedback =
     status === 'feedback' || status === 'review' ? feedback : null;
 
   return (
-    <div className="pb-8">
-      <header className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-5">
-        <div>
-          <div className="flex items-center gap-2 font-mono text-xs font-semibold uppercase text-accent">
-            <Target className="h-4 w-4" aria-hidden="true" />
-            Practice table
-          </div>
-          <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted sm:block">
-            Play exact-card heads-up spots against a pinned baseline. Full-hand continuations begin solving during feedback, and the table never guesses when a decision is unavailable. Adaptive opponent responses never change your grading target.
-          </p>
-        </div>
-        <Link
-          href="/stats"
-          className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
+    <div className="practice-study pb-8">
+      <PageHeading title="Practice" meta="Heads-up · exact cards · no rake">
+        <Link href="/stats" className="study-button-secondary">
           <BarChart3 className="h-4 w-4" aria-hidden="true" />
           Stats
         </Link>
-      </header>
+      </PageHeading>
+      <PracticeToolbar
+        settings={settings}
+        pendingSettings={pendingSettings}
+        onChange={updateSettings}
+        fullDepths={depths}
+      />
 
       {goalSummary && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-accent/35 bg-accent/10 px-4 py-3" role="status">
+        <div
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-accent/35 bg-accent/10 px-4 py-3"
+          role="status"
+        >
           <div className="flex items-start gap-2">
             <Info className="mt-0.5 h-4 w-4 text-accent" aria-hidden="true" />
             <div>
               <p className="text-sm font-semibold">Decision goal reached</p>
-              <p className="mt-0.5 text-xs text-muted">The hand is complete. Continuing resumes on this same table.</p>
+              <p className="mt-0.5 text-xs text-muted">
+                Hand complete. Continue when ready.
+              </p>
             </div>
           </div>
           <button
@@ -934,7 +938,7 @@ export default function PracticePage() {
             onClick={() => setRailTab('stats')}
             className="min-h-11 rounded-md border border-accent px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            View run summary
+            Run summary
           </button>
         </div>
       )}
@@ -945,12 +949,12 @@ export default function PracticePage() {
           onClick={() => setRailTab('settings')}
           className="mb-4 flex min-h-11 w-full items-center justify-between gap-3 rounded-md border border-accent/35 bg-accent/10 px-4 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          <span><strong>Pending settings:</strong> changes apply after this hand.</span>
+          <span>Settings change after this hand.</span>
           <Settings2 className="h-4 w-4 shrink-0" aria-hidden="true" />
         </button>
       )}
 
-      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="practice-layout min-w-0">
         <PracticeTable
           state={state}
           node={spot?.node ?? activeNode}
@@ -965,7 +969,7 @@ export default function PracticePage() {
           onRetry={retry}
           onOpenAnalyst={() => setMobileRailOpen(true)}
         />
-        <div className="hidden xl:block">
+        <div className="practice-desktop-analyst hidden xl:block">
           <AnalystRail
             idPrefix="desktop-rail"
             tab={railTab}
@@ -985,9 +989,13 @@ export default function PracticePage() {
       </div>
 
       {mobileRailOpen && (
-        <div className="fixed inset-0 z-50 bg-black/45 xl:hidden" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setMobileRailOpen(false);
-        }}>
+        <div
+          className="fixed inset-0 z-50 bg-black/45 xl:hidden"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setMobileRailOpen(false);
+          }}
+        >
           <section
             ref={mobileSheetRef}
             role="dialog"
