@@ -487,3 +487,23 @@ data. Reduce their bundle cadence equally *before* fitting if needed for the
 existing resource cap. If teacher drift or costs are the blocker instead,
 preserve the evidence and choose a targeted reference or validated chance
 control-variate pilot; do not launch another unchanged fit.
+
+### October 4 completion and branch decision
+
+The [full-chance pilot report](postflop-full-chance-pilot-2026-10-04.md)
+records completion of all49 references, guarded conditioning, both fixed-step
+student pairs, exhaustive export parity, cached TRAIN contrast probes and both
+full49 actual-policy screens. C1 reduces frozen TRAIN ranking loss by 42.6%,
+but neither arm passes the actual-policy regression screen. C1's mean benefit
+versus C0 is only 0.000078bb with opposing seed means; both regress high-rainbow
+versus retained. **Reject both; do not trigger Stage 3 expansion/integration.**
+
+Targeted own-policy and same-board retained-policy probes localize a large
+continuation action-value mismatch at BTN after BB checks. It persists under
+retained-policy ranges, so pure own-policy range drift is insufficient as an
+explanation. The next bounded intervention should broaden TRAIN board/search
+belief contrast coverage, retaining frozen evaluation families and old-data
+replay. First diagnose that small block with reused/bounded native references;
+do not repeat an unchanged fit, silently relax the screen, or buy compute
+before establishing a useful effect. The pilot boundary is complete; broad
+full-hand/serving qualification remains conditional on an accepted policy.
