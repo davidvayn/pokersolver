@@ -1849,6 +1849,7 @@ def train_one(
     fixed_final_checkpoint: bool = False,
     bundle_objective: Any = None,
     checkpoint_callback: Any = None,
+    initial_model: dict[str, Any] | None = None,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1856,6 +1857,10 @@ def train_one(
         use_ranges, architecture, value_normalization, feature_schema
     )
     mx.eval(model.parameters())
+    initialization = None
+    if initial_model is not None:
+        from retained_initialization import import_retained_weights
+        initialization = import_retained_weights(model, initial_model, seed)
     optimizer = optim.AdamW(
         learning_rate=learning_rate_schedule(
             learning_rate, learning_rate_final, steps
@@ -2028,6 +2033,8 @@ def train_one(
                              dataset.target_scales[validation_rows])
             if authentic.sum() > 0 else None
         )
+    if initialization is not None:
+        metrics["retainedInitialization"] = initialization
     return model, prediction, final_tuning_prediction, metrics
 
 

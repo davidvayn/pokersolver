@@ -571,3 +571,57 @@ protected old replay versus the from-scratch control. This proposed next pilot
 is not started, not a paid-run recommendation, and not a guaranteed fix.
 Use the new optional control-first automatic rejection to avoid spending the
 rest of a screen after a completed audited case already fails its fixed limit.
+
+## 12. Retained-initialization isolation (October 4, in progress)
+
+First change only initialization: warm-start seeds 10601/10602 from the
+retained benchmark pair with a fresh AdamW optimizer. Reuse Section 11's
+immutable scratch C1 pair as the matched control; do not repeat unchanged fits.
+Keep its exact six bounded TRAIN bundles, frozen 474/69/72 split, 600 final
+steps, batch 8, 0.0003-to-0.00003 learning rate, cadence 4, chunk 4 and original
+TRAIN-conditioned contrast coefficient 1.883306130920223. Do not select a
+checkpoint or recondition its coefficient using response scores.
+
+Validate the wide/v3/full-stack/payoff-exposure JSON contract and all parameter
+dimensions/finite values before transferring any weights. Compare imported
+MLX predictions against independent NumPy on two frozen TRAIN states, every
+private combo and both players; validate the finished students against native
+inference on all 615 states. No optimizer state or regrets are imported.
+The retained sources themselves are research-only, not accepted GTO models.
+
+Run the consumed high-rainbow/monotone four-case actual-policy control first,
+stopping after any independently audited >0.01bb regression. No positive
+partial case can accept a policy. If useful and all controls pass, proceed to
+the existing broader qualification sequence. If initialization alone fails,
+test a TRAIN-only retained-prediction protection constraint, distinguish it
+from the already failed replay-only intervention, then diagnose representation
+or target limitations. Advance based on actual policy outcomes, not RMSE alone.
+
+Use one MLX process within 6GiB and a two-hour fit/parity cap; at most two native
+workers, system-pressure stops and a 20GiB free disk reserve. No paid compute,
+serving-route changes or automatic model promotion. Continue to the next
+supported intervention without awaiting user permission for each local pilot.
+
+### Numerical follow-up and research basis
+
+The new import preflight exposed an additional, measured numerical mismatch:
+with MLX 0.32.0's default GPU arithmetic, a retained-network serving prediction
+differs from independent NumPy by 0.015009bb on a cached input. Tower errors
+are already present before the value projection. [MLX's precision documentation](https://ml-explore.github.io/mlx/build/html/usage/precision.html)
+explains that float32 matrix multiplication can use reduced precision, and
+documents `MLX_ENABLE_TF32=0` as the full-float32 switch. Do not silently change
+training precision inside an initialization-only comparison. Verify import on
+full-float32 CPU, preserve the prior training arithmetic, then compare a
+separately pinned full-float32 GPU fit with the same warm-start arm. Measure
+parity and throughput before committing to the same fixed 600-step schedule.
+Numerical agreement is necessary bookkeeping, not an exploitability result.
+
+If old behavior still degrades, a frozen-output retention constraint is an
+adaptation of [Learning without Forgetting](https://arxiv.org/abs/1606.09282),
+not a new source of poker truth: penalize value drift on original TRAIN-only
+inputs while retaining native labels for learning. This differs from the
+already rejected sampling-only replay pair. It can preserve old errors as well
+as old strengths, so only native actual-policy results justify advancement.
+[DeepStack](https://arxiv.org/abs/1701.01724) motivates accurate range-conditioned
+continuation values; its continual-re-solving guarantees do not transfer to
+our current unsafeguarded route merely because a local fit improves.
