@@ -4,12 +4,29 @@ from pathlib import Path
 import tempfile
 import unittest
 import json
+from types import SimpleNamespace
 
 from run_native_value_preflight import sha256
-from run_student_value_pilot import select_students, summarize
+from run_student_value_pilot import select_students, summarize, run
+from decision_pilot_screen import completed_control_regression
 
 
 class StudentValuePilotTests(unittest.TestCase):
+    def test_early_stop_cannot_be_applied_to_an_undeclared_broad_pilot(self):
+        args=SimpleNamespace(packet_workers=4,maximum_seconds=900,stop_on_known_regression=True,spots="limped-paired")
+        with self.assertRaisesRegex(ValueError,"control-first"): run(args)
+
+    def test_one_bad_control_rejects_but_one_good_control_cannot_accept(self):
+        row=dict(spot="three-bet-high-rainbow",seed=100101,gainBb=.3507304900105628,oldGainBb=.2783353664552195)
+        result=completed_control_regression(row)
+        self.assertEqual(result["status"],"rejected")
+        self.assertAlmostEqual(result["regressionBb"],.07239512355534328)
+        self.assertFalse(result["releaseAccepted"])
+        row["gainBb"]=.25
+        self.assertIsNone(completed_control_regression(row))
+        for changed in (dict(seed=1),dict(spot="unknown"),dict(gainBb=float("nan")),dict(oldGainBb=-1.)):
+            with self.assertRaises(ValueError): completed_control_regression({**row,**changed})
+
     def test_requires_two_parity_checked_independent_models(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

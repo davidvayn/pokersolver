@@ -22,6 +22,7 @@ from run_postflop_gap_pilot import (HERE, MEMORY, PREFIX, RESPONSE,
                                     controller_lock, run_job)
 from run_flop_update_pilot import (BASELINE_SHA, DEFAULT_BASELINE, SPOTS,
                                    check_baseline, solve_case)
+from decision_pilot_screen import completed_control_regression, SPOTS as CONTROL_SPOTS
 
 
 def select_students(path: Path, expected_sha: str):
@@ -68,6 +69,9 @@ def summarize(cases, scored):
 def run(args):
     if not 1 <= args.packet_workers <= WORKER_LIMIT or not 0 < args.maximum_seconds <= STAGE_SECONDS:
         raise ValueError("student pilot worker/time limits are outside measured bounds")
+    early_stop = getattr(args, "stop_on_known_regression", False)
+    if early_stop and args.spots.split(",") != list(CONTROL_SPOTS):
+        raise ValueError("early rejection is only for the declared control-first screen")
     root, output, binary = args.baseline_root.resolve(), args.output.resolve(), args.binary.resolve()
     students_path, preflight_path = args.students.resolve(), args.preflight_manifest.resolve()
     if (not output.parent.is_dir() or sha256(binary) != args.binary_sha256
@@ -85,7 +89,7 @@ def run(args):
     sources = {str(path): sha256(path) for path in
                (Path(__file__), HERE / "run_flop_update_pilot.py",
                 HERE / "run_postflop_gap_pilot.py", HERE / "run_native_value_pilot.py",
-                HERE / "worker_resources.py", HERE / "audit_native_flop_response.mjs")}
+                HERE / "worker_resources.py", HERE / "audit_native_flop_response.mjs", HERE / "decision_pilot_screen.py")}
     identity = dict(schema="postflop-student-value-pilot-v1",
                     baselineSha256=args.baseline_sha256, protocolSha256=protocol_sha,
                     studentManifestSha256=args.students_sha256,
@@ -95,7 +99,7 @@ def run(args):
                     spots=args.spots.split(","), flopIterations=128,
                     playedTurnIterations=64, packetWorkers=args.packet_workers,
                     maximumSeconds=args.maximum_seconds,
-                    releaseAccepted=False)
+                    releaseAccepted=False, stopOnKnownRegression=early_stop)
     if output.exists() and not (output / "manifest.json").is_file():
         raise ValueError("output exists without student pilot manifest")
     output.mkdir(parents=True, exist_ok=True)
@@ -173,6 +177,13 @@ def run(args):
                 record["cases"].append(row)
                 atomic_json(manifest, record)
                 print(json.dumps(dict(event="student-value-case", **row)), flush=True)
+                # Check only after native aggregation AND independent JS audit.
+                # A partial success never produces a passing paired summary.
+                rejection = completed_control_regression(row) if early_stop else None
+                if rejection:
+                    record.update(status="rejected", earlyRejection=rejection)
+                    print(json.dumps(dict(event="student-value-early-rejection", **rejection)), flush=True)
+                    break
             if (stop.is_set() or guard.reason
                     or sha256(root / "complete/manifest.json") != args.baseline_sha256
                     or sha256(root / "protocol.json") != protocol_sha
@@ -181,8 +192,9 @@ def run(args):
                     or sha256(preflight_path) != args.preflight_sha256
                     or any(sha256(Path(path)) != digest for path, digest in sources.items())):
                 raise ValueError("student pilot stopped or a pinned input changed")
-            record["pairedSummary"] = summarize(cases, record["cases"])
-            record["status"] = "complete"
+            if record["status"] != "rejected":
+                record["pairedSummary"] = summarize(cases, record["cases"])
+                record["status"] = "complete"
         except (OSError, ValueError, KeyError, AssertionError) as error:
             stop.set()
             record["status"], record["failure"] = "failed", str(error)
@@ -194,7 +206,7 @@ def run(args):
             atomic_json(manifest, record)
     print(json.dumps(dict(status=record["status"], failure=record.get("failure"),
                           cases=record["cases"], pairedSummary=record.get("pairedSummary"))), flush=True)
-    if record["status"] != "complete":
+    if record["status"] not in ("complete", "rejected"):
         raise SystemExit(1)
 
 
@@ -211,6 +223,8 @@ def main():
     parser.add_argument("--spots", default=",".join(SPOTS))
     parser.add_argument("--packet-workers", type=int, default=WORKER_LIMIT)
     parser.add_argument("--maximum-seconds", type=int, default=STAGE_SECONDS)
+    parser.add_argument("--stop-on-known-regression", action="store_true",
+                        help="Reject after the first independently audited control failure; never accept partial coverage")
     parser.add_argument("--output", type=Path, required=True)
     run(parser.parse_args())
 

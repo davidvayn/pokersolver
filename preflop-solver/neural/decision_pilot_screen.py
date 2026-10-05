@@ -17,6 +17,19 @@ MAXIMUM_REGRESSION_BB = .01
 MINIMUM_IMPROVEMENT_BB = .02
 
 
+def completed_control_regression(row):
+    """One audited failure can reject early; one good case can never accept."""
+    if (row.get("spot"), row.get("seed")) not in CASES:
+        raise ValueError("early rejection requires a declared control case")
+    if any(not math.isfinite(row[k]) or row[k] < -1e-8 for k in ("gainBb", "oldGainBb")):
+        raise ValueError("control gains must be finite and nonnegative")
+    regression = row["gainBb"] - row["oldGainBb"]
+    return (dict(status="rejected", spot=row["spot"], seed=row["seed"], regressionBb=regression,
+                 maximumRegressionBb=MAXIMUM_REGRESSION_BB, releaseAccepted=False,
+                 interpretation="One completed audited control rejects; other cases and paired means remain unmeasured.")
+            if regression > MAXIMUM_REGRESSION_BB else None)
+
+
 def screen(rows: list[dict]) -> dict:
     if (len(rows) != len(CASES)
             or {(r["spot"], r["seed"]) for r in rows} != CASES):

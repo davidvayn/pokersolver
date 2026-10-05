@@ -1,11 +1,20 @@
 import copy
 import math
 import unittest
+import json
+from pathlib import Path
+from unittest.mock import patch
 
-from decision_pilot_screen import screen, SPOTS, SEEDS
+from decision_pilot_screen import screen, SPOTS, SEEDS, verified_rows
 
 
 class DecisionPilotScreenTests(unittest.TestCase):
+    def test_early_rejected_receipt_cannot_be_scored_as_a_complete_pair(self):
+        manifest=dict(status="rejected",cases=[dict(spot=SPOTS[0],seed=SEEDS[0],gainBb=.35)])
+        with patch("decision_pilot_screen.sha256",return_value="a"*64), \
+             patch.object(Path,"read_text",return_value=json.dumps(manifest)):
+            with self.assertRaisesRegex(ValueError,"completed matched"): verified_rows(Path("partial"),"a"*64)
+
     def rows(self):
         return [dict(spot=spot, seed=seed, oldGainBb=.3, gainBb=.25)
                 for spot in SPOTS for seed in SEEDS]
