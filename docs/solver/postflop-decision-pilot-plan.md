@@ -743,3 +743,113 @@ permutation-invariant aggregation. This weighted finite representation and
 zero-column transfer are adaptations, not the papers' poker results or GTO
 guarantees. Earlier scratch pooling gave mixed facing gains and worse root
 rankings; retaining the starting function is the specific new hypothesis.
+
+## 16. Diagnose interference before gradient projection (October 5)
+
+Section 15 completed and failed the first control (0.352513bb versus retained
+0.278335bb), despite improved holdout value RMSE. A-GEM/PCGrad are plausible
+only if the relevant objectives interfere. Measure gradients on both frozen
+aligned-model seeds at steps 0, 200, 400 and 600, on TRAIN only. Compare primary,
+mean bundle calibration, weighted contrast and their combined active-bundle
+direction with the 366 original positive-joint states' authentic native-value
+gradient. Include ordinary calibration weighting as a separate diagnostic.
+No new fit, labels, evaluation scores or checkpoint selection.
+
+Result: all eight combined cosines are positive; no checkpoint meets the
+predeclared <-0.2 conflict screen. Original authentic TRAIN loss decreases
+45.2%/40.2%. The requiring-both-seeds-degrade-by-5% criterion fails as well.
+**Do not implement or fit projection from this evidence.** Some individual
+contrast gradients conflict, but the combined direction does not. This does
+not exclude stochastic or region-specific interference. Raw-gradient geometry
+is also not an AdamW-step guarantee; any later constraint would need to inspect
+the actual preconditioned/momentum update rather than promise safety from raw
+gradient projection.
+
+Sources: [A-GEM](https://arxiv.org/abs/1812.00420),
+[PCGrad](https://arxiv.org/abs/2001.06782). Probe artifacts:
+`preflop-solver/neural/runs/local-training-gradient-conflict-20261005-a/`.
+
+## 17. Test policy-induced calibration shift before dataset aggregation
+
+Earlier frozen-belief probes improved rankings at retained beliefs while the
+new policy's own response worsened. The new models' improved TRAIN/holdout
+regression but persistent own-policy ranking error makes induced-belief shift
+a live hypothesis. [DAgger](https://arxiv.org/abs/1011.0686) motivates relabeling
+learner-induced states; its supervised sequential-learning guarantees do not
+transfer directly to adversarial poker or unsafe re-solving.
+
+1. Pin the completed aligned wide pair, existing three registered TRAIN roots
+   100/101/102, their old 16-state captures, root hashes, trunk/sampling seeds,
+   native64 labels and 128 flop updates. Use every registered family; no
+   score-based choice or reuse of control/holdout boards.
+2. Generate only 16 new stratified early/middle/late/final-average native labels
+   per family with the corresponding current model. Preserve the exact root,
+   seed stream and counts. Verify policy-observation parity. Native labels,
+   not model predictions, remain truth for this finite-budget test.
+3. On both old and new captures, evaluate the same current predictor using the
+   actual native inference and independent NumPy parity. Report equal-state
+   authentic RMSE, per-band error, and native label response residuals. These
+   sampled leaf errors do not establish action ranking or exploitability.
+4. Use a 30-minute stage cap, 2GiB native and 6GiB analysis workers, 20GiB disk
+   reserve and memory-pressure stop. Time the first family and reject a cost
+   projection above the remaining cap; do not silently reduce labels.
+5. Dataset replacement becomes worth a matched pilot only if error on current
+   induced states exceeds the old-distribution error by >=10% in at least two
+   of three family/seed pairs. Inspect native-label residuals before blaming
+   the model. If the screen fails, do not launch a DAgger-style fit merely
+   because data aggregation is fashionable.
+6. If supported, replace (do not duplicate) the 16 calibration-only extra
+   states per new-family bundle, preserving its original all49 affine targets.
+   Pin the foreign proposal identity and exact root independently; new states
+   have zero affine coefficients and cannot be mistaken for the original
+   profile's action targets. Preserve counts, data split, wide architecture,
+   weights/optimizer initialization, frozen coefficients and 600-step budget.
+   Require finished export parity and the same rejecting policy screen before
+   broader confirmation. Mixed-policy calibration provenance must be explicit.
+
+Completed in 147.2s, with all 48 new labels and all six independent/native
+prediction comparisons. Current/old authentic RMSE changes are +1.7%, +0.7%
+and -1.1%; zero families reach the +10% criterion. Dataset replacement is
+**not supported**, so no aggregation fit follows. Current native label mean
+response residuals are 0.00447–0.00746bb, versus model RMSE 0.724–1.038bb;
+these are different metrics, not an error decomposition or proof of exact
+labels. See `postflop-objective-diagnostics-2026-10-05.md`.
+
+## 18. Inspect decision-gradient allocation before changing the auxiliary
+
+Two cheap diagnostics failed their prespecified intervention screens. Do not
+force projection or dataset aggregation anyway. The remaining learned-value
+error is large and existing affine TRAIN decisions still have wrong rankings.
+The next hypothesis is objective allocation, not longer unchanged training.
+
+1. Pin all six existing TRAIN bundles and both aligned-model seeds at retained
+   initialization and the fixed 600-step endpoint. No evaluation boards,
+   checkpoint selection, native labels or fitting.
+2. Decompose the exact existing unique-pair Huber derivative into already
+   correctly ordered pairs, inverted pairs, and near-tie pairs. Retain the same
+   authentic/profile-consistent weights, complete chance integration, 20bb
+   normalization and bounded-serving VJP. Check that components reconstruct
+   the original derivative exactly. Measure pairwise derivative allocation and
+   native ranking losses, not only value RMSE.
+3. At the endpoint, compare the original contrast parameter gradient with a
+   bounded-margin, native-gap-aware ranking direction. Do not call a ranking
+   auxiliary exploitability descent: it lacks best-response policy gradients
+   and game-wide guarantees. Near ties below 0.05bb provide no ranking signal;
+   keep ordinary native-value calibration to preserve EV and indifference.
+4. A matched auxiliary pilot is warranted only if both seeds retain >=0.03bb
+   equal-group TRAIN ranking loss and >=75% of the exact pairwise Huber
+   derivative magnitude comes from already correctly ordered pairs. Inspect
+   parameter-gradient agreement too; cancellation/representation may defeat
+   the allocation hypothesis. A failed screen means no ranking fit.
+5. If supported, freeze the alternative auxiliary and coefficient from TRAIN
+   gradient norms before fitting; change only that auxiliary relative to the
+   completed aligned control. Preserve weights, optimizer, primary/bundle
+   data, split, seeds, 600 steps, retention, precision and cadence. Verify the
+   derivative numerically and by an actual network VJP, full export parity,
+   then the same automatic-rejection actual-policy response screen.
+
+Research: [Exploitability Descent](https://arxiv.org/abs/1903.05614) optimizes
+policies against best responses. It helps distinguish actual worst-case policy
+optimization from this proposed supervised ranking surrogate; its convergence
+claims do not apply to a leaf-value loss. No automatic cloud spending or
+website/model activation is authorized.
