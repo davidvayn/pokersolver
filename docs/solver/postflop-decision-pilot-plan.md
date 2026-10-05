@@ -1,15 +1,16 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Replay rejected; sampled Stage 2 data inconclusive; focused exact-chance continuation underway.**
-No model has been promoted. Execution is recorded in
+Status: **Replay and full-chance student pairs rejected; bounded TRAIN coverage intervention underway.**
+No model has been promoted. Earlier execution is recorded in
 [the replay pilot report](postflop-replay-pilot-2026-10-03.md) and
 [the action-contrast report](postflop-action-contrast-pilot-2026-10-04.md).
 The reserved chance block exposed action-ranking instability larger than the
 intended improvement. Per Section 6B, no C0/C1 fit or conditional expansion
-was started. The next experiment needs more reliable chance-integrated targets,
-not another unchanged fitting run. The user authorized continuing on October 4;
-the focused experiment below changes chance coverage only.
+was started at that boundary. The subsequent all49 pilot improved frozen
+training rankings but failed the actual-policy screen. The user authorized
+continuing on October 4; Section 11 now tests broader TRAIN board/search
+coverage with that reliable chance integration, not unchanged iteration scaling.
 
 This refines Step 3 of [the postflop gap plan](postflop-gap-implementation-plan.md).
 It specifies what to implement, how to avoid another expensive false positive,
@@ -507,3 +508,45 @@ replay. First diagnose that small block with reused/bounded native references;
 do not repeat an unchanged fit, silently relax the screen, or buy compute
 before establishing a useful effect. The pilot boundary is complete; broad
 full-hand/serving qualification remains conditional on an accepted policy.
+
+## 11. Bounded TRAIN coverage intervention (October 4)
+
+1. Freeze three new TRAIN families from an authentic 128-root bank (seed
+   2026100417): first two unpaired Q-or-higher rainbow and first two-tone
+   five-leaf three-bet families, in bank order. Exclude every family in the
+   frozen 615-state corpus and all twelve benchmark roots, before inspecting
+   any model errors. Bank indices 22, 76, 115 become TRAIN IDs 100, 101, 102.
+2. Use the rejected C1 pair only as an exploratory proposer, never active play.
+   Capture 16 native64-labeled queries per root from early/middle/late search
+   and final-average beliefs at 128 flop updates. Check observation/no-
+   observation policy parity on the first root. Export its complete final
+   prefix and label all 49 legal public turns at native64; one native256
+   sentinel per root checks measured teacher drift.
+3. Keep the original 615 corpus/split unchanged. Store each new family as a
+   separate 261-state calibration shard (245 final-prefix leaf labels plus
+   16 search queries), retaining existing 640-state/256MiB decoded guards.
+   Zero-pad the affine contrast coefficients for the extra queries: search
+   calibration cannot silently alter frozen action targets.
+4. Diagnose continuation/action-ranking errors on these new training inputs.
+   Only trustworthy complete targets can proceed to fitting; a finite
+   sentinel loss comparable to the 0.02bb intended benefit is inconclusive.
+   Native64/256 stability is not an exploitability certificate.
+5. If justified, join the three old and three registered new TRAIN shards.
+   Run matched C0/C1, seeds 10601/10602, at 600 fixed steps. Both arms receive
+   identical calibration, primary replay, architecture, optimizer and features;
+   only the contrast auxiliary differs. Resource-only cadence changes must
+   preserve equal counts for all six families (cadence 4 gives 25 each).
+   TRAIN-only gradient conditioning may change its coefficient; comparison
+   against older pilots is therefore diagnostic, not a pure coverage estimate.
+6. Verify full 615-state independent NumPy/native export parity, probe frozen
+   TRAIN decisions, then run the same four cheap actual-policy controls using
+   all49/native64 responses. Advance only on actual playing benefit without
+   known-regression failures. Otherwise reject/inconclusive, diagnose, and
+   preserve the retained model. Full-hand and serving work remain conditional.
+
+Resource limits: two native workers total, 2GiB per worker, 90-minute labeling
+cap with a separate three-minute finalization allowance; first two turns per
+family establish cost before complete labeling. New artifacts stay below
+10GiB with 20GiB free disk reserve. Fit one MLX process at a time within 6GiB
+and two hours including conditioning/parity. Honor system memory pressure.
+No paid compute, UI changes, or model promotion in this intervention.
