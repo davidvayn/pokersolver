@@ -1,7 +1,7 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Replay and full-chance student pairs rejected; bounded TRAIN coverage intervention underway.**
+Status: **Replay, full-chance and TRAIN-coverage student pairs rejected; bounded coverage intervention complete.**
 No model has been promoted. Earlier execution is recorded in
 [the replay pilot report](postflop-replay-pilot-2026-10-03.md) and
 [the action-contrast report](postflop-action-contrast-pilot-2026-10-04.md).
@@ -550,3 +550,24 @@ family establish cost before complete labeling. New artifacts stay below
 10GiB with 20GiB free disk reserve. Fit one MLX process at a time within 6GiB
 and two hours including conditioning/parity. Honor system memory pressure.
 No paid compute, UI changes, or model promotion in this intervention.
+
+### Section 11 completion
+
+[The coverage report](postflop-training-coverage-pilot-2026-10-04.md) records
+all three complete native label shards, old-model diagnosis, both matched
+600-step pairs, full-615-state export parity, and six-family frozen probes.
+New C1 reduces ranking loss on the new TRAIN block by 57.5% and improves the
+first known policy control from the prior C1's 0.418741bb to 0.350730bb.
+However, retained is 0.278335bb on that control. C0 and C1 both exceed the
+0.01bb known-case regression limit, so remaining evaluations were stopped
+without scoring partial cases or inventing paired means. **Reject both; no
+conditional full-hand/serving expansion.** All pilot processes have stopped.
+
+The same remaining continuation-ranking problem is measurable from cached
+own-policy packets. Old TRAIN accuracy also worsened with the six-family
+schedule. Next distinguish representation/target mismatch from retention:
+hash-matched input diagnostics, then a bounded retained-weight fine-tune with
+protected old replay versus the from-scratch control. This proposed next pilot
+is not started, not a paid-run recommendation, and not a guaranteed fix.
+Use the new optional control-first automatic rejection to avoid spending the
+rest of a screen after a completed audited case already fails its fixed limit.
