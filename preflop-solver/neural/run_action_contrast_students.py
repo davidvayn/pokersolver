@@ -156,6 +156,36 @@ def fit(args):
     work = args.output / args.arm; work.mkdir()
     rows = []
     for seed in [10601, 10602]:
+        initial_model = None
+        initial_receipt = None
+        if getattr(args, "initial_models", None) is not None:
+            from retained_initialization import import_retained_weights, native_import_prediction
+            initial_receipt = args.initial_models[seed]
+            path = Path(initial_receipt["path"])
+            if sha256(path) != initial_receipt["sha256"]:
+                raise ValueError("retained initialization changed")
+            initial_model = json.loads(path.read_text())
+            probe = training.SharedComboValueNetwork(True, "wide", "payoff-exposure",
+                training.FEATURE_SCHEMA_EXACT_RUNOUT)
+            import_retained_weights(probe, initial_model, seed)
+            # Full private-vector comparison on two frozen TRAIN states. Every
+            # serialized parameter is additionally validated by the importer.
+            selected = train[:2]
+            full_gpu = getattr(args, "matmul_precision", "default") == "full-float32"
+            got = native_import_prediction(probe, contexts[selected], queries[selected],
+                dataset.target_scales[selected], dataset.boards[selected], dataset.ranges[selected],
+                device=mx.gpu if full_gpu else mx.cpu)
+            expected = np.asarray([python_prediction(dataset, initial_model, int(i),
+                (contexts[i], queries[i])) for i in selected])
+            error = float(np.max(np.abs(got - expected)))
+            if not np.isfinite(error) or error > .0001:
+                raise ValueError("retained initialization independent NumPy/MLX parity failed")
+            atomic_json(work / f"initialization-{seed}.json", dict(**initial_receipt,
+                seed=seed, maximumParityErrorBb=error, states=selected.tolist(),
+                optimizerState="fresh_not_imported",
+                parityDevice="gpu_full_float32" if full_gpu else "cpu_full_float32",
+                releaseAccepted=False))
+            del probe; mx.clear_cache()
         objective = BundleObjective(bundles, settings["contrastWeight"] if args.arm == "C1" else 0.,
                                     settings["cadence"], settings["chunkSize"])
         def save(current, step):
@@ -165,7 +195,7 @@ def fit(args):
             np.array([], dtype=np.int64), tuning, holdout, True, seed, 600, 8, .0003, .00003,
             True, 50, 6, "wide", "payoff-exposure", .05, .25, np.ones(len(dataset.targets)), 0.,
             training.FEATURE_SCHEMA_EXACT_RUNOUT, fixed_final_checkpoint=True,
-            bundle_objective=objective, checkpoint_callback=save)
+            bundle_objective=objective, checkpoint_callback=save, initial_model=initial_model)
         model_path = work / f"turn-value-range-seed{seed}.json"
         training.export_model(current, model_path, seed, dataset.source_sha256, native.SCHEMA,
             "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")
@@ -174,7 +204,8 @@ def fit(args):
                 or metrics["actionBundleObjective"]["bundleUpdates"] != 600 // settings["cadence"]
                 or len(counts) != len(bundles) or set(counts.values()) != {600 // settings["cadence"] // len(bundles)}):
             raise ValueError("matched checkpoint/cadence drift")
-        rows.append(dict(seed=seed, model=str(model_path), modelSha256=sha256(model_path), metrics=metrics))
+        rows.append(dict(seed=seed, model=str(model_path), modelSha256=sha256(model_path), metrics=metrics,
+            **({"initialization": initial_receipt} if initial_receipt is not None else {})))
         atomic_json(work / "fit-report.json", dict(arm=args.arm, variants=rows, settings=settings, status="running"))
         print(json.dumps(dict(event="contrast-seed-fit", arm=args.arm, seed=seed,
             selectedStep=600, surrogateHoldoutRmseBb=metrics["onPolicyReachMetrics"]["weightedRmseBb"])), flush=True)
