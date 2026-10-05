@@ -1002,3 +1002,71 @@ values. Its experiments did not establish that range-weighted losses improve
 playing strength. Our weighting change is a falsifiable empirical hypothesis
 motivated by measured TRAIN error, not a research-backed guarantee or a new
 exploitability metric. No paid compute is authorized.
+
+Section 21 completed: the fixed pair passed all615 NumPy/native predictions
+(maximum error 0.00000535bb), in 358.5s including preflight/fit/parity.
+Zero-own TRAIN RMSE fell 10.0%/11.6% to 2.246592/2.186768bb; authentic
+TRAIN RMSE stayed 0.858920/0.888735bb. The complete first all49 policy control
+improved from the 10% experimental arm's 0.343412bb to 0.311409bb, but still
+regresses the retained 0.278335bb baseline by 0.033074bb. The unchanged
+0.01bb tolerance rejects it. Other cases and paired mean are unmeasured.
+Do not activate it or sweep fractions on these controls.
+
+## 22. Allocate accurate native work to a final averaging window
+
+Native64 everywhere improved the original matched policies, whereas native4
+everywhere lost that benefit and supervised-loss changes still fail the
+retained control. Test a different compute allocation, not another loss grid.
+DeepStack's supplementary implementation used an auxiliary estimator in
+omitted early iterations and the stronger evaluator in averaged late
+iterations ([primary paper](https://arxiv.org/html/1701.01724v3), table 4 and
+the following paragraph). Our sampled DCFR/native64 setting differs, so
+this motivates an experiment, not a safety or convergence claim.
+
+1. Pin the original matched32 roots, seed order, exact retained leaf-model
+   hashes and native64/learned32 responses. Preserve the current release
+   binary/source state before editing; prove the rebuilt default learned128
+   pilot still reproduces the frozen candidate byte-for-byte.
+2. Add an explicit research-only leaf schedule and averaging start. Defaults
+   must remain byte-compatible. Validate schedules before work and record
+   them in candidate identity. No changes to chance draws, regret discount,
+   legal trees, leaf depth, exact terminals or raw-reach scaling.
+3. First use limped seed 100101. Both new arms use 32 flop updates and only
+   average rounds 25–32. Control: learned leaves throughout. Intervention:
+   the same learned model in rounds 1–24, native64 in rounds 25–32. Clear only
+   average accumulators at round 25; preserve regrets and discount clocks.
+   This paired control separates accurate late values from omitting early
+   averages. Do not resume a frozen average as if it contains training regrets.
+4. Tests must check exact switch boundaries, invalid schedules, unchanged
+   regrets/strategy/discount clocks when clearing averages, default serialized
+   identity and actual default solver parity. Never emit predicted values as
+   measured native labels; partial native diagnostics are not complete ones.
+5. Time the serial hybrid construction under a 4GiB guard. Target <=40% of
+   the cached native64 construction time. Reject an estimated stage above
+   two hours. Evaluate both policies with native64 played continuations, all49
+   exact turns, four separately guarded 1.5GiB packet workers and the JS audit.
+   Keep system-pressure stops and 20GiB disk reserve; do not score partials.
+6. A first case is promising only if the hybrid improves the tail-only learned
+   control by >=0.05bb, retains at least half of the original native-versus-
+   learned benefit, and meets the construction cost target. This is a compute
+   allocation screen, not acceptance at native64 quality or Approximate GTO.
+   If promising, confirm the other seed and predeclared root before extending
+   work or integrating. If not, diagnose the schedule once; no blind iteration
+   escalation or paid compute spending follows.
+
+Section 22 implementation is verified and its first comparison is running.
+The rebuilt default learned128 policy reproduced the frozen three-bet
+candidate exactly (`90b41a1ee7177663a0aa55d62438925414201f84dd25958a87926e550c65ba83`).
+All362 native unit tests and nine CLI tests pass, plus 14 targeted Python
+controller tests. The six new native tests cover schedule boundaries,
+invalid bounds, averaging-only resets, metadata identity and frozen-policy
+validation. Source and binary snapshots are immutable for the active run.
+The pilot uses the original retained model, not the rejected 50% student.
+No policy result or release acceptance is implied by these checks.
+
+Artifacts under `preflop-solver/neural/runs/local-late-native-tail-20261005-a/`:
+`baseline-build.json`, `scheduled-build.json`, `default-preflight/manifest.json`
+and `first-control/manifest.json`. Binary SHA-256:
+`287b52cbf0a01a867deddb316dffe64f7ae0729565976e7dcbcf814e890f8016`.
+Default parity receipt SHA-256:
+`85c18fea5b0616c40d87fc5b7465948a1564f97e10f07ce7808ac03ba32bd31f`.

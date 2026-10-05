@@ -51,6 +51,14 @@ pub(super) struct Frozen {
 
 impl Frozen {
     pub(super) fn new(input: &Solution) -> Result<Self, String> {
+        if let Some(schedule) = input.leaf_schedule {
+            schedule.validate(input.iterations)?;
+            if input.learned_leaf_model_sha256.is_none() || input.chance_baseline.is_some()
+                || input.complete_root_support.is_some() || input.root_realization_turn_averages.is_some()
+            {
+                return Err("invalid frozen scheduled proposer identity or combined intervention".into());
+            }
+        }
         if input.schema != "hu-native-counterfactual-turn-flop-pilot-v1"
             || input.iterations < 2
             || input.turn_iterations < 2
@@ -392,10 +400,10 @@ impl Frozen {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    pub(super) fn royal_fixture() -> Solution {
+    pub(in super::super) fn royal_fixture() -> Solution {
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 2.0;
         let mut ranges = std::array::from_fn(|_| vec![0.0; COMBO_COUNT]);
@@ -434,6 +442,7 @@ mod tests {
             learned_leaf_model_sha256: None,
             complete_root_support: None,
             root_realization_turn_averages: None,
+            leaf_schedule: None,
             zero_joint_turn_queries: 0,
             chance_baseline: None,
             turn_samples_per_iteration: None,
