@@ -3,10 +3,16 @@ import unittest
 import numpy as np
 
 from action_contrast_dataset import AffineGroup
-from probe_training_serving_bridge import compare_bridge
+from probe_training_serving_bridge import compare_bridge, forward_parity_passed
 
 
 class TrainingServingBridgeTests(unittest.TestCase):
+    def test_strict_forward_verification_rejects_nonfinite_missing_or_large_errors(self):
+        for value in (float("nan"), float("inf"), -.1, .1988):
+            self.assertFalse(forward_parity_passed([dict(decisions=[dict(trainingServingContrastRmseBb=value)])]))
+        self.assertFalse(forward_parity_passed([]))
+        self.assertTrue(forward_parity_passed([dict(decisions=[dict(trainingServingContrastRmseBb=1e-7)])]))
+
     def test_reports_real_action_ranking_change_not_only_value_offset(self):
         coefficients = np.zeros((2, 1, 1326))
         coefficients[1, 0] = 1.
