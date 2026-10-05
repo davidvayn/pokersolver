@@ -34,6 +34,11 @@ def value_loss(current, context, query, projection, scales, targets, weights):
     return (mx.sum(weights * huber(error)) + .25 * mx.sum(weights * huber(error * scales[:, None] / 20))) / denominator
 
 
+def load_training_dataset(args, path):
+    return training.load_dataset(path, 1, "payoff-exposure",
+        native_counterfactual_fraction=getattr(args, "native_counterfactual_fraction", .1))
+
+
 def prepare(args):
     source = read_capture(args.corpus)
     reference = read_capture(args.split_reference)
@@ -46,7 +51,7 @@ def prepare(args):
     # The arrays and Dataset.source preserve training/export metadata. Do not
     # retain two extra parsed copies of the 615/284 targets during preprocessing.
     del source, reference
-    dataset = training.load_dataset(args.corpus, 1, "payoff-exposure")
+    dataset = load_training_dataset(args, args.corpus)
     contexts, queries, cache = training.feature_dataset_cached(dataset,
         training.FEATURE_SCHEMA_EXACT_RUNOUT, args.feature_workers, args.feature_cache)
     manifest = json.loads(args.bundles.read_text())
@@ -78,7 +83,7 @@ def prepare(args):
             receipt = family["extraCapture"]; path = Path(receipt["path"])
             if sha256(path) != receipt["sha256"]: raise ValueError("extra calibration capture changed")
             groups, ordered = extra_calibration(groups, ordered, read_capture(path), family["candidateSha256"])
-        data = training.load_dataset(Path(family["calibrationCorpus"]["path"]), 1, "payoff-exposure")
+        data = load_training_dataset(args, Path(family["calibrationCorpus"]["path"]))
         if data.source["targets"] != ordered: raise ValueError("bundle feature/affine leaf ordering differs")
         # Affine tensors no longer depend on the separately decoded packets.
         # Retain the complete validated calibration source, not both copies.
@@ -227,25 +232,28 @@ def fit(args):
             raise ValueError("matched checkpoint/cadence drift")
         rows.append(dict(seed=seed, model=str(model_path), modelSha256=sha256(model_path), metrics=metrics,
             **({"initialization": initial_receipt} if initial_receipt is not None else {})))
-        atomic_json(work / "fit-report.json", dict(arm=args.arm, variants=rows, settings=settings, status="running"))
+        atomic_json(work / "fit-report.json", dict(arm=args.arm, variants=rows, settings=settings, status="running",
+            nativeCounterfactualFraction=getattr(args, "native_counterfactual_fraction", .1)))
         print(json.dumps(dict(event="contrast-seed-fit", arm=args.arm, seed=seed,
             selectedStep=600, surrogateHoldoutRmseBb=metrics["onPolicyReachMetrics"]["weightedRmseBb"])), flush=True)
         del current; gc.collect(); mx.clear_cache()
     atomic_json(work / "fit-report.json", dict(arm=args.arm, variants=rows, settings=settings,
-        status="complete", featureCache=cache, split=[s.tolist() for s in split], releaseAccepted=False))
+        status="complete", featureCache=cache, split=[s.tolist() for s in split], releaseAccepted=False,
+        nativeCounterfactualFraction=getattr(args, "native_counterfactual_fraction", .1)))
 
 
 def verify(args, arm, stop):
     # Reuse HASH-VERIFIED deterministic feature arrays in the independent NumPy
     # predictor; neither framework forward passes nor only reached hands count
     # as export parity. All 615 states x 2 x 1326 queries remain checked.
-    dataset = training.load_dataset(args.corpus, 1, "payoff-exposure")
+    dataset = load_training_dataset(args, args.corpus)
     contexts, queries, _ = training.feature_dataset_cached(dataset, training.FEATURE_SCHEMA_EXACT_RUNOUT, 1, args.feature_cache)
     work = args.output / arm
     report = json.loads((work / "fit-report.json").read_text())
     record = dict(schema="native-value-student-pair-controller-v1", status="running", releaseAccepted=False,
                   corpusSha256=args.corpus_sha256, arm=arm, predictions=[],
                   bundleManifestSha256=args.bundles_sha256, fixedFinalStep=600,
+                  nativeCounterfactualFraction=getattr(args, "native_counterfactual_fraction", .1),
                   fitSettingsSha256=sha256(args.output / "fit-settings.json"))
     for entry in report["variants"]:
         model_path = Path(entry["model"]); model = json.loads(model_path.read_text())
