@@ -187,7 +187,20 @@ def fit(args):
                 releaseAccepted=False))
             del probe; mx.clear_cache()
         objective = BundleObjective(bundles, settings["contrastWeight"] if args.arm == "C1" else 0.,
-                                    settings["cadence"], settings["chunkSize"])
+                                    settings["cadence"], settings["chunkSize"],
+                                    serving_aligned=getattr(args,"serving_aligned",False))
+        protection_settings = getattr(args, "protection_settings", None)
+        if protection_settings is not None:
+            from retained_value_protection import RetainedValueProtection
+            if initial_model is None:
+                raise ValueError("retained-value protection requires a frozen initialized reference")
+            reference = training.SharedComboValueNetwork(True, "wide", "payoff-exposure",
+                training.FEATURE_SCHEMA_EXACT_RUNOUT)
+            import_retained_weights(reference, initial_model, seed)
+            objective = RetainedValueProtection(objective, dataset, contexts, queries, train,
+                reference, protection_settings["coefficient"], seed,
+                protection_settings["cadence"], protection_settings["batchSize"])
+            del reference
         def save(current, step):
             training.export_model(current, work / f"turn-value-range-seed{seed}-step{step}.json", seed,
                 dataset.source_sha256, native.SCHEMA, "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")
@@ -200,6 +213,10 @@ def fit(args):
         training.export_model(current, model_path, seed, dataset.source_sha256, native.SCHEMA,
             "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")
         counts = metrics["actionBundleObjective"]["familyCounts"]
+        protection_report = metrics["actionBundleObjective"].get("retainedValueProtection")
+        if protection_settings is not None and (protection_report is None
+                or protection_report["updates"] != 150 or protection_report["draws"] != 1200):
+            raise ValueError("retained-value protection exposure drift")
         if (metrics["selectedStep"] != 600
                 or metrics["actionBundleObjective"]["bundleUpdates"] != 600 // settings["cadence"]
                 or len(counts) != len(bundles) or set(counts.values()) != {600 // settings["cadence"] // len(bundles)}):

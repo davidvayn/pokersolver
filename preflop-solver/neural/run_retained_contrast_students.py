@@ -48,6 +48,13 @@ def main():
     p.add_argument("--matmul-precision", choices=("default", "full-float32"), default="default")
     p.add_argument("--warm-control", type=Path)
     p.add_argument("--warm-control-sha256")
+    p.add_argument("--protection-control", type=Path)
+    p.add_argument("--protection-control-sha256")
+    p.add_argument("--condition-protection", action="store_true")
+    p.add_argument("--protection-settings-sha256")
+    p.add_argument("--serving-control", type=Path)
+    p.add_argument("--serving-control-sha256")
+    p.add_argument("--serving-preflight", action="store_true")
     a = p.parse_args()
     pinned = {}
     for name in ("binary", "corpus", "split_reference", "bundles", "quality_decision"):
@@ -97,6 +104,70 @@ def main():
             pinned[str(Path(row["model"]).resolve())] = row["modelSha256"]
     elif a.warm_control is not None or a.warm_control_sha256 is not None:
         raise ValueError("warm control is only for a precision intervention")
+    protection_control = None
+    if a.protection_control is not None:
+        if (a.matmul_precision != "full-float32" or a.protection_control_sha256 is None
+                or sha256(a.protection_control) != a.protection_control_sha256):
+            raise ValueError("protection requires a pinned full-float32 matched control")
+        protection_control = json.loads(a.protection_control.read_text())
+        if (protection_control.get("status") != "complete"
+                or protection_control.get("schema") != "retained-initialization-contrast-pilot-v1"
+                or protection_control.get("armDifference") != "matmul_precision_only"
+                or protection_control.get("matmulPrecision") != "full-float32"
+                or protection_control.get("warmControlSha256") != a.warm_control_sha256
+                or protection_control.get("fitSettings") != settings
+                or protection_control.get("pinnedInputs", {}).get(str(a.bundles)) != a.bundles_sha256
+                or protection_control.get("pinnedInputs", {}).get(str(a.corpus)) != a.corpus_sha256):
+            raise ValueError("protection control does not match the experiment")
+        pinned[str(a.protection_control.resolve())] = a.protection_control_sha256
+        receipt = protection_control["studentManifest"]
+        if sha256(Path(receipt["path"])) != receipt["sha256"]:
+            raise ValueError("full-float32 control pair changed")
+        pair = json.loads(Path(receipt["path"]).read_text())
+        if pair.get("status") != "complete" or sorted(row["seed"] for row in pair["predictions"]) != [10601,10602]:
+            raise ValueError("complete full-float32 paired control required")
+        pinned[str(Path(receipt["path"]).resolve())] = receipt["sha256"]
+        for row in pair["predictions"]:
+            if row["maximumParityErrorBb"] > .0001: raise ValueError("full-float32 control parity failed")
+            pinned[str(Path(row["model"]).resolve())] = row["modelSha256"]
+        checkpoint = Path(receipt["path"]).parent / "turn-value-range-seed10601-step200.json"
+        a.protection_checkpoint = dict(path=str(checkpoint), sha256=sha256(checkpoint))
+        pinned[str(checkpoint.resolve())] = a.protection_checkpoint["sha256"]
+    elif a.protection_control_sha256 is not None or a.condition_protection or a.protection_settings_sha256 is not None:
+        raise ValueError("protection options require a matched full-float32 control")
+    serving_control = None
+    if a.serving_control is not None:
+        if (protection_control is None or a.serving_control_sha256 is None
+                or sha256(a.serving_control) != a.serving_control_sha256):
+            raise ValueError("serving alignment requires a pinned protected control")
+        serving_control=json.loads(a.serving_control.read_text())
+        if (serving_control.get("status") != "complete"
+                or serving_control.get("schema") != "retained-initialization-contrast-pilot-v1"
+                or serving_control.get("armDifference") != "retained_value_protection_only"
+                or serving_control.get("matmulPrecision") != "full-float32"
+                or serving_control.get("warmControlSha256") != a.warm_control_sha256
+                or serving_control.get("protectionControlSha256") != a.protection_control_sha256
+                or serving_control.get("fitSettings") != settings
+                or serving_control.get("pinnedInputs",{}).get(str(a.bundles)) != a.bundles_sha256
+                or serving_control.get("pinnedInputs",{}).get(str(a.corpus)) != a.corpus_sha256):
+            raise ValueError("protected control does not match the serving-alignment experiment")
+        pinned[str(a.serving_control.resolve())]=a.serving_control_sha256
+        receipt=serving_control["studentManifest"]
+        path=Path(receipt["path"])
+        if sha256(path) != receipt["sha256"]: raise ValueError("protected control pair changed")
+        pinned[str(path.resolve())]=receipt["sha256"]
+        pair=json.loads(path.read_text())
+        if pair.get("status") != "complete" or sorted(r["seed"] for r in pair["predictions"]) != [10601,10602]:
+            raise ValueError("complete protected paired control required")
+        for row in pair["predictions"]:
+            if row["maximumParityErrorBb"] > .0001: raise ValueError("protected control parity failed")
+            pinned[str(Path(row["model"]).resolve())]=row["modelSha256"]
+        a.frozen_protection_settings=a.serving_control.resolve().parent/"protection-settings.json"
+        digest=serving_control["protectionSettingsSha256"]
+        if sha256(a.frozen_protection_settings) != digest: raise ValueError("frozen protection coefficient changed")
+        pinned[str(a.frozen_protection_settings)]=digest
+    elif a.serving_control_sha256 is not None or a.serving_preflight:
+        raise ValueError("serving options require the protected matched control")
     a.initial_models = {}
     for seed, digest in RETAINED.items():
         path = (a.retained_directory / f"turn-value-range-seed{seed}.json").resolve()
@@ -118,11 +189,33 @@ def main():
             "action_contrast_dataset.py", "validate_public_value_parity.py", "native_value_dataset.py",
             "training_coverage.py", "run_native_value_pilot.py", "worker_resources.py"):
         path = Path(__file__).with_name(name); pinned[str(path)] = sha256(path)
+    if protection_control is not None:
+        path = Path(__file__).with_name("retained_value_protection.py"); pinned[str(path)] = sha256(path)
+    if serving_control is not None:
+        for name in ("serving_value_projection.py","serving_contrast_preflight.py"):
+            path=Path(__file__).with_name(name); pinned[str(path)]=sha256(path)
     a.output, a.feature_cache = a.output.resolve(), a.feature_cache.resolve()
     a.arm = "C1"
-    if a.worker:
+    a.serving_aligned = serving_control is not None
+    if a.worker or a.condition_protection or a.serving_preflight:
         if a.matmul_precision == "full-float32" and os.environ.get("MLX_ENABLE_TF32") != "0":
             raise ValueError("full-float32 must be selected before importing MLX in the worker")
+        if a.condition_protection:
+            from retained_value_protection import condition_protection
+            condition_protection(a)
+            return
+        if a.serving_preflight:
+            from serving_contrast_preflight import preflight
+            preflight(a)
+            return
+        if protection_control is not None:
+            path = a.output / "protection-settings.json"
+            if a.protection_settings_sha256 is None or sha256(path) != a.protection_settings_sha256:
+                raise ValueError("protection fitting requires pinned TRAIN-conditioned settings")
+            a.protection_settings = json.loads(path.read_text())
+            if (a.protection_settings.get("status") != "complete"
+                    or a.protection_settings.get("checkpoint") != a.protection_checkpoint):
+                raise ValueError("protection conditioning changed")
         base.fit(a)
         return
     if a.output.exists(): raise ValueError("never overwrite a retained-initialization stage")
@@ -132,9 +225,13 @@ def main():
     # Preserve the original settings bytes, not recondition lambda on a different model.
     (a.output / "fit-settings.json").write_bytes(a.settings.read_bytes())
     record = dict(schema="retained-initialization-contrast-pilot-v1", status="running",
-        releaseAccepted=False, armDifference=("matmul_precision_only" if warm_control is not None
+        releaseAccepted=False, armDifference=("serving_contrast_forward_vjp_only" if serving_control is not None
+            else "retained_value_protection_only" if protection_control is not None
+            else "matmul_precision_only" if warm_control is not None
             else "initial_weights_only_fresh_optimizer"), matmulPrecision=a.matmul_precision,
         warmControlSha256=a.warm_control_sha256,
+        protectionControlSha256=a.protection_control_sha256,
+        servingControlSha256=a.serving_control_sha256,
         scratchControlSha256=CONTROL_SHA, pinnedInputs=pinned, maximumSeconds=7200,
         maximumFitMemoryBytes=6*1024**3, fitSettings=settings)
     atomic_json(a.output / "manifest.json", record)
@@ -143,11 +240,25 @@ def main():
     timer = threading.Timer(7200, stop.set); timer.daemon = True; timer.start()
     pressure = PilotMemoryGuard(stop, a.output / "system-memory.json").start()
     try:
-        command = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:], "--worker"]
+        command = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
         env = {"MLX_ENABLE_TF32": "0"} if a.matmul_precision == "full-float32" else {}
         if a.matmul_precision == "default" and os.environ.get("MLX_ENABLE_TF32", "1") != "1":
             raise ValueError("default comparison requires the original backend-default precision")
-        record["fitWorker"] = guarded(command, env, a.output / "fit-worker", 3600, 6*1024**3, stop)
+        if protection_control is not None:
+            if serving_control is not None:
+                (a.output/"protection-settings.json").write_bytes(a.frozen_protection_settings.read_bytes())
+                record["servingPreflightWorker"] = guarded(command + ["--serving-preflight"], env,
+                    a.output/"serving-preflight-worker",1200,6*1024**3,stop)
+                pinned[str(a.output/"serving-preflight.json")]=sha256(a.output/"serving-preflight.json")
+            else:
+                record["conditioningWorker"] = guarded(command + ["--condition-protection"], env,
+                    a.output / "conditioning-worker", 1200, 6*1024**3, stop)
+            digest = sha256(a.output / "protection-settings.json")
+            pinned[str(a.output / "protection-settings.json")] = digest
+            record["protectionSettingsSha256"] = digest
+            atomic_json(a.output / "manifest.json", record)
+            command += ["--protection-settings-sha256", digest]
+        record["fitWorker"] = guarded(command + ["--worker"], env, a.output / "fit-worker", 3600, 6*1024**3, stop)
         atomic_json(a.output / "manifest.json", record)
         base.verify(a, "C1", stop)
         record["studentManifest"] = dict(path=str(a.output / "C1" / "manifest.json"),
