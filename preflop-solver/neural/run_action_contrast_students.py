@@ -22,6 +22,7 @@ from run_native_value_pilot import guarded, read_capture, test_command, PREDICT_
 from run_native_value_preflight import atomic_json, sha256
 from run_postflop_gap_pilot import PilotMemoryGuard
 from validate_public_value_parity import python_prediction
+from training_coverage import extra_calibration, extension_families
 
 
 def value_loss(current, context, query, projection, scales, targets, weights):
@@ -51,6 +52,18 @@ def prepare(args):
     manifest = json.loads(args.bundles.read_text())
     if manifest.get("status") != "complete" or manifest.get("calibrationOnly"):
         raise ValueError("completed training bundles required")
+    registry = manifest.get("trainingExtension")
+    expected_roots = [2, 3, 4]
+    if registry:
+        added = extension_families(registry, args.corpus_sha256, args.split_reference_sha256, allowed, forbidden)
+        allowed |= added
+        expected_roots += [100, 101, 102]
+        plan = json.loads(Path(registry["path"]).read_text())
+        registered = {f["root"]: tuple(f["family"]) for f in plan["families"]}
+        if any(tuple(f["family"]) != registered.get(f["root"]) for f in manifest["families"] if f["root"] >= 100):
+            raise ValueError("training family/id differs from the registry")
+    if sorted(f["root"] for f in manifest["families"]) != expected_roots:
+        raise ValueError("predeclared training family set changed")
     bundles = []
     for family in sorted(manifest["families"], key=lambda f: f["root"]):
         if tuple(family["family"]) not in allowed or tuple(family["family"]) in forbidden:
@@ -60,6 +73,11 @@ def prepare(args):
         prefix = json.loads(Path(family["prefix"]["path"]).read_text())
         packets = [json.loads(Path(r["path"]).read_text()) for r in family["labels"]]
         groups, ordered = build_groups(prefix, packets, require_full_chance=bool(family.get("all49Turns")))
+        if family.get("extraCapture"):
+            if not registry or family["root"] < 100: raise ValueError("unregistered extra search calibration")
+            receipt = family["extraCapture"]; path = Path(receipt["path"])
+            if sha256(path) != receipt["sha256"]: raise ValueError("extra calibration capture changed")
+            groups, ordered = extra_calibration(groups, ordered, read_capture(path), family["candidateSha256"])
         data = training.load_dataset(Path(family["calibrationCorpus"]["path"]), 1, "payoff-exposure")
         if data.source["targets"] != ordered: raise ValueError("bundle feature/affine leaf ordering differs")
         # Affine tensors no longer depend on the separately decoded packets.
@@ -69,17 +87,18 @@ def prepare(args):
         if any(float((g.weights * g.support).sum()) <= 0 for g in groups):
             raise ValueError("training bundle has no profile-consistent authentic contrast support")
         bundles.append(TrainingBundle(data, c, q, groups, tuple(family["family"])))
-    if len(bundles) != 3: raise ValueError("three predeclared training families required")
+    if len(bundles) != len(expected_roots): raise ValueError("predeclared training families required")
     return dataset, contexts, queries, split, bundles, cache
 
 
 def budgeted_cadence(family_seconds, available_seconds):
     """Resolve equal-arm work BEFORE fitting, never from response/holdout scores."""
     times = np.asarray(family_seconds, dtype=float)
-    if times.shape != (3,) or not np.isfinite(times).all() or (times <= 0).any():
-        raise ValueError("three finite positive complete-family timings required")
+    if times.shape not in ((3,), (6,)) or not np.isfinite(times).all() or (times <= 0).any():
+        raise ValueError("three or six finite positive complete-family timings required")
     for cadence in (4, 8, 20):
-        # 600/cadence is divisible by three, preserving equal family counts.
+        if (600 // cadence) % len(times): continue
+        # Reject schedules that silently undertrain some registered families.
         projected = 1.5 * (float(np.mean(times)) * (600 // cadence) * 4 + 405 * 2 + 1200)
         if projected <= available_seconds:
             return cadence, projected
@@ -150,8 +169,10 @@ def fit(args):
         model_path = work / f"turn-value-range-seed{seed}.json"
         training.export_model(current, model_path, seed, dataset.source_sha256, native.SCHEMA,
             "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")
+        counts = metrics["actionBundleObjective"]["familyCounts"]
         if (metrics["selectedStep"] != 600
-                or metrics["actionBundleObjective"]["bundleUpdates"] != 600 // settings["cadence"]):
+                or metrics["actionBundleObjective"]["bundleUpdates"] != 600 // settings["cadence"]
+                or len(counts) != len(bundles) or set(counts.values()) != {600 // settings["cadence"] // len(bundles)}):
             raise ValueError("matched checkpoint/cadence drift")
         rows.append(dict(seed=seed, model=str(model_path), modelSha256=sha256(model_path), metrics=metrics))
         atomic_json(work / "fit-report.json", dict(arm=args.arm, variants=rows, settings=settings, status="running"))
@@ -213,6 +234,13 @@ def main():
         if sha256(path) != getattr(a, name + "_sha256"): raise ValueError("pinned input changed")
         pinned[str(path)] = sha256(path)
     a.output, a.feature_cache = a.output.resolve(), a.feature_cache.resolve()
+    bundle_manifest = json.loads(a.bundles.read_text())
+    registry = bundle_manifest.get("trainingExtension")
+    if registry:
+        path = Path(registry["path"]).resolve()
+        if sha256(path) != registry["sha256"]: raise ValueError("training registry changed")
+        pinned[str(path)] = registry["sha256"]
+        pinned.update(json.loads(path.read_text())["pinnedInputs"])
     if not a.preflight_only and a.worker != "preflight":
         if (a.quality_decision is None or a.quality_decision_sha256 is None
                 or sha256(a.quality_decision) != a.quality_decision_sha256):
@@ -231,7 +259,7 @@ def main():
     if a.output.exists(): raise ValueError("never overwrite matched student stage")
     a.output.mkdir()
     for name in ("run_action_contrast_students.py", "action_contrast_dataset.py", "action_contrast_loss.py",
-                 "train_public_value_network.py", "validate_public_value_parity.py", "native_value_dataset.py"):
+                 "train_public_value_network.py", "validate_public_value_parity.py", "native_value_dataset.py", "training_coverage.py"):
         path = Path(__file__).with_name(name); pinned[str(path)] = sha256(path)
     record = dict(schema="matched-action-contrast-students-v1", status="running", releaseAccepted=False,
                   pinnedInputs=pinned, arms=[], maximumSeconds=7200, maximumFitMemoryBytes=6*1024**3)

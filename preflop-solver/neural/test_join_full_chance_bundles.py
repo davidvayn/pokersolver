@@ -26,6 +26,13 @@ class FullChanceDecisionTests(unittest.TestCase):
         qualities[2]["groups"][1]["sentinel64To256"]["firstTargetLossFromSecondBestBb"] = .02
         self.assertEqual(data_decision(qualities, "a" * 64)["status"], "inconclusive")
 
+    def test_new_training_ids_require_explicit_declaration(self):
+        qualities=self.fixture()
+        for q, root in zip(qualities,[100,101,102]): q["root"]=root
+        with self.assertRaises(ValueError): data_decision(qualities,"a"*64)
+        self.assertEqual(data_decision(qualities,"a"*64,expected_roots=[100,101,102])["status"],"ready_for_fit_preflight")
+        with self.assertRaises(ValueError): data_decision(qualities,"a"*64,expected_roots=[100,101,103])
+
     def test_missing_duplicate_unbounded_or_nonfinite_targets_rejected(self):
         with self.assertRaises(ValueError): data_decision(self.fixture()[:2], "a" * 64)
         for mutate in (lambda q: q.update(root=2), lambda q: q.update(all49Turns=False),

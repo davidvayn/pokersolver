@@ -15,9 +15,12 @@ from run_native_value_pilot import read_capture
 from run_native_value_preflight import atomic_json, sha256
 
 
-def data_decision(qualities, bundle_sha):
+def data_decision(qualities, bundle_sha, expected_roots=None):
     """Finite-teacher training screen. Exact chance integration is not GTO proof."""
-    if len(qualities) != 3 or sorted(q["root"] for q in qualities) != [2, 3, 4]:
+    expected = [2, 3, 4] if expected_roots is None else expected_roots
+    if expected not in ([2, 3, 4], [100, 101, 102], [2, 3, 4, 100, 101, 102]):
+        raise ValueError("unregistered target family set")
+    if len(qualities) != len(expected) or sorted(q["root"] for q in qualities) != expected:
         raise ValueError("exactly the three predeclared training families required")
     groups = []
     for quality in qualities:

@@ -18,6 +18,11 @@ class ContrastStudentContractTests(unittest.TestCase):
             module.budgeted_cadence([60.] * 3, 7200)
         for bad in ([1., 2.], [1., float("nan"), 2.], [1., 0., 2.]):
             with self.assertRaises(ValueError): module.budgeted_cadence(bad, 7200)
+        for seconds,expected in [(1.,4),(8.,20)]:
+            cadence,projected=module.budgeted_cadence([seconds]*6,7200)
+            self.assertEqual(cadence,expected)
+            self.assertEqual((600//cadence)%6,0)
+            self.assertLessEqual(projected,7200)
 
     def test_prepare_uses_existing_training_refresh_but_protects_frozen_eval_split(self):
         source, reference = {"source": True}, {"reference": True}
@@ -39,7 +44,7 @@ class ContrastStudentContractTests(unittest.TestCase):
                         primaryTrainingManifestSha256="a" * 64, releaseAccepted=False)
         with patch.object(module.sys, "argv", arguments), \
              patch.object(module, "sha256", return_value="a" * 64), \
-             patch.object(Path, "read_text", return_value=json.dumps(decision)), \
+             patch.object(Path, "read_text", side_effect=[json.dumps({}),json.dumps(decision)]), \
              patch.object(Path, "mkdir") as mkdir, patch.object(module, "prepare") as prepare:
             with self.assertRaisesRegex(ValueError, "inconclusive or mismatched"):
                 module.main()
