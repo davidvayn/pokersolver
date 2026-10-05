@@ -33,6 +33,18 @@ def checked_settings(path):
     return settings
 
 
+def check_pooling_control(control, serving_control_sha256, settings, corpus_sha256, bundles_sha256):
+    if (control.get("status") != "complete"
+            or control.get("schema") != "retained-initialization-contrast-pilot-v1"
+            or control.get("armDifference") != "serving_contrast_forward_vjp_only"
+            or control.get("servingControlSha256") != serving_control_sha256
+            or control.get("matmulPrecision") != "full-float32"
+            or control.get("fitSettings") != settings
+            or control.get("pinnedInputs", {}).get(str(Path(corpus_sha256[0]).resolve())) != corpus_sha256[1]
+            or control.get("pinnedInputs", {}).get(str(Path(bundles_sha256[0]).resolve())) != bundles_sha256[1]):
+        raise ValueError("pooling requires the frozen matched serving-aligned control")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ("binary", "corpus", "split-reference", "bundles", "quality-decision"):
@@ -55,6 +67,9 @@ def main():
     p.add_argument("--serving-control", type=Path)
     p.add_argument("--serving-control-sha256")
     p.add_argument("--serving-preflight", action="store_true")
+    p.add_argument("--pooling-control", type=Path)
+    p.add_argument("--pooling-control-sha256")
+    p.add_argument("--initial-native-preflight", action="store_true")
     a = p.parse_args()
     pinned = {}
     for name in ("binary", "corpus", "split_reference", "bundles", "quality_decision"):
@@ -168,6 +183,30 @@ def main():
         pinned[str(a.frozen_protection_settings)]=digest
     elif a.serving_control_sha256 is not None or a.serving_preflight:
         raise ValueError("serving options require the protected matched control")
+    pooling_control = None
+    if a.pooling_control is not None:
+        if (serving_control is None or a.pooling_control_sha256 is None
+                or sha256(a.pooling_control) != a.pooling_control_sha256):
+            raise ValueError("pooling requires a pinned serving-aligned matched control")
+        pooling_control = json.loads(a.pooling_control.read_text())
+        check_pooling_control(pooling_control, a.serving_control_sha256, settings,
+            (str(a.corpus), a.corpus_sha256), (str(a.bundles), a.bundles_sha256))
+        pinned[str(a.pooling_control.resolve())] = a.pooling_control_sha256
+        receipt = pooling_control["studentManifest"]; path = Path(receipt["path"])
+        if sha256(path) != receipt["sha256"]: raise ValueError("serving-aligned control pair changed")
+        pinned[str(path.resolve())] = receipt["sha256"]
+        pair = json.loads(path.read_text())
+        if (pair.get("status") != "complete" or sorted(r["seed"] for r in pair["predictions"]) != [10601,10602]
+                or any(not 0 <= r["maximumParityErrorBb"] <= .0001
+                    or r.get("fitMetrics",{}).get("actionBundleObjective",{}).get("servingAlignedContrast") is not True
+                    for r in pair["predictions"])):
+            raise ValueError("serving-aligned paired control must have parity and aligned training")
+        for row in pair["predictions"]:
+            pinned[str(Path(row["model"]).resolve())] = row["modelSha256"]
+        if pooling_control["protectionSettingsSha256"] != serving_control["protectionSettingsSha256"]:
+            raise ValueError("pooling must keep the frozen retention coefficient")
+    elif a.pooling_control_sha256 is not None or a.initial_native_preflight:
+        raise ValueError("pooling options require the matched aligned control")
     a.initial_models = {}
     for seed, digest in RETAINED.items():
         path = (a.retained_directory / f"turn-value-range-seed{seed}.json").resolve()
@@ -194,10 +233,14 @@ def main():
     if serving_control is not None:
         for name in ("serving_value_projection.py","serving_contrast_preflight.py"):
             path=Path(__file__).with_name(name); pinned[str(path)]=sha256(path)
+    if pooling_control is not None:
+        path=Path(__file__).with_name("pooled_initialization_preflight.py"); pinned[str(path)]=sha256(path)
     a.output, a.feature_cache = a.output.resolve(), a.feature_cache.resolve()
     a.arm = "C1"
     a.serving_aligned = serving_control is not None
-    if a.worker or a.condition_protection or a.serving_preflight:
+    a.architecture = "wide-pooled" if pooling_control is not None else "wide"
+    a.initialization_transform = "wide-to-wide-pooled-zero-columns-v1" if pooling_control is not None else None
+    if a.worker or a.condition_protection or a.serving_preflight or a.initial_native_preflight:
         if a.matmul_precision == "full-float32" and os.environ.get("MLX_ENABLE_TF32") != "0":
             raise ValueError("full-float32 must be selected before importing MLX in the worker")
         if a.condition_protection:
@@ -206,6 +249,10 @@ def main():
             return
         if a.serving_preflight:
             from serving_contrast_preflight import preflight
+            preflight(a)
+            return
+        if a.initial_native_preflight:
+            from pooled_initialization_preflight import preflight
             preflight(a)
             return
         if protection_control is not None:
@@ -225,13 +272,15 @@ def main():
     # Preserve the original settings bytes, not recondition lambda on a different model.
     (a.output / "fit-settings.json").write_bytes(a.settings.read_bytes())
     record = dict(schema="retained-initialization-contrast-pilot-v1", status="running",
-        releaseAccepted=False, armDifference=("serving_contrast_forward_vjp_only" if serving_control is not None
+        releaseAccepted=False, armDifference=("function_preserving_range_augmentation_only" if pooling_control is not None
+            else "serving_contrast_forward_vjp_only" if serving_control is not None
             else "retained_value_protection_only" if protection_control is not None
             else "matmul_precision_only" if warm_control is not None
             else "initial_weights_only_fresh_optimizer"), matmulPrecision=a.matmul_precision,
         warmControlSha256=a.warm_control_sha256,
         protectionControlSha256=a.protection_control_sha256,
         servingControlSha256=a.serving_control_sha256,
+        poolingControlSha256=a.pooling_control_sha256, initializationTransform=a.initialization_transform,
         scratchControlSha256=CONTROL_SHA, pinnedInputs=pinned, maximumSeconds=7200,
         maximumFitMemoryBytes=6*1024**3, fitSettings=settings)
     atomic_json(a.output / "manifest.json", record)
@@ -244,6 +293,10 @@ def main():
         env = {"MLX_ENABLE_TF32": "0"} if a.matmul_precision == "full-float32" else {}
         if a.matmul_precision == "default" and os.environ.get("MLX_ENABLE_TF32", "1") != "1":
             raise ValueError("default comparison requires the original backend-default precision")
+        if pooling_control is not None:
+            record["initialNativePreflightWorker"] = guarded(command + ["--initial-native-preflight"], env,
+                a.output/"initial-native-preflight-worker",1200,6*1024**3,stop)
+            pinned[str(a.output/"initial-native-parity.json")]=sha256(a.output/"initial-native-parity.json")
         if protection_control is not None:
             if serving_control is not None:
                 (a.output/"protection-settings.json").write_bytes(a.frozen_protection_settings.read_bytes())

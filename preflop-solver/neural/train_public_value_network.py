@@ -1859,6 +1859,7 @@ def train_one(
     bundle_objective: Any = None,
     checkpoint_callback: Any = None,
     initial_model: dict[str, Any] | None = None,
+    initialization_transform: str | None = None,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1869,7 +1870,9 @@ def train_one(
     initialization = None
     if initial_model is not None:
         from retained_initialization import import_retained_weights
-        initialization = import_retained_weights(model, initial_model, seed)
+        initialization = import_retained_weights(model, initial_model, seed, initialization_transform)
+    elif initialization_transform is not None:
+        raise ValueError("initialization transform requires retained weights")
     optimizer = optim.AdamW(
         learning_rate=learning_rate_schedule(
             learning_rate, learning_rate_final, steps

@@ -7,6 +7,8 @@ import numpy as np
 
 import native_value_dataset as native
 
+RANGE_AUGMENTATION = "wide-to-wide-pooled-zero-columns-v1"
+
 
 def native_import_prediction(model, contexts, queries, scales, boards, ranges, device=mx.cpu):
     """Imported towers with the *serving* clip/mask/projection, not train loss.
@@ -22,7 +24,16 @@ def native_import_prediction(model, contexts, queries, scales, boards, ranges, d
         context, query, scale = mx.array(contexts), mx.array(queries), mx.array(scales)
         embedding = model.query_tower(query)
         expanded = mx.broadcast_to(model.context_tower(context)[:, :, None, :], embedding.shape)
-        residual = model.head(mx.concatenate((expanded, embedding), axis=-1)).reshape((-1, 2, 1326))
+        if model.pools_exact_ranges:
+            weights = mx.array(np.asarray([r * native.compatible_masses(r) for r in ranges], dtype=np.float32))
+            reach = weights / mx.maximum(mx.sum(weights, axis=2, keepdims=True), 1e-9)
+            pooled = mx.sum(embedding * reach[:, :, :, None], axis=2)
+            own = mx.broadcast_to(pooled[:, :, None, :], embedding.shape)
+            opponent = mx.broadcast_to(mx.stack((pooled[:, 1], pooled[:, 0]), axis=1)[:, :, None, :], embedding.shape)
+            combined = mx.concatenate((expanded, own, opponent, embedding), axis=-1)
+        else:
+            combined = mx.concatenate((expanded, embedding), axis=-1)
+        residual = model.head(combined).reshape((-1, 2, 1326))
         equity = query[:, :, :, 94]
         baseline = (equity * context[:, :, 20, None]
             - (1-equity) * context[:, :, 19, None]) * 20.
@@ -31,10 +42,13 @@ def native_import_prediction(model, contexts, queries, scales, boards, ranges, d
         for values, board, weights in zip(raw, boards, ranges)])
 
 
-def import_retained_weights(model, payload: dict, expected_seed: int) -> dict:
+def import_retained_weights(model, payload: dict, expected_seed: int, transform: str | None = None) -> dict:
     # Deliberately narrow: unsupported encoders/architectures must not receive
     # an approximately compatible subset of another network's parameters.
-    if (model.architecture != "wide" or not model.use_ranges
+    if transform not in (None, RANGE_AUGMENTATION):
+        raise ValueError("unsupported retained initialization transform")
+    augment = transform == RANGE_AUGMENTATION
+    if (model.architecture != ("wide-pooled" if augment else "wide") or not model.use_ranges
             or model.value_normalization != "payoff-exposure"
             or model.feature_schema != "rank-suit-invariant-combo-query-v3"):
         raise ValueError("retained initialization supports only the pinned wide/v3 contract")
@@ -58,7 +72,11 @@ def import_retained_weights(model, payload: dict, expected_seed: int) -> dict:
             raise ValueError("retained tower layer count differs")
         for index, (layer, item) in enumerate(zip(layers, source)):
             activation = "linear" if name == "head" and index == len(layers)-1 else "relu"
-            output_size, input_size = layer.weight.shape
+            output_size, destination_size = layer.weight.shape
+            expand = augment and name == "head" and index == 0
+            input_size = 128 if expand else destination_size
+            if expand and (destination_size, output_size) != (256, 64):
+                raise ValueError("range augmentation requires exact wide-pooled head")
             if (not isinstance(item, dict) or item.get("activation") != activation
                     or item.get("inputSize") != input_size or item.get("outputSize") != output_size):
                 raise ValueError("retained layer shape/activation differs")
@@ -70,10 +88,16 @@ def import_retained_weights(model, payload: dict, expected_seed: int) -> dict:
             if (weights.shape != (input_size * output_size,) or biases.shape != (output_size,)
                     or not np.isfinite(weights).all() or not np.isfinite(biases).all()):
                 raise ValueError("retained parameter dimensions/nonfinite values")
-            pending.append((layer, weights.reshape(output_size, input_size), biases))
+            weights = weights.reshape(output_size, input_size)
+            if expand:
+                enlarged = np.zeros((64, 256), dtype=np.float32)
+                enlarged[:, :64] = weights[:, :64]
+                enlarged[:, 192:] = weights[:, 64:]
+                weights = enlarged
+            pending.append((layer, weights, biases))
     # Complete validation before mutation; no hybrid old/new model on rejection.
     for layer, weights, biases in pending:
         layer.weight, layer.bias = mx.array(weights), mx.array(biases)
     mx.eval(model.parameters())
-    return dict(seed=expected_seed, optimizerState="fresh_not_imported",
+    return dict(seed=expected_seed, optimizerState="fresh_not_imported", transform=transform,
         sourceValidationStatus=payload.get("sourceValidationStatus"), releaseAccepted=False)

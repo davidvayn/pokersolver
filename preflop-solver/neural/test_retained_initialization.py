@@ -6,11 +6,12 @@ import unittest
 from types import SimpleNamespace
 
 import mlx.core as mx
+import mlx.nn as nn
 import numpy as np
 
 import train_public_value_network as training
 import native_value_dataset as native
-from retained_initialization import import_retained_weights, native_import_prediction
+from retained_initialization import RANGE_AUGMENTATION, import_retained_weights, native_import_prediction
 from validate_public_value_parity import python_prediction
 
 
@@ -77,6 +78,63 @@ class RetainedInitializationTests(unittest.TestCase):
             projection_weights=ranges * native.compatible_masses(ranges[0])[None])
         expected = python_prediction(data, self.payload, 0, (context[0], query[0]))
         got = native_import_prediction(self.destination, context, query, np.array([20.]), board, ranges)
+        np.testing.assert_allclose(got[0], expected, atol=1e-5, rtol=0)
+
+    def test_function_preserving_range_augmentation_has_trainable_new_columns(self):
+        pooled = training.SharedComboValueNetwork(True, "wide-pooled", "payoff-exposure",
+            training.FEATURE_SCHEMA_EXACT_RUNOUT)
+        with self.assertRaises(ValueError):
+            import_retained_weights(pooled, self.payload, 10601)
+        with self.assertRaises(ValueError):
+            import_retained_weights(self.destination, self.payload, 10601, RANGE_AUGMENTATION)
+        receipt = import_retained_weights(pooled, self.payload, 10601, RANGE_AUGMENTATION)
+        self.assertEqual(receipt["transform"], RANGE_AUGMENTATION)
+        source = np.asarray(self.source.head.layers[0].weight)
+        target = np.asarray(pooled.head.layers[0].weight)
+        np.testing.assert_array_equal(target[:, :64], source[:, :64])
+        np.testing.assert_array_equal(target[:, 192:], source[:, 64:])
+        np.testing.assert_array_equal(target[:, 64:192], 0.)
+        rng = np.random.default_rng(27)
+        context = mx.array(rng.random((1, 2, 417), dtype=np.float32))
+        query = mx.array(rng.random((1, 2, 1326, 124), dtype=np.float32))
+        reach = mx.array(rng.random((1, 2, 1326), dtype=np.float32))
+        scales = mx.array([20.])
+        with mx.stream(mx.cpu):
+            np.testing.assert_allclose(np.asarray(pooled.raw_values(context, query, reach, scales)),
+                np.asarray(self.source.raw_values(context, query, reach, scales)), atol=1e-6, rtol=0)
+            np.testing.assert_allclose(np.asarray(pooled(context, query, reach, scales)),
+                np.asarray(self.source(context, query, reach, scales)), atol=1e-6, rtol=0)
+            _, gradient = nn.value_and_grad(pooled, lambda model: mx.sum(
+                model.raw_values(context, query, reach, scales)))(pooled)
+            new_columns = np.asarray(gradient["head"]["layers"][0]["weight"])[:, 64:192]
+        self.assertGreater(float(np.linalg.norm(new_columns)), 0)
+        self.assertTrue(np.isfinite(new_columns).all())
+        before = training.tower_payload(pooled.context_tower, "relu", "relu")
+        bad = copy.deepcopy(self.payload); bad["head"][-1]["biases"][0] = float("nan")
+        with self.assertRaises(ValueError):
+            import_retained_weights(pooled, bad, 10601, RANGE_AUGMENTATION)
+        self.assertEqual(before, training.tower_payload(pooled.context_tower, "relu", "relu"))
+
+    def test_pooled_import_serving_wrapper_matches_numpy_with_active_pool_columns(self):
+        pooled = training.SharedComboValueNetwork(True, "wide-pooled", "payoff-exposure",
+            training.FEATURE_SCHEMA_EXACT_RUNOUT)
+        import_retained_weights(pooled, self.payload, 10601, RANGE_AUGMENTATION)
+        weight = np.asarray(pooled.head.layers[0].weight).copy()
+        weight[:, 64:192] = .001
+        pooled.head.layers[0].weight = mx.array(weight)
+        rng = np.random.default_rng(29)
+        context = rng.random((1, 2, 417), dtype=np.float32); context[:, :, 19:21] = .375
+        query = rng.random((1, 2, 1326, 124), dtype=np.float32)
+        board = np.array([[0, 5, 10, 15]])
+        ranges = rng.random((1, 2, 1326), dtype=np.float32) * native.legal_combos(board[0])
+        data = SimpleNamespace(boards=board, ranges=ranges, invested=np.array([[7.5, 7.5]]),
+            projection_weights=(ranges * native.compatible_masses(ranges[0])[None]).astype(np.float32))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pooled.json"
+            training.export_model(pooled, path, 10601, "a"*64, native.SCHEMA,
+                "research_only", "b"*64, "payoff-exposure")
+            expected = python_prediction(data, json.loads(path.read_text()), 0, (context[0], query[0]))
+        got = native_import_prediction(pooled, context, query, np.array([20.]), board, ranges)
         np.testing.assert_allclose(got[0], expected, atol=1e-5, rtol=0)
 
 

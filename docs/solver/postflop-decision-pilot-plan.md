@@ -699,3 +699,47 @@ Keep the two-native-worker, 6GiB fitting, pressure and disk guards. No paid
 compute, serving changes or automatic activation. If alignment alone fails,
 use targeted own-policy diagnostics before choosing a range-representation or
 target-coverage intervention; isolated correct gradients cannot certify GTO.
+
+## 15. Function-preserving range augmentation (October 5)
+
+Section 14 fixed contrast-forward parity (maximum 0.0000001413bb), but its first
+control regressed retained by 0.065077bb and was rejected. Cached own-policy
+replay isolates the large after-check ranking error: 0.269730bb local ranking
+loss and 0.748897bb contrast RMSE; all-in branches match exactly. This motivates
+a representation test, not another unchanged fit. It does not prove that
+representation rather than labels/coverage is the dominant cause.
+
+1. Add an explicit research-only wide-to-wide-pooled transfer. Validate the
+   original v4 wide/v3/20bb contract completely before mutation. Keep both
+   encoder towers, biases and final head identical. Expand the first head's
+   128 inputs to 256: copy context columns to 0:64 and query columns to
+   192:256, with new own/opponent pooled columns 64:192 exactly zero. This
+   preserves the original function, with newly available trainable range
+   inputs. Unsupported transforms must fail closed.
+2. Prove raw/training/serving forward equivalence, zero added columns, nonzero
+   gradients into those columns, and independent NumPy/native v5 export parity
+   before fitting. Native already supports this research v5 contract. Use
+   joint-reach-weighted pooling with the existing native 1e-9 denominator.
+3. Change only this representation relative to the completed aligned arm:
+   frozen retained source weights, seeds, data/split, six bundles, coefficients
+   1.883306130920223 and 0.42899030580264763, full float32, fresh AdamW, 600
+   fixed steps, cadence/chunk 4 and identical reference/anchor sampling.
+   Preserve the non-pooled reference network; never train on consumed controls.
+4. Preflight the largest TRAIN family and full-615 initial exported v5 parity;
+   require <=0.0001bb and projected two-seed fitting/parity <=2h, 6GiB worker,
+   two-native-worker response and existing memory/disk guards.
+5. Run full-615 finished parity and control-first actual-policy screening. The
+   retained regression limit remains 0.01bb; a first failed completed case
+   stops remaining work. If all matched controls improve credibly, expand to
+   the broader frozen screen before any full-hand qualification. No promotion
+   from value RMSE or an isolated conditional root.
+6. If this fails, use the resulting frozen replay to discriminate label/profile
+   mismatch and off-policy belief coverage; do not repeat earlier scratch
+   pooling or increase unchanged iterations automatically.
+
+Research: [Net2Net](https://arxiv.org/abs/1511.05641) motivates function-preserving
+transfer; [Deep Sets](https://arxiv.org/abs/1703.06114) motivates learned
+permutation-invariant aggregation. This weighted finite representation and
+zero-column transfer are adaptations, not the papers' poker results or GTO
+guarantees. Earlier scratch pooling gave mixed facing gains and worse root
+rankings; retaining the starting function is the specific new hypothesis.
