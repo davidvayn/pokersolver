@@ -625,3 +625,77 @@ as old strengths, so only native actual-policy results justify advancement.
 [DeepStack](https://arxiv.org/abs/1701.01724) motivates accurate range-conditioned
 continuation values; its continual-re-solving guarantees do not transfer to
 our current unsafeguarded route merely because a local fit improves.
+
+## 13. Frozen-output retention constraint (October 4, in progress)
+
+Both initialization and full-float32 arms failed the first audited control.
+Full precision improved that one conditional response gain from 0.359659bb to
+0.347476bb, but retained remains 0.278335bb. Stop both screens; there are no
+paired means or new full-game exploitability results. Keep full float32 for
+the next comparison because it removes the demonstrated arithmetic mismatch.
+
+Change only frozen-output retention relative to the completed full-float32
+pair. Anchor original-prefix (`group < 508`) TRAIN states with positive joint
+reach; exclude tuning/holdout, appended states and all new board shards. Freeze
+the corresponding retained network's normalized outputs. Apply the same
+Huber/depth auxiliary form using authentic joint-reach weights, not a new
+solver target. Do not replace native labels or anchor zero-joint states.
+
+Use a separate deterministic RNG so the existing training draws stay identical.
+Add an eight-state anchor gradient every four steps, combined into the existing
+single optimizer update: 150 anchor updates and 1,200 draws per fixed 600-step
+seed. The six native calibration/contrast bundles still receive 25 updates
+each. Do not retain the reference network as a live trainable submodule.
+
+Before fitting, choose one common coefficient from frozen TRAIN gradients at
+the full-float32 seed-10601 step-200 checkpoint: 0.5 times the learning-gradient
+norm divided by the anchor-gradient norm, capped at 32. Conditioning includes
+the ordinary loss and equal-family mean calibrated contrast gradients; no
+response scores, holdout errors or checkpoint selection enter this rule. Pin
+the checkpoint and resulting settings before fitting either seed.
+
+Run full-corpus parity and the same automatically rejecting actual-policy
+controls. If useful, expand the policy screen; otherwise reject the retention
+arm and investigate a function-preserving richer range representation. No
+automatic promotion or longer unchanged training run. Existing local resource
+caps apply; no paid compute. This constraint tests retention, not equilibrium
+safety, and may preserve the retained model's own mistakes.
+
+## 14. Align contrast optimization with bounded serving (October 4)
+
+Section 13 completed all fits/parity but failed the first audited control:
+0.350971bb versus retained 0.278335bb. Do not tune its coefficient against
+that response or repeat an unchanged fit. The subsequent hash-matched TRAIN
+probe measured optimization/serving action-contrast RMSE as high as 0.198796bb,
+authentic value differences up to 0.636126bb, and local ranking changes.
+Serving occasionally improves rankings, so this is a contract discrepancy,
+not proof that it explains the policy failure.
+
+1. Expose the unchanged network's raw pre-projection values without altering
+   its existing value-calibration forward or exported inference contract.
+2. Implement the same legal-card mask, +/-20bb clipping, native 1e-9 joint
+   denominator and bounded zero-sum correction used by serving. Vectorize the
+   80-step bisection over a complete family to avoid thousands of Python loops.
+3. Use its implicit derivative with respect to raw values, including both
+   clips and the cross-player dependence of the weighted target. Bisection's
+   discrete branches themselves are not a useful autodiff program. Verify
+   native forward parity, zero/tiny joint cases, directional finite differences
+   and the real two-pass network-parameter gradient before fitting.
+4. Change only the contrast forward/VJP relative to Section 13. Retain all
+   ordinary/calibration losses, data/split, architecture, seeds, full float32,
+   600 fixed steps, native bundle cadence and coefficients. Reuse its frozen
+   retention settings (0.42899030580264763); do not recondition them. Raw value
+   calibration remains active so a clipped auxiliary cannot prevent recovery
+   of oversaturated predictions.
+5. Cost/parity-preflight the largest TRAIN family at retained initialization.
+   Require complete private-vector agreement within 0.0001bb and a projected
+   pair below two hours. Do not quietly lower counts or alter the matched game.
+6. Verify all-615 export parity, then the same control-first actual-policy
+   screen with automatic rejection. Verify the original training/serving
+   mismatch is removed *for the new contrast forward*, not by pretending the
+   intentionally unbounded calibration forward changed.
+
+Keep the two-native-worker, 6GiB fitting, pressure and disk guards. No paid
+compute, serving changes or automatic activation. If alignment alone fails,
+use targeted own-policy diagnostics before choosing a range-representation or
+target-coverage intervention; isolated correct gradients cannot certify GTO.

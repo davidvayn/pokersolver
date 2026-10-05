@@ -464,7 +464,7 @@ class SharedComboValueNetwork(nn.Module):
         else:
             raise ValueError(f"unknown shared-combo architecture {architecture}")
 
-    def __call__(
+    def raw_values(
         self,
         context: mx.array,
         queries: mx.array,
@@ -540,12 +540,21 @@ class SharedComboValueNetwork(nn.Module):
             residual = self.head(combined).reshape(
                 (combined.shape[0], 2, COMBO_COUNT)
             )
-        raw = baseline + residual
+        return baseline + residual
+
+    def __call__(
+        self,
+        context: mx.array,
+        queries: mx.array,
+        projection_weights: mx.array,
+        value_scales: mx.array,
+    ) -> mx.array:
+        raw = self.raw_values(context, queries, projection_weights, value_scales)
         joint_mass = mx.maximum(mx.sum(projection_weights[:, 0, :], axis=1), 1e-8)
         aggregate = mx.sum(raw * projection_weights, axis=2) / joint_mass[:, None]
         residual = mx.sum(aggregate, axis=1)
         projected = raw - residual[:, None, None] / 2.0
-        return projected.reshape((combined.shape[0], COMBO_COUNT * 2))
+        return projected.reshape((raw.shape[0], COMBO_COUNT * 2))
 
 
 def parse_args() -> argparse.Namespace:

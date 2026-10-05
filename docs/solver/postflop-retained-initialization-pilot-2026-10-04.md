@@ -57,7 +57,7 @@ Immutable local artifacts, under `preflop-solver/neural/`:
 - Rejected response: `runs/local-retained-contrast-response-20261004-c/manifest.json`,
   `d63c86c2e1a039c55cd34a1c04ff032c055bd9295898127ebec074bf4c503616`.
 
-## Isolated full-float32 comparison: running
+## Isolated full-float32 comparison: completed, rejected
 
 The retained network on cached state 0 differs from independent NumPy by
 0.015009bb under default MLX GPU inference. Errors exist before projection:
@@ -71,20 +71,80 @@ and the launch-time `MLX_ENABLE_TF32=0` switch. The next pair changes only that
 training arithmetic relative to the completed warm pair. Inputs, retained
 weights, loss, coefficient, batch draws, schedule and checkpoint stay frozen.
 Its imported GPU prediction must match NumPy before fitting; no tolerance is
-relaxed. Worker environment records the switch before MLX imports. The same
-full-615 export verification and automatic control-first rejection apply.
+relaxed. Worker environment records the switch before MLX imports.
 
-If precision alone fails, proceed to a TRAIN-only frozen-output retention
+GPU import/NumPy errors are 0.000003906bb/0.000004063bb, and finished full-615
+NumPy/native errors are 0.000006398bb/0.000006359bb. Both seeds completed 600
+steps with holdout RMSE 1.199262bb/1.258429bb. Fit plus parity took 286.0 seconds
+(19% longer than default arithmetic), with a 3.56GiB peak worker footprint.
+
+The first audited high-rainbow control returns 0.347476bb conditional response
+gain: 0.012182bb better than default-arithmetic warm-start, but 0.069141bb
+worse than retained. **Reject and stop automatically**. Remaining cases and
+paired means are unmeasured. Precision matters to numerical fidelity but did
+not solve the dominant policy limitation on this consumed control.
+
+Full-float32 fit manifest:
+`runs/local-retained-contrast-fp32-students-20261004-a/manifest.json`, SHA-256
+`dfd176542bf03a80ae44d4406f57c333a72aefb09f563ac71a9be251d150683b`;
+exported pair `C1/manifest.json`,
+`a20a205e41b6ee00932367e6f27c1ea5ffb095484a1251026fec97a47a306f55`.
+
+Proceed to a TRAIN-only frozen-output retention
 constraint, then representation/target diagnosis. [Learning without Forgetting](https://arxiv.org/abs/1606.09282)
 supports preserving prior outputs as a regularizer; it does not make those
 outputs ground truth or provide poker re-solving safety. The prior
 sampling-only replay experiment already failed and is not being repeated.
 
+The next pilot freezes old predictions only on original positive-joint TRAIN
+states. A separate RNG draws eight anchors every four steps; native targets,
+six-family contrast objective and ordinary training draws remain unchanged.
+Its common coefficient is conditioned on frozen step-200 TRAIN gradients, not
+evaluation scores. Full float32 removes the diagnosed arithmetic mismatch.
+This is Section 13 of the plan, not a repeat of sampling-only replay.
+
+## Frozen-output retention: completed, rejected
+
+TRAIN-only conditioning fixed coefficient 0.42899030580264763 from the
+predeclared full-float32 seed-10601 step-200 checkpoint. Both seeds trained to
+600 with 150 protection updates, 1,200 anchor draws and 366 eligible original
+positive-joint TRAIN states. Existing native bundles still received 25 updates
+each. Full-615 NumPy/native errors were 0.000006216bb/0.000005680bb. Fit,
+conditioning and parity completed in 427.0 seconds.
+
+The first audited high-rainbow control was 0.350971bb conditional response
+gain versus 0.278335bb retained. **Rejected and automatically stopped**;
+remaining cases and paired means are unmeasured. It did not fix the regression.
+Fit manifest `runs/local-retained-protection-students-20261004-a/manifest.json`
+has SHA-256 `93b03e66203e219727ef6266ae69024573833953731fc02c01c4fb8ce1c593b3`.
+
+## Training/serving action-value contract diagnosis
+
+The complete, frozen six-family/two-seed probe uses unchanged model weights,
+features, private cards and action backups. It compares the unbounded training
+projection with the native bounded serving wrapper; no fitting or new labels.
+Largest action-contrast discrepancy is 0.198796bb, largest authentic value
+RMSE is 0.636126bb. On one old family, reached-hand best-action agreement
+between the two forwards falls to 86.1%. Some serving rankings improve over
+raw training rankings; this does not establish causation or an exploitability
+decrease. It does show the auxiliary optimizes a different value function.
+
+Proceed with Section 14's serving-aligned contrast forward and implicit VJP.
+The new vectorized projector matches the native reference, including clipping,
+zero-joint and below-denominator-floor cases. Directional finite differences
+and the actual two-pass parameter-gradient test pass. Keep raw calibration and
+all other fit settings unchanged; test policy outcomes before accepting it.
+
 ## Verification so far
 
-63 targeted Python tests pass, including exact weight/forward round trips,
+71 targeted Python tests pass, including exact weight/forward round trips,
 fail-before-mutation cases, clipping-aware native wrapper parity, frozen fit
 settings, original trainer paths, action-bundle gradients, coverage and early
 rejection. Existing constant-vector correlation fixtures emit expected NumPy
 warnings. `git diff --check` passes. Native and browser code are unchanged;
 native inference and policy evaluation use the hash-qualified existing binary.
+
+The serving-aligned preflight passed on eight complete private vectors of the
+largest 441-state TRAIN bundle: maximum serving difference 0.000003329bb and
+projected two-seed cost 1,047 seconds. The fixed 600-step pair is running; this
+cost projection and correct gradients are not evidence of improved play.
