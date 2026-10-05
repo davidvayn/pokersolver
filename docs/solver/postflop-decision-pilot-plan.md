@@ -1070,3 +1070,67 @@ and `first-control/manifest.json`. Binary SHA-256:
 `287b52cbf0a01a867deddb316dffe64f7ae0729565976e7dcbcf814e890f8016`.
 Default parity receipt SHA-256:
 `85c18fea5b0616c40d87fc5b7465948a1564f97e10f07ce7808ac03ba32bd31f`.
+
+Section 22 completed and is **rejected**, without expansion to other cases.
+The full49-turn audited learned-tail control scores1.592275bb and the native8
+hybrid scores1.070927bb. Native finishing improves the weakened matched tail
+control by0.521348bb, but regresses the original learned32 average (0.519529bb)
+by0.551397bb, and the native32 reference (0.187585bb) by0.883342bb. It retains
+none of the original native benefit. Construction took499.527s at661,521,224
+bytes sampled footprint, 25.53% of the cached all-native construction time;
+passing that cost target does not rescue its failed quality screen. Complete
+construction/evaluation/audits took3954.4s. No model or generator is accepted.
+
+The rebuilt default learned32 policy additionally reproduces its original
+candidate exactly (`f1faa095fc4b905786d446f32bf9927db645fb8008258187e49b33d812e1fe4d`),
+so default solver drift does not explain the averaging intervention's failure.
+Cached action audits show BB's opening-decision local loss increasing from
+0.389613bb (original full average) to1.465955bb (learned tail-only average).
+These local losses are not additive exploitability components or full-game
+bb/hand. Do not retain the truncated-average schedule or run longer hybrids
+unchanged. Native eight-update finishing partially helps, but does not establish
+whether bad inherited regrets, noisy late draws or continuation approximation
+accounts for the remaining regression.
+
+Completed manifest SHA-256:
+`84000457d3211f142c05eeb10c0126f8bd436ea570c9bc86265fdaa8caf65dd7`.
+Native8 candidate SHA-256:
+`d140d603b7d0e61a7adfe8be17297e149e33878e7a35cf711ee388c384f36ab1`;
+native8 response SHA-256:
+`741b5423e2f095bf41b6ad79c8a543398867e7b66891528d0deaef560dacb1e9`.
+
+## 23. Measure exact parallel native continuation construction
+
+The original all-native64, full-average policies remain stronger than the
+learned32 policies on the four consumed matched cases. Native4 and late-native8
+failed; do not trade accuracy or truncate averaging again. The existing parallel
+leaf evaluator solves independent continuation queries from a frozen flop
+strategy, then applies backups in the original order. Test implementation cost
+without changing the strategy computation.
+
+1. Pin the unchanged `287b52c` binary, all Rust sources, original limped root,
+   seed 100101 and matched32 native candidate. No inherited neural model or
+   tail/averaging settings. Use turn64, one uniform turn sample, no baseline
+   and ordinary full averaging. Only leaf workers changes from one to four.
+2. Start with eight flop updates under a 4GiB whole-process memory guard and
+   900s limit. Stop for sustained memory pressure or disk below 20GiB. This
+   stage measures cost and memory only, not strategy quality. Require exact
+   parity with the completed serial eight-update preflight as well.
+3. If the eight-update measurement projects 32 updates below 1800s with a
+   25% margin, construct 32 with four workers under the same 4GiB guard.
+   Require byte-identical output to the cached serial32 candidate
+   `ba4d571c0e9bd7820a0be03083a449a38fdb4adf3b8ad95e3911bf0d5f9d7710`.
+   A parity failure stops the path. A cost failure does not justify more workers
+   or relaxed guards automatically. Total preflight limit: 3000s.
+4. Identical candidate bytes reuse the existing complete all49 response and
+   independent audit; do not recompute the same policy's quality. Cached timing
+   comparisons are hardware-state-sensitive and not a guaranteed speedup.
+5. Only after useful cost/parity evidence, preregister an all-native32 versus
+   all-native64 flop-update comparison with full averaging. Keep the inner and
+   played continuation budgets at 64. Add the explicit research CLI budget if
+   needed, test it and prove default parity before training. Require meaningful
+   actual response improvement, then another seed/root, before full-hand work.
+
+This sequence targets the measured continuation bottleneck without another
+neural-loss grid. No paid compute, model promotion or full-game exploitability
+claim follows from a cost preflight.

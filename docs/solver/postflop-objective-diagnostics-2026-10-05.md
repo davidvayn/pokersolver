@@ -215,3 +215,43 @@ Verification before the export addition: `cargo test --release --
 jobs skipped. The new canonical-export test and 46 targeted Python tests also
 passed. The expanded native continuation suite passed all40 runnable tests,
 with 13 explicit research jobs skipped.
+
+## Late-native allocation: accurate finishing cannot rescue this short tail
+
+The matched 32-update limped seed100101 comparison is complete. Both arms omit
+rounds1–24 from the average; one retains learned leaves and the other switches
+to native64 leaves for rounds25–32. Sampling, legal actions and regret training
+are unchanged. The rebuilt default learned32 candidate matches the cached
+original byte-for-byte, independently of the learned128 default parity check.
+
+Learned-tail response gain is1.592275bb; native8-tail gain is1.070927bb, with
+all49 legal turns and successful independent audits for both. The hybrid's
+0.521348bb improvement over its tail control is misleading without the original
+references: learned32/full-average is0.519529bb and native32/full-average is
+0.187585bb. **Reject the hybrid**; the 499.527s construction (25.53% of cached
+native32 cost) does not compensate for worse actions. No paired confirmation,
+generator acceptance, serving promotion or full-game improvement follows.
+
+Reusing the cached packets takes under two seconds per action audit. The
+learned tail increases BB's opening local deviation loss from0.389613bb to
+1.465955bb. Its aggregate initial check frequency drops40.38%→23.14%, but
+"check more" is not a valid replacement strategy: the loss is hand-specific.
+Changing only flop actions recovers1.399458/1.646514bb for the two seats,
+compared with full conditional gains1.492164/1.692385bb. These restricted
+responses and local diagnostics must not be added across overlapping nodes or
+relabelled as full-game exploitability.
+
+Discarding the early averages is harmful on this controlled case. The data do
+not isolate the remaining hybrid error between inherited approximate regrets,
+late chance-sampling noise and eight accurate updates being insufficient.
+Do not sweep averaging windows or repeat the failed student fits. The separate
+native copy-reduction patch passed363 unit/nine CLI tests and two exact-export
+checks in an isolated checkout. Its separate old/new/old cost replay was
+inconclusive: 18.57% control drift exceeded the 15% timing-stability limit.
+The nominal 7.33% reduction is not accepted; the source patch is parked,
+not retained. See [the cost report](native-borrowed-reaches-2026-10-05.md).
+
+Completed comparison manifest SHA-256:
+`84000457d3211f142c05eeb10c0126f8bd436ea570c9bc86265fdaa8caf65dd7`.
+The raw candidates, all98 packets, audit receipts and cached action reports
+remain under `runs/local-late-native-tail-20261005-a/`.
