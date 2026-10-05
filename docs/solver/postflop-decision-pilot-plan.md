@@ -947,4 +947,58 @@ Step 2's first frozen packet passed exact parity, using 621MB buffered versus
 first step-4 launch caught noncanonical Python candidate JSON before solving;
 step 3 now has a Rust exporter and a regression test. This is a research
 controller fix, not a website or solver-policy improvement. The updated
-binary's packet parity passed and the complete first-control screen is running.
+binary's packet parity passed. The first-control screen completed all49 turns
+and its independent JS audit in 1817.4s. Native4 response gain is 0.542281bb,
+versus native64 0.187585bb and learned32 0.519529bb. It regresses native64 by
+0.354696bb, well above the 0.05bb tolerance, and retains none of the measured
+native benefit. **Rejected: do not construct/evaluate the other unchanged
+native4 cases or use native4 as an accepted label generator.** Its speedup
+does not offset this quality failure. Streaming hash memory savings and exact
+packet parity remain valid independent implementation improvements.
+
+## 21. Test counterfactual calibration weighting, not invented reach
+
+While the first native4 quality control runs, a six-second saved-prediction
+probe inspected only the existing 474 TRAIN states, using the original 284
+split reference and refreshed-TRAIN split. Both serving-aligned seeds have
+authentic RMSE 0.856532/0.889458bb versus zero-own-reach completed-value RMSE
+2.497332/2.474706bb. Zero-own loss weight is already positive: the current
+calibration uses a 10% uniform-legal / 90% authentic mixture. No missing-label
+or absent-supervision bug is claimed. The zero-own target differs from the
+frozen-profile target by 3.732402bb RMSE, so changing labels to profile values
+would erase the existing counterfactual-completion contract, not fix it.
+
+1. Finish section 20's first quality result before launching another fit.
+   Keep both result and raw candidate regardless of acceptance.
+2. Freeze one intervention: increase the existing uniform-legal calibration
+   fraction from 0.1 to 0.5, for primary and bundle calibration alike. Keep
+   actual ranges, projection/pooling weights, labels, context/query features,
+   chance integration and contrast coefficients unchanged. Do not invent
+   positive reach or add another auxiliary. Legal zero-own hands get more
+   loss weight; blocked cards still get zero weight.
+3. Require the exact completed serving-aligned wide control and its retained
+   initialization/retention coefficient. Keep both seeds, fresh AdamW,
+   full-float32, 600 fixed steps, 474/69/72 split, six-family cadence/chunks,
+   draw streams and all49 affine targets. Do not combine pooled transfer,
+   data aggregation or ranking loss with this intervention.
+4. Use the existing two-hour fit/parity controller, 6GiB fit guard, system
+   pressure stop and 20GiB disk reserve. Verify all615 native/NumPy predictions;
+   record the changed loss distribution explicitly. A unit test must prove
+   that only loss weights change at the real dataset-loading seam.
+5. Reuse the original control-first actual-policy test with native64 played
+   continuations and all49 turns, independent JS audit and automatic rejection
+   above the existing 0.01bb per-case regression tolerance. Require complete
+   paired controls before interpreting the existing >=0.02bb mean-improvement
+   criterion; also compare against the completed 10% aligned control where
+   available. A partial pass or lower TRAIN/value error is not acceptance.
+6. If rejected, stop that configuration. Do not tune the fraction repeatedly
+   on these consumed controls. If promising, evaluate other predeclared roots
+   and then a pinned full-hand candidate; no website promotion follows from
+   this diagnostic pilot alone.
+
+Research: [Value Functions for Depth-Limited Solving](https://arxiv.org/abs/1906.06412)
+distinguishes counterfactual values used by DL-CFR from public-state aggregate
+values. Its experiments did not establish that range-weighted losses improve
+playing strength. Our weighting change is a falsifiable empirical hypothesis
+motivated by measured TRAIN error, not a research-backed guarantee or a new
+exploitability metric. No paid compute is authorized.

@@ -44,7 +44,9 @@ def preflight(args):
         maximumForwardDifferenceBb=error, parityStates=8, privateQueriesPerState=2652,
         largestBundleStates=len(d.targets), wholeFamilyGradientSeconds=seconds,
         projectedPairSeconds=projected, gradientReport=gradient_report,
-        servingAlignedContrast=True, ordinaryValueCalibrationUnchanged=True,
+        servingAlignedContrast=True,
+        nativeCounterfactualFraction=getattr(args, "native_counterfactual_fraction", .1),
+        ordinaryValueCalibrationUnchanged=getattr(args, "native_counterfactual_fraction", .1) == .1,
         fixedFinalStep=600,cadence=4,chunkSize=4)
     atomic_json(args.output/"serving-preflight.json",result)
     print(json.dumps(dict(event="serving-contrast-preflight",maximumForwardDifferenceBb=error,

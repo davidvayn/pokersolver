@@ -45,6 +45,15 @@ def check_pooling_control(control, serving_control_sha256, settings, corpus_sha2
         raise ValueError("pooling requires the frozen matched serving-aligned control")
 
 
+def check_counterfactual_control(control, serving_control_sha256, settings,
+                                corpus_sha256, bundles_sha256, protection_sha256):
+    check_pooling_control(control, serving_control_sha256, settings, corpus_sha256, bundles_sha256)
+    if (control.get("nativeCounterfactualFraction", .1) != .1
+            or control.get("protectionSettingsSha256") != protection_sha256
+            or control.get("initializationTransform") is not None):
+        raise ValueError("counterfactual weighting requires unchanged 10% wide control and retention")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ("binary", "corpus", "split-reference", "bundles", "quality-decision"):
@@ -70,6 +79,9 @@ def main():
     p.add_argument("--pooling-control", type=Path)
     p.add_argument("--pooling-control-sha256")
     p.add_argument("--initial-native-preflight", action="store_true")
+    p.add_argument("--native-counterfactual-fraction", type=float, choices=(.1, .5), default=.1)
+    p.add_argument("--counterfactual-control", type=Path)
+    p.add_argument("--counterfactual-control-sha256")
     a = p.parse_args()
     pinned = {}
     for name in ("binary", "corpus", "split_reference", "bundles", "quality_decision"):
@@ -207,6 +219,30 @@ def main():
             raise ValueError("pooling must keep the frozen retention coefficient")
     elif a.pooling_control_sha256 is not None or a.initial_native_preflight:
         raise ValueError("pooling options require the matched aligned control")
+    if a.native_counterfactual_fraction != .1:
+        if (serving_control is None or pooling_control is not None
+                or a.counterfactual_control is None or a.counterfactual_control_sha256 is None
+                or sha256(a.counterfactual_control) != a.counterfactual_control_sha256):
+            raise ValueError("50% weighting requires a pinned aligned wide control; cannot combine interventions")
+        counterfactual_control = json.loads(a.counterfactual_control.read_text())
+        check_counterfactual_control(counterfactual_control, a.serving_control_sha256, settings,
+            (str(a.corpus), a.corpus_sha256), (str(a.bundles), a.bundles_sha256),
+            serving_control["protectionSettingsSha256"])
+        pinned[str(a.counterfactual_control.resolve())] = a.counterfactual_control_sha256
+        receipt = counterfactual_control["studentManifest"]; path = Path(receipt["path"])
+        if sha256(path) != receipt["sha256"]: raise ValueError("10% aligned student pair changed")
+        pair = json.loads(path.read_text())
+        if (pair.get("status") != "complete"
+                or sorted(row["seed"] for row in pair["predictions"]) != [10601, 10602]
+                or any(not 0 <= row["maximumParityErrorBb"] <= .0001
+                       or row.get("fitMetrics", {}).get("actionBundleObjective", {}).get("servingAlignedContrast") is not True
+                       for row in pair["predictions"])):
+            raise ValueError("10% control must have complete paired native parity and aligned training")
+        pinned[str(path.resolve())] = receipt["sha256"]
+        for row in pair["predictions"]:
+            pinned[str(Path(row["model"]).resolve())] = row["modelSha256"]
+    elif a.counterfactual_control is not None or a.counterfactual_control_sha256 is not None:
+        raise ValueError("counterfactual control is only for the 50% weighting intervention")
     a.initial_models = {}
     for seed, digest in RETAINED.items():
         path = (a.retained_directory / f"turn-value-range-seed{seed}.json").resolve()
@@ -272,7 +308,8 @@ def main():
     # Preserve the original settings bytes, not recondition lambda on a different model.
     (a.output / "fit-settings.json").write_bytes(a.settings.read_bytes())
     record = dict(schema="retained-initialization-contrast-pilot-v1", status="running",
-        releaseAccepted=False, armDifference=("function_preserving_range_augmentation_only" if pooling_control is not None
+        releaseAccepted=False, armDifference=("counterfactual_calibration_weight_only" if a.native_counterfactual_fraction != .1
+            else "function_preserving_range_augmentation_only" if pooling_control is not None
             else "serving_contrast_forward_vjp_only" if serving_control is not None
             else "retained_value_protection_only" if protection_control is not None
             else "matmul_precision_only" if warm_control is not None
@@ -281,6 +318,8 @@ def main():
         protectionControlSha256=a.protection_control_sha256,
         servingControlSha256=a.serving_control_sha256,
         poolingControlSha256=a.pooling_control_sha256, initializationTransform=a.initialization_transform,
+        nativeCounterfactualFraction=a.native_counterfactual_fraction,
+        counterfactualControlSha256=a.counterfactual_control_sha256,
         scratchControlSha256=CONTROL_SHA, pinnedInputs=pinned, maximumSeconds=7200,
         maximumFitMemoryBytes=6*1024**3, fitSettings=settings)
     atomic_json(a.output / "manifest.json", record)

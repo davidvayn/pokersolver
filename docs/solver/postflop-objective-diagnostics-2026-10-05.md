@@ -137,10 +137,43 @@ hashes, non-stronger budgets and excessive budgets. The identity check was
 not relaxed. The raw candidate is still immutable; a new canonical evaluation
 candidate uses native64 played continuations.
 
-A staged first-control evaluation is running across all49 turns with the
-independent JavaScript audit and unchanged cost/quality rejection rules.
-Its runner supports identity-matching interrupted-job recovery. Passing one
-control cannot qualify the other seed/root or full-game exploitability.
+The staged first-control evaluation completed all49 turns and the independent
+JavaScript audit in 1817.4s. Native4 response gain was 0.542281bb, versus the
+native64 control's 0.187585bb and learned32's 0.519529bb. The 0.354696bb
+regression exceeds the unchanged 0.05bb tolerance, so native4 is rejected;
+the remaining unchanged cases are not run. Construction speed is not enough
+to accept a label generator. The measured memory reduction remains valid,
+but there is no new policy or full-game exploitability improvement.
+
+`local-native-inner-budget-quality-20261005-b/manifest.json` SHA-256:
+`679720dd6e527921cfa2e8c29729fe11397c29aa4760895912c241cf56cfc0c5`.
+Its canonical native4 candidate SHA-256 is
+`bf22f7963d582cb8d00add6eed97b2e3d75e03f363f3d48efdc39cae92bb7723`;
+the audited response SHA-256 is
+`e27a27dd6661d26ce6487ad57307a69d05d556462fde818883ec2ed9c70b136f`.
+
+## Counterfactual calibration coverage
+
+An additional saved-prediction check used only the existing 474 TRAIN states,
+with the frozen 284-state split reference (69 tuning/72 holdout states were
+excluded from the analysis). It did not allocate features, label new states
+or fit models. In 6.21s, both native-prediction seeds showed authentic RMSE
+0.856532/0.889458bb and zero-own-reach completed-value RMSE
+2.497332/2.474706bb. This is a 2.8–2.9x error concentration, not a proof that
+those errors cause the failed policy control.
+
+Those hands already receive nonzero weights from the 10% uniform-legal loss
+mixture; projection and actual beliefs remain unchanged. The completion gap
+between zero-own best-response labels and frozen-profile labels is 3.732402bb
+RMSE. Replacing completion labels with profile labels is not justified. A
+single matched 50% weighting pilot is planned in section 21, retaining the
+existing actual-policy rejection rules. No acceptance follows from this
+diagnostic and no fraction sweep on control boards is permitted.
+
+`local-train-counterfactual-error-20261005-a/manifest.json` SHA-256:
+`e4328e9d158c3dcbc7c7389c4e00bf14662897c52198d54399a914f139d25ca9`.
+Its analysis SHA-256 is
+`8858782ce230272aaa9ba2b7bd812a1f62ec349b86a411f35547b61e2cd21668`.
 
 Artifacts under `preflop-solver/neural/runs/`:
 
