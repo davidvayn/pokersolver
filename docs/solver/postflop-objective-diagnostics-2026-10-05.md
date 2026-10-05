@@ -170,6 +170,25 @@ single matched 50% weighting pilot is planned in section 21, retaining the
 existing actual-policy rejection rules. No acceptance follows from this
 diagnostic and no fraction sweep on control boards is permitted.
 
+The one 50% pilot is now complete. It passed all615 independent/native
+predictions in both seeds, maximum difference 0.00000535bb. Fit/preflight/parity
+took 358.5s with sampled fit footprint 4,266,660,280 bytes. Zero-own TRAIN RMSE
+fell to 2.246592/2.186768bb (10.0%/11.6% lower); authentic TRAIN RMSE stayed
+0.858920/0.888735bb. The first all49 audited policy control improved over the
+10% experimental arm, 0.343412 to 0.311409bb, but still regressed the retained
+0.278335bb baseline by 0.033074bb. It failed the existing 0.01bb tolerance and
+was rejected in 97.4s. Other cases and paired means remain unmeasured. No
+serving activation or full-game exploitability improvement is claimed.
+
+Artifacts: `local-counterfactual50-students-20261005-a/manifest.json` SHA-256
+`526c4f0fb026d88cd5546618a997b3ec37eda7cabc6efbc12d86ec3bdb7401a3`;
+student-pair SHA-256
+`866f875d9d9654a8a04d17e34153c235e6d4157dbdd4b35a81b2b2bcc89cff6c`;
+response manifest `local-counterfactual50-response-20261005-a/manifest.json`
+SHA-256 `0b4781afb2b043c6eb9364f8a74bcf3b890ba8bbadd3e5af6ee2bdf493e911e4`.
+Matched TRAIN analysis SHA-256
+`0d75137d10638633c76a45bf9022b8d5c31ebed625c1a131fab9bcde0c36c211`.
+
 `local-train-counterfactual-error-20261005-a/manifest.json` SHA-256:
 `e4328e9d158c3dcbc7c7389c4e00bf14662897c52198d54399a914f139d25ca9`.
 Its analysis SHA-256 is

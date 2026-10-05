@@ -63,6 +63,7 @@ fn frozen_prediction_probe_preserves_beliefs_and_raw_reach_scaling() {
         learned_leaf_model_sha256: model.artifact_sha256.clone(),
         complete_root_support: None,
         root_realization_turn_averages: None,
+        leaf_schedule: None,
     };
     let before = serde_json::to_vec(&candidate).unwrap();
     let frozen = frozen_response::Frozen::new(&candidate).unwrap();

@@ -6,6 +6,7 @@ use std::cell::RefCell;
 mod chance_baseline;
 mod chance_batch;
 mod continuation;
+mod leaf_schedule;
 mod root_support;
 pub(in crate::blueprint) use root_support::exact_flop_kernel;
 mod forced_beliefs;
@@ -99,6 +100,8 @@ struct Solution {
     complete_root_support: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     root_realization_turn_averages: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    leaf_schedule: Option<leaf_schedule::Schedule>,
 }
 
 struct Trunk {
@@ -335,11 +338,35 @@ fn train_with_root_support(
     use_baseline: bool,
     turn_samples: usize,
     leaf_workers: usize,
-    mut observer: Option<LeafObservation<'_, '_>>,
+    observer: Option<LeafObservation<'_, '_>>,
     evaluator: continuation::Evaluator<'_>,
     complete_root_support: bool,
 ) -> Result<Solution, String> {
+    train_with_schedule(game, state, seed, iterations, turn_iterations, use_baseline,
+        turn_samples, leaf_workers, observer, evaluator, complete_root_support, None)
+}
+
+fn train_with_schedule(
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+    seed: u64,
+    iterations: u64,
+    turn_iterations: u64,
+    use_baseline: bool,
+    turn_samples: usize,
+    leaf_workers: usize,
+    mut observer: Option<LeafObservation<'_, '_>>,
+    evaluator: continuation::Evaluator<'_>,
+    complete_root_support: bool,
+    schedule: Option<leaf_schedule::Schedule>,
+) -> Result<Solution, String> {
     let learned_leaf_model_sha256 = evaluator.model_sha256()?;
+    if let Some(schedule) = schedule {
+        schedule.validate(iterations)?;
+        if learned_leaf_model_sha256.is_none() || use_baseline || observer.is_some() || complete_root_support {
+            return Err("late native schedule requires a frozen learned proposer, no baseline/capture/support intervention".into());
+        }
+    }
     let captures_native_values = observer.as_ref().is_some_and(|o| matches!(o, LeafObservation::Native(_)));
     if learned_leaf_model_sha256.is_some() && (captures_native_values || use_baseline) {
         return Err("learned predictions cannot be exported as native labels or combined with a chance baseline".into());
@@ -369,9 +396,15 @@ fn train_with_root_support(
     let flop: [u8; 3] = trunk.state.board.clone().try_into().unwrap();
     let references = RefCell::new(BTreeMap::new());
     for round in 1..=iterations {
+        if let Some(schedule) = schedule {
+            schedule.prepare_average(round, &mut trunk);
+        }
+        let round_evaluator = if schedule.is_some_and(|s| s.native_round(round, iterations)) {
+            continuation::Evaluator::Native
+        } else { evaluator };
         let sampled = chance_batch::draw(&turns, turn_samples, &mut chance);
         let game = &game;
-        if leaf_workers > 1 || observer.is_some() || learned_leaf_model_sha256.is_some() {
+        if leaf_workers > 1 || observer.is_some() || matches!(round_evaluator, continuation::Evaluator::Learned(_)) {
             if use_baseline {
                 return Err(
                     "native value capture cannot be combined with a learned chance baseline".into(),
@@ -384,7 +417,7 @@ fn train_with_root_support(
                 turn_iterations,
                 leaf_workers,
                 &mut observer,
-                evaluator,
+                round_evaluator,
             )?;
             queries.set(queries.get() + diagnostics.queries);
             zero_reach.set(std::array::from_fn(|p| {
@@ -472,6 +505,7 @@ fn train_with_root_support(
         learned_leaf_model_sha256,
         complete_root_support: complete_root_support.then_some(true),
         root_realization_turn_averages: None,
+        leaf_schedule: schedule,
     })
 }
 
@@ -711,7 +745,24 @@ fn saved_20bb_native_flop_pilot() {
         assert_eq!(network.artifact_sha256().unwrap(), std::env::var("POKER_NATIVE_FLOP_VALUE_MODEL_SHA").unwrap());
         network
     });
-    let result = train_with_evaluator(
+    let schedule = match (std::env::var("POKER_NATIVE_FLOP_NATIVE_TAIL_ITERATIONS"),
+                          std::env::var("POKER_NATIVE_FLOP_AVERAGING_START")) {
+        (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => None,
+        (Ok(tail), Ok(start)) => {
+            let schedule = leaf_schedule::Schedule {
+                native_tail_iterations: tail.parse().unwrap(),
+                averaging_start_iteration: start.parse().unwrap(),
+            };
+            assert_eq!(iterations, 32);
+            assert_eq!(turn_iterations, 64);
+            assert!([0, 8].contains(&schedule.native_tail_iterations));
+            assert_eq!(schedule.averaging_start_iteration, 25);
+            schedule.validate(iterations).unwrap();
+            Some(schedule)
+        },
+        other => panic!("explicit tail and averaging start must both be supplied: {other:?}"),
+    };
+    let result = train_with_schedule(
         game,
         state,
         seed,
@@ -722,6 +773,8 @@ fn saved_20bb_native_flop_pilot() {
         leaf_workers,
         None,
         learned.as_ref().map_or(continuation::Evaluator::Native, continuation::Evaluator::Learned),
+        false,
+        schedule,
     )
     .unwrap();
     let path = PathBuf::from(std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap());
@@ -739,6 +792,7 @@ fn saved_20bb_native_flop_pilot() {
         "publicInputSha256":input_sha256,
         "turnSamplesPerIteration":turn_samples,
         "leafWorkers":leaf_workers,
+        "leafSchedule":result.leaf_schedule,
         "seconds":started.elapsed().as_secs_f64(),"turnQueries":result.turn_queries,
         "zeroOwnReachCompletions":result.zero_own_reach_completions,"zeroJointTurnQueries":result.zero_joint_turn_queries,
         "maximumConditionalTurnResponseGainBb":result.maximum_conditional_turn_response_gain_bb,
