@@ -155,6 +155,8 @@ def fit(args):
     train, tuning, holdout = [np.flatnonzero(np.isin(dataset.groups, s)) for s in split]
     work = args.output / args.arm; work.mkdir()
     rows = []
+    architecture = getattr(args, "architecture", "wide")
+    transform = getattr(args, "initialization_transform", None)
     for seed in [10601, 10602]:
         initial_model = None
         initial_receipt = None
@@ -165,9 +167,9 @@ def fit(args):
             if sha256(path) != initial_receipt["sha256"]:
                 raise ValueError("retained initialization changed")
             initial_model = json.loads(path.read_text())
-            probe = training.SharedComboValueNetwork(True, "wide", "payoff-exposure",
+            probe = training.SharedComboValueNetwork(True, architecture, "payoff-exposure",
                 training.FEATURE_SCHEMA_EXACT_RUNOUT)
-            import_retained_weights(probe, initial_model, seed)
+            import_retained_weights(probe, initial_model, seed, transform)
             # Full private-vector comparison on two frozen TRAIN states. Every
             # serialized parameter is additionally validated by the importer.
             selected = train[:2]
@@ -184,6 +186,7 @@ def fit(args):
                 seed=seed, maximumParityErrorBb=error, states=selected.tolist(),
                 optimizerState="fresh_not_imported",
                 parityDevice="gpu_full_float32" if full_gpu else "cpu_full_float32",
+                transform=transform,
                 releaseAccepted=False))
             del probe; mx.clear_cache()
         objective = BundleObjective(bundles, settings["contrastWeight"] if args.arm == "C1" else 0.,
@@ -206,9 +209,10 @@ def fit(args):
                 dataset.source_sha256, native.SCHEMA, "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")
         current, _, _, metrics = training.train_one(dataset, contexts, queries, train, train,
             np.array([], dtype=np.int64), tuning, holdout, True, seed, 600, 8, .0003, .00003,
-            True, 50, 6, "wide", "payoff-exposure", .05, .25, np.ones(len(dataset.targets)), 0.,
+            True, 50, 6, architecture, "payoff-exposure", .05, .25, np.ones(len(dataset.targets)), 0.,
             training.FEATURE_SCHEMA_EXACT_RUNOUT, fixed_final_checkpoint=True,
-            bundle_objective=objective, checkpoint_callback=save, initial_model=initial_model)
+            bundle_objective=objective, checkpoint_callback=save, initial_model=initial_model,
+            initialization_transform=transform)
         model_path = work / f"turn-value-range-seed{seed}.json"
         training.export_model(current, model_path, seed, dataset.source_sha256, native.SCHEMA,
             "research_only", dataset.source["source_policy_sha256"], "payoff-exposure")

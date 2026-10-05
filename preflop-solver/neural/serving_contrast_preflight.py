@@ -18,8 +18,10 @@ from serving_value_projection import BoundedValueProjection
 def preflight(args):
     dataset, contexts, queries, split, bundles, _ = base.prepare(args)
     settings = json.loads((args.output/"fit-settings.json").read_text())
-    model = training.SharedComboValueNetwork(True,"wide","payoff-exposure",training.FEATURE_SCHEMA_EXACT_RUNOUT)
-    import_retained_weights(model,json.loads(Path(args.initial_models[10601]["path"]).read_text()),10601)
+    model = training.SharedComboValueNetwork(True,getattr(args,"architecture","wide"),
+        "payoff-exposure",training.FEATURE_SCHEMA_EXACT_RUNOUT)
+    import_retained_weights(model,json.loads(Path(args.initial_models[10601]["path"]).read_text()),10601,
+        getattr(args,"initialization_transform",None))
     bundle = max(bundles,key=lambda b:len(b.dataset.targets))
     d = bundle.dataset
     raw = np.asarray(model.raw_values(*BundleObjective.inputs(bundle,0,8))) * d.target_scales[:8,None,None]
