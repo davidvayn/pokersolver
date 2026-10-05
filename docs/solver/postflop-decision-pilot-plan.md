@@ -853,3 +853,98 @@ policies against best responses. It helps distinguish actual worst-case policy
 optimization from this proposed supervised ranking surrogate; its convergence
 claims do not apply to a leaf-value loss. No automatic cloud spending or
 website/model activation is authorized.
+
+Section 18 completed: endpoint TRAIN ranking loss is 0.063204/0.069243bb,
+down from 0.215331/0.198206bb. Correctly ordered pairs receive 75.54%/73.62%
+of pairwise derivative magnitude. The requiring-both-seeds >=75% screen fails;
+**no ranking-auxiliary fit follows**. Original/margin parameter-gradient
+cosines are -0.052/-0.068 at the endpoints, but different directions do not
+prove policy benefit. The range-scale invariance hypothesis was also checked:
+native inference already normalizes raw ranges and its qualified Rust test
+passes; no augmentation/normalization patch is needed.
+
+## 19. Measure a cheaper native-continuation construction budget
+
+Native64 leaves have the strongest measured actual-policy effect (selected
+32-update root mean 0.7062bb learned versus 0.2592bb native), but 20–33 minutes
+per construction limits offline coverage. Test the existing native4 budget
+before building a larger neural architecture or buying compute. This is an
+offline generator cost/quality comparison, not a proposal to serve native4.
+
+1. Pin the completed October 2 matched32 comparison, original benchmark roots,
+   binary, input hashes and cached native64/learned32 candidates/responses.
+   Use the same two predeclared roots and both chance seeds, in original order.
+   No new fit, parameter tuning or untouched-validation claim.
+2. Construct native4 candidates at the same 32 flop updates and one leaf worker.
+   Change only the inner continuation update budget. Preserve an immutable
+   raw training candidate. Export a separate evaluation candidate with explicit
+   response_turn_iterations=64, proving all policy probabilities unchanged.
+   Construction and played/evaluation budgets must never be conflated.
+3. First time the limped seed-100101 construction; retain the existing 2.5GiB
+   serial worker guard. Target <=20% of its cached native64 construction time.
+   Project the remaining complete comparison with margin and a two-hour cap;
+   stop if it cannot fit. Do not silently reduce chance/evaluation counts.
+4. Evaluate each completed policy using native64 played continuations, all49
+   exact turns and the independent JavaScript accounting/backup audit. Limit
+   packet concurrency to two workers, retain pressure/disk stops, pin every
+   artifact and source. No score from partial packets.
+5. Stop after an audited case if its gain exceeds native64 by >0.05bb or retains
+   less than half the native-versus-learned32 improvement. Advance only after
+   all four complete comparisons and cost/quality checks pass. This pragmatic
+   generator screen is not an Approximate GTO release gate. If rejected, use
+   sampled CPU attribution to identify reusable work in the accurate native
+   solver rather than scaling failed student fits.
+
+Research: [Value Functions for Depth-Limited Solving](https://arxiv.org/abs/1906.06412)
+ties useful depth-limited play to suitable value functions and reports limited
+benefit from its explored loss variations. Together with this repository's
+matched native-versus-learned result, it motivates addressing accurate-target
+cost directly. It does not guarantee a four-update continuation is sufficient.
+
+The first native4 construction was interrupted at 43.943s by the original
+2.5GiB physical-footprint guard (sampled peak 2,703,821,728 bytes). No policy or
+quality score exists from that attempt. An explicitly separate memory-only
+retry permits 4GiB for the one serial constructor, leaving the same two
+1.5GiB evaluation workers, system-pressure/disk stops and unchanged cost and
+quality thresholds. The original failure remains immutable. A three-second
+macOS CPU sample attributes time to repeated training/profile walks, compatible
+mass calculations, policy serialization and SHA-256; this is not evidence of
+a leak, nor a measured whole-run percentage. No target/algorithm changes are
+made by this retry.
+
+The retry completed in 205.690s (9.51x faster construction) at 3.513GiB
+sampled footprint. The projected full response comparison was 13,842.9s,
+so it stopped at the two-hour stage cap without a quality score. Do not
+confuse passing construction speed with passing the generator pilot.
+
+## 20. Reduce native allocation overhead, then stage the quality screen
+
+1. Preserve the completed native4 raw candidate and all failed-attempt records.
+   Inspect one owned CPU/memory snapshot rather than increasing iteration
+   counts or launching another unsupported student fit.
+2. Stream the exact native policy JSON into SHA-256 with a bounded 64KiB
+   buffer. Leave all mathematical operations, policy rows, export rounding and
+   best-response accounting unchanged. Compare the new hash with buffered
+   export bytes, then replay a pinned native64 turn serially before/after and
+   require complete byte parity with the cached original control.
+3. Separate native canonical export from Python manifest writing. A new
+   response-budget candidate must round-trip to its exact Rust identity and
+   recover every original training byte when the override is removed. Reject
+   cosmetic JSON identity drift; never bypass the native reader's check.
+4. Stage only the original limped seed-100101 quality control first. Reuse the
+   completed native4 construction, explicitly export native64 evaluation,
+   and solve all49 turns with two guarded workers plus the independent JS
+   audit. Retain the two-hour cap and original >0.05bb/half-benefit rejection
+   rules. Resume only identical interrupted jobs. This first control does
+   not establish a paired mean or full-game quality.
+5. Reject on a complete failed quality screen. If it passes, use actual new
+   packet timings to plan the remaining seed/root comparisons; do not expand
+   a run from a stale optimistic estimate. Require all four before accepting
+   a generator budget, and separately validate any subsequently fitted model.
+
+Step 2's first frozen packet passed exact parity, using 621MB buffered versus
+336MB streamed footprint. Time was essentially unchanged (54.5/54.0s). The
+first step-4 launch caught noncanonical Python candidate JSON before solving;
+step 3 now has a Rust exporter and a regression test. This is a research
+controller fix, not a website or solver-policy improvement. The updated
+binary's packet parity passed and the complete first-control screen is running.
