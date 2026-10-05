@@ -1134,3 +1134,56 @@ without changing the strategy computation.
 This sequence targets the measured continuation bottleneck without another
 neural-loss grid. No paid compute, model promotion or full-game exploitability
 claim follows from a cost preflight.
+
+Section 23 completed: both eight- and 32-update parallel policies match their
+cached serial controls byte-for-byte. Eight updates took 263.425s (cached serial
+455.752s), 32 took 1196.997s (cached serial 1956.564s). Peaks were
+1,274,807,568 / 1,179,747,528 bytes; system pressure stayed normal. The cached
+timing comparison is hardware-state-sensitive, not a controlled speed ratio.
+The resulting 32-update policy is unchanged, so its complete 0.187585bb
+conditional response gain and audit can be reused without another evaluation.
+Artifacts: `runs/local-native-parallel-cost-20261005-a/manifest.json` and the
+two guarded construction receipts/candidates.
+
+## 24. Accurate 32-to-64 flop-update quality comparison
+
+1. Keep the consumed limped root and seed 100101 fixed. Use the exact cached
+   native32 control from section 23, not the rejected learned-tail/native4 arms.
+2. Add 64 only to the explicit research CLI's allowed flop budgets. Rebuild,
+   run native release tests and reproduce the frozen default learned32 policy
+   byte-for-byte. Freeze binary and all Rust/controller sources before launch.
+3. Construct from scratch with 64 flop updates, native64 continuation queries,
+   one seeded turn draw per update, no learned model/baseline, full averaging
+   and four leaf workers. No new loss function or numerical algorithm change.
+4. Use a 4GiB/3600s construction guard and a 7200s total limit. Reject a total
+   projection above two hours from the completed parallel32 and original all49
+   native64 packet timings. Keep system-pressure stops and the 20GiB reserve.
+5. Evaluate every legal turn under the same native64 played policy; four
+   separately guarded 1.5GiB packet workers, complete aggregate and independent
+   JS audit. Do not score partial turns or a faster inner continuation budget.
+6. Require >=0.02bb improvement over the complete native32 conditional response
+   gain before expansion. Otherwise reject unchanged scaling. A first pass is
+   only a consumed-root feasibility signal: next confirm the other seed/root,
+   then evaluate a pinned combined full-hand route. It is not Approximate GTO
+   qualification, a generator acceptance or a website-ready release.
+
+This tests additional accurate regret updates after demonstrating affordable
+local construction, rather than repeatedly fitting better loss metrics that
+did not produce better policy actions. No paid compute is authorized.
+
+Section 24 is implemented and its first quality run is active. Native release
+validation passed 362 unit and nine CLI tests (57 research jobs skipped), and
+17 targeted Python tests pass. The rebuilt default learned32 policy remains
+byte-identical to the frozen `f1faa095` candidate. The controller pins that
+proof and all sources, requires section 23's complete parity result, and
+projects 5186.2s including guarded construction, all49 packets and audits.
+No quality result has been observed yet.
+
+Section 23 receipt SHA-256:
+`8980fdb8f8dce1ba6fd8ad3889c12ee15bff10f6f3a2bbbc49d0e0c4bedf3855`.
+Section 24 artifacts: `runs/local-native-update64-20261005-a/build.json`,
+`default-parity/manifest.json`, `first-control/manifest.json`.
+New binary SHA-256:
+`87e7e1b36d2896a4ae75fe9243c5e8b27c19d0e9d7c88642bc4b4750c749978d`.
+Default parity receipt SHA-256:
+`7f97ff767d2aabccf87e405cba93595a36a21f6cf875698d3270d4b1f50b39b6`.

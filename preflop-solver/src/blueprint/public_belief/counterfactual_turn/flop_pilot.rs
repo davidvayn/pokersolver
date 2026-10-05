@@ -718,7 +718,7 @@ fn saved_20bb_native_flop_pilot() {
         .unwrap_or_else(|_| "2".into())
         .parse()
         .unwrap();
-    assert!([2, 8, 16, 32, 128, 256].contains(&iterations));
+    assert!([2, 8, 16, 32, 64, 128, 256].contains(&iterations));
     let turn_iterations: u64 = std::env::var("POKER_NATIVE_FLOP_TURN_ITERATIONS")
         .unwrap_or_else(|_| "64".into())
         .parse()
