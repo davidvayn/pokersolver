@@ -33,6 +33,15 @@ fn frozen_policy(config: TurnRiverSolveConfig) -> Result<Vec<PublicBeliefStrateg
     solve_impl(config, true).map(|(_, rows)| rows)
 }
 
+/// Hash the exact export bytes without materializing another full policy.
+/// Buffer small serializer writes; policy identity and f32 export stay intact.
+fn policy_digest(rows: &[PublicBeliefStrategy]) -> Result<String, String> {
+    let mut writer = BufWriter::with_capacity(64 * 1024, Sha256::new());
+    serde_json::to_writer(&mut writer, rows).map_err(|error| error.to_string())?;
+    let digest = writer.into_inner().map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 fn solve_impl(
     config: TurnRiverSolveConfig,
     retain_policy: bool,
@@ -83,7 +92,7 @@ fn solve_impl_with_root_averages(
     solver.train();
     let rows = solver.policy_strategies();
     let policy_rows = rows.len();
-    let policy_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&rows).unwrap()));
+    let policy_sha256 = policy_digest(&rows)?;
     solver.nodes.clear();
     solver.load_frozen_average_strategies(&rows)?;
     let retained_rows = if retain_policy {
@@ -195,6 +204,25 @@ mod tests {
             river_refinement_iterations: 0,
             regret_matching_plus: false,
         }
+    }
+
+    #[test]
+    fn streamed_policy_digest_matches_exact_buffered_export_bytes() {
+        // Multiple buffers, escaped histories, signed zero and tiny weights.
+        let rows = (0..8).map(|index| PublicBeliefStrategy {
+            public_history: vec![format!("check:{index}\n\"\\♠")],
+            actor: index % 2,
+            action_labels: vec!["fold".into(), "call".into(), "all-in".into()],
+            probabilities: (0..COMBO_COUNT * 3).map(|combo| match combo % 6 {
+                0 => 0.0, 1 => -0.0, 2 => 1e-20, 3 => 1.0 / 3.0,
+                4 => 0.99999994, _ => 1.0,
+            }).collect(),
+            action_values_bb: None,
+        }).collect::<Vec<_>>();
+        let bytes = serde_json::to_vec(&rows).unwrap();
+        assert!(bytes.len() > 64 * 1024);
+        assert_eq!(policy_digest(&rows).unwrap(), format!("{:x}", Sha256::digest(&bytes)));
+        assert_eq!(policy_digest(&[]).unwrap(), format!("{:x}", Sha256::digest(b"[]")));
     }
 
     #[test]

@@ -72,7 +72,94 @@ Artifacts under `preflop-solver/neural/runs/`:
 - `local-on-policy-calibration-probe-20261005-a/manifest.json`:
   `290b7c7ec767c0edbec31563c2f873cc5069e34d7adf4e5ebf4e0cd48900c121`.
 
-Next: inspect how the existing pairwise contrast objective allocates gradient
-between correct and wrong action orderings on frozen TRAIN data. Retain
-native-value calibration and the rejecting actual-policy screen; neither
-supervised ranking nor value RMSE can substitute for exploitability.
+## Pairwise allocation: ranking fit not supported
+
+The exact Huber derivative was decomposed into correctly ordered, inverted
+and near-tie pairs, and reconstructed to <=1e-12 before the same affine and
+bounded-serving VJP. Both frozen seeds were measured at initialization and
+step 600 on all twelve TRAIN decisions. Equal-group native ranking loss
+fell from 0.215331/0.198206bb to 0.063204/0.069243bb.
+
+Correct-order pairs receive 75.54%/73.62% of the endpoint pairwise derivative
+magnitude. The requiring-both-seeds >=75% screen fails; do not lower it after
+seeing the numbers. A capped-margin ranking direction has parameter-gradient
+cosine -0.052/-0.068 with the existing contrast direction, but that does not
+establish improvement. No ranking fit was launched. These derivative shares
+are before the affine/network Jacobians, not parameter-gradient norms.
+
+The allocation manifest SHA-256 is
+`1e500e62729774b26c2dc2f7a46673518e1655f5af35cc1cb4b72509f62e4910`,
+under `local-decision-gradient-allocation-20261005-a/`. Five new unit tests
+cover decomposition, near ties, actual finite differences, offset invariance
+and fail-closed screening.
+
+Native inference was also inspected for reach-scale invariance. It already
+normalizes both raw ranges before feature construction; the qualified binary's
+`native_value_contract_preserves_future_bets_and_zero_own_reach` test passed.
+Do not add redundant normalization or scale augmentation.
+
+[Exploitability Descent](https://arxiv.org/abs/1903.05614) requires policy
+optimization against best responses, unlike this supervised ranking proposal.
+[Value Functions for Depth-Limited Solving](https://arxiv.org/abs/1906.06412)
+reports limited benefit from its explored alternative losses. Our next
+intervention addresses the known accurate-native-leaf computation cost with
+a matched smaller-inner-budget comparison, retaining native64 evaluation.
+No full-game improvement or serving qualification follows from these probes.
+
+## Native construction cost and allocation overhead
+
+The first native4/32 construction stopped at 43.943s under its original
+2.5GiB physical-footprint guard. A separate 4GiB-only retry completed in
+205.690s, versus the pinned native64/32 control's 1956.564s (9.51x faster).
+Sampled peak footprint was 3,772,042,816 bytes. The same board, ranges, game,
+seed, 32 flop updates and one turn proposal per iteration were retained.
+This is construction speed, not playing strength. The projected complete
+two-root/two-seed response stage was 13,842.9s, exceeding the declared 7200s
+cap. No quality score or paired mean was produced by that cost pilot.
+
+A live memory snapshot showed large unused allocator regions. A three-second
+CPU sample also found policy serialization/hashing among the repeated work.
+Native policy hashing now streams the same JSON bytes through a 64KiB buffer,
+rather than materializing a complete second serialized policy. No regret,
+average, f32 probability or value calculation changes. A serial frozen
+native64 turn replay matched the cached packet byte-for-byte before and
+after the change. Sampled footprint fell from 621,052,984 to 335,709,000 bytes
+(46%); time was 54.473/53.959s, not a meaningful measured speed gain. One
+packet does not establish the savings on every root or long construction.
+
+The first staged quality launch failed before solving because Python JSON
+formatting changed the candidate byte identity. Probabilities had not changed,
+but the native reader correctly refused the noncanonical payload. A guarded
+Rust exporter now changes only the explicit response budget, verifies both
+canonical round trips, and restores the original training bytes exactly when
+that field is removed. The regression test rejects pretty JSON, wrong source
+hashes, non-stronger budgets and excessive budgets. The identity check was
+not relaxed. The raw candidate is still immutable; a new canonical evaluation
+candidate uses native64 played continuations.
+
+A staged first-control evaluation is running across all49 turns with the
+independent JavaScript audit and unchanged cost/quality rejection rules.
+Its runner supports identity-matching interrupted-job recovery. Passing one
+control cannot qualify the other seed/root or full-game exploitability.
+
+Artifacts under `preflop-solver/neural/runs/`:
+
+- Completed cost retry `local-native-inner-budget-20261005-b/manifest.json`:
+  `7d5fe82701affb37b180597e314ef034021288ce68ed7db22c16d6843860850c`.
+- Immutable native4 training candidate:
+  `ea79c625efad2e21cc0bb15cd5b96a55828489df135776026ae077c3fcf57ebb`.
+- First streaming-hash packet preflight manifest:
+  `ce24be53c932158483a5b83c689e59353a6c62730e9aee846e56b5fd7ad0b83c`.
+- All three cached/buffered/streamed control packets:
+  `25a6bd363f1edd8b076919299287827dca8f525ff407c9797e1ecd3ba39ff0cd`.
+- Canonical native4-training/native64-evaluation candidate:
+  `bf22f7963d582cb8d00add6eed97b2e3d75e03f363f3d48efdc39cae92bb7723`.
+- Rebuilt canonical-export binary's identical packet proof:
+  `7371d6593ce2c43be2a9edfe88abd42f5728a8be101d866c62e3b33f18efd235`,
+  under `local-native-streaming-hash-20261005-a/canonical-packet-preflight/`.
+
+Verification before the export addition: `cargo test --release --
+--test-threads=1` passed 355 unit and nine CLI tests, with 56 explicit research
+jobs skipped. The new canonical-export test and 46 targeted Python tests also
+passed. The expanded native continuation suite passed all40 runnable tests,
+with 13 explicit research jobs skipped.
