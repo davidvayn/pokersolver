@@ -15,10 +15,12 @@ import numpy as np
 
 import run_action_contrast_students as base
 import train_public_value_network as training
+import native_value_dataset as native
 from retained_initialization import import_retained_weights, native_import_prediction
 from run_native_value_pilot import guarded
 from run_native_value_preflight import atomic_json, sha256
 from run_postflop_gap_pilot import PilotMemoryGuard
+from serving_value_projection import BoundedValueProjection
 
 
 def compare_bridge(group, raw_values, served_values):
@@ -41,12 +43,18 @@ def compare_bridge(group, raw_values, served_values):
         supportedReachFraction=float((group.weights * group.support).sum() / group.weights.sum()))
 
 
+def forward_parity_passed(results):
+    values = [x["trainingServingContrastRmseBb"] for r in results for x in r["decisions"]]
+    return bool(values) and bool(np.isfinite(values).all()) and min(values) >= 0 and max(values) <= .0001
+
+
 def worker(args):
     dataset, contexts, queries, split, bundles, _ = base.prepare(args)
     del dataset, contexts, queries, split; gc.collect()
     students = json.loads(args.students.read_text())
     results = []
     for entry in students["predictions"]:
+        aligned = entry.get("fitMetrics",{}).get("actionBundleObjective",{}).get("servingAlignedContrast") is True
         model = training.SharedComboValueNetwork(True, "wide", "payoff-exposure", training.FEATURE_SCHEMA_EXACT_RUNOUT)
         payload = json.loads(Path(entry["model"]).read_text())
         import_retained_weights(model, payload, entry["seed"])
@@ -56,8 +64,13 @@ def worker(args):
             for start in range(0, len(d.targets), 8):
                 end = min(start+8, len(d.targets))
                 inputs = base.BundleObjective.inputs(bundle, start, end)
-                raw.append(np.asarray(model(*inputs)).reshape((-1, 2, 1326))
-                    * d.target_scales[start:end, None, None])
+                values = np.asarray(model.raw_values(*inputs) if aligned else model(*inputs)).reshape((-1,2,1326))
+                values = values*d.target_scales[start:end,None,None]
+                if aligned:
+                    weights=np.asarray([r*native.compatible_masses(r) for r in d.ranges[start:end]])
+                    legal=np.asarray([native.legal_combos(b) for b in d.boards[start:end]])
+                    values=BoundedValueProjection(values,weights,legal).values
+                raw.append(values)
                 served.append(native_import_prediction(model, bundle.contexts[start:end],
                     bundle.queries[start:end], d.target_scales[start:end], d.boards[start:end], d.ranges[start:end]))
             raw, served = np.concatenate(raw), np.concatenate(served)
@@ -65,14 +78,20 @@ def worker(args):
             weights = d.projection_weights
             value_rmse = float(np.sqrt(np.sum(weights*(raw-served)**2) / weights.sum()))
             row = dict(seed=entry["seed"], family=list(bundle.family),
+                contrastForward="serving_aligned" if aligned else "unbounded_legacy",
                 authenticTrainingServingValueRmseBb=value_rmse, decisions=decisions)
             results.append(row)
             atomic_json(args.output / "analysis.json", dict(status="running", results=results, releaseAccepted=False))
             print(json.dumps(dict(event="training-serving-bridge", seed=entry["seed"], family=list(bundle.family),
                 maximumContrastRmseBb=max(r["trainingServingContrastRmseBb"] for r in decisions))), flush=True)
         del model; gc.collect(); mx.clear_cache()
-    atomic_json(args.output / "analysis.json", dict(status="complete", results=results, releaseAccepted=False,
+    passed = forward_parity_passed(results)
+    atomic_json(args.output / "analysis.json", dict(
+        status="failed" if args.require_forward_parity and not passed else "complete",
+        forwardParityPassed=passed, results=results, releaseAccepted=False,
         interpretation="Frozen TRAIN backups only. A different serving wrapper is not necessarily a policy error or an exploitability estimate."))
+    if args.require_forward_parity and not passed:
+        raise ValueError("actual contrast-training forward still differs from serving")
 
 
 def main():
@@ -83,6 +102,7 @@ def main():
     p.add_argument("--feature-cache", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--worker", action="store_true")
+    p.add_argument("--require-forward-parity", action="store_true")
     a = p.parse_args(); a.feature_workers = 1
     pinned = {}
     for name in ("corpus", "split_reference", "bundles", "students"):
@@ -101,6 +121,8 @@ def main():
         if row["maximumParityErrorBb"] > .0001 or sha256(path) != row["modelSha256"]:
             raise ValueError("student export parity/identity changed")
         pinned[str(path)] = row["modelSha256"]
+        if a.require_forward_parity and row.get("fitMetrics",{}).get("actionBundleObjective",{}).get("servingAlignedContrast") is not True:
+            raise ValueError("require-forward-parity needs a serving-aligned training pair")
     bundles = json.loads(a.bundles.read_text())
     if bundles.get("status") != "complete": raise ValueError("completed TRAIN bundles required")
     registry = bundles["trainingExtension"]
@@ -119,6 +141,7 @@ def main():
             "action_contrast_loss.py", "train_public_value_network.py", "retained_initialization.py",
             "native_value_dataset.py", "training_coverage.py", "worker_resources.py"):
         path = Path(__file__).with_name(name); pinned[str(path)] = sha256(path)
+    path=Path(__file__).with_name("serving_value_projection.py"); pinned[str(path)]=sha256(path)
     a.output, a.feature_cache = a.output.resolve(), a.feature_cache.resolve()
     if a.worker:
         worker(a); return

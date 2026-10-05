@@ -146,5 +146,45 @@ native inference and policy evaluation use the hash-qualified existing binary.
 
 The serving-aligned preflight passed on eight complete private vectors of the
 largest 441-state TRAIN bundle: maximum serving difference 0.000003329bb and
-projected two-seed cost 1,047 seconds. The fixed 600-step pair is running; this
-cost projection and correct gradients are not evidence of improved play.
+projected two-seed cost 1,047 seconds. This cost projection and correct
+gradients are not evidence of improved play.
+
+## Serving-aligned contrast: completed, rejected (October 5)
+
+Both seeds completed 600 fixed steps, unchanged six-family exposure and frozen
+retention. Full-615 NumPy/native maximum errors were
+0.000006440bb/0.000006145bb. Authentic holdout RMSE was
+1.205253bb/1.259385bb; fit and parity took 312.2 seconds. A separate frozen
+TRAIN verification measured maximum action-contrast forward discrepancy
+0.0000001413bb, down from 0.198796bb. This removes the diagnosed contrast
+optimization/serving mismatch, not the intentionally unbounded calibration.
+
+The first completed high-rainbow control measured 0.343412bb conditional
+response gain versus retained 0.278335bb. It improved the protected arm by
+0.007559bb but regressed retained by 0.065077bb: reject and stop automatically.
+Other cases and paired means remain unmeasured. No serving weights changed and
+no new full-game exploitability improvement has been established.
+
+Cached own-policy replay completed in 3.65 seconds with zero new native solves.
+After BB checks, the reached-hand local deviation loss was 0.567216bb against
+native continuation versus 0.136442bb predicted, ranking loss 0.269730bb and
+contrast RMSE 0.748897bb. All-in-only branches had exactly zero value/ranking
+discrepancy. These overlapping local deviations cannot be summed into
+full-game exploitability. Continue with a function-preserving range-input
+augmentation rather than repeating scratch pooling or unchanged iterations.
+
+Artifacts under `preflop-solver/neural/runs/`:
+
+- `local-serving-contrast-students-20261004-a/C1/manifest.json`:
+  `f10c0f81217b00ac8acf189ec07fa5f290b9ee71688ea74f0f3e9e5aeafa0765`.
+- `local-serving-contrast-response-20261004-a/manifest.json`: one rejected
+  completed case; no partial positive result is accepted.
+- `local-serving-contrast-forward-verification-20261004-a/analysis.json`:
+  all six frozen TRAIN families and both seeds.
+- `local-serving-contrast-own-policy-diagnosis-20261004-a/manifest.json`:
+  pins the same candidate, model, 49 chance packets and equity blob.
+
+Completed-case replay validates the real nested `state.board`, seed pairing,
+export parity and unchanged audited gain; missing/partial cases fail closed.
+Strict bridge verification also rejects nonfinite/missing metrics and records
+a failed analysis before raising, so artifacts cannot report false completion.
