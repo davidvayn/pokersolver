@@ -124,6 +124,19 @@ fn learned_full_hand_candidate_serving_probe() {
     );
 }
 
+#[test]
+#[ignore = "pinned compact preflop + native64 full-hand cost probe; explicit inputs and external resource guard"]
+fn compact_native_full_hand_candidate_serving_probe() {
+    assert_eq!(std::env::var("POKER_NATIVE_COMPACT_CONTINUATION").unwrap(), "1");
+    assert!(std::env::var("POKER_NATIVE_VALUE_MODEL").is_err());
+    assert!(std::env::var("POKER_NATIVE_VALUE_MODEL_SHA").is_err());
+    retained_checkpoint_probe(
+        NativeFlopOptions { seed: 100101, iterations: 64,
+            training_turn_iterations: 64, response_turn_iterations: 64 },
+        4,
+    );
+}
+
 fn retained_checkpoint_probe(options: NativeFlopOptions, leaf_workers: usize) {
     let source =
         PathBuf::from(std::env::var("POKER_NATIVE_CHECKPOINT").expect("explicit checkpoint"));
@@ -139,7 +152,6 @@ fn retained_checkpoint_probe(options: NativeFlopOptions, leaf_workers: usize) {
     if let Some(flag) = &compact {
         assert_eq!(flag, "1");
         assert!([2, 4, 8, 16, 32].contains(&preflop.rounds));
-        assert!(std::env::var("POKER_NATIVE_VALUE_MODEL").is_ok());
     } else {
         assert_eq!(preflop.rounds, 800);
     }
@@ -160,7 +172,11 @@ fn retained_checkpoint_probe(options: NativeFlopOptions, leaf_workers: usize) {
         }
     } else {
         assert!(std::env::var("POKER_NATIVE_VALUE_MODEL_SHA").is_err());
-        NativeFullHandPolicy::new(preflop, options)
+        if compact.is_some() {
+            NativeFullHandPolicy::with_compact_native_continuation(preflop, options, leaf_workers).unwrap()
+        } else {
+            NativeFullHandPolicy::new(preflop, options)
+        }
     };
     policy.leaf_workers = leaf_workers;
     println!(

@@ -1331,3 +1331,22 @@ Artifacts: `runs/local-native-update64-20261005-a/single-raised-paired/`.
 This moves the supported native improvement toward a measurable combined
 policy rather than starting another loss grid or extrapolating conditional
 root gains into a full-game claim. No paid compute is authorized.
+
+Section 27's implementation and prelaunch validation are complete. Native
+release tests pass 364 unit and nine CLI tests (58 explicit research jobs
+ignored); 24 targeted Python tests pass. The new actual-caller test covers
+all streets, hidden/future-card independence and parallel-copy consistency.
+Existing learned32 default output still reproduces `f1faa095` byte-for-byte.
+The controller also independently reconstructs the Rust full-hand route hash
+and checks its original paired admissions, budgets, preflop coverage, every
+served probability mix and complete eight-decision output. The root-support
+entry is an explicit additional route contract, not a claim that the four
+conditional policies already certify full-hand coverage.
+
+Frozen native binary SHA-256:
+`cebe4fa6cb3fc4825f39c6c967322aada41333e96973111681b2201df05937c8`.
+Build/source receipt SHA-256:
+`19318c98f30bc6194e15261618b49c9bdb125bc2cc1cd4a55ad6823662ddb211`.
+Default parity receipt SHA-256:
+`458848bb18df0a7591771bdce8c895cdc869ee787781b08585741e8710f248bb`.
+Artifacts: `runs/local-accurate-full-hand-20261005-a/`.
