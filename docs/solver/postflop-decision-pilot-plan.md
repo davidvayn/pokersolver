@@ -1350,3 +1350,51 @@ Build/source receipt SHA-256:
 Default parity receipt SHA-256:
 `458848bb18df0a7591771bdce8c895cdc869ee787781b08585741e8710f248bb`.
 Artifacts: `runs/local-accurate-full-hand-20261005-a/`.
+
+Section 27's accurate full-hand cost probe **passed**. All eight forced
+decisions and the independent Rust/Python route identity check passed.
+Exhaustive preflop coverage: 132,600 queries, zero missing rows, maximum
+probability-sum error 6.661338e-16. Cold flop solving took 2597.924s; cold turn
+playback took 22.782s. Subsequent flop/turn/river decisions took at most
+0.0000321s. Total elapsed time 2621.378s; peak sampled footprint 1,162,953,904
+bytes; memory pressure stayed normal. This establishes offline integration
+feasibility, **not interactive cold-serving readiness or playing strength**.
+
+Cost manifest SHA-256:
+`0aa9ec68ecbecd96f7d86b65e4b98ecb260bb5409fa7e2f850e833740a1d4c95`.
+Probe SHA-256:
+`aa620ed5abc7a8c0831a83832ec64edb44d93935740cb8e29a1816fd6256c209`.
+Route SHA-256:
+`5dad23fc43e5db520fbabad33d4320388577500297bc02e421007d5d25a9cc29`.
+
+## 28. Cost-first matched complete-hand response pilot
+
+1. Admit only section 27's complete cost/coverage/route receipt and the same
+   benchmark preflop checkpoint. Reuse the existing frozen legal LBR:
+   seed 90001, 16 early runouts per opposing combo, exact river equity. Keep
+   its own information limited to visible cards and observed actions.
+2. Freeze one declared screening deal cluster, index 0, from the existing
+   chance/action seed rule. Use policy seed 100101 for both native32 and
+   native64 arms. Keep full counterfactual root support, four leaf workers,
+   native64 training/played turn values, game abstraction and preflop fixed.
+   No neural model or postflop solver settings may be substituted.
+3. Play both attacker seats for each arm, without an extra baseline rollout:
+   zero-sum self-play payoffs cancel in the paired total. Preserve exact deal
+   identity across arms. Report **total** response gain, not the earlier
+   half-summed conditional-root convention. Count independent deal clusters,
+   not seats or private combos; one cluster cannot qualify strength.
+4. Preflight cost sequentially under a 4GiB whole-worker limit: 4500s for
+   native32, 7200s for native64, 12000s total. A full-deal pair can touch two
+   different flop ancestors, unlike the forced one-root cost probe. These
+   caps include a margin over the observed 2597.924s cold root and possible
+   additional native continuation queries. Retain pressure stops and the
+   20GiB disk reserve; stop rather than quietly change the policy budget.
+5. Require complete legal reports, route/hash/budget parity, bounded payoff
+   accounting and at least an explicit count of postflop decisions. A hand
+   ending preflop is still recorded, not replaced with a favorable deal.
+   Observe cost before declaring a larger fixed cohort. Do not promote or
+   expand based on one favorable payoff; its confidence is insufficient.
+
+This is a matched complete-hand cost/response feasibility test, not a global
+exploitability upper bound. The unmodified learned route and website remain
+unchanged; paid compute remains unauthorized.
