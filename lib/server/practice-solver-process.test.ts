@@ -90,6 +90,33 @@ describe('pinned practice resolver process', () => {
     expect(threads).toBeLessThanOrEqual(Math.min(8, cpus().length));
   });
 
+  it('honors explicit higher whole-core budgets without oversubscribing process pools', () => {
+    const cores = Math.max(1, cpus().length);
+    try {
+      vi.stubEnv('PRACTICE_RESOLVER_POOL_SIZE', '1');
+      vi.stubEnv('PRACTICE_RESOLVER_THREADS', '10');
+      expect(option(practiceResolverCommand().args, '--flop-resolver-threads')).toBe(
+        String(Math.min(10, 16, cores))
+      );
+      vi.stubEnv('PRACTICE_RESOLVER_POOL_SIZE', '2');
+      const budget = Math.max(1, Math.floor(cores / 2));
+      for (const count of ['16', '128']) {
+        vi.stubEnv('PRACTICE_RESOLVER_THREADS', count);
+        const args = practiceResolverCommand().args;
+        expect(option(args, '--flop-resolver-threads')).toBe(String(Math.min(16, budget)));
+        expect(option(args, '--turn-resolver-threads')).toBe(String(Math.min(16, budget)));
+      }
+      for (const invalid of ['0', '-2', '3.5', 'bad']) {
+        vi.stubEnv('PRACTICE_RESOLVER_THREADS', invalid);
+        expect(option(practiceResolverCommand().args, '--flop-resolver-threads')).toBe(
+          String(Math.min(8, budget))
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('opts into streaming and resolves a ready sibling without waiting for the batch', async () => {
     const child = Object.assign(new EventEmitter(), {
       stdin: new PassThrough(),
