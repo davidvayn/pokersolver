@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VERSION = "hu-20bb-v102-consensus-continual-resolver-experimental"
 
 
-def fixtures(version, cross_batch=False):
+def fixtures(version, cross_batch=False, cold_pair=None):
     preflop = dict(requestId="startup-preflop", stateHash="e" * 64,
                    modelVersion=version, depthBb=20, privateCards=[7, 34],
                    board=[], street="preflop", actor=0, totalPotBb=1.5,
@@ -43,6 +43,10 @@ def fixtures(version, cross_batch=False):
                                                "requestId": "cross-batch-slow-flop"}),
                     ("cross-batch-ready-preflop", {**preflop,
                                                    "requestId": "cross-batch-ready-preflop"})]
+    if cold_pair:
+        queries += [(name, {**limp, "board": board, "requestId": name})
+                    for name, board in [("cold-pair-a", [0, 18, 44]),
+                                        ("cold-pair-b", [9, 26, 51])]]
     return queries
 
 
@@ -83,14 +87,16 @@ def main():
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--baseline", type=Path, help="require identical outputs to this prior receipt")
     parser.add_argument("--cross-batch", action="store_true", help="include a later ready batch behind a cold one")
+    parser.add_argument("--cold-pair", choices=("serial", "parallel"),
+                        help="compare two independent cold flops sequentially or concurrently")
     args = parser.parse_args()
-    if not 1 <= args.threads <= 8:
-        parser.error("threads must be between 1 and 8")
+    if not 1 <= args.threads <= 16:
+        parser.error("threads must be between 1 and 16")
     manifest_path = ROOT / "data/practice/full-hand-manifests.json"
     manifest = next(m for m in json.loads(manifest_path.read_text()) if m["version"] == VERSION)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    queries = fixtures(manifest["version"], args.cross_batch)
+    queries = fixtures(manifest["version"], args.cross_batch, args.cold_pair)
     launch = command(args.binary.resolve(), manifest, args.threads)
     record = dict(schema="practice-serving-latency-v1", status="running",
                   binarySha256=sha256(args.binary), manifestSha256=sha256(manifest_path),
@@ -151,7 +157,7 @@ def main():
                 save(second, time.perf_counter() - started)
             if args.cross_batch:
                 started = time.perf_counter()
-                for name, query in queries[7:]:
+                for name, query in queries[7:9]:
                     batch = dict(schema="hu-practice-continual-resolver-batch-query-v1",
                                  requestId=name + "-container", streamResults=True, queries=[query])
                     process.stdin.write(json.dumps(batch) + "\n")
@@ -164,6 +170,25 @@ def main():
                             save(result, elapsed)
                     else:
                         save(value, elapsed)
+            if args.cold_pair:
+                pair = queries[-2:]
+                pair_started = time.perf_counter()
+                if args.cold_pair == "parallel":
+                    batch = dict(schema="hu-practice-continual-resolver-batch-query-v1",
+                                 requestId="cold-pair", streamResults=True,
+                                 queries=[query for _, query in pair])
+                    process.stdin.write(json.dumps(batch) + "\n")
+                    process.stdin.flush()
+                    for _ in pair:
+                        save(read(), time.perf_counter() - pair_started)
+                else:
+                    for _, query in pair:
+                        started = time.perf_counter()
+                        process.stdin.write(json.dumps(query) + "\n")
+                        process.stdin.flush()
+                        save(read(), time.perf_counter() - started)
+                record["coldPair"] = dict(mode=args.cold_pair,
+                                          seconds=time.perf_counter() - pair_started)
             if seen != set(dict(queries)):
                 raise ValueError("incomplete request coverage")
             record["status"] = "complete"

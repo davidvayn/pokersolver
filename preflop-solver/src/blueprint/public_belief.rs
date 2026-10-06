@@ -10,7 +10,7 @@ use super::neural::{FrozenPolicy, MAX_TRAJECTORY_ACTIONS};
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -29,6 +29,8 @@ pub(super) mod frozen_turn_response;
 #[cfg(test)]
 pub(in crate::blueprint) mod counterfactual_turn;
 mod compact_marginals;
+mod card_workers;
+mod continuation_cache;
 mod value_inference;
 
 pub const COMBO_COUNT: usize = 1_326;
@@ -62,16 +64,28 @@ pub(super) const RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 1e-12;
 pub(super) const MINIMUM_DEPLOYED_ACTION_PROBABILITY: f64 = 1e-9;
 const SAFE_RESOLVE_PROJECTION_BISECTIONS: usize = 8;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
-const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
+// Two live cold flops can require up to 98 canonical turn matrices. Retain
+// both populations so parallel serving cannot evict and recompute each other.
+const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 128;
 const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARDS * 49;
 
 type DenseAllInEquityCell = Arc<OnceLock<Arc<Vec<f32>>>>;
 type DenseTurnEquityCell = Arc<OnceLock<Arc<Vec<u8>>>>;
 
-#[derive(Default)]
 struct DenseTurnEquityCache {
     clock: u64,
     entries: BTreeMap<[u8; 4], (u64, DenseTurnEquityCell)>,
+    capacity: usize,
+}
+
+impl Default for DenseTurnEquityCache {
+    fn default() -> Self {
+        Self {
+            clock: 0,
+            entries: BTreeMap::new(),
+            capacity: DENSE_TURN_EQUITY_CACHE_BOARDS,
+        }
+    }
 }
 
 impl DenseTurnEquityCache {
@@ -81,7 +95,7 @@ impl DenseTurnEquityCache {
             *last_used = self.clock;
             return cell.clone();
         }
-        if self.entries.len() >= DENSE_TURN_EQUITY_CACHE_BOARDS {
+        if self.entries.len() >= self.capacity {
             let least_recent = self
                 .entries
                 .iter()
@@ -3161,22 +3175,20 @@ fn shared_combo_features(
             }
         }
     }
-    let immediate_equity = [
-        current_range_equity(
-            &board_features.strengths,
-            &ranges[1],
-            &compatible_masses[1],
-            conflicts,
-        ),
-        current_range_equity(
-            &board_features.strengths,
-            &ranges[0],
-            &compatible_masses[0],
-            conflicts,
-        ),
-    ];
-    let exact_runout_equity = (feature_schema == SHARED_FEATURE_SCHEMA_V3)
-        .then(|| exact_turn_range_equities(board, ranges));
+    // Schema v3 replaces immediate strength equity with exact runout equity;
+    // do not calculate the unused strength/rank distribution as well.
+    let query_equity = if feature_schema == SHARED_FEATURE_SCHEMA_V3 {
+        exact_turn_range_equities(board, ranges)
+    } else {
+        std::array::from_fn(|player| {
+            current_range_equity(
+                &board_features.strengths,
+                &ranges[1 - player],
+                &compatible_masses[1 - player],
+                conflicts,
+            )
+        })
+    };
     let blocked_board_relative: [Vec<[f64; 29]>; 2] = std::array::from_fn(|player| {
         conflict_feature_masses_from_card_marginals(
             &combos,
@@ -3328,9 +3340,7 @@ fn shared_combo_features(
             }
             query[92] = range_totals[player] as f32;
             query[93] = range_totals[opponent] as f32;
-            query[94] = exact_runout_equity
-                .as_ref()
-                .map_or(immediate_equity[player][key], |values| values[player][key]);
+            query[94] = query_equity[player][key];
             if uses_board_relative {
                 let compatible = compatible_masses[opponent][key];
                 for feature in 0..29 {
@@ -3838,7 +3848,11 @@ pub struct FlopContinuationValues {
 #[derive(Clone)]
 struct FlopSolver {
     config: FlopResolveConfig,
+    card_workers: Arc<card_workers::CardWorkers>,
     value_inference: Arc<Vec<value_inference::ValueInferenceSession>>,
+    turn_continuations: RefCell<continuation_cache::ContinuationCache>,
+    #[cfg(test)]
+    turn_leaf_computations: Cell<u64>,
     legal: [Vec<bool>; 2],
     conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
@@ -3968,9 +3982,14 @@ impl FlopSolver {
                 .collect()
         });
         let value_inference = Self::value_inference_sessions(&config);
+        let card_workers = card_workers::CardWorkers::shared(config.threads)?;
         Ok(Self {
             config,
+            card_workers,
             value_inference,
+            turn_continuations: RefCell::new(continuation_cache::ContinuationCache::default()),
+            #[cfg(test)]
+            turn_leaf_computations: Cell::new(0),
             legal,
             conflicts: combo_conflicts(),
             nodes: BTreeMap::new(),
@@ -3998,6 +4017,7 @@ impl FlopSolver {
         self.config.value_network = network;
         self.config.auxiliary_value_networks.clear();
         self.value_inference = Self::value_inference_sessions(&self.config);
+        self.turn_continuations = RefCell::new(continuation_cache::ContinuationCache::default());
     }
 
     fn install_safe_root(
@@ -5161,49 +5181,55 @@ impl FlopSolver {
     ) -> [Vec<f64>; 2] {
         self.turn_leaf_evaluations
             .set(self.turn_leaf_evaluations.get() + 1);
+        let (values, residual) = self.turn_continuations.borrow_mut().get_or_compute(
+            &self.config,
+            state,
+            reaches,
+            traverser,
+            || self.compute_turn_leaf_values(state, reaches, traverser),
+        );
+        self.maximum_leaf_zero_sum_residual
+            .set(self.maximum_leaf_zero_sum_residual.get().max(residual));
+        values
+    }
+
+    fn compute_turn_leaf_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        traverser: Option<usize>,
+    ) -> ([Vec<f64>; 2], f64) {
+        #[cfg(test)]
+        self.turn_leaf_computations
+            .set(self.turn_leaf_computations.get() + 1);
         let mut result = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         let turns = (0..52u8)
             .filter(|turn| !self.config.state.board.contains(turn))
             .collect::<Vec<_>>();
         let worker_count = self.config.threads.min(turns.len()).max(1);
         let continuation_selection = self.config.continuation_selection;
-        let solved = std::thread::scope(|scope| {
-            let mut workers = Vec::with_capacity(worker_count);
-            for worker in 0..worker_count {
-                let assigned = turns
-                    .iter()
-                    .copied()
-                    .skip(worker)
-                    .step_by(worker_count)
-                    .collect::<Vec<_>>();
-                let networks = &self.value_inference;
-                let board = self.config.state.board.clone();
-                workers.push(scope.spawn(move || {
-                    assigned
-                        .into_iter()
-                        .filter_map(|turn| {
-                            turn_leaf_card_values(
-                                networks,
-                                &board,
-                                state.actor,
-                                state.invested,
-                                reaches,
-                                turn,
-                                continuation_selection,
-                                traverser,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                }));
-            }
-            let mut values = Vec::with_capacity(turns.len());
-            for worker in workers {
-                values.extend(worker.join().expect("turn value worker panicked"));
-            }
-            values
+        // Preserve the previous strided-worker fold order exactly. Execution
+        // is dynamically balanced, but floating-point aggregation stays serial
+        // and deterministic; regret updates never run concurrently.
+        let ordered = (0..worker_count)
+            .flat_map(|worker| turns.iter().copied().skip(worker).step_by(worker_count))
+            .collect::<Vec<_>>();
+        let networks = &self.value_inference;
+        let board = &self.config.state.board;
+        let solved = self.card_workers.map(&ordered, |turn| {
+            turn_leaf_card_values(
+                networks,
+                board,
+                state.actor,
+                state.invested,
+                reaches,
+                *turn,
+                continuation_selection,
+                traverser,
+            )
         });
-        let mut maximum_residual = self.maximum_leaf_zero_sum_residual.get();
-        for (contribution, residual) in solved {
+        let mut maximum_residual = 0.0f64;
+        for (contribution, residual) in solved.into_iter().flatten() {
             maximum_residual = maximum_residual.max(residual);
             for player in 0..2 {
                 for combo in 0..COMBO_COUNT {
@@ -5211,8 +5237,7 @@ impl FlopSolver {
                 }
             }
         }
-        self.maximum_leaf_zero_sum_residual.set(maximum_residual);
-        result
+        (result, maximum_residual)
     }
 
     fn capture_average_turn_leaves(&self) -> Vec<ResolverTurnLeaf> {
@@ -15604,6 +15629,34 @@ mod tests {
     }
 
     #[test]
+    fn dense_turn_cache_retains_two_live_flop_populations() {
+        let flops = [[0, 18, 44], [9, 26, 51]];
+        let populate = |capacity| {
+            let mut cache = DenseTurnEquityCache {
+                capacity,
+                ..Default::default()
+            };
+            for flop in flops {
+                for turn in 0..52u8 {
+                    if !flop.contains(&turn) {
+                        let key = canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]).0;
+                        cache.cell(key).get_or_init(|| Arc::new(vec![0]));
+                    }
+                }
+            }
+            cache
+        };
+        // The former 64-entry limit loses matrices from the first active flop.
+        assert!(populate(64).completed_flop_turns(flops[0]).is_none());
+        let cache = populate(DENSE_TURN_EQUITY_CACHE_BOARDS);
+        assert!(cache.entries.len() > 64);
+        assert!(cache.entries.len() <= DENSE_TURN_EQUITY_CACHE_BOARDS);
+        for flop in flops {
+            assert_eq!(cache.completed_flop_turns(flop).unwrap().len(), 49);
+        }
+    }
+
+    #[test]
     fn completed_flop_turns_requires_every_initialized_canonical_matrix() {
         let flop = [0, 20, 40];
         let mut cache = DenseTurnEquityCache::default();
@@ -16489,6 +16542,43 @@ mod tests {
         )
         .unwrap_err()
         .contains("provenance"));
+    }
+
+    #[test]
+    fn repeated_exact_turn_continuation_is_computed_once() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let solver = FlopSolver::new(FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges.clone()),
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+            value_network: zero_shared_value_network(),
+            auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
+            threads: 4,
+        })
+        .unwrap();
+        let state = solver.config.state.game_state();
+        let first = solver.turn_leaf_values(&state, &ranges, None);
+        let second = solver.turn_leaf_values(&state, &ranges, Some(0));
+        let third = solver.turn_leaf_values(&state, &ranges, Some(1));
+        assert_eq!(first, second);
+        assert_eq!(first, third);
+        // Mean continuations are independent of the traverser. Identical
+        // betting state and exact reaches must not launch another card sweep.
+        assert_eq!(solver.turn_leaf_computations.get(), 1);
+        assert_eq!(solver.turn_leaf_evaluations.get(), 3);
+        let mut changed = ranges.clone();
+        changed[1][Combo::new(50, 51).key()] =
+            f64::from_bits(changed[1][Combo::new(50, 51).key()].to_bits() + 1);
+        solver.turn_leaf_values(&state, &changed, None);
+        assert_eq!(solver.turn_leaf_computations.get(), 2);
+        let mut solver = solver;
+        solver.replace_continuation_network(zero_shared_value_network());
+        assert_eq!(solver.turn_leaf_values(&state, &ranges, None), first);
+        assert_eq!(solver.turn_leaf_computations.get(), 3);
     }
 
     #[test]

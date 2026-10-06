@@ -80,9 +80,15 @@ export function practiceResolverCommand(): {
     'PRACTICE_RESOLVER_BIN',
     path.join(root, 'preflop-solver', 'target', 'release', 'preflop-solver')
   );
-  const threadsPerProcess = Math.max(
-    1,
-    Math.min(8, Number(process.env.PRACTICE_RESOLVER_THREADS) || cpus().length)
+  const coreBudget = Math.max(1, Math.floor(cpus().length / practiceResolverPoolSize()));
+  const requestedThreads = Number(process.env.PRACTICE_RESOLVER_THREADS);
+  // Eight remains the measured default. Higher counts are opt-in and bounded
+  // by whole available cores, including when loading a second model process.
+  const threadsPerProcess = Math.min(
+    coreBudget,
+    Number.isInteger(requestedThreads) && requestedThreads > 0
+      ? Math.min(16, requestedThreads)
+      : 8
   );
   return {
     executable,

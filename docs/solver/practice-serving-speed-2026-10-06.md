@@ -232,3 +232,159 @@ serial streaming transport. Later cheap preflop lookups now bypass that queue.
 The remaining speed target is cold postflop computation and the scheduling of
 actual decisions versus speculative branches, not additional training rounds
 or silently reducing solve quality.
+
+## Follow-up: profiling, whole continuations and shared card workers
+
+The next pass follows the user's three priorities: profile redundant work,
+cache exact continuations, and improve independent parallel execution. The
+serving path already used eight card workers, not four.
+
+A macOS `sample` capture on the frozen control found neural GEMM most prominent
+among active stacks (2,987 collapsed samples), followed by feature construction
+(818), scalar activation `expf` (783), exact turn equity initialization (610),
+and immediate-strength equity (119). These are sampled stacks, not wall-time
+percentages; idle dispatcher/reader/join waits are not computation. The capture
+is ignored under `local-practice-speed-20261006-b/profile-control/cpu-sample.txt`,
+SHA-256 `5cfa59cfd96d33a4b87639445e81922f1767574d8c1e8ad5b8ea75e796894b92`.
+
+Implementation:
+
+- Schema v3 now computes exact runout equity without first calculating the
+  unused immediate-strength equity it replaces. Older schemas retain their
+  existing immediate-equity features.
+- A 128-entry / estimated 16MiB per-solve cache holds complete continuation
+  vectors and their residual, keyed by ordered board, stack depth, execution
+  order, actor, exact investments/bets/raise state, history/trajectory and both
+  raw reach vectors. No normalization, rounding or probabilistic hash is used
+  for identity. Mean continuation ignores only its genuinely irrelevant
+  traverser argument; robust hypothesis selection retains it. Replacing the
+  frozen model resets both this cache and the prediction sessions. Diagnostics
+  still count requested evaluations and preserve their maximum residual.
+- Independent turn-card jobs use a reusable, shared, bounded
+  [Rayon](https://github.com/rayon-rs/rayon) pool (MIT/Apache-2.0). Concurrent
+  same-budget flop solves share these card workers instead of each repeatedly
+  launching another full set of OS threads. Results retain the previous
+  strided-worker order before the unchanged serial floating-point fold; regret
+  updates remain sequential. See the primary
+  [pool](https://docs.rs/rayon/latest/rayon/struct.ThreadPool.html) and
+  [indexed iterator](https://docs.rs/rayon/latest/rayon/iter/trait.IndexedParallelIterator.html)
+  interfaces.
+- The exact turn matrix LRU has 128 entries (about 215MiB of matrix payload at
+  capacity), sufficient for the two active flop populations' maximum 98
+  canonical boards. A small real-cache regression reproduces the former
+  64-entry eviction and checks both complete 49-turn populations at the new
+  capacity. Other model/cache/scratch allocations are additional.
+- The Node launcher keeps eight as its default, permits explicit whole-number
+  budgets up to 16, and caps/divides available cores across configured model
+  processes. Invalid/fractional settings use the safe default rather than
+  producing an invalid Rust argument.
+
+The extended benchmark adds `--cold-pair serial|parallel`, using identical new
+boards/queries in both modes and retaining exact probability/EV comparisons,
+resource limits and completeness checks. Four cheap Python tests cover these
+fixtures, unchanged model/budget arguments and worker validation.
+
+Initial controls were noisier/slower than the preceding session: four workers
+took 16.529s/22.222s/16.149s on the three common cold fixtures versus eight's
+11.654s/11.199s/10.985s. Ten static workers did not establish a consistent gain
+(11.402s/13.685s/9.462s/11.488s across the four cold fixtures). The cache-only
+pilot retained all eleven exact responses but did not establish a clear
+single-request improvement: total four-cold time 45.206s versus 44.250s, while
+the independent pair completed in 23.273s versus 24.640s. No general SLA or
+single-variable speed claim follows from this noisy first pair.
+
+### Shared-worker matched results
+
+The combined implementation (whole-continuation cache, dead feature work
+removed, shared workers and 128-matrix retention) reproduced all eleven full
+responses exactly in two comparisons. Pair B reverses the execution order:
+candidate first, then frozen control. No build or test ran alongside the
+latency pilots.
+
+| Cold request | Control A | Shared A | Control B | Shared B |
+| --- | ---: | ---: | ---: | ---: |
+| Limped flop | 10.115s | 7.149s | 16.278s | 8.737s |
+| Raised flop | 13.204s | 13.254s | 15.280s | 13.081s |
+| Mixed-batch flop | 10.574s | 10.263s | 11.204s | 9.199s |
+| Cross-batch flop | 10.357s | 9.973s | 11.688s | 11.087s |
+| Four-cold total | 44.250s | 40.639s | 54.450s | 42.103s |
+| Two independent cold flops, concurrently | 24.640s | 19.561s | 55.871s | 17.475s |
+| Sampled peak footprint | 450MiB | 567MiB | 468MiB | 596MiB |
+
+The first comparison's concurrent pair improved 20.6%; its four-cold total
+improved 8.2%. The reverse comparison also favors the implementation, but the
+55.871s baseline pair is unusually slow. Keep that observation rather than
+present its much larger percentage as a general throughput forecast. These
+are local fixture measurements, not an SLA or a full-hand strength evaluation.
+The larger exact-matrix cache trades additional memory for avoiding eviction;
+the measured peak remains below the pilot's 2GiB safety stop. All receipts
+completed without a resource stop. Ready native preflop replies stayed below
+1ms in both eight-worker comparisons, and repeated solved-flop queries below
+0.3ms.
+
+An additional ten-worker replay retained all eleven responses exactly. Its
+four-cold times were 8.176s/13.385s/11.344s/9.498s and its concurrent pair
+finished in 16.188s. This unpaired sample does not establish a consistent
+single-request benefit over eight, so the website default remains eight;
+higher budgets remain explicitly configurable and core-bounded.
+
+Receipts live in the ignored `local-practice-speed-20261006-b` directory:
+
+- Control A: `pair-control-eight-1/manifest.json`, SHA-256
+  `c83532fba12d88f1d66c1a12c368b4c685592f3c9126637b829970cac2705bff`.
+- Shared A: `pair-pooled-eight-1/manifest.json`, SHA-256
+  `4dc5d99ec09b850ec5ffb15d0912772f688e05e5bec4b4f8141f1abfea5ee2b4`.
+- Control B: `pair-control-eight-2/manifest.json`, SHA-256
+  `01a2dd874a5504fe2c9d820679a43102d3e494e194f45652abb6f69be07b3bd8`.
+- Shared B: `pair-pooled-eight-2/manifest.json`, SHA-256
+  `f0b74bff733dd48e2815936cb67752e173256088520e2516edb775efba01fc7e`.
+- Ten-worker replay: `pair-pooled-ten-1/manifest.json`, SHA-256
+  `32d882e5a405f912c0a8edcc55b175f5172fc214d8994b11fd09463af329ec81`.
+
+The default worker count was not reduced, nor were iterations, legal actions,
+sampling rules, model weights or precision changed. The pool preserves the
+control's floating-point fold order. Cache tests reproduce exact reuse,
+one-bit-range misses and invalidation after changing the frozen model; worker
+tests exercise eight actual workers, shared concurrent budgets, ordered
+results and recovery after a task panic.
+
+The final release binary (`f80f4bfd5dcdb3344979063790ed7e849b1c0d4ee4be3c7881232ee1254cf06a`)
+also reproduced all eleven responses exactly. Its unpaired replay was noisier:
+8.699s/15.044s/11.423s/11.405s for the four cold requests and 32.055s for the
+concurrent pair, with a sampled 520MiB peak and no resource stop. This is a
+final-binary parity check, not another matched speed win. Receipt:
+`shared-workers-final/manifest.json`, SHA-256
+`6fdf6f88ed3fac66fdbf30a1bc270af2426dc5a404e07694e1ae7e7688310f8b`.
+
+### Follow-up verification
+
+- `npm test`: 155 passed; four opt-in native integration tests are skipped by
+  default.
+- `cargo test --release --manifest-path preflop-solver/Cargo.toml`: 377 library,
+  seven transport and nine CLI tests passed. The 59 explicitly gated long
+  research tests remain intentionally ignored.
+- From `preflop-solver/neural`, `../.venv-neural/bin/python -m unittest
+  test_practice_latency`: four passed.
+- `npm run build` passed, including verification of the unchanged deployed
+  artifact identities.
+- The live development server returned 200 for preflop and limped-flop POSTs
+  with full policy/EV equality to the frozen control, and `/practice` retained
+  its COOP/COEP headers. The old idle native child was restarted so this was
+  the final release binary, not a stale process.
+- Running those live checks alongside the separate native integration process
+  produced unusually slow cold requests (about 86.6s) despite passing all four
+  integration cases. Both independently launched model instances requested
+  eight card workers; this is outside the shared pool within one native
+  process. A later isolated live raised-flop POST completed in 6.023s, with a
+  5.942ms repeated reply, both exactly matching the control. Background CPU
+  competition was also visible. This shows why isolated latency pilots must
+  not be treated as a multi-process load guarantee.
+- Repeating `PRACTICE_RESOLVER_INTEGRATION=1 npx vitest run
+  lib/server/practice-solver-process.integration.test.ts` in isolation passed
+  all four cases in 16.690s: 5.189s for the pinned solved flop and 11.375s for
+  the trajectory across flop, turn and river. The unusually slow concurrent
+  observations are retained above, not used as a policy-quality result.
+- Chrome remains running but the browser harness has no active debugging
+  connection. Renewed remote-debugging/Accessibility approval has been
+  requested; final visual/keyboard/console rechecking is still pending. The
+  preceding milestones' browser checks above are not claimed for this build.
