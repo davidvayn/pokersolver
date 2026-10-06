@@ -60,6 +60,20 @@ impl NativeFullHandPolicy {
         Ok(policy)
     }
 
+    fn with_compact_native_continuation(
+        preflop: Arc<FrozenPreflopPolicy>, options: NativeFlopOptions,
+        leaf_workers: usize,
+    ) -> Result<Self, String> {
+        if options.iterations < 2 || options.training_turn_iterations < 2
+            || options.response_turn_iterations < 2 || !(1..=4).contains(&leaf_workers) {
+            return Err("invalid pinned native full-hand search budget".into());
+        }
+        let mut policy = Self::new(preflop, options);
+        policy.complete_root_support = true;
+        policy.leaf_workers = leaf_workers;
+        Ok(policy)
+    }
+
     fn with_compact_continuation_and_turn_averages(
         preflop: Arc<FrozenPreflopPolicy>, options: NativeFlopOptions,
         model: Arc<PublicValueNetwork>, root_realization_turn_averages: bool,
@@ -202,6 +216,10 @@ impl NativeFullHandPolicy {
                         self.preflop.game.clone(), input, &options, model,
                     )?
                 }
+            } else if self.complete_root_support {
+                NativePostflopPolicy::solve_pinned_compact_native_continuation(
+                    self.preflop.game.clone(), input, &options, self.leaf_workers,
+                )?
             } else if self.leaf_workers == 1 {
                 NativePostflopPolicy::solve(self.preflop.game.clone(), input, &options)?
             } else {
@@ -382,6 +400,35 @@ mod tests {
     }
 
     #[test]
+    fn compact_native_full_hand_rejects_unpinned_budgets_and_preserves_copies() {
+        let fixture = fixture();
+        for field in 0..3 {
+            let mut options = fixture.options.clone();
+            match field {
+                0 => options.iterations = 1,
+                1 => options.training_turn_iterations = 1,
+                _ => options.response_turn_iterations = 1,
+            }
+            assert!(NativeFullHandPolicy::with_compact_native_continuation(
+                fixture.preflop.clone(), options, 4).is_err());
+        }
+        for workers in [0, 5] {
+            assert!(NativeFullHandPolicy::with_compact_native_continuation(
+                fixture.preflop.clone(), fixture.options.clone(), workers).is_err());
+        }
+        let policy = NativeFullHandPolicy::with_compact_native_continuation(
+            fixture.preflop.clone(), fixture.options.clone(), 4).unwrap();
+        assert!(policy.learned.is_none());
+        assert!(policy.complete_root_support);
+        assert_ne!(policy.route_identity(), fixture.route_identity());
+        let copy = policy.parallel_copy().unwrap().take_resolution_diagnostics().unwrap();
+        assert_eq!(copy["routeSha256"], policy.route_identity());
+        assert_eq!(copy["executionLeafWorkers"], 4);
+        assert_eq!(copy["completeRootSupport"], true);
+        assert_eq!(copy["learnedLeafModelSha256"], serde_json::Value::Null);
+    }
+
+    #[test]
     fn native_full_hand_parallel_execution_preserves_policy_and_worker_copies() {
         let serial = fixture();
         let mut parallel = fixture();
@@ -412,7 +459,18 @@ mod tests {
 
     #[test]
     fn native_full_hand_uses_one_observable_policy_through_showdown_and_parallel_copy() {
-        let policy = fixture();
+        observable_full_hand(fixture());
+    }
+
+    #[test]
+    fn compact_native_full_hand_uses_only_observable_cards_through_showdown() {
+        let fixture = fixture();
+        let policy = NativeFullHandPolicy::with_compact_native_continuation(
+            fixture.preflop, fixture.options, 4).unwrap();
+        observable_full_hand(policy);
+    }
+
+    fn observable_full_hand(policy: NativeFullHandPolicy) {
         let game = &policy.preflop.game;
         let deal = Deal::from_sampled_cards([[51, 50], [47, 46]], [0, 5, 10, 15, 20]);
         let mut state = GameState::initial(game);

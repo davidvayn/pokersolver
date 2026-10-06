@@ -59,6 +59,26 @@ impl NativePostflopPolicy {
             compact_continuation_game(game),state,options,model,root_realization_turn_averages)
     }
 
+    /// Accurate-leaf sibling of the compact learned route. Complete own-card
+    /// support is trained counterfactually, without changing actual ranges.
+    pub fn solve_pinned_compact_native_continuation(
+        game: BlueprintConfig, state: PublicBeliefState, options: &NativeFlopOptions,
+        leaf_workers: usize,
+    ) -> Result<Self, String> {
+        if options.iterations < 2 || options.training_turn_iterations < 2
+            || options.response_turn_iterations < 2 || !(1..=4).contains(&leaf_workers) {
+            return Err("invalid pinned native full-hand search budget".into());
+        }
+        let mut candidate = super::super::train_with_root_support(
+            compact_continuation_game(game), state, options.seed, options.iterations,
+            options.training_turn_iterations, false, 1, leaf_workers, None,
+            super::super::continuation::Evaluator::Native, true,
+        )?;
+        candidate.response_turn_iterations = (options.response_turn_iterations
+            != candidate.turn_iterations).then_some(options.response_turn_iterations);
+        Ok(Self::from_frozen(Frozen::new(&candidate)?))
+    }
+
     pub fn validate_learned_model(
         game: &BlueprintConfig,
         model: &PublicValueNetwork,
