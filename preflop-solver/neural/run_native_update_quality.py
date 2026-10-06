@@ -26,12 +26,25 @@ def first_verdict(gain, control):
         interpretation="One consumed root/seed under native64 continuations; not full-game exploitability")
 
 
-def native_environment(root, digest, output, environ=None):
+def paired_verdict(gain, control, first_gain, first_control):
+    if not first_verdict(first_gain, first_control)["promising"]:
+        raise ValueError("first complete quality screen must pass before pairing")
+    second = first_verdict(gain, control)
+    mean = ((first_control-first_gain) + second["improvementBb"])/2
+    return dict(promising=mean >= .02 and second["regressionBb"] <= .01,
+        meanImprovementBb=mean, secondImprovementBb=second["improvementBb"],
+        secondRegressionBb=second["regressionBb"], releaseAccepted=False,
+        interpretation="Two consumed limped-root seeds under native64 continuations; other roots and full-game exploitability unmeasured")
+
+
+def native_environment(root, digest, output, environ=None, seed=100101):
     inherited = os.environ if environ is None else environ
     if any(k.startswith("POKER_NATIVE_FLOP_") for k in inherited):
         raise ValueError("cannot inherit different flop/model/averaging settings")
+    if seed not in (100101, 100102):
+        raise ValueError("only the original matched seeds are allowed")
     return dict(POKER_NATIVE_FLOP_INPUT=str(root), POKER_NATIVE_FLOP_INPUT_SHA=digest,
-        POKER_NATIVE_FLOP_SEED="100101", POKER_NATIVE_FLOP_ITERATIONS="64",
+        POKER_NATIVE_FLOP_SEED=str(seed), POKER_NATIVE_FLOP_ITERATIONS="64",
         POKER_NATIVE_FLOP_TURN_ITERATIONS="64", POKER_NATIVE_FLOP_TURN_SAMPLES="1",
         POKER_NATIVE_FLOP_CHANCE_BASELINE="none", POKER_NATIVE_FLOP_LEAF_WORKERS="4",
         POKER_NATIVE_FLOP_OUTPUT=str(output))
@@ -63,9 +76,44 @@ def run(args):
     protocol = json.loads(protocol_path.read_text()); protocol["sha256"] = pinned[str(protocol_path)]
     cases = select_cases(protocol, json.loads(baseline.read_text()), list(SPOTS))
     reference = json.loads(args.reference.read_text()); old = controls(reference, cases)
-    control = old[("limped-paired", 100101, "native")]
-    seconds32 = verify_cost(json.loads(args.cost.read_text()), control)
-    original = args.reference.resolve().parent / "limped-paired/100101/native"
+    control = old[("limped-paired", args.seed, "native")]
+    seconds32 = verify_cost(json.loads(args.cost.read_text()), old[("limped-paired", 100101, "native")])
+    first = None
+    if (args.first_screen is None) != (args.first_screen_sha256 is None):
+        raise ValueError("first screen and hash must be supplied together")
+    if args.seed == 100101 and args.first_screen is not None:
+        raise ValueError("first case cannot use its own result as confirmation")
+    if args.seed == 100102:
+        if args.first_screen is None: raise ValueError("paired seed requires the completed promising first screen")
+        path = args.first_screen.resolve(); first = json.loads(path.read_text())
+        pinned[str(path)] = args.first_screen_sha256
+        first_control = old[("limped-paired", 100101, "native")]
+        if (first.get("schema") != "native64-flop-update-first-screen-v1" or first.get("status") != "complete"
+                or first.get("seed", 100101) != 100101 or first.get("flopIterations") != 64
+                or first.get("turnIterations") != 64 or first.get("controlGainBb") != first_control["gainBb"]
+                or first.get("result") != first_verdict(first["gainBb"], first_control["gainBb"])
+                or not first["result"]["promising"] or len(first.get("packets", {})) != 49
+                or first["pinnedInputs"].get(str(binary)) != args.binary_sha256):
+            raise ValueError("first screen is incomplete, mismatched or rejected")
+        for filename, digest in (("candidate.json", first["candidateSha256"]), ("response.json", first["responseSha256"])):
+            pinned[str(path.parent / filename)] = digest
+        first_candidate = json.loads((path.parent / "candidate.json").read_text())
+        first_response = json.loads((path.parent / "response.json").read_text())
+        first_audit = path.parent / "audit/completed.json"
+        audited = json.loads(first_audit.read_text())["worker"]
+        if (first_candidate["seed"] != 100101 or first_candidate["iterations"] != 64 or first_candidate["turn_iterations"] != 64
+                or first_candidate.get("learned_leaf_model_sha256") is not None or first_candidate.get("leaf_schedule") is not None
+                or first_response["public_turns"] != 49 or first_response["candidate_sha256"] != first["candidateSha256"]
+                or abs(first_response["half_summed_gain_bb"]-first["gainBb"]) > 1e-12
+                or audited.get("status") != "complete" or audited.get("exitCode") != 0 or audited.get("resourceStopReason")):
+            raise ValueError("first policy/response/audit identity changed")
+        pinned[str(first_audit)] = sha256(first_audit)
+        expected_turns = set(range(52))-set(first_candidate["state"]["board"])
+        if set(first["packets"]) != {str(t) for t in expected_turns}:
+            raise ValueError("first screen omits exact public chance")
+        for turn in expected_turns:
+            pinned[str(path.parent / "packets" / f"turn-{turn}.json")] = first["packets"][str(turn)]["sha256"]
+    original = args.reference.resolve().parent / "limped-paired" / str(args.seed) / "native"
     for filename, digest in (("candidate.json", control["candidateSha256"]),
                              ("response.json", control["responseSha256"])):
         pinned[str(original / filename)] = digest
@@ -80,7 +128,14 @@ def run(args):
     root_input = root / "inputs/limped-paired.json"; inputs = root / "inputs.json"
     pinned[str(inputs)] = sha256(inputs)
     pinned[str(root_input)] = json.loads(inputs.read_text())["roots"][str(root_input)]
-    equity = root / "jobs/limped-paired/100101/equity.json"
+    if first is not None:
+        public = json.loads(root_input.read_text())
+        if (not same_public_state(first_candidate["state"], public["public"])
+                or first_candidate["game"] != public["game"]
+                or first_candidate.get("response_turn_iterations") is not None
+                or first["pinnedInputs"].get(str(root_input)) != pinned[str(root_input)]):
+            raise ValueError("first screen used a different public root or played budget")
+    equity = root / "jobs/limped-paired" / str(args.seed) / "equity.json"
     pinned[str(equity)] = sha256(equity)
     pinned[str(equity.with_suffix(".f32le"))] = json.loads(equity.read_text())["sha256"]
     build = json.loads(args.build.read_text())
@@ -120,7 +175,8 @@ def run(args):
     timer = threading.Timer(7200, stop.set); timer.daemon = True
     record = dict(schema="native64-flop-update-first-screen-v1", status="running", pinnedInputs=pinned,
         maximumSeconds=7200, projectedSeconds=projection, packetWorkers=4, releaseAccepted=False,
-        controlGainBb=control["gainBb"], flopIterations=64, turnIterations=64)
+        controlGainBb=control["gainBb"], flopIterations=64, turnIterations=64,
+        spot="limped-paired", seed=args.seed, firstScreenSha256=args.first_screen_sha256)
     with controller_lock(output):
         pressure = None
         try:
@@ -128,11 +184,11 @@ def run(args):
             pressure = PilotMemoryGuard(stop, output / "system-memory.json").start()
             candidate = output / "candidate.json"
             solve = run_job(binary, PREFIX+"saved_20bb_native_flop_pilot",
-                native_environment(root_input, pinned[str(root_input)], candidate),
+                native_environment(root_input, pinned[str(root_input)], candidate, seed=args.seed),
                 output / "solve", [candidate], stop, seconds=3600, memory=4*1024**3)
             value = json.loads(candidate.read_text()); original_input = json.loads(root_input.read_text())
             if (not same_public_state(value["state"], original_input["public"]) or value["game"] != original_input["game"]
-                    or value["seed"] != 100101 or value["iterations"] != 64 or value["turn_iterations"] != 64
+                    or value["seed"] != args.seed or value["iterations"] != 64 or value["turn_iterations"] != 64
                     or value.get("response_turn_iterations") is not None
                     or value.get("learned_leaf_model_sha256") is not None or value.get("leaf_schedule") is not None):
                 raise ValueError("candidate changed model, budgets, averaging or frozen game")
@@ -171,7 +227,8 @@ def run(args):
                 command=["node", str(HERE/"audit_native_flop_response.mjs"), str(candidate), str(packets), str(equity), str(response_path)])
             gain = json.loads(response_path.read_text())["half_summed_gain_bb"]
             record.update(status="complete", gainBb=gain, responseSha256=sha256(response_path), packets=completed,
-                result=first_verdict(gain, control["gainBb"]))
+                result=(first_verdict(gain, control["gainBb"]) if first is None else
+                        paired_verdict(gain, control["gainBb"], first["gainBb"], first["controlGainBb"])))
             if stop.is_set() or any(sha256(Path(p)) != h for p, h in pinned.items()):
                 raise ValueError("stopped or pinned source changed")
             print(json.dumps(dict(event="native64-quality", gainBb=gain, result=record["result"])), flush=True)
@@ -186,6 +243,8 @@ def run(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--baseline-root", type=Path, required=True); p.add_argument("--baseline-sha256", required=True)
+    p.add_argument("--seed", type=int, choices=(100101,100102), default=100101)
+    p.add_argument("--first-screen", type=Path); p.add_argument("--first-screen-sha256")
     for name in ("reference", "cost", "build", "binary", "default_parity"):
         option = name.replace("_", "-")
         p.add_argument("--"+option, type=Path, required=True); p.add_argument("--"+option+"-sha256", required=True)

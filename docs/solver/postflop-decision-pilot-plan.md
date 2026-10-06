@@ -1187,3 +1187,37 @@ New binary SHA-256:
 `87e7e1b36d2896a4ae75fe9243c5e8b27c19d0e9d7c88642bc4b4750c749978d`.
 Default parity receipt SHA-256:
 `7f97ff767d2aabccf87e405cba93595a36a21f6cf875698d3270d4b1f50b39b6`.
+
+Section 24's first screen completed and is **promising**, not release accepted.
+Conditional response gain fell 0.187584887→0.127664771bb, an improvement of
+0.059920116bb (31.94%), exceeding the predeclared 0.02bb screen. Construction
+took 2145.307s with 1,260,750,072 bytes peak sampled footprint. All49 native64
+packets and the independent audit passed; total elapsed time was 3554.3s,
+with normal system pressure. Other seeds/roots and full-game improvement are
+not yet measured. No neural weights or website policy has been promoted.
+
+Completed first manifest SHA-256:
+`d583d8396c900924391341898027069fb7947741c366a4153c90840e7f5a10eb`.
+Native64 candidate SHA-256:
+`348b402894439c8ae1130fa2c067408ca9b3564bc54383357b6969c0a2b8ced4`.
+Native64 response SHA-256:
+`1f2e046894415fcb63bcb2002956f238a1f5a2ed64e2cb7adc5f9ee08dc9fcb3`.
+
+## 25. Confirm accurate-update improvement across the matched seed
+
+1. Pin section 24's completed first policy, response, all49 packet hashes,
+   successful audit and original native32 control. Require its original
+   improvement criterion before allocating a second run.
+2. Change only the solver seed to 100102 on the same limped root. Keep native64
+   leaves, 64 flop updates, full averaging, one turn sample and four leaf
+   workers. Use the same immutable native binary and default-parity proof.
+3. Reuse that seed's already complete native32 response (0.246098758bb), not
+   another redundant 32-update construction/evaluation. Preserve the original
+   two-hour projection, 4GiB/3600s construction, 1.5GiB packet limits, system
+   pressure and 20GiB disk reserve. Evaluate all49 turns and run the JS audit.
+4. Require the second seed not to regress its own control by more than 0.01bb
+   and the two-seed mean improvement to be at least 0.02bb. Do not average away
+   a larger seed regression. A pass justifies the other predeclared root/seed
+   comparisons; it is not evidence of full-game exploitability or GTO safety.
+5. If the pair fails, preserve both outcomes and stop unchanged scaling.
+   Do not tune seeds or the window to rescue the original favorable result.
