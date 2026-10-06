@@ -1221,3 +1221,38 @@ Native64 response SHA-256:
    comparisons; it is not evidence of full-game exploitability or GTO safety.
 5. If the pair fails, preserve both outcomes and stop unchanged scaling.
    Do not tune seeds or the window to rescue the original favorable result.
+
+Section 25 completed and **passes its paired feasibility criteria**. Seed
+100102 improves 0.246098758→0.118057507bb, a 0.128041251bb reduction. The two
+limped seeds' mean improves 0.216841822→0.122861139bb (43.34%), with neither
+seed regressing. This is conditional response gain, not full-game bb/hand.
+Second-seed construction took 2163.730s at 1,181,484,232 bytes peak sampled
+footprint; complete all49 evaluation and independent audit took 3506.1s total.
+Memory pressure stayed normal. No website model has been promoted.
+
+Paired manifest SHA-256:
+`b58a53ecc7092d0590e9eba75f0e1f4f574e06b4fc7dcb65b1b5c2daa81039f5`.
+Second native64 candidate SHA-256:
+`2657c0e8c020779f2af14ce85c07390ceb62f20e85560d1385a30c75776b5be4`.
+Second native64 response SHA-256:
+`7828433377ef37de666d77fbbdb328ea58c2adda3a44b61602b5cddeefe45177`.
+
+## 26. Test transfer to the original single-raised high-rainbow root
+
+1. Require the completed, promising limped pair and recheck both policies,
+   all98 packet identities and independent audits before expansion. Reuse the
+   original native32 single-raised controls, 0.303985955/0.299026003bb.
+2. Run seed 100101 first on the original single-raised input; change only the
+   root. Keep 64 flop/native64 continuation updates, one turn sample, full
+   averaging, four leaf workers and the exact same native binary. Keep all
+   prior memory, pressure, disk, two-hour projection and time stops.
+3. Require >=0.02bb improvement before seed 100102 confirmation. The root's
+   completed pair must improve mean gain >=0.02bb, with second-seed regression
+   <=0.01bb. No favorable-root substitution or reduced evaluation budget.
+4. Evaluate all49 legal turns and run the independent audit for each accepted
+   construction. Report the complete four-case comparison, not just the best
+   root/seed. Other boards, betting histories, full-hand safety and deployable
+   neural quality remain separate unresolved questions.
+5. A complete successful transfer justifies a pinned full-hand feasibility
+   route and measured next iteration budget. It does not authorize cloud spend,
+   model promotion, new fit-loss grids or claiming Approximate GTO.

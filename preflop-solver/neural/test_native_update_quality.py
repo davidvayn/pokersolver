@@ -1,11 +1,56 @@
 import math
 from pathlib import Path
+import json
+import tempfile
 import unittest
 
-from run_native_update_quality import first_verdict, native_environment, paired_verdict, verify_cost
+from run_native_update_quality import first_verdict, native_environment, paired_verdict, pin_screen, progression, verify_cost
+from run_native_value_preflight import sha256
 
 
 class NativeUpdateQualityTest(unittest.TestCase):
+    def test_completed_screen_seam_rejects_wrong_root_seed_partial_chance_and_failed_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory); (path/"audit").mkdir()
+            state = dict(board=[8,9,16],ranges=[[.5,.5],[.5,.5]])
+            game = dict(effective_stack_bb=20)
+            root = path/"root.json"; root.write_text(json.dumps(dict(public=state,game=game)))
+            binary = path/"binary"; binary.write_text("fixture")
+            candidate = dict(state=state,game=game,seed=100101,iterations=64,turn_iterations=64)
+            (path/"candidate.json").write_text(json.dumps(candidate))
+            candidate_sha = sha256(path/"candidate.json")
+            response = dict(public_turns=49,candidate_sha256=candidate_sha,half_summed_gain_bb=.12)
+            (path/"response.json").write_text(json.dumps(response))
+            audit = path/"audit/completed.json"
+            audit.write_text(json.dumps(dict(worker=dict(status="complete",exitCode=0,resourceStopReason=None))))
+            record = dict(schema="native64-flop-update-first-screen-v1",status="complete",seed=100101,
+                spot="limped-paired",flopIterations=64,turnIterations=64,controlGainBb=.188,gainBb=.12,
+                candidateSha256=candidate_sha,responseSha256=sha256(path/"response.json"),
+                pinnedInputs={str(binary):sha256(binary),str(root):sha256(root)},
+                packets={str(t):dict(turn=t,sha256="b"*64) for t in range(52) if t not in state["board"]})
+            control=dict(seed=100101,spot="limped-paired",gainBb=.188)
+            pinned={str(binary):sha256(binary)}
+            pin_screen(path/"manifest.json",record,pinned,binary,root,control)
+            self.assertEqual(len([p for p in pinned if "/packets/" in p]),49)
+            for bad in ({**record,"status":"running"},{**record,"seed":100102},
+                        {**record,"packets":{}},{**record,"gainBb":.1}):
+                with self.assertRaises(ValueError):
+                    pin_screen(path/"manifest.json",bad,pinned,binary,root,control)
+            changed=path/"different-root.json"
+            changed.write_text(json.dumps(dict(public={**state,"board":[0,1,2]},game=game)))
+            bad={**record,"pinnedInputs":{**record["pinnedInputs"],str(changed):sha256(changed)}}
+            with self.assertRaises(ValueError): pin_screen(path/"manifest.json",bad,pinned,binary,changed,control)
+            audit.write_text(json.dumps(dict(worker=dict(status="complete",exitCode=1))))
+            with self.assertRaises(ValueError): pin_screen(path/"manifest.json",record,pinned,binary,root,control)
+
+    def test_expansion_requires_its_completed_prior_cases(self):
+        for row in (("limped-paired",100101,False,False),("limped-paired",100102,True,False),
+                    ("single-raised-high-rainbow",100101,False,True),("single-raised-high-rainbow",100102,True,True)):
+            progression(*row)
+        for row in (("limped-paired",100102,False,False),("limped-paired",100101,True,False),
+                    ("single-raised-high-rainbow",100101,False,False),("other",100101,False,True)):
+            with self.assertRaises(ValueError): progression(*row)
+
     def test_real_policy_improvement_required(self):
         self.assertTrue(first_verdict(.16, .188)["promising"])
         self.assertFalse(first_verdict(.18, .188)["promising"])
