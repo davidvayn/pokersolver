@@ -24,13 +24,20 @@ No exploitability improvement or new equilibrium claim follows from it.
    request ID. A ready decision no longer waits for its slow speculative
    sibling. Omitted/false keeps the existing aggregate CLI envelope and input
    order. Panics retain the failing request ID rather than failing every client
-   with an unidentified response. This does not preempt a running batch or
-   eliminate cold solve cost.
+   with an unidentified response. Streaming does not eliminate cold solve cost;
+   cross-batch scheduling is addressed by the next change below.
 4. Add a cheap, guarded native serving benchmark. It reads the actual pinned
    manifest, preserves full probability/EV outputs, supports exact baseline
    comparison, and measures cold, cached and mixed-speed batch requests.
    The worker has a 120-second cap, 2GiB sampled-memory cap and 20GiB disk
    reserve. Failed/incomplete/resource-stopped receipts are not valid results.
+5. Separate NDJSON transport scheduling from poker computation. A reader feeds
+   a bounded dispatcher; two workers handle postflop computation with at most
+   eight waiting jobs. Preflop uses the same frozen lookup/EV-table adapter
+   immediately instead of queuing behind active postflop work. Responses retain
+   their request IDs, default batches retain input ordering, accepted jobs drain
+   on EOF, and saturation produces an explicit retry error, never fake policy.
+   The poker engine, solve budget and per-solve card worker count are unchanged.
 
 ## Local evidence and limitations
 
@@ -96,12 +103,43 @@ The baseline binary must be preserved before rebuilding. Repeating a cached
 request is not a cold benchmark. Keep power conditions/system load comparable
 and retain all receipts rather than selecting the fastest run.
 
+### Cross-batch head-of-line delay
+
+The first streaming milestone still processed stdin batches serially. A second
+matched test sent a cold flop in one batch, then a ready preflop in a separate
+batch on the same loaded engine. The bounded asynchronous transport produced:
+
+| Native request | Serial streaming transport | Asynchronous transport |
+| --- | ---: | ---: |
+| Earlier cold flop | 6.421s | 6.091s |
+| Later ready preflop | 6.422s | 0.000306s |
+
+All nine outputs in the expanded fixture matched exactly, including EVs and
+confidence. Other cold requests took 5.523s/6.693s/5.841s in the asynchronous
+run: this is evidence of eliminating avoidable queuing, not another established
+cold-computation improvement. Two heavy solves may contend for CPU; neither
+this pair nor the earlier fixture establishes a multi-user throughput SLA.
+Cached postflop queries still use the bounded postflop lanes.
+
+Append `--cross-batch` to both benchmark commands to reproduce. Receipts:
+
+- `cross-batch-serial/manifest.json` SHA-256:
+  `301a09155bf7513fcd4c5d00a5d8e220e39ca35309d0fe8c65cfd4f2d9685db8`
+- `cross-batch-async/manifest.json` SHA-256:
+  `4d936b072d37ea023a8492533ba6493f0db68cb1de9cb0752ecc52da3156d39b`
+
+The transport regression first failed against the serial implementation, then
+passed with two deliberately blocked postflop callbacks and a later preflop
+request over a real NDJSON stream. Further gated tests cover completion order,
+legacy batches, identified panics, malformed input, output failure, EOF draining,
+and the two-active/eight-queued limit.
+
 ## Verification and next serving bottleneck
 
 - `npm test`: 154 passed; the four opt-in native integration cases are skipped
   by default. Running them explicitly with `PRACTICE_RESOLVER_INTEGRATION=1`
   passes, including pinned flop policy and a trajectory through every street.
-- Native `cargo test --release`: 367 library, three batch and nine CLI tests
+- Native `cargo test --release`: 367 library, seven transport and nine CLI tests
   passed; 59 explicit long research tests remain intentionally ignored.
 - `npm run build` passes and verifies the unchanged model artifact identities.
 - A real browser completed a full hand through an all-in runout and terminal
@@ -110,14 +148,19 @@ and retain all receipts rather than selecting the fastest run.
   emulation works. Captured practice requests returned 200, with no captured
   page error or unhandled rejection. Mobile next-hand initialization retained
   the table and alternated the hero to BB.
+- After replacing serial batch scheduling, the rebuilt server also handled a
+  fresh browser hand through a preflop raise/call line, a solved flop, and a
+  mobile flop bet. All captured requests returned 200, with no captured errors
+  or horizontal overflow at 375px. The accepted turn/river integration replay
+  was rerun against this binary, not a stale server process.
 - The observed hero response to one flop all-in still has unavailable EVs:
   the existing model shows the frequency grade and explicitly declines EV
   grading. This is not fixed or fabricated by the speed change; the integration
   trajectory is not proof that every possible decision has an EV estimate.
 
-Browser tracing also exposed the next relevant transport bottleneck: a request
-in a *later* stdin batch can still queue behind an earlier cold solve. One BB
-hand's speculative flop branches took approximately 5.86s and 11.28s. The
-within-batch streaming fix does not claim to solve that cross-batch wait.
-Investigate bounded asynchronous request scheduling before adding iterations,
-lowering quality, or resuming strength experiments.
+Browser tracing exposed the cross-batch bottleneck addressed above: one BB
+hand's speculative flop branches took approximately 5.86s and 11.28s with the
+serial streaming transport. Later cheap preflop lookups now bypass that queue.
+The remaining speed target is cold postflop computation and the scheduling of
+actual decisions versus speculative branches, not additional training rounds
+or silently reducing solve quality.

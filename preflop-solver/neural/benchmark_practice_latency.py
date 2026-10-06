@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VERSION = "hu-20bb-v102-consensus-continual-resolver-experimental"
 
 
-def fixtures(version):
+def fixtures(version, cross_batch=False):
     preflop = dict(requestId="startup-preflop", stateHash="e" * 64,
                    modelVersion=version, depthBb=20, privateCards=[7, 34],
                    board=[], street="preflop", actor=0, totalPotBb=1.5,
@@ -33,11 +33,17 @@ def fixtures(version):
               "actions": [
                   dict(actor=0, street="preflop", kind="raise", amountToBb=2.5),
                   dict(actor=1, street="preflop", kind="call", amountToBb=None)]}
-    return [(name, {**query, "requestId": name}) for name, query in [
+    queries = [(name, {**query, "requestId": name}) for name, query in [
         ("startup-preflop", preflop), ("limped-cold", limp), ("limped-warm", limp),
         ("raised-cold", raised), ("raised-warm", raised),
         ("batch-slow-flop", {**limp, "board": [2, 24, 41]}),
         ("batch-ready-preflop", preflop)]]
+    if cross_batch:
+        queries += [("cross-batch-slow-flop", {**limp, "board": [3, 21, 42],
+                                               "requestId": "cross-batch-slow-flop"}),
+                    ("cross-batch-ready-preflop", {**preflop,
+                                                   "requestId": "cross-batch-ready-preflop"})]
+    return queries
 
 
 def command(binary, manifest, threads):
@@ -76,6 +82,7 @@ def main():
     parser.add_argument("--binary", type=Path, default=ROOT / "preflop-solver/target/release/preflop-solver")
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--baseline", type=Path, help="require identical outputs to this prior receipt")
+    parser.add_argument("--cross-batch", action="store_true", help="include a later ready batch behind a cold one")
     args = parser.parse_args()
     if not 1 <= args.threads <= 8:
         parser.error("threads must be between 1 and 8")
@@ -83,7 +90,7 @@ def main():
     manifest = next(m for m in json.loads(manifest_path.read_text()) if m["version"] == VERSION)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    queries = fixtures(manifest["version"])
+    queries = fixtures(manifest["version"], args.cross_batch)
     launch = command(args.binary.resolve(), manifest, args.threads)
     record = dict(schema="practice-serving-latency-v1", status="running",
                   binarySha256=sha256(args.binary), manifestSha256=sha256(manifest_path),
@@ -127,7 +134,7 @@ def main():
                 save(value, time.perf_counter() - started)
             batch = dict(schema="hu-practice-continual-resolver-batch-query-v1",
                          requestId="latency-batch", streamResults=True,
-                         queries=[query for _, query in queries[5:]])
+                         queries=[query for _, query in queries[5:7]])
             started = time.perf_counter()
             process.stdin.write(json.dumps(batch) + "\n")
             process.stdin.flush()
@@ -142,6 +149,21 @@ def main():
                 if second.get("requestId") == first.get("requestId"):
                     raise ValueError("duplicate streamed response")
                 save(second, time.perf_counter() - started)
+            if args.cross_batch:
+                started = time.perf_counter()
+                for name, query in queries[7:]:
+                    batch = dict(schema="hu-practice-continual-resolver-batch-query-v1",
+                                 requestId=name + "-container", streamResults=True, queries=[query])
+                    process.stdin.write(json.dumps(batch) + "\n")
+                process.stdin.flush()
+                for _ in range(2):
+                    value = read()
+                    elapsed = time.perf_counter() - started
+                    if value.get("schema") == "hu-practice-continual-resolver-batch-result-v1":
+                        for result in value["results"]:
+                            save(result, elapsed)
+                    else:
+                        save(value, elapsed)
             if seen != set(dict(queries)):
                 raise ValueError("incomplete request coverage")
             record["status"] = "complete"
