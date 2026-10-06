@@ -26,7 +26,7 @@ def first_verdict(gain, control):
         interpretation="One consumed root/seed under native64 continuations; not full-game exploitability")
 
 
-def paired_verdict(gain, control, first_gain, first_control):
+def paired_verdict(gain, control, first_gain, first_control, spot="limped-paired"):
     if not first_verdict(first_gain, first_control)["promising"]:
         raise ValueError("first complete quality screen must pass before pairing")
     second = first_verdict(gain, control)
@@ -34,7 +34,50 @@ def paired_verdict(gain, control, first_gain, first_control):
     return dict(promising=mean >= .02 and second["regressionBb"] <= .01,
         meanImprovementBb=mean, secondImprovementBb=second["improvementBb"],
         secondRegressionBb=second["regressionBb"], releaseAccepted=False,
-        interpretation="Two consumed limped-root seeds under native64 continuations; other roots and full-game exploitability unmeasured")
+        interpretation=("Two consumed limped-root seeds under native64 continuations; other roots and full-game exploitability unmeasured"
+            if spot == "limped-paired" else "Two consumed single-raised-root seeds under native64 continuations; full-game exploitability unmeasured"))
+
+
+def progression(spot, seed, has_first, has_pair):
+    if spot not in SPOTS or seed not in (100101,100102):
+        raise ValueError("only the original matched roots/seeds are allowed")
+    if has_first != (seed == 100102):
+        raise ValueError("second seed requires its own root's first screen; first seed cannot confirm itself")
+    if has_pair != (spot != "limped-paired"):
+        raise ValueError("single-raised expansion requires the completed limped pair")
+
+
+def pin_screen(path, record, pinned, binary, root_input, control):
+    """Reuse complete audited policies, never partial or differently routed work."""
+    if (record.get("schema") != "native64-flop-update-first-screen-v1" or record.get("status") != "complete"
+            or record.get("seed", 100101) != control["seed"] or record.get("spot", "limped-paired") != control["spot"]
+            or record.get("flopIterations") != 64 or record.get("turnIterations") != 64
+            or record.get("controlGainBb") != control["gainBb"]
+            or record["pinnedInputs"].get(str(binary)) != pinned[str(binary)]
+            or record["pinnedInputs"].get(str(root_input)) != sha256(root_input)):
+        raise ValueError("completed screen identity/root/budgets differ")
+    for filename, digest in (("candidate.json",record["candidateSha256"]),("response.json",record["responseSha256"])):
+        pinned[str(path.parent / filename)] = digest
+    candidate = json.loads((path.parent / "candidate.json").read_text())
+    response = json.loads((path.parent / "response.json").read_text())
+    public = json.loads(root_input.read_text()); audit = path.parent / "audit/completed.json"
+    worker = json.loads(audit.read_text())["worker"]
+    if (not same_public_state(candidate["state"],public["public"]) or candidate["game"] != public["game"]
+            or candidate["seed"] != control["seed"] or candidate["iterations"] != 64 or candidate["turn_iterations"] != 64
+            or candidate.get("response_turn_iterations") is not None or candidate.get("learned_leaf_model_sha256") is not None
+            or candidate.get("leaf_schedule") is not None or response["public_turns"] != 49
+            or response["candidate_sha256"] != record["candidateSha256"]
+            or abs(response["half_summed_gain_bb"]-record["gainBb"]) > 1e-12
+            or worker.get("status") != "complete" or worker.get("exitCode") != 0 or worker.get("resourceStopReason")):
+        raise ValueError("completed screen policy/response/audit differs")
+    pinned[str(audit)] = sha256(audit)
+    turns = set(range(52))-set(candidate["state"]["board"])
+    if set(record.get("packets",{})) != {str(t) for t in turns} or len(turns) != 49:
+        raise ValueError("completed screen omits exact public chance")
+    for turn in turns:
+        row = record["packets"][str(turn)]
+        if row["turn"] != turn: raise ValueError("packet registry turn changed")
+        pinned[str(path.parent / "packets" / f"turn-{turn}.json")] = row["sha256"]
 
 
 def native_environment(root, digest, output, environ=None, seed=100101):
@@ -76,44 +119,39 @@ def run(args):
     protocol = json.loads(protocol_path.read_text()); protocol["sha256"] = pinned[str(protocol_path)]
     cases = select_cases(protocol, json.loads(baseline.read_text()), list(SPOTS))
     reference = json.loads(args.reference.read_text()); old = controls(reference, cases)
-    control = old[("limped-paired", args.seed, "native")]
+    progression(args.spot,args.seed,args.first_screen is not None,args.paired_screen is not None)
+    control = old[(args.spot, args.seed, "native")]
     seconds32 = verify_cost(json.loads(args.cost.read_text()), old[("limped-paired", 100101, "native")])
+    root_input = root / "inputs" / (args.spot+".json")
     first = None
     if (args.first_screen is None) != (args.first_screen_sha256 is None):
         raise ValueError("first screen and hash must be supplied together")
-    if args.seed == 100101 and args.first_screen is not None:
-        raise ValueError("first case cannot use its own result as confirmation")
+    if (args.paired_screen is None) != (args.paired_screen_sha256 is None):
+        raise ValueError("paired screen and hash must be supplied together")
+    if args.paired_screen is not None:
+        path = args.paired_screen.resolve(); pair = json.loads(path.read_text())
+        pinned[str(path)] = args.paired_screen_sha256
+        first_paths = [Path(p) for p,h in pair["pinnedInputs"].items() if h == pair.get("firstScreenSha256")]
+        if len(first_paths) != 1: raise ValueError("limped pair omits its first-screen identity")
+        first_path = first_paths[0]; initial = json.loads(first_path.read_text())
+        pinned[str(first_path)] = pair["firstScreenSha256"]
+        limp = root / "inputs/limped-paired.json"
+        a,b = (old[("limped-paired",seed,"native")] for seed in (100101,100102))
+        pin_screen(first_path,initial,pinned,binary,limp,a)
+        pin_screen(path,pair,pinned,binary,limp,b)
+        expected = paired_verdict(pair["gainBb"],b["gainBb"],initial["gainBb"],a["gainBb"])
+        if pair.get("result") != expected or not expected["promising"]:
+            raise ValueError("limped pair did not pass the original mean/nonregression criteria")
     if args.seed == 100102:
         if args.first_screen is None: raise ValueError("paired seed requires the completed promising first screen")
         path = args.first_screen.resolve(); first = json.loads(path.read_text())
         pinned[str(path)] = args.first_screen_sha256
-        first_control = old[("limped-paired", 100101, "native")]
-        if (first.get("schema") != "native64-flop-update-first-screen-v1" or first.get("status") != "complete"
-                or first.get("seed", 100101) != 100101 or first.get("flopIterations") != 64
-                or first.get("turnIterations") != 64 or first.get("controlGainBb") != first_control["gainBb"]
-                or first.get("result") != first_verdict(first["gainBb"], first_control["gainBb"])
-                or not first["result"]["promising"] or len(first.get("packets", {})) != 49
-                or first["pinnedInputs"].get(str(binary)) != args.binary_sha256):
+        first_control = old[(args.spot, 100101, "native")]
+        pin_screen(path,first,pinned,binary,root_input,first_control)
+        if (first.get("result") != first_verdict(first["gainBb"],first_control["gainBb"])
+                or not first["result"]["promising"]):
             raise ValueError("first screen is incomplete, mismatched or rejected")
-        for filename, digest in (("candidate.json", first["candidateSha256"]), ("response.json", first["responseSha256"])):
-            pinned[str(path.parent / filename)] = digest
-        first_candidate = json.loads((path.parent / "candidate.json").read_text())
-        first_response = json.loads((path.parent / "response.json").read_text())
-        first_audit = path.parent / "audit/completed.json"
-        audited = json.loads(first_audit.read_text())["worker"]
-        if (first_candidate["seed"] != 100101 or first_candidate["iterations"] != 64 or first_candidate["turn_iterations"] != 64
-                or first_candidate.get("learned_leaf_model_sha256") is not None or first_candidate.get("leaf_schedule") is not None
-                or first_response["public_turns"] != 49 or first_response["candidate_sha256"] != first["candidateSha256"]
-                or abs(first_response["half_summed_gain_bb"]-first["gainBb"]) > 1e-12
-                or audited.get("status") != "complete" or audited.get("exitCode") != 0 or audited.get("resourceStopReason")):
-            raise ValueError("first policy/response/audit identity changed")
-        pinned[str(first_audit)] = sha256(first_audit)
-        expected_turns = set(range(52))-set(first_candidate["state"]["board"])
-        if set(first["packets"]) != {str(t) for t in expected_turns}:
-            raise ValueError("first screen omits exact public chance")
-        for turn in expected_turns:
-            pinned[str(path.parent / "packets" / f"turn-{turn}.json")] = first["packets"][str(turn)]["sha256"]
-    original = args.reference.resolve().parent / "limped-paired" / str(args.seed) / "native"
+    original = args.reference.resolve().parent / args.spot / str(args.seed) / "native"
     for filename, digest in (("candidate.json", control["candidateSha256"]),
                              ("response.json", control["responseSha256"])):
         pinned[str(original / filename)] = digest
@@ -125,17 +163,10 @@ def run(args):
             or worker.get("resourceStopReason")):
         raise ValueError("native32 reference lacks complete response and independent audit")
     pinned[str(audit)] = sha256(audit)
-    root_input = root / "inputs/limped-paired.json"; inputs = root / "inputs.json"
+    inputs = root / "inputs.json"
     pinned[str(inputs)] = sha256(inputs)
     pinned[str(root_input)] = json.loads(inputs.read_text())["roots"][str(root_input)]
-    if first is not None:
-        public = json.loads(root_input.read_text())
-        if (not same_public_state(first_candidate["state"], public["public"])
-                or first_candidate["game"] != public["game"]
-                or first_candidate.get("response_turn_iterations") is not None
-                or first["pinnedInputs"].get(str(root_input)) != pinned[str(root_input)]):
-            raise ValueError("first screen used a different public root or played budget")
-    equity = root / "jobs/limped-paired" / str(args.seed) / "equity.json"
+    equity = root / "jobs" / args.spot / str(args.seed) / "equity.json"
     pinned[str(equity)] = sha256(equity)
     pinned[str(equity.with_suffix(".f32le"))] = json.loads(equity.read_text())["sha256"]
     build = json.loads(args.build.read_text())
@@ -176,7 +207,8 @@ def run(args):
     record = dict(schema="native64-flop-update-first-screen-v1", status="running", pinnedInputs=pinned,
         maximumSeconds=7200, projectedSeconds=projection, packetWorkers=4, releaseAccepted=False,
         controlGainBb=control["gainBb"], flopIterations=64, turnIterations=64,
-        spot="limped-paired", seed=args.seed, firstScreenSha256=args.first_screen_sha256)
+        spot=args.spot, seed=args.seed, firstScreenSha256=args.first_screen_sha256,
+        pairedScreenSha256=args.paired_screen_sha256)
     with controller_lock(output):
         pressure = None
         try:
@@ -228,7 +260,7 @@ def run(args):
             gain = json.loads(response_path.read_text())["half_summed_gain_bb"]
             record.update(status="complete", gainBb=gain, responseSha256=sha256(response_path), packets=completed,
                 result=(first_verdict(gain, control["gainBb"]) if first is None else
-                        paired_verdict(gain, control["gainBb"], first["gainBb"], first["controlGainBb"])))
+                        paired_verdict(gain, control["gainBb"], first["gainBb"], first["controlGainBb"],spot=args.spot)))
             if stop.is_set() or any(sha256(Path(p)) != h for p, h in pinned.items()):
                 raise ValueError("stopped or pinned source changed")
             print(json.dumps(dict(event="native64-quality", gainBb=gain, result=record["result"])), flush=True)
@@ -244,7 +276,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--baseline-root", type=Path, required=True); p.add_argument("--baseline-sha256", required=True)
     p.add_argument("--seed", type=int, choices=(100101,100102), default=100101)
+    p.add_argument("--spot", choices=SPOTS, default="limped-paired")
     p.add_argument("--first-screen", type=Path); p.add_argument("--first-screen-sha256")
+    p.add_argument("--paired-screen", type=Path); p.add_argument("--paired-screen-sha256")
     for name in ("reference", "cost", "build", "binary", "default_parity"):
         option = name.replace("_", "-")
         p.add_argument("--"+option, type=Path, required=True); p.add_argument("--"+option+"-sha256", required=True)
