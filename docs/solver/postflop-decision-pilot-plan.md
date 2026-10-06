@@ -1398,3 +1398,20 @@ Route SHA-256:
 This is a matched complete-hand cost/response feasibility test, not a global
 exploitability upper bound. The unmodified learned route and website remain
 unchanged; paid compute remains unauthorized.
+
+Section 28's controller and explicit native research entry are implemented.
+Release validation passes 364 unit and nine CLI tests (59 explicit jobs
+ignored), plus 29 targeted Python tests. The existing default learned32
+candidate still reproduces byte-for-byte. The controller reconstructs both
+route identities independently, requires the complete section 27 cost probe,
+and validates exact cards, paired attacker randomness, legal recorded actions,
+complete seat payoffs and total-scale accounting. It explicitly retains
+preflop-only deals and sets no strength acceptance from this one-deal pilot.
+
+Frozen paired-response binary SHA-256:
+`fa4f8d254a47bb822b781cd27d8f3dab01bbaa77af8cdf4e488da8b939610603`.
+Build/source receipt SHA-256:
+`d97340dfc9a75640195ccd0c559f50d0e36fc12a5df781e27b1a9ce7c5267d41`.
+Default parity receipt SHA-256:
+`b6f62941247bfe59f9d9e5adb58a8a5eae1bc01ff608ea26d62124f405b9e5e7`.
+Artifacts: `runs/local-accurate-full-hand-pair-20261005-a/`.

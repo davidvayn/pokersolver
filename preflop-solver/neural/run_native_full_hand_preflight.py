@@ -20,9 +20,9 @@ TEST = "blueprint::response::native_policy::pilot::compact_native_full_hand_cand
 DEFAULT_POLICY_SHA = "f1faa095fc4b905786d446f32bf9927db645fb8008258187e49b33d812e1fe4d"
 
 
-def expected_route_sha256(preflop_sha):
+def expected_route_sha256(preflop_sha, flop_iterations=64, seed=100101):
     payload = dict(schema="research-pinned-full-hand-route-v1", preflopSha256=preflop_sha,
-        learnedLeafModelSha256=None, seed=100101, flopIterations=64, trainingTurnIterations=64,
+        learnedLeafModelSha256=None, seed=seed, flopIterations=flop_iterations, trainingTurnIterations=64,
         playedTurnIterations=64, rootSeedRule="seed-xor-first8-le-sha256-public-input-v1",
         playedContinuation="frozen-native-turn-river-average-v1",
         rootSupport="all-board-legal-own-realization-average-v1",
