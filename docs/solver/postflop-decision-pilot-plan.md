@@ -1481,3 +1481,19 @@ parity proof are unchanged; no redundant native rebuild is required. The
 expansion derives its policy seed from the declared index rather than offering
 a best-seed selection switch. A bounded local two-controller launcher will
 enforce the cohort's 18000s stop and preserve incomplete status on failures.
+
+### October 6 priority change: interactive solving speed
+
+The user clarified that the goal is faster solving for usability. The local
+four-deal expansion was stopped through its owned controller's signal handler;
+indices 1 and 2 had not completed either pair, and index 3 had not started.
+The expansion remains **incomplete**, with logs preserved under
+`local-accurate-full-hand-pair-20261006-cohort-a`. No partial reports are used
+as evidence of playing-strength improvement. The completed index-0 evidence
+above remains unchanged. Do not resume strength runs under this speed task.
+
+The interactive website's pinned resolver uses two iterations per street,
+not the research native32/native64 budgets. Speed work measures that actual
+serving configuration, preserves model artifacts, exact card removal and
+the solver budget, and checks complete policy/EV output parity. It does not
+promote this experimental model to Approximate GTO or waive any strength gate.

@@ -93,6 +93,21 @@ impl DenseTurnEquityCache {
         self.entries.insert(key, (self.clock, cell.clone()));
         cell
     }
+
+    /// Snapshot only completed matrices. A flop shortcut must never wait on a
+    /// turn initialization or force cache population for a sparse-only solve.
+    fn completed_flop_turns(&self, flop: [u8; 3]) -> Option<Vec<(Vec<usize>, Arc<Vec<u8>>)>> {
+        (0..52u8)
+            .filter(|turn| !flop.contains(turn))
+            .map(|turn| {
+                let (key, permutation) =
+                    canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]);
+                let matrix = self.entries.get(&key)?.1.get()?.clone();
+                let mapping = suit_combo_keys(permutation).to_vec();
+                Some((mapping, matrix))
+            })
+            .collect()
+    }
 }
 
 static DENSE_ALL_IN_EQUITY_CACHE: LazyLock<Mutex<BTreeMap<[u8; 3], DenseAllInEquityCell>>> =
@@ -3395,17 +3410,7 @@ fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>;
     );
     let original: [u8; 4] = board.try_into().expect("validated turn board");
     let (key, suit_permutation) = canonical_turn_board_suits(original);
-    let canonical_combo_keys = all_combos()
-        .into_iter()
-        .map(|combo| {
-            let [first, second] = combo.cards();
-            Combo::new(
-                permute_card_suit(first, suit_permutation),
-                permute_card_suit(second, suit_permutation),
-            )
-            .key()
-        })
-        .collect::<Vec<_>>();
+    let canonical_combo_keys = suit_combo_keys(suit_permutation);
     let cell = {
         let mut cache = DENSE_TURN_EQUITY_CACHE
             .lock()
@@ -3419,17 +3424,24 @@ fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>;
     let compatible_masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
         compatible_masses_from_card_marginals(&combos, &ranges[1 - player])
     });
+    // Preserve original combo/summation order. Only exact zero weights are
+    // omitted: no epsilon threshold, range quantization, or hand pruning.
+    let weighted_columns: [Vec<(usize, f64)>; 2] = std::array::from_fn(|player| {
+        ranges[1 - player].iter().zip(canonical_combo_keys)
+            .filter(|(weight, _)| **weight != 0.0)
+            .map(|(&weight, &column)| (column, weight))
+            .collect()
+    });
     std::array::from_fn(|player| {
         (0..COMBO_COUNT)
             .map(|own| {
                 let compatible = compatible_masses[player][own];
                 if compatible > EPSILON {
                     let row = canonical_combo_keys[own] * COMBO_COUNT;
-                    let numerator = ranges[1 - player]
+                    let numerator = weighted_columns[player]
                         .iter()
-                        .enumerate()
-                        .map(|(opponent, weight)| {
-                            weight * f64::from(matrix[row + canonical_combo_keys[opponent]]) / 88.0
+                        .map(|(column, weight)| {
+                            weight * f64::from(matrix[row + column]) / 88.0
                         })
                         .sum::<f64>();
                     (numerator / compatible).clamp(0.0, 1.0) as f32
@@ -3443,6 +3455,26 @@ fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>;
 
 fn permute_card_suit(card: u8, permutation: [u8; 4]) -> u8 {
     (card & !3) | permutation[(card & 3) as usize]
+}
+
+/// The 24 suit permutations are immutable and board-independent. Reuse their
+/// exact combo indices instead of rebuilding 1,326 keys at every value leaf.
+fn suit_combo_keys(permutation: [u8; 4]) -> &'static [usize] {
+    static KEYS: LazyLock<BTreeMap<[u8; 4], Vec<usize>>> = LazyLock::new(|| {
+        let combos = all_combos();
+        (0..256u16).filter_map(|packed| {
+            let permutation: [u8; 4] = std::array::from_fn(|suit| ((packed >> (2 * suit)) & 3) as u8);
+            if permutation.iter().fold(0u8, |mask, suit| mask | (1 << suit)) != 15 {
+                return None;
+            }
+            let mapping = combos.iter().map(|combo| {
+                let [first, second] = combo.cards();
+                Combo::new(permute_card_suit(first, permutation), permute_card_suit(second, permutation)).key()
+            }).collect();
+            Some((permutation, mapping))
+        }).collect()
+    });
+    &KEYS[&permutation]
 }
 
 /// Returns the lexicographically smallest suit-isomorphic turn board and the
@@ -3491,7 +3523,7 @@ fn compute_exact_turn_equity_units(board: [u8; 4]) -> Arc<Vec<u8>> {
             .enumerate()
             .filter_map(|(key, combo)| {
                 let cards = combo.cards();
-                (legal[key] && !cards.contains(&river)).then_some((
+                (legal[key] && !cards.contains(&river)).then(|| (
                     key,
                     *combo,
                     evaluate(&[
@@ -5676,9 +5708,59 @@ fn exact_flop_all_in_equities(
                 .map(|combo| !combo.cards().iter().any(|card| flop.contains(card)))
                 .collect::<Vec<_>>()
         });
-        compute_exact_flop_all_in_equities(flop, &dense_legal, threads)
+        let completed_turns = DENSE_TURN_EQUITY_CACHE
+            .lock()
+            .expect("dense turn equity cache poisoned")
+            .completed_flop_turns(flop);
+        if let Some(turns) = completed_turns {
+            compute_flop_equities_from_turns(&dense_legal, threads, &turns)
+        } else {
+            compute_exact_flop_all_in_equities(flop, &dense_legal, threads)
+        }
     })
     .clone()
+}
+
+/// Exact flop equity from completed turn matrices, without evaluating the
+/// same showdowns again. Each compatible pair has 45 legal turns and 44 legal
+/// rivers. Ordered runouts count each unordered flop runout twice, hence
+/// sum(turn equity units) / 3,960 == direct flop units / 1,980 exactly.
+/// Board/hand-blocked entries in the turn matrices are already zero.
+fn compute_flop_equities_from_turns(
+    legal: &[Vec<bool>; 2],
+    threads: usize,
+    turns: &[(Vec<usize>, Arc<Vec<u8>>)],
+) -> Arc<Vec<f32>> {
+    debug_assert_eq!(turns.len(), 49);
+    let combos = all_combos();
+    let mut equities = vec![f32::NAN; COMBO_COUNT * COMBO_COUNT];
+    let rows_per_worker = COMBO_COUNT.div_ceil(threads.clamp(1, COMBO_COUNT));
+    std::thread::scope(|scope| {
+        for (chunk, output) in equities.chunks_mut(rows_per_worker * COMBO_COUNT).enumerate() {
+            let combos = &combos;
+            scope.spawn(move || {
+                let mut counts = vec![0u16; COMBO_COUNT];
+                for (local_row, row) in output.chunks_mut(COMBO_COUNT).enumerate() {
+                    let own = chunk * rows_per_worker + local_row;
+                    if !legal[0][own] { continue; }
+                    counts.fill(0);
+                    for (mapping, matrix) in turns {
+                        let start = mapping[own] * COMBO_COUNT;
+                        let turn_row = &matrix[start..start + COMBO_COUNT];
+                        for (count, &opponent) in counts.iter_mut().zip(mapping) {
+                            *count += u16::from(turn_row[opponent]);
+                        }
+                    }
+                    for opponent in 0..COMBO_COUNT {
+                        if legal[1][opponent] && !combos[own].overlaps(combos[opponent]) {
+                            row[opponent] = counts[opponent] as f32 / 3_960.0;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Arc::new(equities)
 }
 
 pub(crate) fn exact_flop_showdown_continuation_values(
@@ -15454,6 +15536,42 @@ mod tests {
     }
 
     #[test]
+    fn compact_turn_equity_dot_products_match_dense_original_order() {
+        let board = [0, 20, 40, 47];
+        let combos = all_combos();
+        let ranges: [Vec<f64>; 2] = std::array::from_fn(|player| combos.iter().enumerate().map(|(key, combo)| {
+            if combo.cards().iter().any(|card| board.contains(card)) || key % (player + 2) == 0 {
+                0.0
+            } else if key % 17 == 0 {
+                1e-40 // Positive tiny weights must not be threshold-pruned.
+            } else {
+                (key % 13 + 1) as f64 / 13_260.0
+            }
+        }).collect());
+        let actual = exact_turn_range_equities(&board, &ranges);
+        let (key, permutation) = canonical_turn_board_suits(board);
+        let mapping = suit_combo_keys(permutation);
+        for (combo, &mapped) in combos.iter().zip(mapping) {
+            let [first, second] = combo.cards();
+            assert_eq!(mapped, Combo::new(permute_card_suit(first, permutation), permute_card_suit(second, permutation)).key());
+        }
+        let cell = DENSE_TURN_EQUITY_CACHE.lock().unwrap().cell(key);
+        let matrix = cell.get_or_init(|| compute_exact_turn_equity_units(key));
+        for player in 0..2 {
+            let masses = compatible_masses_from_card_marginals(&combos, &ranges[1-player]);
+            for own in 0..COMBO_COUNT {
+                let expected = if masses[own] > EPSILON {
+                    let numerator = ranges[1-player].iter().enumerate().map(|(opponent, weight)| {
+                        weight * f64::from(matrix[mapping[own]*COMBO_COUNT + mapping[opponent]]) / 88.0
+                    }).sum::<f64>();
+                    (numerator / masses[own]).clamp(0.0, 1.0) as f32
+                } else { 0.0 };
+                assert_eq!(expected.to_bits(), actual[player][own].to_bits());
+            }
+        }
+    }
+
+    #[test]
     fn dense_turn_equity_cache_evicts_the_least_recently_used_board() {
         let mut cache = DenseTurnEquityCache::default();
         let keys = (0..=DENSE_TURN_EQUITY_CACHE_BOARDS)
@@ -15467,6 +15585,75 @@ mod tests {
         assert!(cache.entries.contains_key(&keys[0]));
         assert!(!cache.entries.contains_key(&keys[1]));
         assert_eq!(cache.entries.len(), DENSE_TURN_EQUITY_CACHE_BOARDS);
+    }
+
+    #[test]
+    fn completed_flop_turns_requires_every_initialized_canonical_matrix() {
+        let flop = [0, 20, 40];
+        let mut cache = DenseTurnEquityCache::default();
+        assert!(cache.completed_flop_turns(flop).is_none());
+        for turn in 0..52u8 {
+            if !flop.contains(&turn) {
+                let key = canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]).0;
+                cache.cell(key);
+            }
+        }
+        assert!(cache.completed_flop_turns(flop).is_none());
+        let shared = Arc::new(vec![0u8; COMBO_COUNT * COMBO_COUNT]);
+        for (_, cell) in cache.entries.values() {
+            cell.set(shared.clone()).unwrap();
+        }
+        let turns = cache.completed_flop_turns(flop).unwrap();
+        // Do not collapse suit-isomorphic turns: each physical card has its
+        // own chance weight and original-to-canonical combo permutation.
+        assert_eq!(turns.len(), 49);
+        assert!(turns.iter().all(|(mapping, _)| mapping.len() == COMBO_COUNT));
+    }
+
+    #[test]
+    fn cached_turn_counts_reproduce_exact_flop_equities_bit_for_bit() {
+        let combos = all_combos();
+        for flop in [[0, 5, 10], [0, 20, 40], [2, 22, 42]] {
+            let hands = [Combo::new(47, 51), Combo::new(4, 9), Combo::new(45, 49)];
+            let legal = std::array::from_fn(|_| {
+                combos.iter().map(|combo| hands.contains(combo)).collect::<Vec<_>>()
+            });
+            let direct = compute_exact_flop_all_in_equities(flop, &legal, 2);
+            let mut turns = Vec::new();
+            for turn in 0..52u8 {
+                if flop.contains(&turn) { continue; }
+                let (_, permutation) =
+                    canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]);
+                let mapping = combos.iter().map(|combo| {
+                    let [a, b] = combo.cards();
+                    Combo::new(permute_card_suit(a, permutation), permute_card_suit(b, permutation)).key()
+                }).collect::<Vec<_>>();
+                let mut units = vec![0u8; COMBO_COUNT * COMBO_COUNT];
+                for left in hands {
+                    for right in hands {
+                        if left.overlaps(right) || left.cards().contains(&turn) || right.cards().contains(&turn) {
+                            continue;
+                        }
+                        for river in 0..52u8 {
+                            if flop.contains(&river) || river == turn || left.cards().contains(&river) || right.cards().contains(&river) {
+                                continue;
+                            }
+                            let a = left.cards(); let b = right.cards();
+                            let first = evaluate(&[a[0], a[1], flop[0], flop[1], flop[2], turn, river]);
+                            let second = evaluate(&[b[0], b[1], flop[0], flop[1], flop[2], turn, river]);
+                            units[mapping[left.key()] * COMBO_COUNT + mapping[right.key()]] += equity_units(first, second) as u8;
+                        }
+                    }
+                }
+                turns.push((mapping, Arc::new(units)));
+            }
+            for threads in [1, 2] {
+                let reused = compute_flop_equities_from_turns(&legal, threads, &turns);
+                for (old, new) in direct.iter().zip(reused.iter()) {
+                    assert_eq!(old.to_bits(), new.to_bits());
+                }
+            }
+        }
     }
 
     #[test]

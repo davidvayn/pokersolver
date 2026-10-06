@@ -236,6 +236,10 @@ pub struct PracticePolicyQuery {
 pub struct PracticePolicyBatchQuery {
     pub schema: String,
     pub request_id: String,
+    /// Interactive clients can consume each completed query immediately;
+    /// omitted/false retains the aggregate response for existing CLI callers.
+    #[serde(default)]
+    pub stream_results: bool,
     pub queries: Vec<PracticePolicyQuery>,
 }
 

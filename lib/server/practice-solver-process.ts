@@ -318,6 +318,7 @@ class PracticeSolverProcess implements PracticeResolverWorker {
     const batch = {
       schema: 'hu-practice-continual-resolver-batch-query-v1',
       requestId: randomUUID(),
+      streamResults: true,
       queries: queued.map(({ request }) => request),
     };
     child.stdin.write(`${JSON.stringify(batch)}\n`, (error) => {
