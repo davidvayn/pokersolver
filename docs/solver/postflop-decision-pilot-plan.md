@@ -1270,3 +1270,64 @@ First single-raised manifest SHA-256:
 First single-raised native64 candidate SHA-256:
 `fd33f404c21d239cb4c70f3ce50bcfbe20ff9d3679c53488080d4b786efbce01`.
 Artifacts: `runs/local-native-update64-20261005-a/single-raised-first/`.
+
+Section 26's unchanged second seed also **passes**: 0.299026003→0.146287312bb.
+The single-raised mean improves 0.301505979→0.153396873bb (49.12%), with neither
+seed regressing. Construction took 1350.598s at 724,288,376 bytes peak sampled
+footprint. All49 turns and the independent audit passed; total 2279.3s, normal
+system pressure. First32 update logs again match the original control.
+
+The complete four-case iteration comparison is:
+
+| Consumed root | Seed | Native32 gain (bb) | Native64 gain (bb) |
+| --- | ---: | ---: | ---: |
+| Limped paired | 100101 | 0.187585 | 0.127665 |
+| Limped paired | 100102 | 0.246099 | 0.118058 |
+| Single-raised high-rainbow | 100101 | 0.303986 | 0.160506 |
+| Single-raised high-rainbow | 100102 | 0.299026 | 0.146287 |
+| Equal root/seed mean | — | **0.259174** | **0.138129** |
+
+Mean improvement is 0.121044895bb (46.70%). These are half-summed conditional
+response gains on two consumed roots, not a representative board sample,
+full-game bb/hand estimate, or proof of general safe resolving. The neural
+weights and website policy are unchanged.
+
+Second single-raised manifest SHA-256:
+`da46c687b7cd03b6c8d6c407e352355ffb1be81a1543caa1b4d402d171e37d6a`.
+Second single-raised candidate SHA-256:
+`d8d66c3346f9f1a1b4b53b3adc9066d55a81d0e8b8657e0b2dd231bdf2e93a5e`.
+Second single-raised response SHA-256:
+`59bb94fd5a1371e97baa67093d0a83883ee391f416d3673516f3b0d05a609825`.
+Artifacts: `runs/local-native-update64-20261005-a/single-raised-paired/`.
+
+## 27. Pin accurate continuations into the full-hand research route
+
+1. Require both completed two-seed quality pairs, their original controls,
+   all196 turn packets and independent audits. Keep the same retained compact
+   preflop checkpoint from the benchmark. No neural or website promotion.
+2. Reuse the existing strict full-hand adapter and native playback. Add an
+   explicit native compact-continuation entry point: reset only the inherited
+   preflop optimizer schedule, retain the action/card/stack abstraction, and
+   use the existing counterfactual root-support averaging for all board-legal
+   holdings. Preserve true zero ranges; do not insert a range floor or uniform
+   fallback. Existing learned and ordinary native entries remain unchanged.
+3. Test the actual caller, hidden-card/future-card independence, root-support
+   and worker-copy identities, invalid budgets, and normalization. Run native
+   release tests, freeze a new binary/source snapshot, and reproduce the
+   existing default learned32 candidate byte-for-byte before the cost probe.
+4. Run one deterministic forced check/call hand through all four streets at
+   64 flop/native64 continuation updates with four leaf workers. Exhaustively
+   inspect its frozen preflop lookup coverage; pin every input. Keep a 4GiB
+   whole-worker memory limit, 3600s worker/3900s total limit, system-pressure
+   stops and the 20GiB disk reserve. Stop rather than silently lower the actual
+   continuation budget if the route is too expensive or incomplete.
+5. Record cold/warm street costs and exact route identity. This is integration
+   and cost feasibility only: a forced hand does not measure strength. Only
+   after this passes, preregister a small matched complete-hand response pilot
+   on the same preflop/game and fixed deal clusters. Reuse the existing legal
+   LBR with unchanged sampling; never call its observed gain an exploitability
+   upper bound. Generalization and release gates remain separate.
+
+This moves the supported native improvement toward a measurable combined
+policy rather than starting another loss grid or extrapolating conditional
+root gains into a full-game claim. No paid compute is authorized.
