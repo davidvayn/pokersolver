@@ -7,8 +7,10 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+mod practice_transport;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -298,215 +300,23 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
             flop_resolver,
         },
     )?;
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let response = match serde_json::from_str::<serde_json::Value>(&line) {
-            Ok(value)
-                if value.get("schema").and_then(serde_json::Value::as_str)
-                    == Some("hu-practice-continual-resolver-batch-query-v1") =>
-            {
-                match serde_json::from_value::<blueprint::neural::PracticePolicyBatchQuery>(value) {
-                    Ok(batch)
-                        if batch.schema == "hu-practice-continual-resolver-batch-query-v1"
-                            && !batch.request_id.trim().is_empty()
-                            && (1..=2).contains(&batch.queries.len()) =>
-                    {
-                        resolve_practice_batch(batch, &mut stdout, &|query| {
-                            let request_id = query.request_id.clone();
-                            match engine.query(query) {
-                                Ok(result) => serde_json::to_value(result)
-                                    .expect("practice query results always serialize"),
-                                Err(error) => serde_json::json!({
-                                    "schema": "hu-practice-continual-resolver-error-v1",
-                                    "requestId": request_id,
-                                    "error": error,
-                                }),
-                            }
-                        })?;
-                        continue;
-                    }
-                    Ok(batch) => serde_json::json!({
-                        "schema": "hu-practice-continual-resolver-error-v1",
-                        "requestId": batch.request_id,
-                        "error": "practice resolver batches require one or two queries",
-                    }),
-                    Err(error) => serde_json::json!({
-                        "schema": "hu-practice-continual-resolver-error-v1",
-                        "requestId": null,
-                        "error": format!("invalid practice query batch: {error}"),
-                    }),
-                }
+    practice_transport::serve(
+        std::io::BufReader::new(std::io::stdin()),
+        &mut std::io::BufWriter::new(std::io::stdout().lock()),
+        &|query| {
+            let request_id = query.request_id.clone();
+            match engine.query(query) {
+                Ok(result) => serde_json::to_value(result)
+                    .expect("practice query results always serialize"),
+                Err(error) => serde_json::json!({
+                    "schema": "hu-practice-continual-resolver-error-v1",
+                    "requestId": request_id,
+                    "error": error,
+                }),
             }
-            Ok(value) => {
-                match serde_json::from_value::<blueprint::neural::PracticePolicyQuery>(value) {
-                    Ok(query) => {
-                        let request_id = query.request_id.clone();
-                        match engine.query(query) {
-                            Ok(result) => serde_json::to_value(result)?,
-                            Err(error) => serde_json::json!({
-                                "schema": "hu-practice-continual-resolver-error-v1",
-                                "requestId": request_id,
-                                "error": error,
-                            }),
-                        }
-                    }
-                    Err(error) => serde_json::json!({
-                        "schema": "hu-practice-continual-resolver-error-v1",
-                        "requestId": null,
-                        "error": format!("invalid practice query: {error}"),
-                    }),
-                }
-            }
-            Err(error) => serde_json::json!({
-                "schema": "hu-practice-continual-resolver-error-v1",
-                "requestId": null,
-                "error": format!("invalid practice query: {error}"),
-            }),
-        };
-        write_practice_response(&mut stdout, &response)?;
-    }
+        },
+    )?;
     Ok(())
-}
-
-fn write_practice_response(
-    stdout: &mut impl Write,
-    response: &serde_json::Value,
-) -> std::io::Result<()> {
-    serde_json::to_writer(&mut *stdout, response)?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()
-}
-
-/// Keep one loaded engine and bounded parallelism, but do not make an already
-/// cached decision wait for its slower speculative sibling to finish.
-fn resolve_practice_batch(
-    batch: blueprint::neural::PracticePolicyBatchQuery,
-    stdout: &mut impl Write,
-    query: &(impl Fn(blueprint::neural::PracticePolicyQuery) -> serde_json::Value + Sync),
-) -> std::io::Result<()> {
-    std::thread::scope(|scope| {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut results = vec![serde_json::Value::Null; batch.queries.len()];
-        for (index, request) in batch.queries.into_iter().enumerate() {
-            let sender = sender.clone();
-            scope.spawn(move || {
-                let request_id = request.request_id.clone();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| query(request)))
-                    .unwrap_or_else(|_| serde_json::json!({
-                        "schema": "hu-practice-continual-resolver-error-v1",
-                        "requestId": request_id,
-                        "error": "practice resolver batch worker panicked",
-                    }));
-                let _ = sender.send((index, result));
-            });
-        }
-        drop(sender);
-        for (index, result) in receiver {
-            if batch.stream_results {
-                write_practice_response(stdout, &result)?;
-            } else {
-                results[index] = result;
-            }
-        }
-        if !batch.stream_results {
-            write_practice_response(stdout, &serde_json::json!({
-                "schema": "hu-practice-continual-resolver-batch-result-v1",
-                "requestId": batch.request_id,
-                "results": results,
-            }))?;
-        }
-        Ok(())
-    })
-}
-
-#[cfg(test)]
-mod practice_batch_tests {
-    use super::*;
-
-    fn batch(stream_results: Option<bool>) -> blueprint::neural::PracticePolicyBatchQuery {
-        let queries = ["slow", "fast"].map(|id| serde_json::json!({
-            "requestId": id, "stateHash": "e".repeat(64), "modelVersion": "fixture", "depthBb": 20,
-            "privateCards": [7, 34], "board": [], "street": "preflop", "actor": 0,
-            "totalPotBb": 1.5, "stacksBb": [19.5, 19], "streetBetsBb": [0.5, 1],
-            "totalCommittedBb": [0.5, 1], "lastFullRaiseBb": 1, "raiseReopened": true, "actions": []
-        }));
-        let mut value = serde_json::json!({
-            "schema": "hu-practice-continual-resolver-batch-query-v1",
-            "requestId": "batch", "queries": queries,
-        });
-        if let Some(stream) = stream_results { value["streamResults"] = stream.into(); }
-        serde_json::from_value(value).unwrap()
-    }
-
-    struct FlushGate {
-        output: Vec<u8>,
-        release: Option<std::sync::mpsc::Sender<()>>,
-    }
-    impl Write for FlushGate {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.output.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            if let Some(release) = self.release.take() { release.send(()).unwrap(); }
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn practice_batch_flushes_fast_result_before_slow_query_finishes() {
-        let (release, wait) = std::sync::mpsc::channel();
-        let wait = std::sync::Mutex::new(wait);
-        let mut writer = FlushGate { output: Vec::new(), release: Some(release) };
-        resolve_practice_batch(batch(Some(true)), &mut writer, &|query| {
-            if query.request_id == "slow" {
-                wait.lock().unwrap().recv_timeout(std::time::Duration::from_secs(2))
-                    .expect("a completed sibling must be flushed before the batch finishes");
-            }
-            serde_json::json!({"requestId": query.request_id})
-        }).unwrap();
-        let lines = String::from_utf8(writer.output).unwrap().lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(lines, vec![serde_json::json!({"requestId":"fast"}), serde_json::json!({"requestId":"slow"})]);
-    }
-
-    #[test]
-    fn practice_batch_default_keeps_legacy_envelope_and_input_order() {
-        let (release, wait) = std::sync::mpsc::channel();
-        let wait = std::sync::Mutex::new(wait);
-        let mut output = Vec::new();
-        resolve_practice_batch(batch(None), &mut output, &|query| {
-            if query.request_id == "slow" { wait.lock().unwrap().recv().unwrap(); }
-            else { release.send(()).unwrap(); }
-            serde_json::json!({"requestId": query.request_id})
-        }).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(value["schema"], "hu-practice-continual-resolver-batch-result-v1");
-        assert_eq!(value["requestId"], "batch");
-        assert_eq!(value["results"][0]["requestId"], "slow");
-        assert_eq!(value["results"][1]["requestId"], "fast");
-    }
-
-    #[test]
-    fn practice_batch_panic_preserves_request_identity_without_poisoning_sibling() {
-        let mut output = Vec::new();
-        resolve_practice_batch(batch(Some(true)), &mut output, &|query| {
-            if query.request_id == "slow" { panic!("fixture failure"); }
-            serde_json::json!({"requestId": query.request_id})
-        }).unwrap();
-        let lines = String::from_utf8(output).unwrap().lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(lines.len(), 2);
-        assert!(lines.iter().any(|line| line["requestId"] == "slow" && line["error"].is_string()));
-        assert!(lines.iter().any(|line| line["requestId"] == "fast" && line.get("error").is_none()));
-    }
 }
 
 fn run_preflop_cache_resolver(args: &[String]) -> Result<(), Box<dyn Error>> {
