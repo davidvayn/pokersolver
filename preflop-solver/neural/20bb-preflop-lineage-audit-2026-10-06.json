@@ -1,0 +1,817 @@
+{
+  "schema": "hu-preflop-lineage-audit-v1",
+  "inputSha256": {
+    "preflop-solver/neural/runs/20bb-v104-action-ev/served-v57-seed7601-preflop-policy.json": "1b14fa8987663f37cd0f0f2889fa2574aaf7d31455d6f66d0fca6fe9ceec1114",
+    "preflop-solver/neural/runs/preflop-external-comparison-20261006/served-ranges.json": "fde51004f8e80dce65a0038dc527a8750eff4ae43acdd0792825091d10871c0a",
+    "preflop-solver/neural/runs/preflop-external-comparison-20261006/teacher-old-values.json": "8ec8d3a9dfd42dc109b285847afad2f37ade6db902567944576df83161b5a176",
+    "preflop-solver/models/practice/v104-seed7601-preflop-action-values.json.gz": "fb6a7416096105f2cb12dc4402ec3102fbe62630b38906905167c6382c9df309",
+    "preflop-solver/models/practice/v57-seed7601-networks.json.gz": "5a89abc98ce7c30611517f2e4079fc68a930e66efd2eea07362e7e710ff95036",
+    "preflop-solver/neural/runs/20bb-v27-routed-seed7601-s5000.json": "c5dba74744d817423c94803c2a1c92dc8a3acacd3b5f58094c700704c0fcbf92",
+    "preflop-solver/neural/runs/20bb-v104-action-ev/served-full-leaves/orbit-0000.json.gz": "0faec9712120bea301d893854f738e31ec55329179abf2105e4f960849594740",
+    "data/practice/full-hand-manifests.json": "92ddbb6ca5c7d2541bb278da4cc2f420e4833043d2e22b4dc39e93170a7b73f6",
+    "preflop-solver/neural/references/gtowizard-20bb-hu-20250926.json": "93862337f3548264c967cc1a6432ad5eb8cfbe1d4b40664cafebc360ea8c63e7",
+    "preflop-solver/neural/runs/20bb-v27-mixed10-tabular-seed7601-r10000000.json": "bc4e8b0015464cf55e941596c641b0d8b4e530cef58e53457ee516fbceedc456",
+    "preflop-solver/neural/runs/20bb-v27-mixed10-tabular-seed7602-r10000000.json": "1811501d5250405c041ef576637679709861a7f9d03c9374093fbf8d45438f36",
+    "preflop-solver/neural/runs/v28-overnight/merged-seed8801-r10000000.json": "ef036d8c6b6241755844212e7a6a13606395f308fc63e7882f7cc59747676e8a",
+    "preflop-solver/neural/runs/v28-overnight/merged-seed8802-r10000000.json": "afba6c993034c9e625fc8fe2f92740697db710a177a2332fabc3dc3251a5bf8d",
+    "preflop-solver/neural/runs/v28-overnight/merged-seed8801-r100000000.json": "8c054f5878e108f63dea08f6705a851203e3954b14aadde3e0c8c315814f116e",
+    "preflop-solver/neural/runs/v28-overnight/merged-seed8802-r100000000.json": "67515eb65ba0d2ca2f246610672cd87f38a107dcf09bfee4ca0037517a34160b"
+  },
+  "modelVersion": "hu-20bb-v102-consensus-continual-resolver-experimental",
+  "nativeBinarySha256": "f80f4bfd5dcdb3344979063790ed7e849b1c0d4ee4be3c7881232ee1254cf06a",
+  "completeRootClasses": 169,
+  "exactRootCombos": 1326,
+  "servingParity": {
+    "comboWeightedActionMae": 1.1873362909066646e-17,
+    "comboWeightedTotalVariation": 4.7493451636266584e-17,
+    "comboWeightedPrimaryAgreement": 0.9999999999999983,
+    "maximumActionDelta": 3.3306690738754696e-16
+  },
+  "preflopAncestorWeightsIdentical": true,
+  "studentOpeningMix": {
+    "fold": 0.34828416213795815,
+    "limp": 0.36819651177987633,
+    "raise": 0.23207675073545392,
+    "shove": 0.05144257534671169
+  },
+  "teacherComparisons": [
+    {
+      "modelVersion": "hu-20bb-v27-mixed10-tabular-seed7601-r10000000",
+      "openingMix": {
+        "fold": 0.34977798314511377,
+        "limp": 0.35881087237780557,
+        "raise": 0.2342897458061097,
+        "shove": 0.05712139867097105
+      },
+      "examples": [
+        {
+          "hand": "AA",
+          "probabilities": [
+            0.0018208821983041377,
+            0.8763899497939881,
+            0.05347885827686388,
+            0.02231067125698359,
+            0.016892479969841383,
+            0.013802272841007188,
+            0.009229867660620155,
+            0.006075018002391767
+          ]
+        },
+        {
+          "hand": "KK",
+          "probabilities": [
+            0.0027249156184190686,
+            0.9458148439598046,
+            0.010399799792743076,
+            0.008973018831469129,
+            0.009079315727570751,
+            0.010452859322532069,
+            0.006640174664295262,
+            0.005915072083166014
+          ]
+        },
+        {
+          "hand": "AKs",
+          "probabilities": [
+            0.0020370461646306744,
+            0.47998978903701767,
+            0.14628919919717132,
+            0.08444300652251896,
+            0.11456418119718996,
+            0.07997619395600065,
+            0.06394183892248753,
+            0.02875874500298319
+          ]
+        },
+        {
+          "hand": "K2o",
+          "probabilities": [
+            0.6209678483466642,
+            0.05532251713973293,
+            0.024470607463334175,
+            0.04569517730957612,
+            0.027517651271357607,
+            0.042152816245221617,
+            0.0744872123496683,
+            0.10938616987444491
+          ]
+        },
+        {
+          "hand": "76s",
+          "probabilities": [
+            0.08285001174390005,
+            0.5950261963619189,
+            0.10256894320444718,
+            0.07402908981750714,
+            0.015064950587162496,
+            0.033430800280684674,
+            0.0489951291979062,
+            0.048034878806473405
+          ]
+        }
+      ],
+      "comboWeightedActionMae": 0.03657147619639499,
+      "comboWeightedTotalVariation": 0.14628590478557996,
+      "comboWeightedPrimaryAgreement": 0.9004524886877815,
+      "maximumActionDelta": 0.6697972294258893
+    },
+    {
+      "modelVersion": "hu-20bb-v27-mixed10-tabular-seed7602-r10000000",
+      "openingMix": {
+        "fold": 0.3482153338486392,
+        "limp": 0.3629154669217323,
+        "raise": 0.2268707037678963,
+        "shove": 0.06199849546173226
+      },
+      "examples": [
+        {
+          "hand": "AA",
+          "probabilities": [
+            0.0017545988922917457,
+            0.8747966873644109,
+            0.05416133817766985,
+            0.030013278915533983,
+            0.011828908922127459,
+            0.010765464874344042,
+            0.01045071310545123,
+            0.006229009748170948
+          ]
+        },
+        {
+          "hand": "KK",
+          "probabilities": [
+            0.00254253340291818,
+            0.9502576279992359,
+            0.009720196734036042,
+            0.008997826999645294,
+            0.008321894211172595,
+            0.007441037943459828,
+            0.006593462324004954,
+            0.006125420385527058
+          ]
+        },
+        {
+          "hand": "AKs",
+          "probabilities": [
+            0.0019224746106739606,
+            0.393485686260832,
+            0.2002875489410537,
+            0.07130639439272148,
+            0.08434886204704654,
+            0.12198695386256399,
+            0.07551117444904207,
+            0.05115090543606627
+          ]
+        },
+        {
+          "hand": "K2o",
+          "probabilities": [
+            0.6400408965036635,
+            0.06349960430059448,
+            0.04337560005083033,
+            0.042340847199794744,
+            0.02612834331359565,
+            0.03186779014047498,
+            0.09214797799335145,
+            0.060598940497694785
+          ]
+        },
+        {
+          "hand": "76s",
+          "probabilities": [
+            0.03731370099871206,
+            0.5836195003414449,
+            0.11837767471677653,
+            0.10470967911022826,
+            0.01798185746691612,
+            0.04183064876026162,
+            0.05081828859484842,
+            0.04534865001081206
+          ]
+        }
+      ],
+      "comboWeightedActionMae": 0.04022172654014641,
+      "comboWeightedTotalVariation": 0.16088690616058565,
+      "comboWeightedPrimaryAgreement": 0.8627450980392145,
+      "maximumActionDelta": 0.6843039553557151
+    },
+    {
+      "modelVersion": "hu-20bb-v28-merged-seed8801-r10000000",
+      "openingMix": {
+        "fold": 0.3209994836816934,
+        "limp": 0.38545139290040903,
+        "raise": 0.22174602195229054,
+        "shove": 0.07180310146560714
+      },
+      "examples": [
+        {
+          "hand": "AA",
+          "probabilities": [
+            0.0015505493411685047,
+            0.8840252805676283,
+            0.06453927972505867,
+            0.01540832526924057,
+            0.011549059872150278,
+            0.008522834347376428,
+            0.008475475113176095,
+            0.005929195764201267
+          ]
+        },
+        {
+          "hand": "KK",
+          "probabilities": [
+            0.002071235211051099,
+            0.8829874693074367,
+            0.040751705921560966,
+            0.02750273008302987,
+            0.013927097624152568,
+            0.01120829555058324,
+            0.014061585252224515,
+            0.007489881049961071
+          ]
+        },
+        {
+          "hand": "AKs",
+          "probabilities": [
+            0.002132539064371781,
+            0.2499957474961214,
+            0.09411001446606597,
+            0.12972488500598275,
+            0.07798170890430918,
+            0.051150953239071525,
+            0.1796989311853105,
+            0.21520522063876685
+          ]
+        },
+        {
+          "hand": "K2o",
+          "probabilities": [
+            0.0221016057765479,
+            0.01348433640658059,
+            0.1440738870860474,
+            0.059840660246140986,
+            0.11105607752649023,
+            0.16621794141599397,
+            0.2110567742670605,
+            0.2721687172751384
+          ]
+        },
+        {
+          "hand": "76s",
+          "probabilities": [
+            0.01611177586455745,
+            0.7932703687639243,
+            0.03449184829284416,
+            0.033699574065858044,
+            0.03620663108313056,
+            0.03376907477212916,
+            0.02064065819386794,
+            0.031810068963688355
+          ]
+        }
+      ],
+      "comboWeightedActionMae": 0.0775744618231094,
+      "comboWeightedTotalVariation": 0.3102978472924376,
+      "comboWeightedPrimaryAgreement": 0.6666666666666662,
+      "maximumActionDelta": 0.8403598205803664
+    },
+    {
+      "modelVersion": "hu-20bb-v28-merged-seed8802-r10000000",
+      "openingMix": {
+        "fold": 0.3210892163184282,
+        "limp": 0.385092398589396,
+        "raise": 0.2225630376538934,
+        "shove": 0.07125534743828249
+      },
+      "examples": [
+        {
+          "hand": "AA",
+          "probabilities": [
+            0.001528617239180984,
+            0.9040000022497318,
+            0.03334355224988958,
+            0.018170930938532483,
+            0.015494505497289437,
+            0.013184151387978462,
+            0.008005138155371912,
+            0.006273102282025304
+          ]
+        },
+        {
+          "hand": "KK",
+          "probabilities": [
+            0.0017548390190835603,
+            0.817073966289921,
+            0.09218202906120374,
+            0.03406711515704015,
+            0.01132137922708108,
+            0.023124348473893233,
+            0.012424614043067475,
+            0.008051708728709896
+          ]
+        },
+        {
+          "hand": "AKs",
+          "probabilities": [
+            0.00224025758761955,
+            0.18736867695696618,
+            0.05493535004108557,
+            0.03797018637572415,
+            0.07026927646300656,
+            0.12085217063118141,
+            0.14851575923980456,
+            0.37784832270461194
+          ]
+        },
+        {
+          "hand": "K2o",
+          "probabilities": [
+            0.020896968182126753,
+            0.024233549019860058,
+            0.041449235042842786,
+            0.08603781799770589,
+            0.14835036709356475,
+            0.07939664890960989,
+            0.2274582145636703,
+            0.37217719919061965
+          ]
+        },
+        {
+          "hand": "76s",
+          "probabilities": [
+            0.016336276030090337,
+            0.7898227676502935,
+            0.055289031214471034,
+            0.02603635850607187,
+            0.021171709339836534,
+            0.034499853774669346,
+            0.03889230193616326,
+            0.017951701548404243
+          ]
+        }
+      ],
+      "comboWeightedActionMae": 0.07874440218791855,
+      "comboWeightedTotalVariation": 0.3149776087516742,
+      "comboWeightedPrimaryAgreement": 0.6591251885369528,
+      "maximumActionDelta": 0.8370594617112742
+    },
+    {
+      "modelVersion": "hu-20bb-v28-merged-seed8801-r100000000",
+      "openingMix": {
+        "fold": 0.2453908021456238,
+        "limp": 0.5784271293561783,
+        "raise": 0.09225576942171648,
+        "shove": 0.0839262990764814
+      },
+      "examples": [
+        {
+          "hand": "AA",
+          "probabilities": [
+            0.0005989794050573106,
+            0.9660731140205894,
+            0.01517007645427463,
+            0.006009926361886875,
+            0.0055029866991395,
+            0.0028150795321837327,
+            0.0022547003380833743,
+            0.0015751371887851567
+          ]
+        },
+        {
+          "hand": "KK",
+          "probabilities": [
+            0.0007090102696415434,
+            0.9535488672204472,
+            0.019894310167868415,
+            0.010178216940925426,
+            0.00686554915012984,
+            0.003835209140778416,
+            0.0033207220344455323,
+            0.0016481150757637164
+          ]
+        },
+        {
+          "hand": "AKs",
+          "probabilities": [
+            0.0010494056828771105,
+            0.4631330449034224,
+            0.024974992387185993,
+            0.03980679142963437,
+            0.03675253172042929,
+            0.04804303465270063,
+            0.044856343666905656,
+            0.34138385555684453
+          ]
+        },
+        {
+          "hand": "K2o",
+          "probabilities": [
+            0.023428664224942122,
+            0.05291237302237376,
+            0.055075789031097756,
+            0.0394119193416036,
+            0.03489525194759452,
+            0.06343531601319029,
+            0.07788768337948995,
+            0.6529530030397079
+          ]
+        },
+        {
+          "hand": "76s",
+          "probabilities": [
+            0.005735718790406053,
+            0.9104394559445762,
+            0.036831629133657444,
+            0.00788811222105677,
+            0.00927015043086508,
+            0.0070435991520156485,
+            0.009245602819687889,
+            0.013545731507734998
+          ]
+        }
+      ],
+      "comboWeightedActionMae": 0.09449536439091692,
+      "comboWeightedTotalVariation": 0.3779814575636677,
+      "comboWeightedPrimaryAgreement": 0.7134238310708892,
+      "maximumActionDelta": 0.9360421126807428
+    },
+    {
+      "modelVersion": "hu-20bb-v28-merged-seed8802-r100000000",
+      "openingMix": {
+        "fold": 0.24561723567075555,
+        "limp": 0.5781539009424783,
+        "raise": 0.0933451301456212,
+        "shove": 0.08288373324114508
+      },
+      "examples": [
+        {
+          "hand": "AA",
+          "probabilities": [
+            0.0005959692844472208,
+            0.9683658179839137,
+            0.013779391408872963,
+            0.005263665767533361,
+            0.004658442970757056,
+            0.0032214569964605956,
+            0.0025271622386057215,
+            0.0015880933494094752
+          ]
+        },
+        {
+          "hand": "KK",
+          "probabilities": [
+            0.0007180094337149664,
+            0.9540268929006345,
+            0.018776167463732476,
+            0.010303724398101037,
+            0.007022990571326764,
+            0.0037182752249380773,
+            0.0038005962509648212,
+            0.0016333437565873145
+          ]
+        },
+        {
+          "hand": "AKs",
+          "probabilities": [
+            0.0010669714615943752,
+            0.4449186836631945,
+            0.04776956864586222,
+            0.041221750693320146,
+            0.04621809974169075,
+            0.04483490891208835,
+            0.05577023243801206,
+            0.3181997844442377
+          ]
+        },
+        {
+          "hand": "K2o",
+          "probabilities": [
+            0.015485854307387243,
+            0.13793871872513022,
+            0.04920699975209154,
+            0.04304617765187129,
+            0.03196890325364301,
+            0.06440566933717914,
+            0.0766363652141648,
+            0.5813113117585327
+          ]
+        },
+        {
+          "hand": "76s",
+          "probabilities": [
+            0.005883778563320749,
+            0.9109427214626576,
+            0.035289917946844364,
+            0.008350342189732955,
+            0.010293883051478289,
+            0.007970747909028218,
+            0.009206500249932224,
+            0.012062108627005458
+          ]
+        }
+      ],
+      "comboWeightedActionMae": 0.09458497335586401,
+      "comboWeightedTotalVariation": 0.37833989342345603,
+      "comboWeightedPrimaryAgreement": 0.7164404223227746,
+      "maximumActionDelta": 0.9366516933404668
+    }
+  ],
+  "reference": {
+    "source": "https://blog.gtowizard.com/isolating_limpers_in_short_stack_hu/",
+    "actionTreeIdentical": false,
+    "referenceOpeningMix": {
+      "fold": 0.052,
+      "limp": 0.614,
+      "raise": 0.333,
+      "shove": 0.001
+    },
+    "aggregateDelta": {
+      "fold": 0.29628416213795816,
+      "limp": -0.24580348822012366,
+      "raise": -0.1009232492645461,
+      "shove": 0.05044257534671169
+    },
+    "aggregateTotalVariation": 0.3467267374846698
+  },
+  "values": {
+    "oldBestActionClassCounts": {
+      "fold": 52,
+      "limp": 87,
+      "raise": 23,
+      "shove": 7
+    },
+    "newerBestActionClassCounts": {
+      "fold": 0,
+      "limp": 169,
+      "raise": 0,
+      "shove": 0
+    },
+    "oldFoldNowContinueClasses": 52,
+    "oldFoldNowContinueComboFraction": 0.34238310708898945,
+    "examples": [
+      {
+        "hand": "32o",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          -0.6865822684892281,
+          -0.6624043879286973,
+          -0.8040098012782729,
+          -1.065142986751888,
+          -1.30693412819628,
+          -1.552354832879994,
+          -2.729583579077438
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          -0.23112981816471953,
+          -0.3387118545088079,
+          -0.483912827355665,
+          -0.6343789841724946,
+          -0.979978746267479,
+          -1.1637845375957792,
+          -2.220285947573224
+        ]
+      },
+      {
+        "hand": "72o",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          -1.235248855624126,
+          -0.8336087160138941,
+          -1.1957722937884896,
+          -1.1619260865868293,
+          -1.303937738667836,
+          -1.691378781186978,
+          -2.286681126851726
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          -0.18486006975550306,
+          -0.30445404540026494,
+          -0.4470428692965859,
+          -0.5952347309037883,
+          -0.9376582779250703,
+          -1.1504128019045696,
+          -2.19804012371914
+        ]
+      },
+      {
+        "hand": "76s",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          -0.25687326057586607,
+          -0.33926915270976415,
+          -0.3652414573585999,
+          -0.6228580872896629,
+          -0.6185765516316504,
+          -0.5140165659596445,
+          -0.5778044986163179
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          0.4755917317126956,
+          -0.023187876359222037,
+          -0.15393954247984706,
+          -0.26059361226917827,
+          -0.47237390505927984,
+          -0.5201281284975239,
+          -0.7475059917901452
+        ]
+      },
+      {
+        "hand": "AA",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          6.03024026052915,
+          5.814735313174024,
+          5.549903761983862,
+          5.269569247617471,
+          5.067310042429791,
+          4.842989676702819,
+          3.9451432824980652
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          8.578067032153042,
+          6.8695138264445035,
+          6.789981179742278,
+          6.755101485706611,
+          6.3750661423452675,
+          5.915731363301942,
+          5.042401403028492
+        ]
+      },
+      {
+        "hand": "AKs",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          4.820037416611065,
+          4.8147514702514815,
+          4.690957404122471,
+          4.819857531532202,
+          4.799153968015302,
+          4.741552936059729,
+          4.567886209687515
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          4.155833017877346,
+          3.493102593167799,
+          3.471119785182244,
+          3.4760494397454824,
+          3.3373263655856897,
+          3.1539600862362227,
+          2.7267188379591336
+        ]
+      },
+      {
+        "hand": "K2o",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          -0.6511463450142917,
+          -0.6411372503629406,
+          -0.7391079813938068,
+          -0.7355918223469606,
+          -0.6725795596040083,
+          -0.7820276370419005,
+          -0.6164188731682019
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          0.5270825681520364,
+          0.008178136046058765,
+          -0.11412935533645312,
+          -0.19564628483031074,
+          -0.3690018066774234,
+          -0.46083446421041413,
+          -0.7287277794076124
+        ]
+      },
+      {
+        "hand": "KK",
+        "actionLabels": [
+          "fold",
+          "limp",
+          "raise_to_2.000bb",
+          "raise_to_2.500bb",
+          "raise_to_3.000bb",
+          "raise_to_4.000bb",
+          "raise_to_5.000bb",
+          "raise_all_in_to_20.000bb"
+        ],
+        "oldTeacherEvsBb": [
+          -0.5,
+          5.298787296791581,
+          4.176779133050941,
+          4.060639513720878,
+          3.907957463415691,
+          3.947542346691221,
+          3.500726600436898,
+          3.2252854083130975
+        ],
+        "newerStudentEvsBb": [
+          -0.5,
+          7.8003792431282495,
+          6.1088215961152175,
+          6.031493789545648,
+          5.997517498866847,
+          5.637661197506266,
+          5.2122257104941285,
+          4.422273837993318
+        ]
+      }
+    ],
+    "identicalContinuationGameEstablished": false,
+    "interpretation": "Different policy profiles and continuation generators: EV shifts localize target drift, not an improvement or a matched exploitability comparison."
+  },
+  "newerContinuationProvenance": {
+    "iterations": 2,
+    "averaging_delay": 0,
+    "regret_matching_plus": false,
+    "dcfr": {
+      "positive_regret_exponent": 1.5,
+      "negative_regret_exponent": 0.0,
+      "strategy_exponent": 2.0
+    },
+    "value_uncertainty_bb": 1.0,
+    "threads": 5,
+    "value_projection": "state_payoff_box_constrained_reach_weighted_zero_sum_v1",
+    "value_network_sha256": "d00388ff1f067227928f8ebf5c3e18f6fe1426b7d97ba409f7d97248f71bfdbd",
+    "range_policy_sha256": "1b14fa8987663f37cd0f0f2889fa2574aaf7d31455d6f66d0fca6fe9ceec1114"
+  },
+  "continuationRouteComparison": {
+    "checks": {
+      "iterationsMatch": true,
+      "actorRoutingMatch": false,
+      "dcfrMatch": false,
+      "deployedPostflopBlueprintEvaluated": false,
+      "laterStreetRoutingEvaluated": false
+    },
+    "canUseAsMatchedServingEvaluation": false,
+    "interpretation": "v2 canonical continuation caches evaluate a bilateral flop subgame with learned turn leaves. They do not roll out the deployed full-hand policy; small chance SE is not a calibration bound."
+  },
+  "newerContinuationMethod": "bilateral flop re-solve with learned turn values, not a rollout of the deployed BB-only routed policy",
+  "releaseAccepted": false,
+  "activeModelChanged": false,
+  "interpretation": "Root-only lineage diagnostic. Commercial action-frequency differences and internal teacher fit are not exploitability or equilibrium certificates."
+}

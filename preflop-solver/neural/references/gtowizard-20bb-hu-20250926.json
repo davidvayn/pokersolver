@@ -1,0 +1,15 @@
+{
+  "source": "https://blog.gtowizard.com/isolating_limpers_in_short_stack_hu/",
+  "chart": "https://blog.gtowizard.com/content/wp-content/uploads/2025/09/3-2-1.png",
+  "published": "2025-09-26",
+  "depthBb": 20,
+  "anteBb": 0,
+  "context": "SB first-in heads-up",
+  "groups": ["fold", "limp", "raise", "shove"],
+  "probabilities": [0.052, 0.614, 0.333, 0.001],
+  "probabilityResolution": 0.001,
+  "openingSizesBb": [2, 20],
+  "bbIsolationSizesBb": [3, 6, 20],
+  "actionTreeIdentical": false,
+  "interpretation": "Public rounded aggregate frequencies for external sanity checking only. Not an exact export, training target, or exploitability certificate. Different sizing trees and continuation models prevent direct EV-loss inference."
+}
