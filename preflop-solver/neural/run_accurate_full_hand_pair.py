@@ -17,17 +17,17 @@ from run_postflop_gap_pilot import HERE, PilotMemoryGuard, controller_lock, run_
 TEST = "blueprint::response::native_policy::full_hand_probe::accurate_native_full_hand_lbr_probe"
 
 
-def validate_cluster(row, preflop_sha, iterations):
+def validate_cluster(row, preflop_sha, iterations, index=0, seed=100101):
     d, r = row["diagnostics"], row["report"]
     if (row["schema"] != "accurate-native-full-hand-lbr-cluster-v1" or row["releaseAccepted"] is not False
-            or row["cohort"] != "screening" or row["index"] != 0
+            or row["cohort"] != "screening" or row["index"] != index
             or d["preflopSha256"] != preflop_sha or d["preflopRounds"] != 32
             or d["learnedLeafModelSha256"] is not None or d["completeRootSupport"] is not True
             or d["rootRealizationTurnAverages"] is not False or d["safeResolving"] is not False
             or d["releaseQualified"] is not False or d["executionLeafWorkers"] != 4
             or d["flopIterations"] != iterations or d["trainingTurnIterations"] != 64
             or d["responseTurnIterations"] != 64
-            or d["routeSha256"] != expected_route_sha256(preflop_sha, iterations)
+            or d["routeSha256"] != expected_route_sha256(preflop_sha, iterations, seed)
             or r["schema"] != "paired-frozen-lbr-hand-v1" or r["lbrSeed"] != 90001
             or r["earlyRunoutsPerCombo"] != 16 or len(r["attacks"]) != 2
             or len(r["seatAttackerUtilityBb"]) != 2):
@@ -56,14 +56,14 @@ def validate_cluster(row, preflop_sha, iterations):
         routeSha256=d["routeSha256"])
 
 
-def compare(rows, preflop_sha):
+def compare(rows, preflop_sha, index=0, seed=100101):
     if len(rows) != 2: raise ValueError("both complete matched arms required")
     a, b = rows
     for key in ("cohort", "index", "chanceSeed", "deal"):
         if a[key] != b[key]: raise ValueError("cannot compare different full-deal clusters")
     if a["report"]["actionSeed"] != b["report"]["actionSeed"]:
         raise ValueError("attacker action randomness must be matched")
-    first, second = (validate_cluster(row, preflop_sha, budget) for row, budget in zip(rows, (32, 64)))
+    first, second = (validate_cluster(row, preflop_sha, budget, index, seed) for row, budget in zip(rows, (32, 64)))
     return dict(dealClusters=1, native32=first, native64=second,
         pairedImprovementBbPerHand=first["totalResponseGainBbPerHand"]-second["totalResponseGainBbPerHand"],
         confidence="One fixed deal only; no strength decision or uncertainty bound",
@@ -71,14 +71,53 @@ def compare(rows, preflop_sha):
         interpretation="Total response gain, not half-scale exploitability; frozen heuristic LBR is not an upper-bound certificate")
 
 
+def expansion(index, has_first):
+    if index not in range(4) or has_first != (index > 0):
+        raise ValueError("only declared indices 0..3; expansion requires the completed first pair")
+    return 100101 if index % 2 == 0 else 100102
+
+
+def pin_first_pair(path, prior, pinned, binary, preflop):
+    if (prior.get("schema") != "accurate-native-full-hand-pair-v1" or prior.get("status") != "complete"
+            or prior.get("cohort") != "screening" or prior.get("index") != 0 or prior.get("policySeed") != 100101
+            or prior["pinnedInputs"].get(str(binary)) != pinned[str(binary)]
+            or prior["pinnedInputs"].get(str(preflop)) != pinned[str(preflop)]
+            or len(prior.get("jobs", [])) != 2 or prior["systemMemoryGuard"].get("stopReason")
+            or not math.isfinite(prior.get("elapsedSeconds", math.nan)) or not 0 < prior["elapsedSeconds"] <= 7200):
+        raise ValueError("complete compatible first-pair feasibility receipt required")
+    rows = []
+    for job, iterations in zip(prior["jobs"], (32,64)):
+        worker = job["worker"]
+        if (job["iterations"] != iterations or worker.get("status") != "complete"
+                or worker.get("exitCode") != 0 or worker.get("resourceStopReason")
+                or not 0 < worker.get("sampledPeakMemoryBytes", math.inf) <= 2*1024**3):
+            raise ValueError("first pair must pass both original worker/resource guards")
+        report = path.parent / f"native{iterations}.json"
+        if job["output"] != str(report): raise ValueError("first-pair report path differs")
+        pinned[str(report)] = job["outputSha256"]
+        row = json.loads(report.read_text())
+        if job["summary"] != validate_cluster(row, pinned[str(preflop)], iterations):
+            raise ValueError("first-pair output summary differs")
+        rows.append(row)
+    if prior["summary"] != compare(rows, pinned[str(preflop)]):
+        raise ValueError("first-pair matched comparison differs")
+
+
 def run(args):
     if any(k.startswith("POKER_NATIVE_") for k in os.environ):
         raise ValueError("cannot inherit another native policy configuration")
     pinned = {}
+    seed = expansion(args.index, args.first_pair is not None)
+    if (args.first_pair is None) != (args.first_pair_sha256 is None):
+        raise ValueError("first pair and SHA must be supplied together")
     for name in ("binary", "build", "default_parity", "preflight", "preflop"):
         path = getattr(args, name).resolve(); digest = getattr(args, name+"_sha256")
         if sha256(path) != digest: raise ValueError(name+" changed")
         setattr(args, name, path); pinned[str(path)] = digest
+    if args.first_pair is not None:
+        path = args.first_pair.resolve(); pinned[str(path)] = args.first_pair_sha256
+        if sha256(path) != args.first_pair_sha256: raise ValueError("first pair changed")
+        pin_first_pair(path, json.loads(path.read_text()), pinned, args.binary, args.preflop)
     cost = json.loads(args.preflight.read_text()); probe = args.preflight.parent / "probe.json"
     pinned[str(probe)] = cost["probeSha256"]; worker = cost["worker"]
     if (cost["schema"] != "accurate-native-full-hand-cost-preflight-v1" or cost["status"] != "complete"
@@ -109,7 +148,8 @@ def run(args):
     for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, lambda *_: stop.set())
     timer = threading.Timer(12000, stop.set); timer.daemon = True
     record = dict(schema="accurate-native-full-hand-pair-v1", status="running", pinnedInputs=pinned,
-        cohort="screening", index=0, policySeed=100101, maximumSeconds=12000,
+        cohort="screening", index=args.index, policySeed=seed, maximumSeconds=12000,
+        firstPairSha256=args.first_pair_sha256, controllerPid=os.getpid(),
         maximumWorkerMemoryBytes=4*1024**3, jobs=[], releaseAccepted=False)
     with controller_lock(output):
         pressure = None; rows = []
@@ -120,10 +160,10 @@ def run(args):
                 path = output / f"native{iterations}.json"
                 receipt = run_job(args.binary, TEST, dict(POKER_NATIVE_CHECKPOINT=str(args.preflop),
                     POKER_NATIVE_CHECKPOINT_SHA=args.preflop_sha256, POKER_NATIVE_FLOP_ITERATIONS=str(iterations),
-                    POKER_NATIVE_POLICY_SEED="100101", POKER_NATIVE_LBR_COHORT="screening", POKER_NATIVE_LBR_INDEX="0",
+                    POKER_NATIVE_POLICY_SEED=str(seed), POKER_NATIVE_LBR_COHORT="screening", POKER_NATIVE_LBR_INDEX=str(args.index),
                     POKER_NATIVE_OUTPUT=str(path)), output / f"native{iterations}", [path], stop,
                     seconds=seconds, memory=4*1024**3)
-                row = json.loads(path.read_text()); summary = validate_cluster(row, args.preflop_sha256, iterations)
+                row = json.loads(path.read_text()); summary = validate_cluster(row, args.preflop_sha256, iterations, args.index, seed)
                 rows.append(row)
                 record["jobs"].append(dict(iterations=iterations, output=str(path), outputSha256=sha256(path),
                     worker=receipt["worker"], summary=summary))
@@ -131,7 +171,7 @@ def run(args):
                 print(json.dumps(dict(event="accurate-full-hand-arm", iterations=iterations, **summary)), flush=True)
             if stop.is_set() or any(sha256(Path(p)) != h for p, h in pinned.items()):
                 raise ValueError("stopped or pinned source changed")
-            record.update(status="complete", summary=compare(rows, args.preflop_sha256))
+            record.update(status="complete", summary=compare(rows, args.preflop_sha256, args.index, seed))
             print(json.dumps(dict(event="accurate-full-hand-pair", **record["summary"])), flush=True)
         except BaseException as error:
             stop.set(); record.update(status="failed", failure=str(error)); raise
@@ -143,6 +183,8 @@ def run(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--index", type=int, choices=range(4), default=0)
+    p.add_argument("--first-pair", type=Path); p.add_argument("--first-pair-sha256")
     for name in ("binary", "build", "default_parity", "preflight", "preflop"):
         option = name.replace("_", "-")
         p.add_argument("--"+option, type=Path, required=True); p.add_argument("--"+option+"-sha256", required=True)

@@ -1415,3 +1415,69 @@ Build/source receipt SHA-256:
 Default parity receipt SHA-256:
 `b6f62941247bfe59f9d9e5adb58a8a5eae1bc01ff608ea26d62124f405b9e5e7`.
 Artifacts: `runs/local-accurate-full-hand-pair-20261005-a/`.
+
+Section 28's first complete-hand pair finished. Native32/64 realized total
+attacker gains were **-3.0/-2.0bb**, respectively: a 1.0bb adverse paired
+sample for native64, not an exploitability estimate. Both attacker paths had
+three postflop decisions. Inspection shows the same losing holding bluffs
+2.5bb versus 1.5bb on the flop, then checks turn/river and loses showdown;
+the other seat's attack ends preflop with +0.5bb in both arms. A negative
+realized sample is not a passed equilibrium gate, and this single private
+holding/runout cannot establish a strategy regression or improvement.
+
+Native32 took 1366.557s at 1,334,560,040 bytes peak sampled footprint; native64
+took 2188.386s at 1,364,051,336 bytes. Total active elapsed time was 3555.0s,
+with normal pressure. Calendar time advanced while guard samples and update
+counts barely advanced; elapsed durations use a monotonic clock, not the
+wall-clock timestamps. The
+first32 update streams are exact matches. No missing lookups, source changes,
+invalid actions, accounting errors or route mismatches occurred.
+
+Completed first-pair manifest SHA-256:
+`68318c065c3e3b9d645128c3ee4246b1b5e960cc55820234bf30e3a630aadad9`.
+Native32/64 report SHA-256:
+`7702631ffb44bfd9b0b25123c62d012cc6b74a0668f8b0db4fbb6c4e72f9959a` /
+`1d7002052fada1f889a1aa644f5baca7920c355c68c2cf464c332155f02ed70b`.
+
+## 29. Fixed four-deal matched screening, not one-payoff selection
+
+1. Keep completed screening index 0; do not replace its unfavorable sample.
+   Require its complete pinned two-arm reports, route/accounting validation,
+   normal-pressure receipts, <=7200s active total and <=2GiB observed worker
+   peak before expansion. Admission depends on feasibility, not the payoff.
+2. Declare exactly the remaining indices 1, 2, 3 from the same deterministic
+   screening seed rule. Policy seed is 100102 on odd indices and 100101 on
+   even indices, fixed before their outcomes. Both native32/64 arms on each
+   deal share that seed, preflop artifact and attacker randomness. This compares
+   training configurations across two policy seeds, not one frozen route.
+3. Reuse the same tested native binary and default-parity proof. Only extend
+   controller admission/reporting; do not change the solver or trained models.
+   Retain 4GiB per-worker, 4500s/7200s arm limits and 12000s per-pair limit.
+4. Permit at most two simultaneous independent pair controllers (eight leaf
+   threads total), using the observed <1.4GiB worker peaks as the feasibility
+   basis. Preserve global pressure stops and 20GiB reserve. Monitor both, then
+   start the third after a slot clears; stop the remaining expansion at 18000s
+   active time. Parallelism changes execution only, not seeded policies.
+5. Keep every declared deal, including preflop-only and adverse outcomes.
+   Report all four paired differences, per-policy-seed means and postflop
+   exposure counts. Never clip negative payoffs, count seats as independent
+   boards, or call four deals a 99% exploitability bound. Missing/failed pairs
+   leave the cohort incomplete rather than improving the reported average.
+6. Use this as a cheap full-hand directional screen. No website promotion or
+   unconditional iteration extension follows from a favorable tiny sample.
+   If evidence is inconclusive, choose a variance-reducing exact conditional
+   check on captured public roots or a preregistered larger cohort according
+   to measured cost; do not pretend the original full-game gate was tested.
+
+This extends a measured feasible workload, includes both policy seeds and
+preserves the first adverse result. It is not an overnight convergence promise
+or authorization to spend on cloud compute.
+
+Section 29's gated controller extension is implemented; 31 targeted Python
+tests pass, including actual completed-report admission and rejected partial,
+changed-route and over-budget receipts. The original first-deal comparison
+remains byte-preserved. Native Rust, its frozen `fa4f8d25` binary and default
+parity proof are unchanged; no redundant native rebuild is required. The
+expansion derives its policy seed from the declared index rather than offering
+a best-seed selection switch. A bounded local two-controller launcher will
+enforce the cohort's 18000s stop and preserve incomplete status on failures.
