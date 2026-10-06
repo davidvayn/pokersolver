@@ -1256,3 +1256,17 @@ Second native64 response SHA-256:
 5. A complete successful transfer justifies a pinned full-hand feasibility
    route and measured next iteration budget. It does not authorize cloud spend,
    model promotion, new fit-loss grids or claiming Approximate GTO.
+
+Section 26's first single-raised screen completed and **passes**. Seed 100101
+improves 0.303985955→0.160506433bb, a 0.143479522bb reduction (47.20%).
+Construction took 1318.545s with 724,976,504 bytes peak sampled footprint;
+all49 turn evaluations and the independent audit passed. Total elapsed time
+was 2234.4s, with normal memory pressure. Its first32 update logs match the
+original native32 control exactly. This is another consumed-root conditional
+result, not a full-game or serving acceptance. Next: unchanged seed 100102.
+
+First single-raised manifest SHA-256:
+`c9888bf370c3e0f2c6fed524f137c51f4fa7fb49443e763a2f488b14b39f96ee`.
+First single-raised native64 candidate SHA-256:
+`fd33f404c21d239cb4c70f3ce50bcfbe20ff9d3679c53488080d4b786efbce01`.
+Artifacts: `runs/local-native-update64-20261005-a/single-raised-first/`.
