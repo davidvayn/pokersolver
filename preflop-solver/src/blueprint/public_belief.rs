@@ -29,6 +29,7 @@ pub(super) mod frozen_turn_response;
 #[cfg(test)]
 pub(in crate::blueprint) mod counterfactual_turn;
 mod compact_marginals;
+mod value_inference;
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
@@ -3837,6 +3838,7 @@ pub struct FlopContinuationValues {
 #[derive(Clone)]
 struct FlopSolver {
     config: FlopResolveConfig,
+    value_inference: Arc<Vec<value_inference::ValueInferenceSession>>,
     legal: [Vec<bool>; 2],
     conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
@@ -3965,8 +3967,10 @@ impl FlopSolver {
                 .map(|weight| *weight > 0.0)
                 .collect()
         });
+        let value_inference = Self::value_inference_sessions(&config);
         Ok(Self {
             config,
+            value_inference,
             legal,
             conflicts: combo_conflicts(),
             nodes: BTreeMap::new(),
@@ -3977,6 +3981,23 @@ impl FlopSolver {
             safe_root: None,
             training_round_offset: 0,
         })
+    }
+
+    fn value_inference_sessions(
+        config: &FlopResolveConfig,
+    ) -> Arc<Vec<value_inference::ValueInferenceSession>> {
+        Arc::new(
+            std::iter::once(config.value_network.clone())
+                .chain(config.auxiliary_value_networks.iter().cloned())
+                .map(value_inference::ValueInferenceSession::new)
+                .collect(),
+        )
+    }
+
+    fn replace_continuation_network(&mut self, network: PublicValueNetwork) {
+        self.config.value_network = network;
+        self.config.auxiliary_value_networks.clear();
+        self.value_inference = Self::value_inference_sessions(&self.config);
     }
 
     fn install_safe_root(
@@ -5155,16 +5176,14 @@ impl FlopSolver {
                     .skip(worker)
                     .step_by(worker_count)
                     .collect::<Vec<_>>();
-                let network = &self.config.value_network;
-                let auxiliary_networks = &self.config.auxiliary_value_networks;
+                let networks = &self.value_inference;
                 let board = self.config.state.board.clone();
                 workers.push(scope.spawn(move || {
                     assigned
                         .into_iter()
                         .filter_map(|turn| {
                             turn_leaf_card_values(
-                                network,
-                                auxiliary_networks,
+                                networks,
                                 &board,
                                 state.actor,
                                 state.invested,
@@ -5918,8 +5937,7 @@ fn equity_units(first: u32, second: u32) -> u16 {
 }
 
 fn turn_leaf_card_values(
-    network: &PublicValueNetwork,
-    auxiliary_networks: &[PublicValueNetwork],
+    networks: &[value_inference::ValueInferenceSession],
     flop_board: &[u8],
     actor: usize,
     invested: [f64; 2],
@@ -5956,16 +5974,14 @@ fn turn_leaf_card_values(
         (predicted, residual.abs(), projected_aggregates)
     };
 
-    let networks = std::iter::once(network)
-        .chain(auxiliary_networks)
-        .collect::<Vec<_>>();
+    let network = networks.first().expect("primary continuation hypothesis exists");
     let (predicted, residual) = if continuation_selection
         == FlopContinuationSelection::OpponentPublicChoice
         && traverser.is_some()
     {
         let traverser = traverser.expect("checked robust traverser");
         let mut candidates = networks
-            .into_iter()
+            .iter()
             .map(|candidate| project(candidate.predict(&board, actor, invested, &masked)))
             .collect::<Vec<_>>();
         let maximum_residual = candidates
@@ -5981,7 +5997,7 @@ fn turn_leaf_card_values(
         (candidates.swap_remove(selected).0, maximum_residual)
     } else {
         let mut mean = network.predict(&board, actor, invested, &masked);
-        for auxiliary in auxiliary_networks {
+        for auxiliary in &networks[1..] {
             let prediction = auxiliary.predict(&board, actor, invested, &masked);
             for player in 0..2 {
                 for combo in 0..COMBO_COUNT {
@@ -5989,7 +6005,7 @@ fn turn_leaf_card_values(
                 }
             }
         }
-        if !auxiliary_networks.is_empty() {
+        if networks.len() > 1 {
             let inverse_network_count = 1.0 / networks.len() as f64;
             for player in &mut mean {
                 for value in player {
@@ -6308,8 +6324,7 @@ pub fn solve_flop_cross_evaluated(
     let regret_matching_plus = config.regret_matching_plus;
     let mut solver = FlopSolver::new(config)?;
     solver.train();
-    solver.config.value_network = evaluation_value_network;
-    solver.config.auxiliary_value_networks.clear();
+    solver.replace_continuation_network(evaluation_value_network);
     solver.turn_leaf_evaluations.set(0);
     solver.exact_all_in_terminal_evaluations.set(0);
     solver.maximum_leaf_zero_sum_residual.set(0.0);
@@ -6400,8 +6415,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         completed = *checkpoint;
         let mut evaluator = solver.clone();
         evaluator.config.iterations = *checkpoint;
-        evaluator.config.value_network = evaluation_value_network.clone();
-        evaluator.config.auxiliary_value_networks.clear();
+        evaluator.replace_continuation_network(evaluation_value_network.clone());
         evaluator.turn_leaf_evaluations.set(0);
         evaluator.exact_all_in_terminal_evaluations.set(0);
         evaluator.maximum_leaf_zero_sum_residual.set(0.0);
@@ -14412,9 +14426,9 @@ mod tests {
         network.head[0].biases[..COMBO_COUNT].fill(0.1);
         network.head[0].biases[COMBO_COUNT..].fill(-0.1);
         let turn = 15;
+        let networks = [value_inference::ValueInferenceSession::new(network)];
         let (values, residual) = turn_leaf_card_values(
-            &network,
-            &[],
+            &networks,
             &board,
             0,
             [1.0, 1.0],
@@ -14455,9 +14469,11 @@ mod tests {
         second.head[0].biases[COMBO_COUNT..].fill(0.15);
         let turn = 15;
         let values = |primary: &PublicValueNetwork, auxiliary: &[PublicValueNetwork]| {
+            let networks = std::iter::once(primary.clone())
+                .chain(auxiliary.iter().cloned())
+                .map(value_inference::ValueInferenceSession::new).collect::<Vec<_>>();
             turn_leaf_card_values(
-                primary,
-                auxiliary,
+                &networks,
                 &board,
                 0,
                 [1.0, 1.0],
@@ -14498,10 +14514,10 @@ mod tests {
         second.source_validation_status = Some("accepted".to_owned());
         second.head[0].biases[..COMBO_COUNT].fill(-0.1);
         second.head[0].biases[COMBO_COUNT..].fill(0.1);
+        let networks = [first, second].map(value_inference::ValueInferenceSession::new);
         let evaluate = |traverser| {
             turn_leaf_card_values(
-                &first,
-                std::slice::from_ref(&second),
+                &networks,
                 &board,
                 0,
                 [1.0, 1.0],

@@ -38,6 +38,15 @@ No exploitability improvement or new equilibrium claim follows from it.
    their request IDs, default batches retain input ordering, accepted jobs drain
    on EOF, and saturation produces an explicit retry error, never fake policy.
    The poker engine, solve budget and per-solve card worker count are unchanged.
+6. Reuse complete continuation predictions only when the ordered board, actor,
+   investments and both exact range vectors match bit-for-bit. Each session
+   owns its immutable model; both independent-evaluation paths replace the
+   session when switching models. Retain at most 512 predictions / 48MiB of
+   estimated cache allocations per model per solve (including both FIFO/map
+   keys and vector capacities). In-flight work and model storage are additional.
+   Misses and eviction run the original predictor, with computation outside
+   the cache lock. No feature, matrix-multiplication, projection, regret update,
+   chance weighting or average-policy operation is changed.
 
 ## Local evidence and limitations
 
@@ -134,12 +143,65 @@ request over a real NDJSON stream. Further gated tests cover completion order,
 legacy batches, identified panics, malformed input, output failure, EOF draining,
 and the two-active/eight-queued limit.
 
+### Exact continuation prediction reuse
+
+A temporary input-duplication probe motivated two small pilots. The first held
+board/range features and query embeddings while recomputing public-context
+values. Its nine outputs matched, but cold requests took
+6.072s/7.867s/6.780s/6.912s and sampled peak footprint reached 479MiB. Adjacent
+unchanged controls remained faster. That prototype was removed; its source and
+receipt remain ignored as `rejected-query-value-inference.rs` and
+`memo-candidate-1/manifest.json` (SHA-256
+`d13de4e8493042a12debd934e2ea4fdaa3b57771916e3e110cdef3533940bcd2`).
+Temporary diagnostic logging was removed from production.
+
+The smaller complete-prediction cache retains exact results, not large hidden
+embeddings, and leaves the original predictor intact. Two matched comparisons,
+including a reverse-order repeat, produced:
+
+| Cold request | Control A | Cache A | Control B | Cache B |
+| --- | ---: | ---: | ---: | ---: |
+| Limped flop | 5.479s | 5.084s | 5.963s | 4.962s |
+| Raised flop | 6.611s | 6.460s | 7.039s | 6.389s |
+| Mixed-batch flop | 5.795s | 5.026s | 6.017s | 5.028s |
+| Cross-batch flop | 6.140s | 5.364s | 6.355s | 5.414s |
+| Total | 24.025s | 21.934s | 25.374s | 21.793s |
+
+All nine full responses matched exactly in both comparisons. This is an
+incremental 8.7%/14.1% cold-speed gain on these fixtures, not a generalized p95
+claim. Sampled peak footprints were approximately 319MiB/336MiB for pair A and
+334MiB/320MiB for pair B; retained-cache accounting is not a hard process-memory
+limit. Ready preflop requests remained below 1ms natively.
+
+Receipts in the same ignored run directory:
+
+- Control A: `memo-control-after/manifest.json`.
+- Cache A: `full-memo-candidate-1/manifest.json`, SHA-256
+  `2b3f82518b9ae93b87fca9817ef7c8b336b7de4dad22ab9b7cf99da32bfcdd08`.
+- Control B: `full-memo-control-2/manifest.json`, SHA-256
+  `37196b683c0400addbf57e60718e8989c1cf244e2dd78ad459ae16be6259af53`.
+- Cache B: `full-memo-candidate-2/manifest.json`, SHA-256
+  `d70130ae93cfb71c9aeb6a6408f5b39cc6c6525bae10d807133100cd629912bc`.
+
+The final release binary was replayed against Cache A and again reproduced all
+nine responses exactly. This unpaired final replay took
+6.623s/8.059s/5.559s/7.006s for cold requests, with a sampled 332MiB peak and
+0.335ms/1.399ms ready preflop responses. Retain this noisier observation too;
+it is a parity check, not a third matched speed comparison.
+`serving-memo-final/manifest.json` SHA-256:
+`714d8fefb61c6e4907bf2d9bfc13fb78c9db1b63a1e5a8abbdb709bf09bd7a81`.
+
+Cache tests exercise actual predictor results, exact reuse counts, a one-bit
+range change, actor/investment/board changes, isolated models, eviction,
+oversized bypass and simultaneous callers. The full convergence tests also
+exercise replacing the continuation model after training and at checkpoints.
+
 ## Verification and next serving bottleneck
 
 - `npm test`: 154 passed; the four opt-in native integration cases are skipped
   by default. Running them explicitly with `PRACTICE_RESOLVER_INTEGRATION=1`
   passes, including pinned flop policy and a trajectory through every street.
-- Native `cargo test --release`: 367 library, seven transport and nine CLI tests
+- Native `cargo test --release`: 371 library, seven transport and nine CLI tests
   passed; 59 explicit long research tests remain intentionally ignored.
 - `npm run build` passes and verifies the unchanged model artifact identities.
 - A real browser completed a full hand through an all-in runout and terminal
@@ -153,6 +215,12 @@ and the two-active/eight-queued limit.
   mobile flop bet. All captured requests returned 200, with no captured errors
   or horizontal overflow at 375px. The accepted turn/river integration replay
   was rerun against this binary, not a stale server process.
+- The final cache build passes the four pinned-model HTTP integration cases
+  and initializes a fresh browser hand with successful preflop requests and
+  no captured errors. Completing the final browser action-flow recheck was
+  interrupted by Chrome losing its debugging connection and requesting
+  renewed approval. Earlier desktop/mobile checks above remain valid for
+  their tested builds; they are not claimed as a completed final-cache check.
 - The observed hero response to one flop all-in still has unavailable EVs:
   the existing model shows the frequency grade and explicitly declines EV
   grading. This is not fixed or fabricated by the speed change; the integration
