@@ -1,15 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { cpus } from 'node:os';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 import type { PolicyManifest } from '@/lib/practice-types';
 
 vi.mock('server-only', () => ({}));
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 
 import {
   PRACTICE_RESOLVER_IDENTITY,
   PracticeSolverPool,
   practiceResolverCommand,
   practiceResolverPoolSize,
+  practiceSolverProcess,
+  stopPracticeSolverProcess,
   type PracticeResolverWorker,
 } from '@/lib/server/practice-solver-process';
 
@@ -82,6 +88,52 @@ describe('pinned practice resolver process', () => {
     );
     expect(threads).toBeGreaterThanOrEqual(1);
     expect(threads).toBeLessThanOrEqual(Math.min(8, cpus().length));
+  });
+
+  it('opts into streaming and resolves a ready sibling without waiting for the batch', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      killed: false,
+      exitCode: null as number | null,
+    });
+    let writtenBatch: {
+      streamResults: boolean;
+      queries: Array<{ requestId: string; fixture: string }>;
+    } | undefined;
+    child.stdin.on('data', (bytes: Buffer) => {
+      writtenBatch = JSON.parse(bytes.toString());
+      const ready = writtenBatch!.queries.find((query) => query.fixture === 'fast')!;
+      child.stdout.write(`${JSON.stringify({ requestId: ready.requestId, fixture: 'fast' })}\n`);
+    });
+    child.stdin.on('finish', () => {
+      child.exitCode = 0;
+      child.emit('exit', 0, null);
+    });
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+
+    const pool = practiceSolverProcess();
+    let slowFinished = false;
+    const slow = pool.query({ fixture: 'slow' }).then((value) => {
+      slowFinished = true;
+      return value;
+    });
+    const fast = pool.query({ fixture: 'fast' });
+    try {
+      await expect(fast).resolves.toMatchObject({ fixture: 'fast' });
+      expect(slowFinished).toBe(false);
+      expect(writtenBatch?.streamResults).toBe(true);
+      expect(writtenBatch?.queries).toHaveLength(2);
+      const pending = writtenBatch!.queries.find((query) => query.fixture === 'slow')!;
+      child.stdout.write(`${JSON.stringify({ requestId: pending.requestId, fixture: 'slow' })}\n`);
+      await expect(slow).resolves.toMatchObject({ fixture: 'slow' });
+    } finally {
+      await stopPracticeSolverProcess();
+    }
   });
 
   it('can still dispatch simultaneous branch solves across an explicit pool', async () => {
