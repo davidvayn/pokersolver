@@ -6,6 +6,7 @@
 //! similar private/public states into reusable information sets.
 
 use crate::cards::{all_combos, Combo};
+use crate::cash_game::CashGameRules;
 use crate::evaluator::evaluate;
 use crate::rng::SplitMix64;
 use flate2::read::GzDecoder;
@@ -23,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod neural;
+mod cash;
 pub mod preflop;
 mod preflop_average;
 #[cfg(test)]
@@ -51,6 +53,7 @@ const MODEL_BINARY_HEADER_BYTES: usize = 8 + 32 + 32 + 8;
 const BLUEPRINT_CHECKPOINT_SCHEMA_VERSION: u32 = 5;
 const BLUEPRINT_STREETWISE_CHECKPOINT_SCHEMA_VERSION: u32 = 6;
 const BLUEPRINT_EXACT_PREFLOP_AVERAGE_CHECKPOINT_SCHEMA_VERSION: u32 = 7;
+const BLUEPRINT_CASH_CHECKPOINT_SCHEMA_VERSION: u32 = 8;
 const MAX_HS_DCFR_HORIZON: u64 = 10_000_000;
 
 fn model_binary_path(path: &Path) -> PathBuf {
@@ -115,6 +118,7 @@ where
 
 const EPSILON: f64 = 1e-9;
 const MODEL: &str = "hu-abstracted-external-sampling-dcfr-trajectory-v3";
+const CASH_MODEL: &str = "hu-abstracted-own-payoff-dcfr-cash-v1";
 const SOLVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -209,6 +213,10 @@ impl ActionAbstraction {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BlueprintConfig {
+    /// None preserves the existing Home game serialization and artifact hashes.
+    /// Explicit profiles require new own-payoff training and cent-aligned bets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash_rules: Option<CashGameRules>,
     pub small_blind_bb: f64,
     pub big_blind_bb: f64,
     pub effective_stack_bb: f64,
@@ -397,6 +405,7 @@ impl Default for ShowdownEvaluation {
 impl Default for BlueprintConfig {
     fn default() -> Self {
         Self {
+            cash_rules: None,
             small_blind_bb: 0.5,
             big_blind_bb: 1.0,
             effective_stack_bb: 100.0,
@@ -425,8 +434,13 @@ impl Default for BlueprintConfig {
 }
 
 impl BlueprintConfig {
+    fn model_name(&self) -> &'static str {
+        if self.cash_rules.is_some() { CASH_MODEL } else { MODEL }
+    }
     fn checkpoint_schema_version(&self) -> u32 {
-        if self.exact_preflop_averaging {
+        if self.cash_rules.is_some() {
+            BLUEPRINT_CASH_CHECKPOINT_SCHEMA_VERSION
+        } else if self.exact_preflop_averaging {
             BLUEPRINT_EXACT_PREFLOP_AVERAGE_CHECKPOINT_SCHEMA_VERSION
         } else if self.streetwise_opponent_estimator {
             BLUEPRINT_STREETWISE_CHECKPOINT_SCHEMA_VERSION
@@ -451,6 +465,7 @@ impl BlueprintConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_cash_rules()?;
         if !(self.small_blind_bb > 0.0
             && self.big_blind_bb > self.small_blind_bb
             && self.effective_stack_bb > self.big_blind_bb)
@@ -617,6 +632,7 @@ struct Deal {
     hand_bucket_cache: RefCell<BTreeMap<(usize, usize, HandAbstraction), Arc<str>>>,
     public_bucket_cache: RefCell<BTreeMap<usize, Arc<str>>>,
     showdown_equity_cache: RefCell<BTreeMap<usize, f64>>,
+    showdown_outcome_cache: RefCell<BTreeMap<usize, [f64; 3]>>,
 }
 
 impl Deal {
@@ -642,6 +658,7 @@ impl Deal {
             hand_bucket_cache: RefCell::new(BTreeMap::new()),
             public_bucket_cache: RefCell::new(BTreeMap::new()),
             showdown_equity_cache: RefCell::new(BTreeMap::new()),
+            showdown_outcome_cache: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -929,7 +946,12 @@ impl GameState {
                 // milliblind chip accounting. Keep traversal semantics at the
                 // same boundary instead of retaining invisible sub-milliblind
                 // pot-fraction differences.
-                let target = quantize(target.min(max_to), 0.001);
+                let target = config.quantize_bet_bb(target.min(max_to));
+                let target = if config.cash_rules.is_some() {
+                    target.max(minimum_to).min(max_to)
+                } else {
+                    target
+                };
                 if target + EPSILON < minimum_to || target >= max_to - EPSILON {
                     continue;
                 }
@@ -950,7 +972,7 @@ impl GameState {
                 }
             }
             if abstraction.include_all_in {
-                let max_to = quantize(max_to, 0.001);
+                let max_to = config.quantize_bet_bb(max_to);
                 actions.push(LegalAction {
                     label: format!(
                         "{}_all_in_to_{:.3}bb",
@@ -1109,6 +1131,9 @@ impl GameState {
     }
 
     fn utility_p0(&self, deal: &Deal, config: &BlueprintConfig) -> f64 {
+        if config.cash_rules.is_some() {
+            return self.own_utilities(deal, config)[0];
+        }
         match self.terminal.as_ref().expect("terminal utility") {
             Terminal::Fold { winner } => {
                 if *winner == 0 {
@@ -1536,6 +1561,15 @@ pub struct HeldOutMetrics {
     pub showdown_terminal_fraction: f64,
     pub unknown_information_set_fraction: f64,
     pub untrained_information_set_fraction: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash_accounting: Option<CashAccountingMetrics>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CashAccountingMetrics {
+    pub big_blind_mean_net_bb: f64,
+    pub mean_house_rake_bb: f64,
+    pub maximum_conservation_residual_bb: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1617,6 +1651,8 @@ pub struct BlueprintArtifact {
     pub config: BlueprintConfig,
     pub metrics: BlueprintMetrics,
     pub strategies: Vec<ExportedInfoSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1842,7 +1878,7 @@ impl Trainer {
     fn write_checkpoint(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let checkpoint = BlueprintCheckpointRef {
             schema_version: self.config.checkpoint_schema_version(),
-            model: MODEL,
+            model: self.config.model_name(),
             approximate: true,
             config: &self.config,
             completed_iterations: self.completed_iterations,
@@ -2159,9 +2195,9 @@ impl Trainer {
                 }
                 Terminal::Showdown => range_vector::RangeTerminalKind::Showdown,
             };
-            let evaluation = information_set_cache.terminal_values_at_street(
-                state.street,
-                state.invested,
+            let evaluation = information_set_cache.terminal_values_for_game(
+                &state,
+                &self.config,
                 &ranges[1 - traverser],
                 traverser,
                 terminal,
@@ -2272,8 +2308,9 @@ impl Trainer {
                     Some(Terminal::Showdown) => range_vector::RangeTerminalKind::Showdown,
                     None => unreachable!("checkdown must terminate"),
                 };
-                baselines.push(information_set_cache.terminal_values(
-                    terminal.invested,
+                baselines.push(information_set_cache.terminal_values_for_game(
+                    &terminal,
+                    &self.config,
                     &branch_ranges[actor],
                     traverser,
                     kind,
@@ -2428,12 +2465,7 @@ impl Trainer {
             return deals
                 .iter()
                 .map(|deal| {
-                    let utility = state.utility_p0(deal, &self.config);
-                    if traverser == 0 {
-                        utility
-                    } else {
-                        -utility
-                    }
+                    state.own_utilities(deal, &self.config)[traverser]
                 })
                 .collect();
         }
@@ -2546,8 +2578,7 @@ impl Trainer {
     ) -> f64 {
         if state.terminal.is_some() {
             self.terminal_evaluations += 1;
-            let utility = state.utility_p0(deal, &self.config);
-            return if traverser == 0 { utility } else { -utility };
+            return state.own_utilities(deal, &self.config)[traverser];
         }
 
         let actions = state.legal_actions(&self.config);
@@ -2601,14 +2632,14 @@ impl Trainer {
 
     fn artifact(&self) -> BlueprintArtifact {
         let mut hash_input = SOLVER_VERSION.as_bytes().to_vec();
-        hash_input.extend_from_slice(MODEL.as_bytes());
+        hash_input.extend_from_slice(self.config.model_name().as_bytes());
         hash_input.extend(
             serde_json::to_vec(&self.config).expect("serializable blueprint configuration"),
         );
         let config_hash = stable_hash(&hash_input);
         let mut training_config = serde_json::json!({
             "solver_version": SOLVER_VERSION,
-            "model": MODEL,
+            "model": self.config.model_name(),
             "small_blind_bb": self.config.small_blind_bb,
             "big_blind_bb": self.config.big_blind_bb,
             "effective_stack_bb": self.config.effective_stack_bb,
@@ -2625,6 +2656,10 @@ impl Trainer {
             "showdown_evaluation": &self.config.showdown_evaluation,
             "action_abstraction": &self.config.action_abstraction,
         });
+        if let Some(rules) = &self.config.cash_rules {
+            training_config["cash_rules"] = serde_json::json!(rules);
+            training_config["rules_sha256"] = serde_json::json!(rules.sha256().expect("validated rules"));
+        }
         if self.config.opponent_hand_batch_size > 1 {
             training_config
                 .as_object_mut()
@@ -2782,6 +2817,11 @@ impl Trainer {
             "Root best-action selection and reporting reuse samples. Its maximum has selection bias; reported root confidence bounds are descriptive, not selection-corrected exploitability certificates.".to_owned(),
             "A separate seeded evaluation pass records counterfactual values and standard errors for every action at each reached served information set. Low-sample or >0.02bb-standard-error values are flagged low confidence.".to_owned(),
         ];
+        if let Some(rules) = &self.config.cash_rules {
+            provenance[3] = "Terminal payoffs settle both seats independently using cent-aligned commitments, exact win/tie outcomes, uncalled refunds, and the pinned house rake; utilities are not assumed zero-sum.".into();
+            provenance[4] = format!("Explicit cash study profile {}; rules SHA-256 {}. Odd cents follow the pinned first-left-of-button study abstraction.", rules.id, rules.sha256().expect("validated rules"));
+            provenance.push("Own-payoff DCFR in a general-sum raked game is experimental. The zero-sum average-policy equilibrium theorem does not apply, and these diagnostics are not a full-game NashConv certificate.".into());
+        }
         if self.config.integrate_terminal_actions {
             provenance.push("Opponent terminal actions are integrated exactly; remaining public actions use a conditional proposal with per-combo importance correction. This reduces terminal-action sampling variance without changing legal actions or average-policy weights.".to_owned());
         }
@@ -2817,7 +2857,7 @@ impl Trainer {
             );
         }
         BlueprintArtifact {
-            schema_version: 1,
+            schema_version: if self.config.cash_rules.is_some() { 2 } else { 1 },
             solver_version: SOLVER_VERSION.to_owned(),
             artifact_id: format!(
                 "hu-blueprint-{:.0}bb-i{}-s{}-{config_hash:016x}",
@@ -2825,7 +2865,7 @@ impl Trainer {
             ),
             config_hash: format!("{config_hash:016x}"),
             training_config_hash: format!("{training_config_hash:016x}"),
-            model: MODEL.to_owned(),
+            model: self.config.model_name().to_owned(),
             approximate: true,
             provenance,
             metrics: BlueprintMetrics {
@@ -2865,6 +2905,7 @@ impl Trainer {
                 action_value_evaluation,
             },
             config: self.config.clone(),
+            rules_sha256: self.config.cash_rules.as_ref().map(|rules| rules.sha256().expect("validated rules")),
             validation: BlueprintValidation {
                 status: if self.completed_iterations < self.config.iterations {
                     "incomplete_advisory"
@@ -2968,7 +3009,7 @@ pub fn solve_controlled(
         .map_err(|error| format!("invalid blueprint config: {error}"))?;
     let mut trainer = if let Some(path) = &control.resume_path {
         let checkpoint = read_checkpoint(Path::new(path))?;
-        if checkpoint.model != MODEL || !checkpoint.approximate {
+        if checkpoint.model != config.model_name() || !checkpoint.approximate {
             return Err("checkpoint model is incompatible".into());
         }
         Trainer::from_checkpoint(checkpoint, &config)
@@ -3401,6 +3442,9 @@ fn evaluate_held_out(
     let mut decisions = 0u64;
     let mut unknown = 0u64;
     let mut untrained = 0u64;
+    let mut other_sum = 0.0;
+    let mut rake_sum = 0.0;
+    let mut max_conservation: f64 = 0.0;
     for _ in 0..config.evaluation_controls.held_out_deals {
         let deal = Deal::sample(&mut rng);
         let mut state = GameState::initial(config);
@@ -3427,7 +3471,16 @@ fn evaluate_held_out(
             Some(Terminal::Showdown) => showdowns += 1,
             None => unreachable!(),
         }
-        let utility = state.utility_p0(&deal, config);
+        let values = state.own_utilities(&deal, config);
+        let utility = values[0];
+        if let Some(rules) = &config.cash_rules {
+            let gross = 2 * cash::cash_units(state.invested[0].min(state.invested[1]), rules)
+                .expect("legal cash commitments");
+            let flop_dealt = matches!(state.terminal, Some(Terminal::Showdown)) || state.street != Street::Preflop;
+            let rake = rules.rake_units(gross, flop_dealt).expect("validated cash rake") as f64 / rules.units_per_bb as f64;
+            other_sum += values[1]; rake_sum += rake;
+            max_conservation = max_conservation.max((values[0] + values[1] + rake).abs());
+        }
         sum += utility;
         square_sum += utility * utility;
     }
@@ -3442,6 +3495,11 @@ fn evaluate_held_out(
         showdown_terminal_fraction: showdowns as f64 / count,
         unknown_information_set_fraction: unknown as f64 / decisions.max(1) as f64,
         untrained_information_set_fraction: untrained as f64 / decisions.max(1) as f64,
+        cash_accounting: config.cash_rules.as_ref().map(|_| CashAccountingMetrics {
+            big_blind_mean_net_bb: other_sum / count,
+            mean_house_rake_bb: rake_sum / count,
+            maximum_conservation_residual_bb: max_conservation,
+        }),
     }
 }
 
@@ -3550,7 +3608,7 @@ fn evaluate_information_set_actions(
                         ^ (action_index as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
                     let mut rollout_rng = SplitMix64::new(rollout_seed);
                     let mut coverage = CoverageCounter::default();
-                    let button_value = rollout_average_policy(
+                    let values = rollout_average_policy(
                         state.apply(action, config),
                         &deal,
                         config,
@@ -3558,11 +3616,7 @@ fn evaluate_information_set_actions(
                         &mut rollout_rng,
                         &mut coverage,
                     );
-                    let actor_value = if state.actor == 0 {
-                        button_value
-                    } else {
-                        -button_value
-                    };
+                    let actor_value = values[state.actor];
                     entry.actions[action_index].observe(actor_value, &coverage);
                 }
             }
@@ -3679,8 +3733,8 @@ fn evaluate_root_local_deviation(
                     &mut policy_rng,
                     &mut coverage,
                 );
-                action_accumulators[action_index].observe(value, &coverage);
-                paired_action_values[action_index].push(value);
+                action_accumulators[action_index].observe(value[0], &coverage);
+                paired_action_values[action_index].push(value[0]);
             }
         }
 
@@ -3797,7 +3851,7 @@ fn rollout_average_policy(
     nodes: &BTreeMap<u64, Node>,
     rng: &mut SplitMix64,
     coverage: &mut CoverageCounter,
-) -> f64 {
+) -> [f64; 2] {
     while state.terminal.is_none() {
         let actions = state.legal_actions(config);
         let (key, _, _) = information_set(&state, deal, config);
@@ -3816,7 +3870,7 @@ fn rollout_average_policy(
         let selected = sample_index(&strategy, rng);
         state = state.apply(&actions[selected], config);
     }
-    state.utility_p0(deal, config)
+    state.own_utilities(deal, config)
 }
 
 #[cfg(test)]

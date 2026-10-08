@@ -7,6 +7,16 @@
 //! needed.
 
 use super::*;
+#[cfg(test)]
+mod cash_training_tests;
+mod cash_evaluation;
+pub use cash_evaluation::{evaluate_cash_full_hands, CashFullHandEvaluationConfig};
+mod cash_response;
+pub use cash_response::{evaluate_cash_causal_response, CashCausalResponseConfig};
+mod cash_query;
+pub use cash_query::{canonical_cash_query_state, CashPolicyEngine, CashPolicyEngineConfig, CashPolicyQuery};
+mod cash_turn_roots;
+pub use cash_turn_roots::{sample_cash_turn_roots, CashTurnRootSampleConfig};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
@@ -24,10 +34,14 @@ use super::public_belief::{
 pub const STATE_FEATURE_COUNT: usize = 716;
 pub const ACTION_FEATURE_COUNT: usize = 9;
 pub const MODEL_INPUT_COUNT: usize = STATE_FEATURE_COUNT + ACTION_FEATURE_COUNT;
+pub const CASH_STATE_FEATURE_COUNT: usize = STATE_FEATURE_COUNT + 104;
+pub const CASH_MODEL_INPUT_COUNT: usize = CASH_STATE_FEATURE_COUNT + ACTION_FEATURE_COUNT;
+const CASH_STATE_FEATURE_SCHEMA: &str = "hu-cash-card-arrival-recall-v5";
 pub const MAX_TRAJECTORY_ACTIONS: usize = 32;
 
 const DATASET_SCHEMA: &str = "hu-neural-traversal-jsonl-v7";
 const TRAINING_NETWORK_SCHEMA: &str = "hu-neural-training-networks-v4";
+const CASH_TRAINING_NETWORK_SCHEMA: &str = "hu-neural-own-payoff-training-networks-v3";
 const POKER_FEATURE_OFFSET: usize = 604;
 const TEXTURE_FEATURE_OFFSET: usize = 652;
 const TEXTURE_FEATURE_COUNT: usize = 64;
@@ -212,7 +226,7 @@ pub struct PracticeObservedAction {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PracticePolicyQuery {
     pub request_id: String,
     pub state_hash: String,
@@ -232,7 +246,7 @@ pub struct PracticePolicyQuery {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PracticePolicyBatchQuery {
     pub schema: String,
     pub request_id: String,
@@ -850,6 +864,12 @@ struct TrainingNetworkBundle {
     sampling_baseline: Option<DenseScorer>,
     #[serde(default)]
     sampling_baseline_scale: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cash_rules: Option<CashGameRules>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cash_depth_bb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cash_action_abstraction: Option<ActionAbstraction>,
 }
 
 /// Frozen inference-only policy shared by the neural sampler, preflop
@@ -1021,6 +1041,10 @@ impl FrozenPolicy {
     pub(super) fn load(path: &std::path::Path) -> Result<Self, Box<dyn Error>> {
         let (bundle, bundle_sha256): (TrainingNetworkBundle, String) =
             super::read_model_artifact(path)?;
+        Self::from_bundle(bundle, bundle_sha256)
+    }
+
+    fn from_bundle(bundle: TrainingNetworkBundle, bundle_sha256: String) -> Result<Self, Box<dyn Error>> {
         validate_training_bundle(&bundle)?;
         Ok(Self {
             bundle,
@@ -2620,6 +2644,7 @@ impl FrozenPolicy {
 impl PracticePolicyEngine {
     pub fn load(config: PracticePolicyEngineConfig) -> Result<Self, Box<dyn Error>> {
         config.game.validate()?;
+        config.game.require_legacy_home()?;
         if config.model_version.trim().is_empty() {
             return Err("practice model version is required".into());
         }
@@ -3354,6 +3379,14 @@ pub(super) fn normalize_ranges_for_board(
 }
 
 impl TrainingNetworkBundle {
+    fn validate_game(&self, game: &BlueprintConfig) -> Result<(), String> {
+        if self.cash_rules != game.cash_rules
+            || (self.cash_rules.is_some() && (self.cash_depth_bb != Some(game.effective_stack_bb)
+                || self.cash_action_abstraction.as_ref() != Some(&game.action_abstraction))) {
+            return Err("frozen neural policy cash rules/depth/action abstraction differ from the training game".into());
+        }
+        Ok(())
+    }
     fn policy_network(&self, street: Street, actor: usize) -> &DenseScorer {
         let networks = if street == Street::Preflop {
             &self.networks
@@ -3365,25 +3398,38 @@ impl TrainingNetworkBundle {
 }
 
 fn validate_training_bundle(bundle: &TrainingNetworkBundle) -> Result<(), Box<dyn Error>> {
-    if bundle.schema != TRAINING_NETWORK_SCHEMA
-        || bundle.input_size != MODEL_INPUT_COUNT
+    let input_count = if bundle.cash_rules.is_some() { CASH_MODEL_INPUT_COUNT } else { MODEL_INPUT_COUNT };
+    let schema_valid = if let Some(rules) = &bundle.cash_rules {
+        rules.validate()?;
+        if let Some(depth) = bundle.cash_depth_bb { cash::cash_units(depth, rules)?; }
+        let mut source_game = BlueprintConfig::default();
+        source_game.cash_rules = Some(rules.clone());
+        source_game.small_blind_bb = rules.blinds_units[0] as f64 / rules.units_per_bb as f64;
+        source_game.effective_stack_bb = bundle.cash_depth_bb.ok_or("cash network lacks depth")?;
+        source_game.action_abstraction = bundle.cash_action_abstraction.clone().ok_or("cash network lacks action abstraction")?;
+        source_game.validate()?;
+        bundle.schema == CASH_TRAINING_NETWORK_SCHEMA && bundle.cash_depth_bb.is_some_and(|depth| depth > 1.0)
+            && bundle.sampling_baseline.is_none()
+    } else { bundle.schema == TRAINING_NETWORK_SCHEMA && bundle.cash_depth_bb.is_none() && bundle.cash_action_abstraction.is_none() };
+    if !schema_valid
+        || bundle.input_size != input_count
         || bundle.networks.len() != 2
     {
         return Err("training network bundle is incompatible".into());
     }
     for network in &bundle.networks {
-        network.validate(MODEL_INPUT_COUNT, 1)?;
+        network.validate(input_count, 1)?;
     }
     if let Some(networks) = &bundle.postflop_networks {
         if networks.len() != 2 {
             return Err("postflop training network bundle is incompatible".into());
         }
         for network in networks {
-            network.validate(MODEL_INPUT_COUNT, 1)?;
+            network.validate(input_count, 1)?;
         }
     }
     if let Some(baseline) = &bundle.sampling_baseline {
-        baseline.validate(MODEL_INPUT_COUNT, 1)?;
+        baseline.validate(input_count, 1)?;
         let scale = bundle.sampling_baseline_scale.unwrap_or(0.0);
         if !scale.is_finite() || !(0.0..=1.0).contains(&scale) {
             return Err("sampling baseline scale must be between zero and one".into());
@@ -3483,12 +3529,12 @@ impl DenseScorer {
     }
 
     fn score_state_actions(&self, state: &[f32], actions: &[Vec<f32>]) -> Vec<f64> {
-        debug_assert_eq!(state.len(), STATE_FEATURE_COUNT);
+        debug_assert!(matches!(state.len(),STATE_FEATURE_COUNT|CASH_STATE_FEATURE_COUNT));
         debug_assert!(actions
             .iter()
             .all(|action| action.len() == ACTION_FEATURE_COUNT));
         let first = &self.layers[0];
-        debug_assert_eq!(first.input_size, MODEL_INPUT_COUNT);
+        debug_assert_eq!(first.input_size, state.len() + ACTION_FEATURE_COUNT);
         let nonzero_state = state
             .iter()
             .enumerate()
@@ -3504,7 +3550,7 @@ impl DenseScorer {
             for (action_index, action) in actions.iter().enumerate() {
                 let mut sum = shared;
                 for (column, value) in action.iter().enumerate() {
-                    sum += first.weights[offset + STATE_FEATURE_COUNT + column] * value;
+                    sum += first.weights[offset + state.len() + column] * value;
                 }
                 batch[action_index][row] = activate_dense(sum, first.activation);
             }
@@ -3609,6 +3655,14 @@ struct DatasetMetadata<'a> {
     evaluates_trajectory_action_values: bool,
     enumerates_turn_river_chance: bool,
     action_abstraction: &'a ActionAbstraction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cash_rules: Option<&'a CashGameRules>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rules_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payoff_contract: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cash_terminal_action_integration: Option<bool>,
 }
 
 struct SampleGenerator {
@@ -3635,6 +3689,7 @@ impl SampleGenerator {
             .game
             .validate()
             .map_err(|error| format!("invalid neural game config: {error}"))?;
+        if range_policy_path.is_some() { config.game.require_legacy_home()?; }
         if config.traversals == 0 {
             return Err("neural traversals must be positive".into());
         }
@@ -3654,6 +3709,7 @@ impl SampleGenerator {
             Some(path) => Some(FrozenPolicy::load_with_range(path, range_policy_path)?),
             None => None,
         };
+        if let Some(policy) = &networks { policy.bundle.validate_game(&config.game)?; }
         Ok(Self {
             rng: SplitMix64::new(config.seed),
             records: Vec::with_capacity(config.max_records.min(65_536)),
@@ -3782,6 +3838,11 @@ impl SampleGenerator {
         actions: &[LegalAction],
         traverser: usize,
     ) -> Option<Vec<f64>> {
+        if self.config.game.cash_rules.is_some() {
+            // Negating the opponent's actor-only network target is not our
+            // own payoff with rake. A missing baseline leaves MCCFR unbiased.
+            return None;
+        }
         let bundle = &self.networks.as_ref()?.bundle;
         let baseline = bundle.sampling_baseline.as_ref()?;
         let scale = bundle.sampling_baseline_scale.unwrap_or(0.0);
@@ -3822,6 +3883,32 @@ impl SampleGenerator {
         }
     }
 
+    fn cash_closed_terminal_expectation(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        actions: &[LegalAction],
+        strategy: &[f64],
+        traverser: usize,
+    ) -> Option<f64> {
+        if self.config.game.cash_rules.is_none()
+            || (state.street != Street::River
+                && state.remaining(1 - state.actor, &self.config.game) > EPSILON)
+        {
+            return None;
+        }
+        // Integrate only closed responses. No downstream information sets or
+        // average-policy visits are skipped. Early all-in chance evaluation
+        // retains the separately pinned conditional runout configuration.
+        let mut expectation = 0.0;
+        for (action, probability) in actions.iter().zip(strategy) {
+            let child = state.apply(action, &self.config.game);
+            child.terminal.as_ref()?;
+            expectation += probability * child.own_utilities(deal, &self.config.game)[traverser];
+        }
+        Some(expectation)
+    }
+
     fn value_only_external_sampling(
         &self,
         state: GameState,
@@ -3830,8 +3917,7 @@ impl SampleGenerator {
         rng: &mut SplitMix64,
     ) -> f64 {
         if state.terminal.is_some() {
-            let utility = state.utility_p0(deal, &self.config.game);
-            return if traverser == 0 { utility } else { -utility };
+            return state.own_utilities(deal, &self.config.game)[traverser];
         }
         let actions = state.legal_actions(&self.config.game);
         debug_assert!(!actions.is_empty());
@@ -3846,6 +3932,11 @@ impl SampleGenerator {
                 })
                 .sum()
         } else {
+            if let Some(value) =
+                self.cash_closed_terminal_expectation(&state, deal, &actions, &strategy, traverser)
+            {
+                return value;
+            }
             let selected = sample_index(&strategy, rng);
             let baselines = self.sampled_value_baseline(&state, deal, &actions, traverser);
             let sampled_value =
@@ -3994,8 +4085,7 @@ impl SampleGenerator {
         reach_probability: f64,
     ) -> f64 {
         if state.terminal.is_some() {
-            let utility = state.utility_p0(deal, &self.config.game);
-            return if traverser == 0 { utility } else { -utility };
+            return state.own_utilities(deal, &self.config.game)[traverser];
         }
 
         let actions = state.legal_actions(&self.config.game);
@@ -4093,6 +4183,11 @@ impl SampleGenerator {
                     None,
                     &self.config.game,
                 ));
+            }
+            if let Some(value) =
+                self.cash_closed_terminal_expectation(&state, deal, &actions, &strategy, traverser)
+            {
+                return value;
             }
             let selected = sample_index(&strategy, &mut self.rng);
             let baselines = self.sampled_value_baseline(&state, deal, &actions, traverser);
@@ -4448,14 +4543,14 @@ fn encode_state_action(
 ) -> Vec<f32> {
     let mut features = encode_state_features(state, deal, config);
     features.extend(encode_action_features(state, action, config));
-    debug_assert_eq!(features.len(), MODEL_INPUT_COUNT);
+    debug_assert_eq!(features.len(), if config.cash_rules.is_some() { CASH_MODEL_INPUT_COUNT } else { MODEL_INPUT_COUNT });
     features
 }
 
 fn encode_state_features(state: &GameState, deal: &Deal, config: &BlueprintConfig) -> Vec<f32> {
     assert!(state.trajectory.len() <= MAX_TRAJECTORY_ACTIONS);
     let depth = config.effective_stack_bb as f32;
-    let mut features = vec![0.0f32; STATE_FEATURE_COUNT];
+    let mut features = vec![0.0f32; if config.cash_rules.is_some() { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT }];
     let visible_board = &deal.board[..state.street.board_len()];
     let suit_map = canonical_suit_map(deal.holes[state.actor], visible_board);
     for card in deal.holes[state.actor] {
@@ -4517,6 +4612,15 @@ fn encode_state_features(state: &GameState, deal: &Deal, config: &BlueprintConfi
         state.street,
         &mut features[TEXTURE_FEATURE_OFFSET..TEXTURE_FEATURE_OFFSET + TEXTURE_FEATURE_COUNT],
     );
+
+    // Board membership and the two ordered later arrivals reconstruct the
+    // flop/turn information available at every trajectory action. Do not
+    // expose future cards or change the legacy Home feature contract.
+    if config.cash_rules.is_some() {
+        for index in 3..visible_board.len() {
+            features[STATE_FEATURE_COUNT + (index-3)*52 + canonical_card(visible_board[index],&suit_map)] = 1.0;
+        }
+    }
 
     features
 }
@@ -4749,9 +4853,9 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
     let mut writer = GzEncoder::new(buffered, Compression::fast());
     let metadata = DatasetMetadata {
         record_type: "metadata",
-        schema: DATASET_SCHEMA,
-        state_feature_schema: "hu-cash-trajectory-poker-aware-v4",
-        state_feature_count: STATE_FEATURE_COUNT,
+        schema: if config.game.cash_rules.is_some() { "hu-neural-own-payoff-traversal-jsonl-v3" } else { DATASET_SCHEMA },
+        state_feature_schema: if config.game.cash_rules.is_some() { CASH_STATE_FEATURE_SCHEMA } else { "hu-cash-trajectory-poker-aware-v4" },
+        state_feature_count: if config.game.cash_rules.is_some() { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT },
         action_feature_schema: "hu-cash-legal-action-v1",
         action_feature_count: ACTION_FEATURE_COUNT,
         depth_bb: config.game.effective_stack_bb,
@@ -4769,6 +4873,10 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
         evaluates_trajectory_action_values: config.evaluate_trajectory_values,
         enumerates_turn_river_chance: config.enumerate_turn_river_chance,
         action_abstraction: &config.game.action_abstraction,
+        cash_rules: config.game.cash_rules.as_ref(),
+        rules_sha256: config.game.cash_rules.as_ref().map(|rules| rules.sha256().expect("validated cash rules")),
+        payoff_contract: config.game.cash_rules.as_ref().map(|_| "own-net-bb-after-refunds-and-house-rake-v1"),
+        cash_terminal_action_integration: config.game.cash_rules.as_ref().map(|_| true),
     };
     serde_json::to_writer(&mut writer, &metadata)?;
     writer.write_all(b"\n")?;
@@ -4989,12 +5097,7 @@ fn clairvoyant_response_value(
 ) -> f64 {
     *visited_nodes += 1;
     if state.terminal.is_some() {
-        let utility_p0 = complete_runout_utility_p0(&state, deal);
-        return if responder == 0 {
-            utility_p0
-        } else {
-            -utility_p0
-        };
+        return state.complete_runout_utilities(deal, &generator.config.game)[responder];
     }
     let actions = state.legal_actions(&generator.config.game);
     let strategy = generator.current_strategy(&state, deal, &actions);
@@ -5026,22 +5129,6 @@ fn clairvoyant_response_value(
                     )
             })
             .sum()
-    }
-}
-
-fn complete_runout_utility_p0(state: &GameState, deal: &Deal) -> f64 {
-    match state.terminal.as_ref().expect("terminal utility") {
-        Terminal::Fold { winner } => {
-            if *winner == 0 {
-                state.invested[1]
-            } else {
-                -state.invested[0]
-            }
-        }
-        Terminal::Showdown => {
-            let equity = showdown_result(&deal.holes, &deal.board);
-            equity * state.invested[1] - (1.0 - equity) * state.invested[0]
-        }
     }
 }
 
@@ -5091,13 +5178,7 @@ fn opponent_hidden_future_board_response_value(
             .iter()
             .zip(weights)
             .map(|(deal, weight)| {
-                let utility_p0 = complete_runout_utility_p0(&state, deal);
-                weight
-                    * if responder == 0 {
-                        utility_p0
-                    } else {
-                        -utility_p0
-                    }
+                weight * state.complete_runout_utilities(deal, &generator.config.game)[responder]
             })
             .sum();
     }
@@ -5229,13 +5310,7 @@ fn causal_sample_game_response_value(
             .iter()
             .zip(weights)
             .map(|(deal, weight)| {
-                let utility_p0 = complete_runout_utility_p0(&state, deal);
-                weight
-                    * if responder == 0 {
-                        utility_p0
-                    } else {
-                        -utility_p0
-                    }
+                weight * state.complete_runout_utilities(deal, &generator.config.game)[responder]
             })
             .sum();
     }
@@ -5338,6 +5413,22 @@ fn solve_causal_response_plan(
     ),
     String,
 > {
+    solve_causal_response_plan_limited(generator, state, scenarios, weights, responder, visited_nodes, u64::MAX)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn solve_causal_response_plan_limited(
+    generator: &SampleGenerator,
+    state: GameState,
+    scenarios: &[Deal],
+    weights: &[f64],
+    responder: usize,
+    visited_nodes: &mut u64,
+    node_limit: u64,
+) -> Result<(f64, CausalResponsePlan, CausalResponderDiagnosticsAccumulator), String> {
+    if *visited_nodes >= node_limit {
+        return Err("cash response node budget exhausted; no partial response is scored".into());
+    }
     *visited_nodes += 1;
     if scenarios.len() != weights.len() {
         return Err("causal response scenarios and weights differ".to_owned());
@@ -5354,13 +5445,7 @@ fn solve_causal_response_plan(
             .iter()
             .zip(weights)
             .map(|(deal, weight)| {
-                let utility_p0 = complete_runout_utility_p0(&state, deal);
-                weight
-                    * if responder == 0 {
-                        utility_p0
-                    } else {
-                        -utility_p0
-                    }
+                weight * state.complete_runout_utilities(deal, &generator.config.game)[responder]
             })
             .sum();
         let mut diagnostics = CausalResponderDiagnosticsAccumulator::default();
@@ -5389,13 +5474,14 @@ fn solve_causal_response_plan(
                 CausalResponderDiagnosticsAccumulator,
             )> = None;
             for (action_index, action) in actions.iter().enumerate() {
-                let (value, child_plan, child_diagnostics) = solve_causal_response_plan(
+                let (value, child_plan, child_diagnostics) = solve_causal_response_plan_limited(
                     generator,
                     state.apply(action, &generator.config.game),
                     scenarios,
                     &information_set_weights,
                     responder,
                     visited_nodes,
+                    node_limit,
                 )?;
                 if best
                     .as_ref()
@@ -5442,13 +5528,14 @@ fn solve_causal_response_plan(
     let mut diagnostics = CausalResponderDiagnosticsAccumulator::default();
     for (action, child_weights) in actions.iter().zip(branch_weights) {
         let action_reach = child_weights.iter().sum();
-        let (value, child_plan, mut child_diagnostics) = solve_causal_response_plan(
+        let (value, child_plan, mut child_diagnostics) = solve_causal_response_plan_limited(
             generator,
             state.apply(action, &generator.config.game),
             scenarios,
             &child_weights,
             responder,
             visited_nodes,
+            node_limit,
         )?;
         total += value;
         merge_causal_response_plan(&mut plan, child_plan)?;
@@ -5977,12 +6064,7 @@ fn fixed_causal_response_policy_values(
         return Ok(scenarios
             .iter()
             .map(|deal| {
-                let utility_p0 = complete_runout_utility_p0(&state, deal);
-                if responder == 0 {
-                    utility_p0
-                } else {
-                    -utility_p0
-                }
+                state.complete_runout_utilities(deal, &generator.config.game)[responder]
             })
             .collect());
     }
@@ -6196,6 +6278,7 @@ fn sha256_path(path: &std::path::Path) -> Result<String, Box<dyn Error>> {
 pub fn generate_causal_policy_attribution(
     config: CausalPolicyAttributionConfig,
 ) -> Result<CausalPolicyAttributionReport, Box<dyn Error>> {
+    config.game.require_legacy_home()?;
     if config.deals == 0 {
         return Err("causal attribution requires at least one deal".into());
     }
@@ -7026,6 +7109,7 @@ fn enable_certificate_resolvers(
 pub fn certify_exploitability_upper_bound(
     config: ExploitabilityCertificateConfig,
 ) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
+    config.game.require_legacy_home()?;
     if config.deals < 2 {
         return Err("exploitability certification requires at least two deals".into());
     }
@@ -7375,6 +7459,7 @@ pub fn certify_opponent_hidden_exploitability_upper_bound(
     config: ExploitabilityCertificateConfig,
     opponent_samples_per_deal: u32,
 ) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
+    config.game.require_legacy_home()?;
     if config.deals < 2 {
         return Err("exploitability certification requires at least two deals".into());
     }
@@ -7725,6 +7810,7 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
     public_branches_per_street: u32,
     opponent_samples_per_runout: u32,
 ) -> Result<ExploitabilityCertificate, Box<dyn Error>> {
+    config.game.require_legacy_home()?;
     if config.deals < 2 {
         return Err("exploitability certification requires at least two deals".into());
     }
@@ -8460,6 +8546,7 @@ mod tests {
                 postflop_networks: None,
                 sampling_baseline: None,
                 sampling_baseline_scale: None,
+                cash_rules: None, cash_depth_bb: None, cash_action_abstraction: None,
             },
             bundle_sha256: "test-only".to_owned(),
             // The absence of a range policy makes any missed cache replay fail
@@ -8652,6 +8739,7 @@ mod tests {
                 postflop_networks: None,
                 sampling_baseline: None,
                 sampling_baseline_scale: None,
+                cash_rules: None, cash_depth_bb: None, cash_action_abstraction: None,
             },
             bundle_sha256: "test-only".to_owned(),
             range_policy: None,
@@ -8996,6 +9084,7 @@ mod tests {
             postflop_networks: Some(vec![scorer(3.0), scorer(4.0)]),
             sampling_baseline: None,
             sampling_baseline_scale: None,
+            cash_rules: None, cash_depth_bb: None, cash_action_abstraction: None,
         };
         assert_eq!(
             bundle.policy_network(Street::Preflop, 0).layers[0].biases,

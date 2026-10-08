@@ -88,6 +88,31 @@ describe('AnalystRail decision feedback', () => {
     expect(html).not.toContain('Adaptive (70/30)');
   });
 
+  it('identifies Home game and keeps the chosen online reference visibly unavailable', () => {
+    const html = renderFeedback(null, 'settings');
+    expect(html).toContain('Home game · No rake');
+    expect(html).toMatch(/<option[^>]*disabled=""[^>]*>PokerStars NL25 · Raked · Not available<\/option>/);
+    expect(html).toContain('4.5%');
+    expect(html).toContain('0.50 cap');
+    expect(html).toContain('NL20 is not listed in this USD schedule');
+    expect(html).toContain('No qualified rake-aware models are installed yet');
+    expect(html).toContain('1,000bb, 2,000bb');
+    expect(html).toContain('training targets, not available models');
+  });
+
+  it('shows only supplied model depths, including new depths such as 40bb', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(AnalystRail, {
+      tab: 'settings', onTabChange: vi.fn(), feedback: null, recentHands: [],
+      settings: { ...DEFAULT_PRACTICE_SETTINGS, depthBb: 40 },
+      pendingSettings: null, onSettingsChange: vi.fn(), fullDepths: [20, 40],
+      manifest: null, sessionDecisions: [], historyWarning: '', opponentModel: null,
+    }));
+    expect(html).toContain('<option value="40" selected="">40bb</option>');
+    expect(html).not.toContain('<option value="100">100bb</option>');
+    expect(html).toContain('Only installed model depths are available');
+  });
+
   it('does not show a strategy mix before feedback is available', () => {
     const html = renderFeedback(null);
     expect(html).toContain('Choose an action to see the complete policy mix');

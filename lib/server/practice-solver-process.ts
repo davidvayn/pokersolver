@@ -4,40 +4,46 @@ import { randomUUID } from 'node:crypto';
 import { cpus } from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import fullHandManifests from '@/data/practice/full-hand-manifests.json';
+import { ACTIVE_FULL_HAND_MANIFESTS, isServableFullHandManifest, isLegacyHomeManifest } from '@/lib/practice-models';
+import { HOME_RULES_SHA256 } from '@/lib/practice-game-identity';
+import { verifyPracticeResolverArtifacts } from '@/lib/server/practice-resolver-artifacts';
 import type {
   ContinualResolverRuntime,
   PolicyManifest,
 } from '@/lib/practice-types';
 
-const MODEL_VERSION = 'hu-20bb-v102-consensus-continual-resolver-experimental';
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_STDERR_BYTES = 16_384;
 const MAX_RESOLVER_PROCESSES = 2;
 const MICRO_BATCH_DELAY_MS = 2;
 const MAX_BATCH_QUERIES = 2;
 
-const resolverManifest = (fullHandManifests as PolicyManifest[]).find(
-  (manifest) => manifest.version === MODEL_VERSION
+const resolverManifest = ACTIVE_FULL_HAND_MANIFESTS.find(
+  (manifest) => manifest.runtime?.kind === 'rust-continual-resolver-v1'
 );
 if (resolverManifest?.runtime?.kind !== 'rust-continual-resolver-v1') {
   throw new Error('The pinned continual resolver manifest is missing');
 }
-const resolverRuntime: ContinualResolverRuntime = resolverManifest.runtime;
-const resolverArtifactFiles = resolverRuntime.artifactFiles;
-for (const [kind, file] of Object.entries(resolverArtifactFiles)) {
-  if (!/^[a-z0-9][a-z0-9.-]*\.json\.gz$/.test(file)) {
-    throw new Error(`The pinned continual resolver ${kind} file is unsafe`);
+const defaultResolverManifest: PolicyManifest = resolverManifest;
+const defaultResolverDepth = resolverManifest.depthsBb.includes(20) ? 20 : resolverManifest.depthsBb[0];
+
+export function practiceResolverIdentity(manifest: PolicyManifest, depthBb: number) {
+  if (!isServableFullHandManifest(manifest) || !isLegacyHomeManifest(manifest)
+      || !manifest.depthsBb.includes(depthBb) || manifest.runtime?.kind !== 'rust-continual-resolver-v1') {
+    throw new Error('No qualified Home resolver matches this manifest and depth');
   }
+  const runtime = manifest.runtime;
+  return {
+    modelVersion: manifest.version, depthBb, rulesSha256: HOME_RULES_SHA256,
+    networkSha256: runtime.networkSha256,
+    rangePolicySha256: runtime.rangePolicySha256,
+    valueNetworkSha256: runtime.valueNetworkSha256,
+    preflopActionValuesSha256: runtime.preflopActionValuesSha256,
+  };
 }
 
-export const PRACTICE_RESOLVER_IDENTITY = {
-  modelVersion: MODEL_VERSION,
-  networkSha256: resolverRuntime.networkSha256,
-  rangePolicySha256: resolverRuntime.rangePolicySha256,
-  valueNetworkSha256: resolverRuntime.valueNetworkSha256,
-  preflopActionValuesSha256: resolverRuntime.preflopActionValuesSha256,
-} as const;
+// Compatibility identity for existing Home clients/tests, not global routing.
+export const PRACTICE_RESOLVER_IDENTITY = practiceResolverIdentity(defaultResolverManifest, defaultResolverDepth);
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -67,10 +73,17 @@ export function practiceResolverPoolSize(): number {
   );
 }
 
-export function practiceResolverCommand(): {
+export function practiceResolverCommand(
+  manifest: PolicyManifest = defaultResolverManifest,
+  depthBb: number = defaultResolverDepth,
+  reservedThreads?: number
+): {
   executable: string;
   args: string[];
 } {
+  practiceResolverIdentity(manifest, depthBb);
+  const resolverRuntime = manifest.runtime as ContinualResolverRuntime;
+  const resolverArtifactFiles = resolverRuntime.artifactFiles;
   const root = process.cwd();
   const modelRoot = configuredPath(
     'PRACTICE_RESOLVER_MODEL_DIR',
@@ -86,18 +99,31 @@ export function practiceResolverCommand(): {
   // by whole available cores, including when loading a second model process.
   const threadsPerProcess = Math.min(
     coreBudget,
+    reservedThreads ?? coreBudget,
     Number.isInteger(requestedThreads) && requestedThreads > 0
       ? Math.min(16, requestedThreads)
       : 8
   );
+  const grid = resolverRuntime.actionAbstraction;
   return {
     executable,
     args: [
       'practice-policy-server',
       '--model-version',
-      MODEL_VERSION,
+      manifest.version,
       '--effective-stack-bb',
-      '20',
+      String(depthBb),
+      '--action-abstraction-json',
+      JSON.stringify({
+        open_sizes_bb: grid.openSizesBb, limp_raise_sizes_bb: grid.limpRaiseSizesBb,
+        three_bet_sizes_bb: grid.threeBetSizesBb, four_bet_sizes_bb: grid.fourBetSizesBb,
+        deeper_raise_pot_fractions: grid.deeperRaisePotFractions,
+        preflop_raise_cap: grid.preflopRaiseCap,
+        flop_bet_pot_fractions: grid.flopBetPotFractions,
+        turn_river_bet_pot_fractions: grid.turnRiverBetPotFractions,
+        postflop_raise_pot_fractions: grid.postflopRaisePotFractions,
+        postflop_raise_cap: grid.postflopRaiseCap, include_all_in: grid.includeAllIn,
+      }),
       '--networks',
       path.join(modelRoot, resolverArtifactFiles.networks),
       '--range-policy',
@@ -172,6 +198,9 @@ export interface PracticeResolverWorker {
 }
 
 class PracticeSolverProcess implements PracticeResolverWorker {
+  constructor(private readonly manifest: PolicyManifest, private readonly depthBb: number,
+    private readonly threads: number) {}
+  private stopped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<ChildProcessWithoutNullStreams> | null = null;
   private stdout = '';
@@ -185,12 +214,25 @@ class PracticeSolverProcess implements PracticeResolverWorker {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   private async start(): Promise<ChildProcessWithoutNullStreams> {
+    if (this.stopped) throw new Error('The pinned practice resolver has stopped');
     if (this.child && !this.child.killed && this.child.exitCode === null) {
       return this.child;
     }
     if (this.starting) return this.starting;
-    this.starting = new Promise((resolve, reject) => {
-      const { executable, args } = practiceResolverCommand();
+    this.starting = this.startVerified();
+    // Permit a later retry after missing/corrupt artifacts without spawning
+    // or keeping a rejected startup promise as a permanent cached result.
+    void this.starting.catch(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  private async startVerified(): Promise<ChildProcessWithoutNullStreams> {
+    const modelRoot = configuredPath('PRACTICE_RESOLVER_MODEL_DIR',
+      path.join(process.cwd(), 'preflop-solver', 'models', 'practice'));
+    await verifyPracticeResolverArtifacts(modelRoot, this.manifest.runtime as ContinualResolverRuntime);
+    if (this.stopped) throw new Error('The pinned practice resolver has stopped');
+    return new Promise((resolve, reject) => {
+      const { executable, args } = practiceResolverCommand(this.manifest, this.depthBb, this.threads);
       const child = spawn(executable, args, {
         cwd: process.cwd(),
         env: process.env,
@@ -213,7 +255,6 @@ class PracticeSolverProcess implements PracticeResolverWorker {
         resolve(child);
       });
     });
-    return this.starting;
   }
 
   private attach(child: ChildProcessWithoutNullStreams): void {
@@ -354,6 +395,8 @@ class PracticeSolverProcess implements PracticeResolverWorker {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.starting) await this.starting.catch(() => undefined);
     const child = this.child;
     if (!child || child.exitCode !== null) return;
     child.stdin.end();
@@ -408,23 +451,43 @@ export class PracticeSolverPool implements PracticeResolverWorker {
 }
 
 const globalResolver = globalThis as typeof globalThis & {
-  __practiceSolverPool?: PracticeSolverPool;
+  __practiceSolverPools?: Map<string, { pool: PracticeSolverPool; workers: number; threads: number }>;
 };
 
-export function practiceSolverProcess(): PracticeSolverPool {
-  globalResolver.__practiceSolverPool ??= new PracticeSolverPool(
-    Array.from(
-      { length: practiceResolverPoolSize() },
-      () => new PracticeSolverProcess()
-    )
-  );
-  return globalResolver.__practiceSolverPool;
+export function practiceSolverProcess(
+  manifest: PolicyManifest = defaultResolverManifest,
+  depthBb: number = defaultResolverDepth
+): PracticeSolverPool {
+  const identity = practiceResolverIdentity(manifest, depthBb);
+  const key = JSON.stringify({ identity, runtime: manifest.runtime,
+    abstraction: manifest.abstraction, stateSchema: manifest.stateSchema });
+  const pools = globalResolver.__practiceSolverPools ??= new Map();
+  const existing = pools.get(key);
+  if (existing) return existing.pool;
+  const loaded = [...pools.values()].reduce((sum, entry) => sum + entry.workers, 0);
+  const workers = practiceResolverPoolSize();
+  if (loaded + workers > MAX_RESOLVER_PROCESSES) {
+    throw new Error('The practice resolver model loading budget is full');
+  }
+  const reserved = [...pools.values()].reduce((sum,entry)=>sum+entry.workers*entry.threads,0);
+  const available = cpus().length - reserved;
+  if (available < workers) throw new Error('The practice resolver CPU loading budget is full');
+  const requested = Number(process.env.PRACTICE_RESOLVER_THREADS);
+  const threads = Math.min(Math.floor(available/workers),
+    Number.isInteger(requested) && requested > 0 ? Math.min(16,requested) : 8);
+  // Snapshot the entire configuration. Caller mutations cannot switch an
+  // already pinned hand to different flags or artifact paths.
+  const pinned = structuredClone(manifest);
+  const pool = new PracticeSolverPool(Array.from({ length: workers },
+    () => new PracticeSolverProcess(pinned, depthBb, threads)));
+  pools.set(key, { pool, workers, threads });
+  return pool;
 }
 
 /** Release the long-lived child process in integration tests and shutdown hooks. */
 export async function stopPracticeSolverProcess(): Promise<void> {
-  const resolver = globalResolver.__practiceSolverPool;
-  if (!resolver) return;
-  await resolver.stop();
-  delete globalResolver.__practiceSolverPool;
+  const pools = globalResolver.__practiceSolverPools;
+  if (!pools) return;
+  await Promise.all([...pools.values()].map(({ pool }) => pool.stop()));
+  delete globalResolver.__practiceSolverPools;
 }

@@ -4,7 +4,9 @@ import {
   ACTIVE_FULL_HAND_MANIFESTS,
   isExperimentalFullHandManifest,
   isValidatedFullHandManifest,
+  modelForFullHandIdentity,
 } from '@/lib/practice-models';
+import { HOME_RULES_SHA256, NL25_RULES_SHA256 } from '@/lib/practice-game-identity';
 import type { PolicyManifest } from '@/lib/practice-types';
 
 function acceptedManifest(): PolicyManifest {
@@ -73,6 +75,14 @@ function acceptedManifest(): PolicyManifest {
 }
 
 describe('database-free full-hand activation registry', () => {
+  it('selects an exact pinned version, depth, and rules identity without cross-profile fallback',()=>{
+    for (const manifest of ACTIVE_FULL_HAND_MANIFESTS) {
+      expect(modelForFullHandIdentity(manifest.version,manifest.depthsBb[0],HOME_RULES_SHA256)).toBe(manifest);
+      expect(modelForFullHandIdentity(manifest.version,manifest.depthsBb[0],NL25_RULES_SHA256)).toBeNull();
+      expect(modelForFullHandIdentity(manifest.version,2000)).toBeNull();
+    }
+    expect(modelForFullHandIdentity('missing',20)).toBeNull();
+  });
   it('serves exactly the checked-in manifests that pass a complete serving predicate', () => {
     const expected = (fullHandManifests as unknown[]).filter(
       (manifest) =>
@@ -108,6 +118,61 @@ describe('database-free full-hand activation registry', () => {
         },
       })
     ).toBe(false);
+  });
+
+  it('allows additional trained stack depths without weakening activation gates', () => {
+    for (const depth of [20, 40, 50, 75, 100, 150, 200, 1000, 2000]) {
+      const manifest = { ...acceptedManifest(), depthsBb: [depth] };
+      expect(isValidatedFullHandManifest(manifest)).toBe(true);
+      expect(isValidatedFullHandManifest({
+        ...manifest,
+        validation: { ...manifest.validation, policyCoverage: 0.9 },
+      })).toBe(false);
+    }
+    for (const depth of [0, -20, 1, 20.5, Infinity, NaN, '40']) {
+      expect(isValidatedFullHandManifest({
+        ...acceptedManifest(), depthsBb: [depth],
+      })).toBe(false);
+    }
+  });
+
+  it('rejects impossible or non-finite qualification measurements without relaxing thresholds', () => {
+    const source = acceptedManifest();
+    const invalid: Array<Partial<PolicyManifest['validation']>> = [
+      { exploitabilityEstimateBb: -0.01 }, { exploitabilityUpper99Bb: -0.01 },
+      { exploitabilityEstimateBb: NaN }, { exploitabilityUpper99Bb: Infinity },
+      { exploitabilityEstimateBb: 0.4, exploitabilityUpper99Bb: 0.3 },
+      { crossSeedFrequencyMae: -0.01 }, { maximumAggregateActionDelta: -0.01 },
+      { primaryActionAgreement: Infinity }, { primaryActionAgreement: 1.01 },
+      { policyCoverage: 1.01 }, { actionEvStandardErrorCoverage: 1.01 },
+      { projectedStorageBytes: -1 }, { projectedStorageBytes: 0.5 },
+    ];
+    for (const measurement of invalid) {
+      expect(isValidatedFullHandManifest({ ...source, validation: { ...source.validation, ...measurement } })).toBe(false);
+      if (!('exploitabilityEstimateBb' in measurement) && !('exploitabilityUpper99Bb' in measurement)) {
+        expect(isExperimentalFullHandManifest({ ...source, label: 'Experimental self-play',
+          validation: { ...source.validation, exploitabilityGateDeferred: true, ...measurement } })).toBe(false);
+      }
+    }
+  });
+
+  it('does not serve raked or otherwise incompatible games as Home game', () => {
+    const manifest = acceptedManifest();
+    for (const abstraction of [
+      { ...manifest.abstraction, rake: '5% capped at 3bb' },
+      { ...manifest.abstraction, anteBb: 1 },
+      { ...manifest.abstraction, blindsBb: [1, 2] },
+      { ...manifest.abstraction, blindsBb: [0.5, 1, 2] },
+      undefined,
+    ]) {
+      expect(isValidatedFullHandManifest({ ...manifest, abstraction })).toBe(false);
+      expect(isExperimentalFullHandManifest({
+        ...manifest,
+        label: 'Experimental self-play',
+        abstraction,
+        validation: { ...manifest.validation, exploitabilityGateDeferred: true },
+      })).toBe(false);
+    }
   });
 
   it('rejects unverified artifact locations and experimental labels', () => {
@@ -328,4 +393,3 @@ describe('practice model storage and warming', () => {
     }
   });
 });
-

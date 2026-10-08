@@ -385,6 +385,7 @@ export function PracticeStatsDashboard({ stats, hands }: { stats: PracticeStats;
           <BreakdownChart title="By stack" subtitle="Performance by effective depth" items={stats.byStack} />
           <BreakdownChart title="By action" subtitle="Cost of the actions you choose" items={stats.byAction} />
           <BreakdownChart title="By mode" subtitle="Results across practice formats" items={stats.byMode} />
+          <BreakdownChart title="By game profile" subtitle="Separate frozen rules; unknown history stays unresolved" items={stats.byGameProfile} />
           <BreakdownChart title="By response time" subtitle="Speed bands versus EV loss" items={stats.byResponseTime} />
         </div>
       </section>

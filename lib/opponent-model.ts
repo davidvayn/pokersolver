@@ -8,6 +8,7 @@ import type {
   PracticeStreet,
   Seat,
 } from '@/lib/practice-types';
+import { handsForGame, type PracticeEvidenceScope } from '@/lib/practice-game-identity';
 
 export const OPPONENT_PROFILE_SCHEMA = 'local-opponent-profile-v1' as const;
 export const OPPONENT_PROFILE_FEATURE_COUNT = 16;
@@ -123,10 +124,11 @@ export function adaptationConfigForRuntime(
 export function buildOpponentModel(
   hands: PracticeHandRecord[],
   style: OpponentStyle,
-  config = DEFAULT_OPPONENT_ADAPTATION
+  config = DEFAULT_OPPONENT_ADAPTATION,
+  scope?: PracticeEvidenceScope
 ): OpponentModelSnapshot {
   const checked = validateConfig(config);
-  const records = hands
+  const records = (scope ? handsForGame(hands, scope) : hands)
     .flatMap((hand) => hand.decisions)
     .filter((record) => record.mode !== 'push-fold')
     .sort((first, second) => second.answeredAt - first.answeredAt)

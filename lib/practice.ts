@@ -3,8 +3,11 @@ import type {
   PracticeStreet,
   Seat,
 } from '@/lib/practice-types';
+import { HOME_GAME_RULES } from '@/lib/cash-game-rules';
+import { practiceGameProfile } from '@/lib/practice-game-profiles';
 import {
   DEFAULT_PRACTICE_SETTINGS,
+  isFullHandDepth,
   STREET_ORDER,
 } from '@/lib/practice-types';
 
@@ -15,7 +18,6 @@ export type * from '@/lib/practice-types';
 export const PRACTICE_SETTINGS_KEY = 'poker-lab-practice-settings-v3';
 
 const MODES = new Set(['full-hand', 'preflop', 'postflop', 'push-fold']);
-const FULL_DEPTHS = new Set([20, 50, 100]);
 const PUSH_FOLD_DEPTHS = new Set([2, 3, 5, 8, 10, 12, 15, 20]);
 const HERO_SEATS = new Set([
   'alternate',
@@ -36,11 +38,13 @@ export function sanitizePracticeSettings(value: unknown): PracticeSettings {
       )
     : DEFAULT_PRACTICE_SETTINGS.postflopStreets;
   return {
+    gameProfileId: typeof candidate.gameProfileId === 'string' && practiceGameProfile(candidate.gameProfileId)
+      ? candidate.gameProfileId : HOME_GAME_RULES.id,
     mode: MODES.has(candidate.mode ?? '')
       ? (candidate.mode as PracticeSettings['mode'])
       : DEFAULT_PRACTICE_SETTINGS.mode,
-    depthBb: FULL_DEPTHS.has(candidate.depthBb ?? -1)
-      ? (candidate.depthBb as PracticeSettings['depthBb'])
+    depthBb: isFullHandDepth(candidate.depthBb)
+      ? candidate.depthBb
       : DEFAULT_PRACTICE_SETTINGS.depthBb,
     pushFoldDepthBb: PUSH_FOLD_DEPTHS.has(candidate.pushFoldDepthBb ?? -1)
       ? (candidate.pushFoldDepthBb as PracticeSettings['pushFoldDepthBb'])
@@ -86,6 +90,7 @@ export function structuralSettingsChanged(
   next: PracticeSettings
 ): boolean {
   return (
+    (current.gameProfileId ?? HOME_GAME_RULES.id) !== (next.gameProfileId ?? HOME_GAME_RULES.id) ||
     current.mode !== next.mode ||
     current.depthBb !== next.depthBb ||
     current.pushFoldDepthBb !== next.pushFoldDepthBb ||

@@ -787,6 +787,7 @@ fn evaluate_full_game_response_inner(
         }
     };
     config.game.validate()?;
+    config.game.require_legacy_home()?;
     let policy_source_kind = if config.flop_backoff.is_some() {
         format!("{policy_source_kind}_with_frozen_flop_mass_backoff")
     } else {

@@ -278,6 +278,7 @@ impl ContinuationCache {
             return Err("preflop continuation cache metadata is invalid".into());
         }
         self.game.validate()?;
+        self.game.require_legacy_home()?;
         let expected = self.public_histories.len();
         let valid_digest = |digest: &str| {
             digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -575,6 +576,7 @@ impl RangeContinuationCache {
             return Err("range continuation cache is incomplete or incompatible".into());
         }
         self.game.validate()?;
+        self.game.require_legacy_home()?;
         Ok(())
     }
 }
@@ -641,6 +643,7 @@ impl PreflopPolicyArtifact {
             return Err("tabular preflop policy artifact is incompatible".into());
         }
         self.game.validate()?;
+        self.game.require_legacy_home()?;
         if self.game.effective_stack_bb != self.depth_bb
             || !(0.0..1.0).contains(&self.sampling_exploration_probability)
             || !self.solver_dcfr.positive_regret_exponent.is_finite()

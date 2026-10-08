@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { modelForFullDepth } from '@/lib/practice-models';
+import { modelForFullHandIdentity } from '@/lib/practice-models';
 import type { HandState } from '@/lib/practice-types';
 import {
   resolverAffinityKey,
   resolverQueryPayload,
 } from '@/lib/server/practice-resolver-request';
 import {
-  PRACTICE_RESOLVER_IDENTITY,
+  practiceResolverIdentity,
   practiceSolverProcess,
 } from '@/lib/server/practice-solver-process';
 
@@ -38,6 +38,7 @@ function isQueryState(value: unknown): value is HandState {
       state.toAct &&
       ['button-small-blind', 'big-blind'].includes(state.toAct) &&
       state.terminal === false &&
+      state.cash === undefined &&
       state.holeCards &&
       isCardPair(state.holeCards[state.toAct]) &&
       Array.isArray(state.board) &&
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid resolver request' }, { status: 400 });
   }
   const state = input.state;
-  const manifest = modelForFullDepth(input.depthBb);
+  const manifest = modelForFullHandIdentity(input.modelVersion, input.depthBb);
   const resolver = manifest?.runtime;
   if (
     !manifest ||
@@ -94,7 +95,8 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const result = await practiceSolverProcess().query(
+    const identity = practiceResolverIdentity(manifest, input.depthBb);
+    const result = await practiceSolverProcess(manifest, input.depthBb).query(
       resolverQueryPayload(
         state,
         input.stateHash,
@@ -120,15 +122,17 @@ export async function POST(request: Request) {
       resolved.modelVersion !== input.modelVersion ||
       resolved.depthBb !== input.depthBb ||
       resolved.stateHash !== input.stateHash ||
-      resolved.networkSha256 !== PRACTICE_RESOLVER_IDENTITY.networkSha256 ||
+      resolved.networkSha256 !== identity.networkSha256 ||
       resolved.rangePolicySha256 !==
-        PRACTICE_RESOLVER_IDENTITY.rangePolicySha256 ||
+        identity.rangePolicySha256 ||
       resolved.valueNetworkSha256 !==
-        PRACTICE_RESOLVER_IDENTITY.valueNetworkSha256 ||
+        identity.valueNetworkSha256 ||
       resolved.preflopActionValuesSha256 !==
-        PRACTICE_RESOLVER_IDENTITY.preflopActionValuesSha256 ||
+        identity.preflopActionValuesSha256 ||
       !Array.isArray(resolved.actions) ||
       typeof resolved.maximumProbabilitySumError !== 'number' ||
+      !Number.isFinite(resolved.maximumProbabilitySumError) ||
+      resolved.maximumProbabilitySumError < 0 ||
       resolved.maximumProbabilitySumError > 1e-6
     ) {
       throw new Error('The resolver response does not match its pinned manifest');

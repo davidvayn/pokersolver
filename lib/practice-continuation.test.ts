@@ -37,13 +37,11 @@ describe('PracticeContinuationCache', () => {
       id: 'call',
       kind: 'call',
       label: 'Call 0.5bb',
-      amountBb: 0.5,
     });
     const raised = applyAction(state, {
       id: 'raise-2',
       kind: 'raise',
       label: 'Raise to 2bb',
-      amountBb: 1.5,
       amountToBb: 2,
     });
     const cache = new PracticeContinuationCache<string>();
