@@ -9,6 +9,9 @@ import {
 } from '@/lib/practice-history';
 import { analyzePractice } from '@/lib/practice-stats';
 import { buildOpponentModel } from '@/lib/opponent-model';
+import { HOME_GAME_IDENTITY, HOME_RULES_SHA256, identityForRules } from '@/lib/practice-game-identity';
+import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
+import { applyAction, createHand, seededRandom } from '@/lib/practice-engine';
 import type {
   PracticeDecisionRecord,
   PracticeHandRecord,
@@ -35,7 +38,8 @@ function decision(id: string, loss: number | null, lowConfidence = false): Pract
     chosenActionEvBb: loss === null ? null : 0,
     bestActionEvBb: loss,
     evLossBb: loss,
-    grade: loss === null ? 'ungraded' : loss > 0.25 ? 'blunder' : 'good',
+    // Grades now describe policy frequency, independently of EV availability.
+    grade: loss !== null && loss > 0.25 ? 'blunder' : 'good',
     confidence: lowConfidence ? 'low' : loss === null ? 'unavailable' : 'high',
     lowConfidence,
   };
@@ -85,6 +89,46 @@ afterEach(async () => {
 });
 
 describe('fresh IndexedDB practice history', () => {
+  it('upgrades recognized Home history and preserves unresolved records without invented rake', async () => {
+    const recognized = { ...hand('h1',[decision('d1',.1)]), modelVersion:'hu-push-fold-v1' };
+    const unknown = hand('h2',[decision('d2',.2)]);
+    await new Promise<void>((resolve,reject) => {
+      const request = indexedDB.open(PRACTICE_DB_NAME,1);
+      request.onupgradeneeded = () => {
+        const store = request.result.createObjectStore('hands',{ keyPath:'id' });
+        store.createIndex('completedAt','completedAt'); store.createIndex('modelVersion','modelVersion'); store.createIndex('mode','mode');
+      };
+      request.onsuccess = () => {
+        const db = request.result; const tx = db.transaction('hands','readwrite');
+        tx.objectStore('hands').put(recognized); tx.objectStore('hands').put(unknown);
+        tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => reject(tx.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    const records = await loadPracticeHands();
+    expect(records.find((record) => record.id === 'h1')?.gameIdentity).toEqual({ ...HOME_GAME_IDENTITY,source:'known-legacy-home' });
+    expect(records.find((record) => record.id === 'h2')?.gameIdentity?.source).toBe('unresolved');
+    expect(records.find((record) => record.id === 'h1')?.result).toEqual(recognized.result);
+    expect(records.find((record) => record.id === 'h2')?.decisions[0].evLossBb).toBe(.2);
+    expect(records.every((record) => record.result.cashSettlement === undefined)).toBe(true);
+  });
+
+  it('keeps cash settlement and scoped evidence separate from Home and unknown history', async () => {
+    const state = applyAction(createHand({ modelVersion:'cash-pilot',depthBb:20,button:'button-small-blind',
+      hero:'button-small-blind',cashRules:NL25_STUDY_RULES,random:seededRandom(7) }), { id:'fold',kind:'fold',label:'Fold' });
+    const cash = { ...hand('h3',[]), modelVersion:state.modelVersion,gameIdentity:identityForRules(NL25_STUDY_RULES),
+      heroCards:state.holeCards[state.hero],opponentCards:state.holeCards['big-blind'],board:state.board,
+      cashLedger:state.cash,result:state.result! };
+    expect(await savePracticeHand(cash)).toBe(true);
+    expect(await savePracticeHand({ ...cash,cashLedger:undefined })).toBe(false);
+    const home = { ...hand('h4',[decision('d4',.1)]),gameIdentity:HOME_GAME_IDENTITY };
+    const deeper = { ...home,id:'h5',depthBb:50 };
+    const profile = buildOpponentModel([home,cash,deeper,hand('h6',[decision('d6',.2)])],'baseline',undefined,
+      { rulesSha256:HOME_RULES_SHA256,depthBb:20 });
+    expect(profile.observations).toBe(1);
+    expect(analyzePractice([home,cash,deeper],Date.now(),{ rulesSha256:HOME_RULES_SHA256,depthBb:20 }).hands).toBe(1);
+    expect((await loadPracticeHands())[0].result.cashSettlement?.rakeUnits).toBe(0);
+  });
   it('stores, orders, and clears complete hand records', async () => {
     expect(await savePracticeHand(hand('h1', [decision('d1', 0.1)]))).toBe(true);
     expect(await savePracticeHand(hand('h2', [decision('d2', 0.2)]))).toBe(true);

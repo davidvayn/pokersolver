@@ -1,6 +1,11 @@
 'use client';
 
 import { OPPONENT_PROFILE_FEATURE_COUNT } from '@/lib/opponent-model';
+import { historicalGameIdentity, isPracticeGameIdentity, upgradeHistoryGameIdentity } from '@/lib/practice-game-identity';
+import { identityForRules } from '@/lib/practice-game-identity';
+import { NL25_STUDY_RULES, requireMoneyUnits } from '@/lib/cash-game-rules';
+import { cashUnitsFromBb } from '@/lib/practice-cash';
+import { settleCashHand } from '@/lib/cash-settlement';
 import type {
   OpponentModelSnapshot,
   OpponentPolicyTrace,
@@ -8,7 +13,7 @@ import type {
 } from '@/lib/practice-types';
 
 export const PRACTICE_DB_NAME = 'poker-lab-practice-v3';
-export const PRACTICE_DB_VERSION = 1;
+export const PRACTICE_DB_VERSION = 2;
 export const PRACTICE_HAND_STORE = 'hands';
 const HISTORY_EVENT = 'poker-lab-practice-history-v3';
 const HISTORY_CHANNEL = 'poker-lab-practice-history-sync-v3';
@@ -55,6 +60,17 @@ export function openPracticeDatabase(): Promise<IDBDatabase> {
         store.createIndex('modelVersion', 'modelVersion');
         store.createIndex('mode', 'mode');
       }
+      const store = request.transaction?.objectStore(PRACTICE_HAND_STORE);
+      if (store) {
+        if (!store.indexNames.contains('rulesSha256')) store.createIndex('rulesSha256', 'gameIdentity.rulesSha256');
+        const cursor = store.openCursor();
+        cursor.onsuccess = () => {
+          const current = cursor.result;
+          if (!current) return;
+          if (isPracticeHandRecord(current.value)) current.update(upgradeHistoryGameIdentity(current.value));
+          current.continue();
+        };
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
@@ -75,6 +91,7 @@ export function isPracticeHandRecord(value: unknown): value is PracticeHandRecor
     Number.isFinite(hand.completedAt) &&
     hand.completedAt >= hand.startedAt &&
     typeof hand.modelVersion === 'string' &&
+    (hand.gameIdentity === undefined || isPracticeGameIdentity(hand.gameIdentity)) &&
     typeof hand.depthBb === 'number' &&
     hand.depthBb > 1 &&
     (hand.button === 'button-small-blind' || hand.button === 'big-blind') &&
@@ -86,6 +103,10 @@ export function isPracticeHandRecord(value: unknown): value is PracticeHandRecor
     Array.isArray(hand.board) &&
     Array.isArray(hand.actions) &&
     Array.isArray(hand.decisions) &&
+    hand.decisions.every((decision) => decision && typeof decision === 'object' &&
+      (decision.gameIdentity === undefined || isPracticeGameIdentity(decision.gameIdentity) &&
+        decision.gameIdentity.rulesSha256 === historicalGameIdentity(hand as PracticeHandRecord).rulesSha256)) &&
+    validRecordedCashLedger(hand as PracticeHandRecord) &&
     (hand.opponentModel === undefined ||
       isOpponentModelSnapshot(hand.opponentModel)) &&
     (hand.opponentPolicyQueries === undefined ||
@@ -94,6 +115,44 @@ export function isPracticeHandRecord(value: unknown): value is PracticeHandRecor
     !!hand.result &&
     typeof hand.result === 'object'
   );
+}
+
+function validRecordedCashLedger(hand: PracticeHandRecord): boolean {
+  const identity = historicalGameIdentity(hand);
+  if (!hand.cashLedger) return identity.profileId !== NL25_STUDY_RULES.id;
+  try {
+    const cash = hand.cashLedger;
+    if (identity.rulesSha256 !== identityForRules(cash.rules).rulesSha256
+        || hand.button !== 'button-small-blind') return false;
+    const seats = ['button-small-blind', 'big-blind'] as const;
+    const depth = cashUnitsFromBb(hand.depthBb, cash.rules);
+    const vectors = [cash.stacksUnits, cash.streetBetsUnits, cash.committedUnits];
+    for (const vector of vectors) {
+      if (Object.keys(vector).length !== 2 || !seats.every((seat) => Object.hasOwn(vector, seat))) return false;
+      seats.forEach((seat) => requireMoneyUnits(vector[seat]));
+    }
+    requireMoneyUnits(cash.potUnits); requireMoneyUnits(cash.houseRakeUnits);
+    if (seats.reduce((sum,seat) => sum + cash.stacksUnits[seat] + cash.streetBetsUnits[seat], cash.potUnits + cash.houseRakeUnits) !== 2 * depth) return false;
+    if (hand.result.reason === 'preflop-complete' || hand.result.reason === 'review-complete') {
+      return cash.houseRakeUnits === 0 && hand.result.cashSettlement === undefined;
+    }
+    if (!hand.result.winner || !hand.result.cashSettlement) return false;
+    const expected = settleCashHand(cash.rules, {
+      committedUnits: [cash.committedUnits[seats[0]], cash.committedUnits[seats[1]]],
+      button: 0, reason: hand.result.reason,
+      outcome: hand.result.winner === 'split' ? 'split' : hand.result.winner === seats[0] ? 'player-zero' : 'player-one',
+      boardCardsDealt: hand.board.length as 0 | 3 | 4 | 5,
+    });
+    if (cash.potUnits !== 0 || cash.houseRakeUnits !== expected.rakeUnits || seats.some((seat) => cash.streetBetsUnits[seat] !== 0)) return false;
+    for (const key of ['grossPotUnits','rakeUnits','netPotUnits'] as const) {
+      if (hand.result.cashSettlement[key] !== expected[key]) return false;
+    }
+    for (const key of ['uncalledRefundUnits','awardsUnits','netPayoffUnits'] as const) {
+      if (!expected[key].every((value,index) => hand.result.cashSettlement?.[key][index] === value)) return false;
+    }
+    return seats.every((seat,index) => cash.stacksUnits[seat] - depth === expected.netPayoffUnits[index]
+      && hand.result.netBb[seat] === expected.netPayoffUnits[index] / cash.rules.unitsPerBb);
+  } catch { return false; }
 }
 
 function isOpponentPolicyTrace(value: unknown): value is OpponentPolicyTrace {
@@ -207,7 +266,7 @@ export async function savePracticeHand(
   try {
     database = await openPracticeDatabase();
     const transaction = database.transaction(PRACTICE_HAND_STORE, 'readwrite');
-    transaction.objectStore(PRACTICE_HAND_STORE).put(hand);
+    transaction.objectStore(PRACTICE_HAND_STORE).put(upgradeHistoryGameIdentity(hand));
     await transactionDone(transaction);
     await trimHistory(database);
     notifyPracticeHistoryChanged();

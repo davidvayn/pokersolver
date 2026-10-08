@@ -351,6 +351,9 @@ export function SolverWorkspace(props: SolverWorkspaceProps) {
     >
       <h1 className="sr-only">Postflop solver</h1>
       <header className="min-w-0 rounded-lg border border-border bg-surface px-3 py-2">
+        <p className="mb-2 text-xs leading-5 text-muted" data-solver-rules>
+          Home game · Rake-free, single-street all-in-equity model. Online practice settings do not change this solver.
+        </p>
         <BoardControls context={context} />
       </header>
       <div className="grid min-h-0 gap-2 lg:grid-cols-[minmax(470px,0.95fr)_minmax(0,1.45fr)]">

@@ -30,6 +30,15 @@ pub struct RangeTerminalEvaluation {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct CashRangeTerminalEvaluation {
+    pub counterfactual_values_bb: [Vec<f64>; 2],
+    pub joint_reach_mass: f64,
+    pub profile_net_bb: [f64; 2],
+    pub house_rake_bb: f64,
+    pub conservation_residual_bb: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RangeActionEvaluation {
     /// Values for every actor action, indexed `[action][actor combo]`.
     pub actor_action_values_bb: Vec<Vec<f64>>,
@@ -126,6 +135,23 @@ impl PublicInformationSetCache {
             }
         }
         self.terminal_values(invested, opponent_reach, player, terminal)
+    }
+
+    pub(super) fn terminal_values_for_game(
+        &self, state: &GameState, config: &BlueprintConfig, opponent_reach: &[f64],
+        player: usize, terminal: RangeTerminalKind,
+    ) -> Result<Vec<f64>, String> {
+        if config.cash_rules.is_none() {
+            return self.terminal_values_at_street(state.street, state.invested, opponent_reach, player, terminal);
+        }
+        // Explicit cash public-chance training settles the sampled full board.
+        // Old exact-flop equity matrices lack the tie/odd-cent information.
+        if self.exact_flop_terminal.is_some() {
+            return Err("legacy exact-flop matrices cannot settle explicit cash rules".into());
+        }
+        self.terminal.get_or_init(|| PublicTerminalCache::new(self.board))
+            .values_with_rules(state.invested, opponent_reach, player, terminal,
+                config.cash_rules.as_ref(), state.street.board_len() as u8)
     }
 
     pub fn map(
@@ -689,6 +715,36 @@ pub fn evaluate_terminal_ranges(
     })
 }
 
+/// Rake-aware terminal kernel, with both profile values normalized under the
+/// same compatible joint belief. No zero-sum projection or equity-only ties.
+pub fn evaluate_cash_terminal_ranges(
+    board: [u8; 5], invested_bb: [f64; 2], ranges: &[Vec<f64>; 2],
+    terminal: RangeTerminalKind, rules: &CashGameRules, board_cards_dealt: u8,
+) -> Result<CashRangeTerminalEvaluation, String> {
+    validate_inputs(&board, invested_bb, ranges, terminal)?;
+    rules.validate()?;
+    if ![0, 3, 4, 5].contains(&board_cards_dealt)
+        || (terminal == RangeTerminalKind::Showdown && board_cards_dealt != 5) {
+        return Err("cash range settlement requires a completed board or actual fold street".into());
+    }
+    let cache = PublicTerminalCache::new(board);
+    let conflicts = public_belief::combo_conflicts();
+    let mass = compatible_masses(&ranges[1], &conflicts);
+    let joint_reach_mass = ranges[0].iter().zip(mass).map(|(reach, compatible)| reach * compatible).sum::<f64>();
+    if joint_reach_mass <= 0.0 { return Err("cash ranges have no compatible joint deals".into()); }
+    let values = [
+        cache.values_with_rules(invested_bb, &ranges[1], 0, terminal, Some(rules), board_cards_dealt)?,
+        cache.values_with_rules(invested_bb, &ranges[0], 1, terminal, Some(rules), board_cards_dealt)?,
+    ];
+    let profile_net_bb: [f64; 2] = std::array::from_fn(|player| ranges[player].iter().zip(&values[player])
+        .map(|(reach, value)| reach * value).sum::<f64>() / joint_reach_mass);
+    let gross = 2 * cash::cash_units(invested_bb[0].min(invested_bb[1]), rules)?;
+    let house_rake_bb = rules.rake_units(gross, board_cards_dealt >= 3)? as f64 / rules.units_per_bb as f64;
+    Ok(CashRangeTerminalEvaluation { counterfactual_values_bb: values, joint_reach_mass,
+        profile_net_bb, house_rake_bb,
+        conservation_residual_bb: (profile_net_bb[0] + profile_net_bb[1] + house_rake_bb).abs() })
+}
+
 fn validate_inputs(
     board: &[u8; 5],
     invested_bb: [f64; 2],
@@ -789,6 +845,13 @@ impl PublicTerminalCache {
         player: usize,
         terminal: RangeTerminalKind,
     ) -> Result<Vec<f64>, String> {
+        self.values_with_rules(invested, opponent, player, terminal, None, 5)
+    }
+
+    fn values_with_rules(
+        &self, invested: [f64; 2], opponent: &[f64], player: usize,
+        terminal: RangeTerminalKind, rules: Option<&CashGameRules>, board_cards_dealt: u8,
+    ) -> Result<Vec<f64>, String> {
         if player > 1
             || opponent.len() != EXACT_COMBO_COUNT
             || invested.iter().any(|v| !v.is_finite() || *v < 0.0)
@@ -812,7 +875,11 @@ impl PublicTerminalCache {
         }
         let mut values = vec![0.0; EXACT_COMBO_COUNT];
         if let RangeTerminalKind::Fold { winner } = terminal {
-            let utility = if winner == player {
+            let utility = if let Some(rules) = rules {
+                cash::cash_terminal_payoffs(rules, invested, crate::cash_game::TerminalReason::Fold,
+                    if winner == 0 { crate::cash_game::Outcome::PlayerZero } else { crate::cash_game::Outcome::PlayerOne },
+                    board_cards_dealt)?[player]
+            } else if winner == player {
                 invested[1 - player]
             } else {
                 -invested[player]
@@ -826,6 +893,13 @@ impl PublicTerminalCache {
             }
             return Ok(values);
         }
+
+        let cash_payoffs = rules.map(|rules| {
+            [crate::cash_game::Outcome::PlayerZero, crate::cash_game::Outcome::Split, crate::cash_game::Outcome::PlayerOne]
+                .into_iter().map(|outcome| cash::cash_terminal_payoffs(rules, invested,
+                    crate::cash_game::TerminalReason::Showdown, outcome, 5).map(|values| values[player]))
+                .collect::<Result<Vec<_>, String>>()
+        }).transpose()?;
 
         let mut lower = 0.0f64;
         let mut card_lower = [0.0f64; 52];
@@ -847,8 +921,13 @@ impl PublicTerminalCache {
                 let tied = (equal - card_equal[x] - card_equal[y] + opponent[key]).max(0.0);
                 let compatible = total - card_total[x] - card_total[y] + opponent[key];
                 let stronger = (compatible - weaker - tied).max(0.0);
-                values[key] = weaker * invested[1 - player] - stronger * invested[player]
-                    + tied * 0.5 * (invested[1 - player] - invested[player]);
+                values[key] = if let Some(payoffs) = &cash_payoffs {
+                    weaker * payoffs[if player == 0 { 0 } else { 2 }]
+                        + tied * payoffs[1] + stronger * payoffs[if player == 0 { 2 } else { 0 }]
+                } else {
+                    weaker * invested[1 - player] - stronger * invested[player]
+                        + tied * 0.5 * (invested[1 - player] - invested[player])
+                };
             }
             lower += equal;
             for card in 0..52 {
@@ -944,6 +1023,49 @@ fn showdown_counterfactual_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cash_prefix_kernel_matches_blocker_aware_pairwise_own_payoffs() {
+        let registry: serde_json::Value = serde_json::from_str(include_str!("../../../data/practice/cash-game-rules.json")).unwrap();
+        let rules: CashGameRules = serde_json::from_value(registry["nl25"].clone()).unwrap();
+        for board in [[8, 13, 22, 31, 40], [32, 36, 40, 44, 48]] {
+            let active = exact_combos().iter().filter(|combo| !combo.cards().iter().any(|c| board.contains(c))).take(20).collect::<Vec<_>>();
+            let mut ranges = [vec![0.0; EXACT_COMBO_COUNT], vec![0.0; EXACT_COMBO_COUNT]];
+            for (index, combo) in active.iter().enumerate() {
+                ranges[0][combo.key()] = (index + 1) as f64 / 7.0;
+                ranges[1][combo.key()] = (20 - index) as f64 / 11.0;
+            }
+            for (terminal, board_len, invested) in [
+                (RangeTerminalKind::Showdown, 5, [5.0, 5.0]),
+                (RangeTerminalKind::Fold { winner: 0 }, 0, [20.0, 5.0]),
+                (RangeTerminalKind::Fold { winner: 1 }, 3, [5.0, 20.0]),
+                (RangeTerminalKind::Fold { winner: 0 }, 4, [20.0, 5.0]),
+                (RangeTerminalKind::Fold { winner: 1 }, 5, [5.0, 20.0]),
+            ] {
+                let evaluation = evaluate_cash_terminal_ranges(board, invested, &ranges, terminal, &rules, board_len).unwrap();
+                for player in 0..2 {
+                    for own in &active {
+                        let mut expected = 0.0;
+                        for other in &active {
+                            if own.cards().iter().any(|card| other.cards().contains(card)) { continue; }
+                            let mut holes = [[0; 2]; 2]; holes[player] = own.cards(); holes[1 - player] = other.cards();
+                            let (reason, outcome) = match terminal {
+                                RangeTerminalKind::Fold { winner } => (crate::cash_game::TerminalReason::Fold,
+                                    if winner == 0 { crate::cash_game::Outcome::PlayerZero } else { crate::cash_game::Outcome::PlayerOne }),
+                                RangeTerminalKind::Showdown => (crate::cash_game::TerminalReason::Showdown,
+                                    match showdown_result(&holes, &board) { 1.0 => crate::cash_game::Outcome::PlayerZero, 0.5 => crate::cash_game::Outcome::Split, _ => crate::cash_game::Outcome::PlayerOne }),
+                            };
+                            expected += ranges[1 - player][other.key()] * cash::cash_terminal_payoffs(&rules, invested, reason, outcome, board_len).unwrap()[player];
+                        }
+                        assert!((evaluation.counterfactual_values_bb[player][own.key()] - expected).abs() < 1e-9);
+                    }
+                }
+                assert!(evaluation.conservation_residual_bb < 1e-10);
+                assert!(evaluation.house_rake_bb >= 0.0);
+                if terminal == RangeTerminalKind::Showdown { assert!((evaluation.house_rake_bb - 0.44).abs() < 1e-12); }
+            }
+        }
+    }
 
     fn single_pair_ranges(first: Combo, second: Combo) -> [Vec<f64>; 2] {
         let mut ranges = std::array::from_fn(|_| vec![0.0; EXACT_COMBO_COUNT]);

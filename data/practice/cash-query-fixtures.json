@@ -1,0 +1,31 @@
+{
+  "schema": "hu-cash-query-parity-fixtures-v1",
+  "modelVersion": "cash-pilot-test",
+  "cases": [
+    {
+      "name": "preflop-root",
+      "stateHash": "b063e4246249ef8d64457befc9541a79e0d1d04bad2844521c72aee03ce8535c",
+      "query": { "requestId": "parity-root", "modelVersion": "cash-pilot-test", "depthBb": 20, "privateCards": [48,49], "board": [], "street": "preflop", "actor": 0, "totalPotBb": 1.4, "stacksBb": [19.6,19], "streetBetsBb": [0.4,1], "totalCommittedBb": [0.4,1], "lastFullRaiseBb": 1, "raiseReopened": true, "actions": [] }
+    },
+    {
+      "name": "preflop-limp",
+      "stateHash": "99652b110611ed5677ec9ef94a56387efef873a3bdba34fc18a0c8fe82d7399f",
+      "query": { "requestId": "parity-limp", "modelVersion": "cash-pilot-test", "depthBb": 20, "privateCards": [4,5], "board": [], "street": "preflop", "actor": 1, "totalPotBb": 2, "stacksBb": [19,19], "streetBetsBb": [1,1], "totalCommittedBb": [1,1], "lastFullRaiseBb": 1, "raiseReopened": true, "actions": [{"actor":0,"street":"preflop","kind":"call","amountToBb":null}] }
+    },
+    {
+      "name": "flop-after-limp-check",
+      "stateHash": "0fba305ce6396cf7f3810a81bafb3158fea609bbe4298597aa1d4f20f871d44c",
+      "query": { "requestId": "parity-flop", "modelVersion": "cash-pilot-test", "depthBb": 20, "privateCards": [4,5], "board": [8,13,22], "street": "flop", "actor": 1, "totalPotBb": 2, "stacksBb": [19,19], "streetBetsBb": [0,0], "totalCommittedBb": [1,1], "lastFullRaiseBb": 1, "raiseReopened": true, "actions": [{"actor":0,"street":"preflop","kind":"call","amountToBb":null},{"actor":1,"street":"preflop","kind":"check","amountToBb":null}] }
+    },
+    {
+      "name": "river-after-limp-checkdown",
+      "stateHash": "365ab44d83c3438cc56f03f12696544d37bf901ce5365da19f7ff224d910b598",
+      "query": { "requestId": "parity-river", "modelVersion": "cash-pilot-test", "depthBb": 20, "privateCards": [4,5], "board": [8,13,22,31,40], "street": "river", "actor": 1, "totalPotBb": 2, "stacksBb": [19,19], "streetBetsBb": [0,0], "totalCommittedBb": [1,1], "lastFullRaiseBb": 1, "raiseReopened": true, "actions": [{"actor":0,"street":"preflop","kind":"call","amountToBb":null},{"actor":1,"street":"preflop","kind":"check","amountToBb":null},{"actor":1,"street":"flop","kind":"check","amountToBb":null},{"actor":0,"street":"flop","kind":"check","amountToBb":null},{"actor":1,"street":"turn","kind":"check","amountToBb":null},{"actor":0,"street":"turn","kind":"check","amountToBb":null}] }
+    },
+    {
+      "name": "turn-after-limp-checkdown",
+      "stateHash": "36b51135c2e09b643fef8c724f4e8b3c6ccdde8a1eabd25c6283d0c78de6b4ef",
+      "query": { "requestId": "parity-turn", "modelVersion": "cash-pilot-test", "depthBb": 20, "privateCards": [4,5], "board": [8,13,22,31], "street": "turn", "actor": 1, "totalPotBb": 2, "stacksBb": [19,19], "streetBetsBb": [0,0], "totalCommittedBb": [1,1], "lastFullRaiseBb": 1, "raiseReopened": true, "actions": [{"actor":0,"street":"preflop","kind":"call","amountToBb":null},{"actor":1,"street":"preflop","kind":"check","amountToBb":null},{"actor":1,"street":"flop","kind":"check","amountToBb":null},{"actor":0,"street":"flop","kind":"check","amountToBb":null}] }
+    }
+  ]
+}

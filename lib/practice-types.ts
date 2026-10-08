@@ -1,11 +1,19 @@
 import type { Card } from '@/lib/cards';
+import type { CashGameRules } from '@/lib/cash-game-rules';
+import type { CashSettlement } from '@/lib/cash-settlement';
 
 export type PracticeMode =
   | 'full-hand'
   | 'preflop'
   | 'postflop'
   | 'push-fold';
-export type FullHandDepth = 20 | 50 | 100;
+// Full-hand depths come from accepted manifests, not a fixed menu. This does
+// not make a depth playable without a matching trained policy.
+export type FullHandDepth = number;
+
+export function isFullHandDepth(value: unknown): value is FullHandDepth {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 2;
+}
 export type PushFoldDepth = 2 | 3 | 5 | 8 | 10 | 12 | 15 | 20;
 export type PracticeStreet = 'preflop' | 'flop' | 'turn' | 'river';
 export type Seat = 'button-small-blind' | 'big-blind';
@@ -29,6 +37,7 @@ export type PracticeGrade =
   | 'blunder';
 
 export interface PracticeSettings {
+  gameProfileId?: string;
   mode: PracticeMode;
   depthBb: FullHandDepth;
   pushFoldDepthBb: PushFoldDepth;
@@ -62,6 +71,17 @@ export interface HandResult {
   potBb: number;
   netBb: Record<Seat, number>;
   winningHand?: string;
+  cashSettlement?: CashSettlement;
+}
+
+/** Authoritative integer ledger for explicit cash profiles; bb fields are views. */
+export interface CashHandLedger {
+  readonly rules: CashGameRules;
+  potUnits: number;
+  stacksUnits: Record<Seat, number>;
+  streetBetsUnits: Record<Seat, number>;
+  committedUnits: Record<Seat, number>;
+  houseRakeUnits: number;
 }
 
 export interface HandState {
@@ -85,6 +105,7 @@ export interface HandState {
   actionHistory: PublicAction[];
   terminal: boolean;
   result: HandResult | null;
+  cash?: CashHandLedger;
 }
 
 export interface PolicyValidationSummary {
@@ -197,6 +218,8 @@ export interface ContinualResolverRuntime {
 export interface PolicyManifest {
   schemaVersion: number;
   version: string;
+  /** Reserved for newly versioned rule-pinned runtimes; legacy readers reject it. */
+  cashGame?: { rules: CashGameRules; rulesSha256: string };
   model: string;
   label: 'Approximate GTO' | 'Experimental self-play';
   subtype: 'full-hand' | 'push-fold';
@@ -265,6 +288,7 @@ export interface PracticeDecisionRecord {
   answeredAt: number;
   responseMs: number;
   modelVersion: string;
+  gameIdentity?: PracticeGameIdentity;
   mode: PracticeMode;
   depthBb: number;
   street: PracticeStreet;
@@ -293,6 +317,8 @@ export interface PracticeHandRecord {
   startedAt: number;
   completedAt: number;
   modelVersion: string;
+  gameIdentity?: PracticeGameIdentity;
+  cashLedger?: CashHandLedger;
   mode: PracticeMode;
   depthBb: number;
   button: Seat;
@@ -306,6 +332,11 @@ export interface PracticeHandRecord {
   opponentPolicyQueries?: OpponentPolicyTrace[];
   result: HandResult;
 }
+
+/** Unknown old history remains readable without inventing its economics. */
+export type PracticeGameIdentity =
+  | { source: 'pinned' | 'known-legacy-home'; profileId: string; rulesSha256: string }
+  | { source: 'unresolved'; profileId: null; rulesSha256: null };
 
 export interface EvBreakdown {
   key: string;
@@ -372,6 +403,7 @@ export interface PracticeStats {
   gradeDistribution: PracticeGradeBreakdown[];
   decisionPoints: PracticeDecisionPoint[];
   byStreet: EvBreakdown[];
+  byGameProfile: EvBreakdown[];
   byStack: EvBreakdown[];
   byPosition: EvBreakdown[];
   byAction: EvBreakdown[];
@@ -383,6 +415,7 @@ export interface PracticeStats {
 }
 
 export const DEFAULT_PRACTICE_SETTINGS: PracticeSettings = {
+  gameProfileId: 'home-game-v1',
   mode: 'full-hand',
   depthBb: 20,
   pushFoldDepthBb: 20,

@@ -265,6 +265,21 @@ mod tests {
         output: Vec<u8>,
         release: Option<mpsc::Sender<()>>,
     }
+
+    #[test]
+    fn legacy_transport_rejects_cash_identity_in_single_and_batch_queries() {
+        let mut cash = query("cash", "preflop");
+        cash["rulesSha256"] = Value::String("6".repeat(64));
+        for request in [cash.clone(), serde_json::json!({
+            "schema": "hu-practice-continual-resolver-batch-query-v1", "requestId": "cash-batch", "queries": [cash]
+        })] {
+            let input = std::io::Cursor::new(format!("{request}\n").into_bytes());
+            let mut output = Vec::new();
+            serve(input, &mut output, &|_| panic!("cash request must not enter the Home policy")).unwrap();
+            let response: Value = serde_json::from_slice(&output).unwrap();
+            assert!(response["error"].as_str().unwrap().contains("unknown field"));
+        }
+    }
     impl Write for FlushGate {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.output.extend_from_slice(bytes);

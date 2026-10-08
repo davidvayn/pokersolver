@@ -1,5 +1,6 @@
 import hashlib
 import json
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ import numpy as np
 from train import (
     ACTION_FEATURE_COUNT,
     INPUT_FEATURE_COUNT,
+    input_feature_count,
     MAX_POLICY_ACTIONS,
     STATE_FEATURE_COUNT,
     TEXTURE_FEATURE_OFFSET,
@@ -18,15 +20,19 @@ from train import (
     DecisionReservoir,
     ReplayReservoir,
     RunConfig,
+    run_config_payload,
     bootstrap_dcfr_plus_targets,
     backfill_street_file,
     backfill_legacy_replay_streets,
     expand_state_action,
     export_teacher_snapshot,
     initialize_models,
+    ingest_records,
     load_optimizer,
     linear_layers,
     make_compiled_step,
+    make_compiled_policy_step,
+    make_compiled_group_regression_step,
     make_compiled_ev_policy_step,
     migrate_legacy_resume_state,
     parse_args,
@@ -57,6 +63,61 @@ def initial_state():
 
 
 class NeuralTrainerTests(unittest.TestCase):
+    def test_cash_grouped_replay_and_compiled_losses_use_the_full_recall_vector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = np.zeros(820,dtype=np.float32); state[716+31] = 1.
+            actions = np.zeros((2,9),dtype=np.float32); actions[0,0] = 1.; actions[1,1] = 1.
+            rng = np.random.default_rng(41)
+            for name,normalize in (("policy",True),("advantage",False)):
+                replay = DecisionReservoir(Path(directory),name,4,normalize,feature_count=820)
+                replay.add(state,actions,np.array([.3,.7],dtype=np.float32),1.,3,random.Random(41))
+                features,targets,masks,weights = replay.sample(2,rng,None)
+                self.assertEqual(features.shape,(2,MAX_POLICY_ACTIONS,829))
+                np.testing.assert_array_equal(np.asarray(features)[:,0,716+31],np.ones(2))
+                model = ActionScorer(829,(8,4)); optimizer = optim.AdamW(learning_rate=.001)
+                step = (make_compiled_policy_step if normalize else make_compiled_group_regression_step)(model,optimizer)
+                loss = step(features,targets,masks,weights); mx.eval(loss)
+                self.assertTrue(np.isfinite(float(loss)))
+            values = ReplayReservoir(Path(directory),"value",4,2,feature_count=829)
+            values.add(np.zeros(829,dtype=np.float32),np.zeros(2,dtype=np.float32),1.,3,random.Random(41))
+            self.assertEqual(values.sample(2,rng,None)[0].shape,(2,829))
+
+    def test_cash_features_remember_card_arrivals_but_home_contract_is_unchanged(self):
+        state = initial_state()
+        state.update(street="river",board=[8,13,22,31,40])
+        action = {"kind":"check","amount_to_bb":None}
+        changed = {**state,"board":[8,13,22,40,31]}
+        home = expand_state_action(state,action,20)
+        np.testing.assert_array_equal(home,expand_state_action(changed,action,20))
+        cash = expand_state_action(state,action,20,cash_profile="nl25")
+        self.assertEqual(len(home),725)
+        self.assertEqual(len(cash),829)
+        self.assertFalse(np.array_equal(cash,expand_state_action(changed,action,20,cash_profile="nl25")))
+        np.testing.assert_array_equal(cash,expand_state_action({**state,"board":[22,8,13,31,40]},action,20,cash_profile="nl25"))
+        np.testing.assert_array_equal(cash,expand_state_action(state,action,20,cash_profile="nl25-rake-off-control"))
+
+    def test_cash_bootstrap_matches_frozen_cpu_prior_not_gpu_arithmetic(self):
+        mx.random.seed(7201)
+        model = ActionScorer(input_feature_count("nl25"),(64,32))
+        linear_layers(model)[-1].bias = mx.ones((1,))
+        mx.eval(model.parameters())
+        state = initial_state()
+        state.update(stacks_bb=[19.6,19.],street_bets_bb=[.4,1.],total_committed_bb=[.4,1.],to_call_bb=.6)
+        actions = [{"kind":"fold","amount_bb":0.,"amount_to_bb":None},
+                   {"kind":"call","amount_bb":.6,"amount_to_bb":None},
+                   {"kind":"raise","amount_bb":1.6,"amount_to_bb":2.}]
+        features = np.stack([expand_state_action(state,a,20,cash_profile="nl25") for a in actions]).astype(np.float32)
+        expected = features
+        for index,layer in enumerate(linear_layers(model)):
+            expected = expected @ np.asarray(layer.weight).T + np.asarray(layer.bias)
+            if index < 2: expected = np.maximum(expected,0)
+        record = {"state":state,"actions":actions,"kind":"advantage_p0","targets":[-.4,.4,0.],"weight":1.,
+                  "feature_sha256":[hashlib.sha256(np.rint(f.astype(np.float64)*1_000_000).astype('<i4').tobytes()).hexdigest() for f in features]}
+        heldout = ingest_records([record],20,{}, {"advantage_p0":model},32,2.,random.Random(7),cash_profile="nl25")
+        actual = heldout["advantage_p0"][0][1]
+        target = bootstrap_dcfr_plus_targets(expected.reshape(-1),np.asarray(record["targets"],dtype=np.float32)/20,32,2.)
+        np.testing.assert_allclose(actual,target,rtol=0,atol=2e-6)
+
     def test_cli_defaults_match_leading_20bb_profile(self):
         args = parse_args(["--run-dir", "/tmp/leading-profile", "--seed", "4501"])
         self.assertEqual(args.traversals_per_round, 400)
@@ -117,7 +178,7 @@ class NeuralTrainerTests(unittest.TestCase):
             "new-hash",
         )
         self.assertTrue(changed)
-        self.assertEqual(migrated["config"], json.loads(json.dumps(config.__dict__)))
+        self.assertEqual(migrated["config"], json.loads(json.dumps(run_config_payload(config))))
         self.assertEqual(migrated["config_hash"], "new-hash")
         self.assertEqual(migrated["completed_rounds"], 50)
 

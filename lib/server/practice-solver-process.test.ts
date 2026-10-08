@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -6,25 +6,77 @@ import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 import type { PolicyManifest } from '@/lib/practice-types';
 
 vi.mock('server-only', () => ({}));
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnMock, verifyMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), verifyMock: vi.fn(async () => undefined) }));
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
+vi.mock('@/lib/server/practice-resolver-artifacts', () => ({verifyPracticeResolverArtifacts:verifyMock}));
 
 import {
   PRACTICE_RESOLVER_IDENTITY,
   PracticeSolverPool,
   practiceResolverCommand,
   practiceResolverPoolSize,
+  practiceResolverIdentity,
   practiceSolverProcess,
   stopPracticeSolverProcess,
   type PracticeResolverWorker,
 } from '@/lib/server/practice-solver-process';
+import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
 
 function option(args: string[], flag: string): string | null {
   const index = args.indexOf(flag);
   return index < 0 ? null : (args[index + 1] ?? null);
 }
+afterEach(async () => { await stopPracticeSolverProcess(); vi.unstubAllEnvs(); verifyMock.mockReset().mockResolvedValue(undefined); });
+
+function resolverFixture(): PolicyManifest {
+  return structuredClone((fullHandManifests as PolicyManifest[]).find(
+    m=>m.version===PRACTICE_RESOLVER_IDENTITY.modelVersion)!);
+}
 
 describe('pinned practice resolver process', () => {
+  it('builds commands and identities from each qualified manifest/depth without a global version',()=>{
+    const candidate = resolverFixture(); candidate.version = 'home-test-depth-40'; candidate.depthsBb = [40];
+    const {args} = practiceResolverCommand(candidate,40);
+    expect(option(args,'--model-version')).toBe(candidate.version);
+    expect(option(args,'--effective-stack-bb')).toBe('40');
+    expect(practiceResolverIdentity(candidate,40).depthBb).toBe(40);
+    expect(()=>practiceResolverCommand(candidate,20)).toThrow('qualified');
+    candidate.active = false;
+    expect(()=>practiceSolverProcess(candidate,40)).toThrow('qualified');
+  });
+
+  it('does not permit a cash profile to reuse the legacy native runtime',()=>{
+    const candidate = resolverFixture();
+    candidate.cashGame = {rules:NL25_STUDY_RULES,rulesSha256:'a'.repeat(64)};
+    expect(()=>practiceSolverProcess(candidate,20)).toThrow('qualified');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('isolates model/config identities and bounds all model pools together',()=>{
+    vi.stubEnv('PRACTICE_RESOLVER_THREADS','1');
+    const first = resolverFixture();
+    const original = practiceSolverProcess(first,20);
+    expect(practiceSolverProcess(structuredClone(first),20)).toBe(original);
+    const second = structuredClone(first); second.version = 'home-other-model';
+    if (cpus().length < 2) {
+      expect(()=>practiceSolverProcess(second,20)).toThrow('CPU loading budget');
+      return;
+    }
+    expect(practiceSolverProcess(second,20)).not.toBe(original);
+    const third = structuredClone(first); third.version = 'home-third-model';
+    expect(()=>practiceSolverProcess(third,20)).toThrow('loading budget');
+  });
+
+  it('checks artifacts before spawning and allows retry after verification failure',async()=>{
+    const pool = practiceSolverProcess();
+    const initialSpawns = spawnMock.mock.calls.length;
+    verifyMock.mockRejectedValue(new Error('canonical hash mismatch'));
+    await expect(pool.query({fixture:'bad'})).rejects.toThrow('hash mismatch');
+    await expect(pool.query({fixture:'retry'})).rejects.toThrow('hash mismatch');
+    expect(verifyMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenCalledTimes(initialSpawns);
+  });
+
   it('passes the complete manifest solver profile to Rust', () => {
     const manifest = (fullHandManifests as PolicyManifest[]).find(
       (candidate) =>
@@ -36,6 +88,10 @@ describe('pinned practice resolver process', () => {
     }
 
     const { args } = practiceResolverCommand();
+    const actionGrid = JSON.parse(option(args,'--action-abstraction-json')!);
+    expect(actionGrid.open_sizes_bb).toEqual(manifest.runtime.actionAbstraction.openSizesBb);
+    expect(actionGrid.turn_river_bet_pot_fractions).toEqual(manifest.runtime.actionAbstraction.turnRiverBetPotFractions);
+    expect(actionGrid.include_all_in).toBe(manifest.runtime.actionAbstraction.includeAllIn);
     const resolver = manifest.runtime.resolver;
     expect(option(args, '--dcfr-alpha')).toBe(
       String(manifest.runtime.dcfr.positiveRegretExponent)

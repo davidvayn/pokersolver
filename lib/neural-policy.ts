@@ -6,6 +6,7 @@ import {
   totalPotBb,
 } from '@/lib/practice-engine';
 import { OPPONENT_PROFILE_FEATURE_COUNT } from '@/lib/opponent-model';
+import { assertCashConservation, quantizeCashSizingBb } from '@/lib/practice-cash';
 import type {
   ActionAbstraction,
   ActionKind,
@@ -376,6 +377,7 @@ export function neuralLegalActions(
   abstraction: ActionAbstraction
 ): LegalAction[] {
   if (state.terminal || !state.toAct) return [];
+  if (state.cash) assertCashConservation(state);
   const actor = state.toAct;
   const opponent = otherSeat(actor);
   const stack = state.stacksBb[actor];
@@ -385,6 +387,7 @@ export function neuralLegalActions(
     state.streetBetsBb['button-small-blind'],
     state.streetBetsBb['big-blind']
   );
+  const displayDecimals = state.cash ? 2 : 1;
   const actions: LegalAction[] =
     toCall > EPSILON
       ? [
@@ -394,8 +397,8 @@ export function neuralLegalActions(
             kind: 'call',
             label:
               stack <= toCall + EPSILON
-                ? `Call ${stack.toFixed(1)}bb`
-                : `Call ${toCall.toFixed(1)}bb`,
+                ? `Call ${stack.toFixed(displayDecimals)}bb`
+                : `Call ${toCall.toFixed(displayDecimals)}bb`,
           },
         ]
       : [{ id: 'check', kind: 'check', label: 'Check' }];
@@ -416,14 +419,18 @@ export function neuralLegalActions(
   const minimumTo = roundMoney(highest + Math.max(state.lastFullRaiseBb, 1));
   const aggressiveKind: LegalAction['kind'] =
     highest <= EPSILON ? 'bet' : 'raise';
-  for (const target of uniqueTargets(raiseTargets(state, abstraction))) {
+  const targets = state.cash
+    ? [...new Set(raiseTargets(state, abstraction).map((target) =>
+      Math.min(maximumTo, Math.max(minimumTo, quantizeCashSizingBb(Math.min(target, maximumTo), state.cash!.rules))))) ]
+    : uniqueTargets(raiseTargets(state, abstraction));
+  for (const target of targets) {
     const capped = Math.min(target, maximumTo);
     if (capped + EPSILON < minimumTo || capped >= maximumTo - EPSILON) continue;
     const fixed = capped.toFixed(3);
     actions.push({
       id: `${aggressiveKind}-to-${fixed}`,
       kind: aggressiveKind,
-      label: `${aggressiveKind === 'bet' ? 'Bet' : 'Raise'} to ${Number(fixed).toFixed(1)}bb`,
+      label: `${aggressiveKind === 'bet' ? 'Bet' : 'Raise'} to ${Number(fixed).toFixed(displayDecimals)}bb`,
       amountToBb: Number(fixed),
     });
   }
@@ -431,7 +438,7 @@ export function neuralLegalActions(
     actions.push({
       id: 'all-in',
       kind: 'all-in',
-      label: `All-in ${maximumTo.toFixed(1)}bb`,
+      label: `All-in ${maximumTo.toFixed(displayDecimals)}bb`,
       amountToBb: maximumTo,
     });
   }
@@ -836,6 +843,7 @@ export async function inferNeuralPolicy(input: {
   profile: OpponentModelSnapshot;
   usage: 'grading' | 'opponent';
 }): Promise<NeuralPolicyResult> {
+  if (input.state.cash) throw new Error('Legacy browser neural weights cannot consume explicit cash rules');
   assertNeuralArtifact(input.artifact);
   const { metadata, parameters } = input.artifact;
   if (input.state.modelVersion !== metadata.modelVersion) {

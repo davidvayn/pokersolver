@@ -1,5 +1,8 @@
 import { cardRank, cardSuit, RANKS, type Card } from '@/lib/cards';
 import { evaluate, handCategory, HAND_CATEGORY_NAMES } from '@/lib/evaluator';
+import { canonicalCashGameRules, type CashGameRules } from '@/lib/cash-game-rules';
+import { assertCashConservation, cashUnitsFromBb, collectCashStreet, initialCashLedger,
+  payCashWager, settleCashState, withCashLedger } from '@/lib/practice-cash';
 import type {
   HandResult,
   HandState,
@@ -20,6 +23,7 @@ export interface CreateHandOptions {
   button: Seat;
   hero: Seat;
   random?: () => number;
+  cashRules?: CashGameRules;
 }
 
 export function otherSeat(seat: Seat): Seat {
@@ -59,6 +63,8 @@ function roundMoney(value: number): number {
 }
 
 export function totalPotBb(state: HandState): number {
+  if (state.cash) return (state.cash.potUnits + state.cash.streetBetsUnits['button-small-blind']
+    + state.cash.streetBetsUnits['big-blind']) / state.cash.rules.unitsPerBb;
   return roundMoney(
     state.potBb +
       state.streetBetsBb['button-small-blind'] +
@@ -67,6 +73,9 @@ export function totalPotBb(state: HandState): number {
 }
 
 export function createHand(options: CreateHandOptions): HandState {
+  if (options.cashRules && options.button !== 'button-small-blind') {
+    throw new Error('Explicit cash seats are BTN/SB and BB roles; rotate the hero, not the role labels');
+  }
   if (!Number.isFinite(options.depthBb) || options.depthBb <= BIG_BLIND_BB) {
     throw new Error('Effective stack must be larger than the big blind');
   }
@@ -77,7 +86,7 @@ export function createHand(options: CreateHandOptions): HandState {
     'big-blind': [draw(deck), draw(deck)],
   };
   const depth = roundMoney(options.depthBb);
-  return {
+  const state: HandState = {
     id:
       options.id ??
       `hand-${Date.now().toString(36)}-${Math.floor(random() * 0xffff).toString(36)}`,
@@ -110,6 +119,7 @@ export function createHand(options: CreateHandOptions): HandState {
     terminal: false,
     result: null,
   };
+  return options.cashRules ? withCashLedger(state, initialCashLedger(options.depthBb, options.cashRules)) : state;
 }
 
 function maxStreetBet(state: HandState): number {
@@ -121,6 +131,8 @@ function maxStreetBet(state: HandState): number {
 
 export function toCallBb(state: HandState, seat = state.toAct): number {
   if (!seat) return 0;
+  if (state.cash) return Math.max(0, Math.max(...Object.values(state.cash.streetBetsUnits))
+    - state.cash.streetBetsUnits[seat]) / state.cash.rules.unitsPerBb;
   return roundMoney(
     Math.max(0, maxStreetBet(state) - state.streetBetsBb[seat])
   );
@@ -131,13 +143,14 @@ export function engineLegalActions(state: HandState): LegalAction[] {
   const seat = state.toAct;
   const stack = state.stacksBb[seat];
   const toCall = toCallBb(state, seat);
+  const displayDecimals = state.cash ? 2 : 1;
   const actions: LegalAction[] = [];
   if (toCall > EPSILON) {
     actions.push({ id: 'fold', kind: 'fold', label: 'Fold' });
     actions.push({
       id: stack <= toCall + EPSILON ? 'call-all-in' : 'call',
       kind: 'call',
-      label: stack <= toCall + EPSILON ? `Call ${stack.toFixed(1)}bb` : `Call ${toCall.toFixed(1)}bb`,
+      label: stack <= toCall + EPSILON ? `Call ${stack.toFixed(displayDecimals)}bb` : `Call ${toCall.toFixed(displayDecimals)}bb`,
     });
   } else {
     actions.push({ id: 'check', kind: 'check', label: 'Check' });
@@ -148,7 +161,7 @@ export function engineLegalActions(state: HandState): LegalAction[] {
     actions.push({
       id: 'all-in',
       kind: 'all-in',
-      label: `All-in ${allInTo.toFixed(1)}bb`,
+      label: `All-in ${allInTo.toFixed(displayDecimals)}bb`,
       amountToBb: allInTo,
     });
   }
@@ -181,6 +194,7 @@ function assertActionLegal(state: HandState, action: LegalAction): void {
   if (!Number.isFinite(target) || target === undefined) {
     throw new Error('Betting actions require an amount-to value');
   }
+  if (state.cash) cashUnitsFromBb(target, state.cash.rules);
   if (target <= highest + EPSILON || target > maximum + EPSILON) {
     throw new Error('Bet amount is outside the legal stack range');
   }
@@ -205,6 +219,7 @@ function assertActionLegal(state: HandState, action: LegalAction): void {
 }
 
 function collectStreetBets(state: HandState): HandState {
+  if (state.cash) return collectCashStreet(state);
   const added =
     state.streetBetsBb['button-small-blind'] +
     state.streetBetsBb['big-blind'];
@@ -250,6 +265,10 @@ function awardPot(
   winner: Seat | 'split',
   reason: HandResult['reason']
 ): HandState {
+  if (state.cash) {
+    if (reason !== 'fold' && reason !== 'showdown') throw new Error('Partial review cannot settle cash');
+    return settleCashState(state, winner, reason);
+  }
   const collected = collectStreetBets(state);
   const pot = collected.potBb;
   const stacks = { ...collected.stacksBb };
@@ -331,6 +350,7 @@ function finishBettingRound(state: HandState): HandState {
 }
 
 export function applyAction(state: HandState, action: LegalAction): HandState {
+  if (state.cash) assertCashConservation(state);
   assertActionLegal(state, action);
   const actor = state.toAct as Seat;
   const opponent = otherSeat(actor);
@@ -374,6 +394,7 @@ export function applyAction(state: HandState, action: LegalAction): HandState {
   next.totalCommittedBb[actor] = roundMoney(
     next.totalCommittedBb[actor] + paid
   );
+  if (state.cash) next = payCashWager(next, actor, amountTo);
 
   const aggressive =
     action.kind === 'bet' || action.kind === 'raise' || action.kind === 'all-in';
@@ -452,14 +473,19 @@ export function stopForReview(
 export function canonicalPolicyState(state: HandState, actor = state.toAct): string {
   if (!actor) throw new Error('A terminal state has no policy actor');
   const cards = [...state.holeCards[actor]].sort((a, b) => a - b).join(',');
-  const board = [...state.board].sort((a, b) => a - b).join(',');
+  // Within-flop card order is irrelevant, but which card arrived on the
+  // turn/river changes the public information seen during earlier actions.
+  // Preserve legacy Home hashes; cash queries use the recall-aware v3 key.
+  const board = (state.cash
+    ? [...state.board.slice(0,3).sort((a,b) => a-b),...state.board.slice(3)]
+    : [...state.board].sort((a,b) => a-b)).join(',');
   const history = state.actionHistory
     .map((action) =>
       [action.street, action.actor, action.kind, action.amountToBb ?? action.amountBb]
         .join(':')
     )
     .join('/');
-  return [
+  const fields = [
     'hu-cash-v1',
     state.modelVersion,
     state.depthBb.toFixed(3),
@@ -473,7 +499,10 @@ export function canonicalPolicyState(state: HandState, actor = state.toAct): str
     state.stacksBb['button-small-blind'].toFixed(3),
     state.stacksBb['big-blind'].toFixed(3),
     history,
-  ].join('|');
+  ];
+  return state.cash
+    ? ['hu-cash-v3', canonicalCashGameRules(state.cash.rules), ...fields.slice(1)].join('|')
+    : fields.join('|');
 }
 
 export async function canonicalPolicyHash(
@@ -498,6 +527,7 @@ export function handBucket(cards: [Card, Card]): string {
 }
 
 export function assertChipConservation(state: HandState): void {
+  if (state.cash) { assertCashConservation(state); return; }
   const total =
     state.stacksBb['button-small-blind'] +
     state.stacksBb['big-blind'] +

@@ -35,6 +35,8 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 from mlx.utils import tree_flatten, tree_unflatten
 import numpy as np
+from cash_profiles import (CASH_DATASET_SCHEMA, CASH_NETWORK_SCHEMA, CASH_STATE_FEATURE_SCHEMA, CASH_STATE_FEATURE_COUNT, PAYOFF_CONTRACT,
+    profile_rules, rules_digest, validate_cash_metadata, validate_training_profile)
 
 
 STATE_FEATURE_COUNT = 716
@@ -95,6 +97,34 @@ class RunConfig:
     flop_runout_samples: int
     exact_turn_rivers: bool
     compact_serving_grid: bool
+    cash_profile: str | None = None
+
+
+def run_config_payload(config: RunConfig) -> dict:
+    payload = asdict(config)
+    if config.cash_profile is None:
+        payload.pop("cash_profile")  # Preserve legacy Home hashes and resumes.
+    else:
+        payload["cash_rules_sha256"] = rules_digest(profile_rules(config.cash_profile))
+        payload["cash_network_schema"] = CASH_NETWORK_SCHEMA
+        payload["cash_bootstrap_inference"] = "mlx-cpu-fp32-v1"
+        payload["cash_state_feature_schema"] = CASH_STATE_FEATURE_SCHEMA
+        payload["cash_terminal_action_integration"] = "own-expectation-v1"
+    return payload
+
+
+def state_feature_count(cash_profile: str | None = None) -> int:
+    # Hot encoder path: profile validation must not reopen the rules JSON for
+    # every decision. The immutable rules themselves are validated at run/load.
+    if cash_profile in (None,"home"):
+        return STATE_FEATURE_COUNT
+    if cash_profile not in ("nl25","nl25-rake-off-control"):
+        raise ValueError("unknown cash study profile")
+    return CASH_STATE_FEATURE_COUNT
+
+
+def input_feature_count(cash_profile: str | None = None) -> int:
+    return state_feature_count(cash_profile) + ACTION_FEATURE_COUNT
 
 
 class ActionScorer(nn.Module):
@@ -174,6 +204,7 @@ class ReplayReservoir:
         target_size: int,
         size: int = 0,
         seen: int = 0,
+        feature_count: int = INPUT_FEATURE_COUNT,
     ) -> None:
         self.name = name
         self.capacity = capacity
@@ -194,7 +225,7 @@ class ReplayReservoir:
             self.feature_path,
             dtype=np.float16,
             mode=mode,
-            shape=(capacity, INPUT_FEATURE_COUNT),
+            shape=(capacity, feature_count),
         )
         self.targets = np.memmap(
             self.target_path,
@@ -289,6 +320,7 @@ class DecisionReservoir:
         normalize_targets: bool,
         size: int = 0,
         seen: int = 0,
+        feature_count: int = STATE_FEATURE_COUNT,
     ) -> None:
         self.name = name
         self.capacity = capacity
@@ -318,7 +350,7 @@ class DecisionReservoir:
             self.state_path,
             dtype=np.float16,
             mode=mode,
-            shape=(capacity, STATE_FEATURE_COUNT),
+            shape=(capacity, feature_count),
         )
         self.actions = np.memmap(
             self.action_path,
@@ -411,7 +443,7 @@ class DecisionReservoir:
         actions = np.asarray(self.actions[indices], dtype=np.float32)
         expanded_states = np.broadcast_to(
             states[:, None, :],
-            (batch_size, MAX_POLICY_ACTIONS, STATE_FEATURE_COUNT),
+            (batch_size, MAX_POLICY_ACTIONS, self.states.shape[1]),
         )
         features = np.concatenate((expanded_states, actions), axis=2)
         targets = np.asarray(self.targets[indices], dtype=np.float32)
@@ -604,8 +636,8 @@ def texture_features(private_cards: list[int], board: list[int], street: str) ->
     return output
 
 
-def expand_state(state: dict[str, Any], depth_bb: float) -> np.ndarray:
-    features = np.zeros(STATE_FEATURE_COUNT, dtype=np.float32)
+def expand_state(state: dict[str, Any], depth_bb: float, cash_profile: str | None = None) -> np.ndarray:
+    features = np.zeros(state_feature_count(cash_profile), dtype=np.float32)
     suit_map = canonical_suit_map(state["private_cards"], state["board"])
     for card in state["private_cards"]:
         features[canonical_card(int(card), suit_map)] = 1.0
@@ -666,6 +698,13 @@ def expand_state(state: dict[str, Any], depth_bb: float) -> np.ndarray:
     features[TEXTURE_FEATURE_OFFSET : TEXTURE_FEATURE_OFFSET + TEXTURE_FEATURE_COUNT] = (
         texture_features(state["private_cards"], state["board"], state["street"])
     )
+    # Current board membership plus exact turn/river arrivals reconstructs all
+    # public card information seen at earlier betting decisions. Flop order
+    # itself is irrelevant. Home v4 features and weights stay byte-compatible.
+    if len(features) == CASH_STATE_FEATURE_COUNT:
+        for index in (3,4):
+            if len(state["board"]) > index:
+                features[STATE_FEATURE_COUNT + (index-3)*52 + canonical_card(int(state["board"][index]),suit_map)] = 1.
 
     if not np.all(np.isfinite(features)):
         raise ValueError("expanded state vector contains non-finite values")
@@ -694,8 +733,8 @@ def expand_action(state: dict[str, Any], action: dict[str, Any], depth_bb: float
     return features
 
 
-def expand_state_action(state: dict[str, Any], action: dict[str, Any], depth_bb: float) -> np.ndarray:
-    return np.concatenate((expand_state(state, depth_bb), expand_action(state, action, depth_bb)))
+def expand_state_action(state: dict[str, Any], action: dict[str, Any], depth_bb: float, cash_profile: str | None = None) -> np.ndarray:
+    return np.concatenate((expand_state(state, depth_bb, cash_profile), expand_action(state, action, depth_bb)))
 
 
 def load_jsonl_gzip(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -705,18 +744,21 @@ def load_jsonl_gzip(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if metadata.get("schema") not in (
         "hu-neural-traversal-jsonl-v6",
         "hu-neural-traversal-jsonl-v7",
+        CASH_DATASET_SCHEMA,
     ):
         raise ValueError("Rust traversal shard has an incompatible schema")
-    if metadata.get("state_feature_count") != STATE_FEATURE_COUNT:
+    is_cash = metadata.get("schema") == CASH_DATASET_SCHEMA
+    if metadata.get("state_feature_count") != (CASH_STATE_FEATURE_COUNT if is_cash else STATE_FEATURE_COUNT):
         raise ValueError("Rust and MLX state feature schemas differ")
     if metadata.get("action_feature_count") != ACTION_FEATURE_COUNT:
         raise ValueError("Rust and MLX action feature schemas differ")
-    if metadata.get("state_feature_schema") != STATE_FEATURE_SCHEMA:
+    if metadata.get("state_feature_schema") != (CASH_STATE_FEATURE_SCHEMA if is_cash else STATE_FEATURE_SCHEMA):
         raise ValueError("Rust and MLX suit-canonical feature schemas differ")
     if metadata.get("sampling_mode") not in ("external_sampling", "trajectory"):
         raise ValueError("Rust traversal shard has an unknown sampling mode")
     if metadata.get("records") != len(records):
         raise ValueError("Rust traversal shard record count is invalid")
+    validate_cash_metadata(metadata)
     return metadata, records
 
 
@@ -746,6 +788,7 @@ def ingest_records(
     round_number: int,
     advantage_alpha: float,
     reservoir_rng: random.Random,
+    cash_profile: str | None = None,
 ) -> dict[str, list[tuple[np.ndarray, np.ndarray, float]]]:
     heldout: dict[str, list[tuple[np.ndarray, np.ndarray, float]]] = {
         "advantage_p0": [],
@@ -764,13 +807,13 @@ def ingest_records(
         if kind not in ("advantage_p0", "advantage_p1", "average_strategy"):
             raise ValueError(f"unknown training sample kind: {kind}")
         street = STREETS.index(record["state"]["street"])
-        state_features = expand_state(record["state"], depth_bb)
+        state_features = expand_state(record["state"], depth_bb, cash_profile)
         action_features = np.stack(
             [expand_action(record["state"], action, depth_bb) for action in actions]
         )
         group_features = np.concatenate(
             (
-                np.broadcast_to(state_features, (len(actions), STATE_FEATURE_COUNT)),
+                np.broadcast_to(state_features, (len(actions), len(state_features))),
                 action_features,
             ),
             axis=1,
@@ -787,10 +830,22 @@ def ingest_records(
             raise ValueError("Rust and MLX feature encoders disagree")
         group_targets = np.asarray(targets, dtype=np.float32)
         if kind in ("advantage_p0", "advantage_p1"):
-            prior_cumulative = np.asarray(
-                models[kind](mx.array(group_features)),
-                dtype=np.float32,
-            ).reshape(-1)
+            if cash_profile is not None:
+                # Native traversals use frozen FP32 CPU predictions. On the
+                # pilot host GPU inference differed by .0536bb on identical
+                # real grouped poker features. Recycling those predictions
+                # into DCFR targets injected arithmetic error every round.
+                # Keep GPU optimization, but pin this teacher to the native
+                # inference semantics, and bind the change to the run digest.
+                with mx.stream(mx.cpu):
+                    prior = models[kind](mx.array(group_features))
+                    mx.eval(prior)
+                    prior_cumulative = np.asarray(prior,dtype=np.float32).reshape(-1)
+            else:
+                prior_cumulative = np.asarray(
+                    models[kind](mx.array(group_features)),
+                    dtype=np.float32,
+                ).reshape(-1)
             group_targets = bootstrap_dcfr_plus_targets(
                 prior_cumulative,
                 group_targets / depth_bb,
@@ -902,7 +957,7 @@ def make_compiled_policy_step(model: ActionScorer, optimizer: optim.Optimizer):
         weights: mx.array,
     ) -> mx.array:
         batch_size = features.shape[0]
-        logits = active_model(features.reshape((-1, INPUT_FEATURE_COUNT))).reshape(
+        logits = active_model(features.reshape((-1, features.shape[-1]))).reshape(
             (batch_size, MAX_POLICY_ACTIONS)
         )
         masked_logits = mx.where(masks > 0, logits, mx.array(-1e9))
@@ -953,7 +1008,7 @@ def make_compiled_ev_policy_step(
         action_values_bb: mx.array,
     ) -> mx.array:
         batch_size = features.shape[0]
-        logits = active_model(features.reshape((-1, INPUT_FEATURE_COUNT))).reshape(
+        logits = active_model(features.reshape((-1, features.shape[-1]))).reshape(
             (batch_size, MAX_POLICY_ACTIONS)
         )
         masked_logits = mx.where(masks > 0, logits, mx.array(-1e9))
@@ -1008,7 +1063,7 @@ def make_compiled_group_regression_step(model: ActionScorer, optimizer: optim.Op
         weights: mx.array,
     ) -> mx.array:
         batch_size = features.shape[0]
-        predictions = active_model(features.reshape((-1, INPUT_FEATURE_COUNT))).reshape(
+        predictions = active_model(features.reshape((-1, features.shape[-1]))).reshape(
             (batch_size, MAX_POLICY_ACTIONS)
         )
         error = predictions - targets
@@ -1091,6 +1146,17 @@ def softmax(values: np.ndarray) -> np.ndarray:
 
 
 def evaluate_models(
+    models: dict[str, ActionScorer],
+    heldout: dict[str, list[tuple[np.ndarray, np.ndarray, float]]],
+    depth_bb: int,
+) -> dict[str, float | int | None]:
+    # Validation uses native-compatible CPU FP32 inference. GPU training stays
+    # enabled, but GPU matmul differences must not masquerade as policy quality.
+    with mx.stream(mx.cpu):
+        return evaluate_models_reference(models, heldout, depth_bb)
+
+
+def evaluate_models_reference(
     models: dict[str, ActionScorer],
     heldout: dict[str, list[tuple[np.ndarray, np.ndarray, float]]],
     depth_bb: int,
@@ -1207,11 +1273,16 @@ def export_traversal_networks(
     path: Path,
     variance_baseline_scale: float,
     depth_bb: int,
+    cash_profile: str | None = None,
+    action_abstraction: dict[str, Any] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    expected_input = input_feature_count(cash_profile)
+    if any(linear_layers(model)[0].weight.shape[1] != expected_input for model in models.values()):
+        raise ValueError("network features differ from the pinned game schema")
     source = {
         "schema": NETWORK_SCHEMA,
-        "input_size": INPUT_FEATURE_COUNT,
+        "input_size": input_feature_count(cash_profile),
         "strategy_transform": "regret_matching",
         "networks": [scorer_json(models["advantage_p0"]), scorer_json(models["advantage_p1"])],
         "sampling_baseline": scorer_json(
@@ -1222,6 +1293,14 @@ def export_traversal_networks(
         "sampling_baseline_scale": variance_baseline_scale,
     }
     temporary = path.with_suffix(".tmp")
+    rules = profile_rules(cash_profile)
+    if rules is not None:
+        if action_abstraction is None:
+            raise ValueError("cash network export requires its sampled action abstraction")
+        source.update(schema=CASH_NETWORK_SCHEMA, cash_rules=rules, cash_depth_bb=depth_bb,
+            cash_action_abstraction=action_abstraction)
+        source.pop("sampling_baseline")
+        source.pop("sampling_baseline_scale")
     temporary.write_text(json.dumps(source, separators=(",", ":")), encoding="utf-8")
     os.replace(temporary, path)
 
@@ -1322,7 +1401,10 @@ def export_teacher_snapshot(
             "completedTraversals": completed_traversals,
             "strategyWeight": float(completed_traversals**2),
             "strategyTransform": "regret_matching",
-            "networkSchema": NETWORK_SCHEMA,
+            "networkSchema": CASH_NETWORK_SCHEMA if config.cash_profile else NETWORK_SCHEMA,
+            **({"cashRules": profile_rules(config.cash_profile),
+                "rulesSha256": rules_digest(profile_rules(config.cash_profile)),
+                "payoffContract": PAYOFF_CONTRACT} if config.cash_profile else {}),
             "models": teacher_models,
         },
     )
@@ -1337,8 +1419,27 @@ def export_browser_artifact(
     round_number: int,
     action_abstraction: dict[str, Any],
 ) -> tuple[Path, Path]:
+    if config.cash_profile:
+        # Cash weights stay native-only until sizing and serving are integrated.
+        artifact_dir = run_dir / "artifacts" / f"round-{round_number:06d}"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        rules = profile_rules(config.cash_profile)
+        source_path, weights_path = artifact_dir / "model-source.json", artifact_dir / "average-policy.json"
+        atomic_json(weights_path, {"schema": CASH_NETWORK_SCHEMA, "input_size": input_feature_count(config.cash_profile),
+            "strategy_transform": "softmax", "networks": [scorer_json(models["average_strategy"])] * 2,
+            "cash_rules": rules, "cash_depth_bb": config.depth_bb,
+            "cash_action_abstraction": action_abstraction})
+        atomic_json(source_path, {"schema": "hu-cash-neural-pilot-artifact-v1",
+            "validation_status": "training_not_activated", "config": run_config_payload(config),
+            "round": round_number, "cash_rules": rules, "rules_sha256": rules_digest(rules),
+            "payoff_contract": PAYOFF_CONTRACT, "native_average_policy": weights_path.name,
+            "native_average_policy_sha256": hashlib.sha256(weights_path.read_bytes()).hexdigest(),
+            "state_feature_schema": CASH_STATE_FEATURE_SCHEMA, "state_feature_count": CASH_STATE_FEATURE_COUNT,
+            "limitations": ["No full-game NashConv qualification", "No raked learned continuation or browser route", "Actor-only variance baseline disabled"]})
+        export_teacher_snapshot(models, artifact_dir, config, round_number)
+        return source_path, weights_path
     config_fingerprint = hashlib.sha256(
-        json.dumps(asdict(config), sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(run_config_payload(config), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:12]
     model_version = (
         f"deep-dcfr-plus-v12-{config.depth_bb}bb-cfg{config_fingerprint}"
@@ -1478,7 +1579,9 @@ def migrate_legacy_resume_state(
     legacy_config.setdefault("learning_rate_decay_end_round", None)
     legacy_config.setdefault("replay_street_proposal", None)
     legacy_config.setdefault("value_rollouts_per_action", 1)
-    expected_config = json.loads(json.dumps(asdict(config)))
+    if legacy_config.get("cash_profile") is None:
+        legacy_config.pop("cash_profile", None)
+    expected_config = json.loads(json.dumps(run_config_payload(config)))
     if legacy_config != expected_config:
         raise RuntimeError("resume configuration differs from the existing neural run")
     migrated = copy.deepcopy(state)
@@ -1611,7 +1714,7 @@ def initialize_models(config: RunConfig) -> tuple[dict[str, ActionScorer], dict[
     optimizers: dict[str, optim.Optimizer] = {}
     for offset, (name, output_size) in enumerate(names_outputs.items()):
         mx.random.seed(config.seed + offset * 1009)
-        model = ActionScorer(INPUT_FEATURE_COUNT, config.hidden_sizes, output_size)
+        model = ActionScorer(input_feature_count(config.cash_profile), config.hidden_sizes, output_size)
         first_layer = linear_layers(model)[0]
         first_weights = np.asarray(first_layer.weight, dtype=np.float32)
         first_weights[:, TEXTURE_FEATURE_OFFSET : TEXTURE_FEATURE_OFFSET + TEXTURE_FEATURE_COUNT] = 0
@@ -1647,6 +1750,8 @@ def save_checkpoint(
     round_number: int,
     variance_baseline_scale: float,
     depth_bb: int,
+    cash_profile: str | None = None,
+    action_abstraction: dict[str, Any] | None = None,
 ) -> Path:
     checkpoints = run_dir / "checkpoints"
     checkpoints.mkdir(parents=True, exist_ok=True)
@@ -1665,6 +1770,8 @@ def save_checkpoint(
         staging / "traversal-networks.json",
         variance_baseline_scale,
         depth_bb,
+        cash_profile,
+        action_abstraction,
     )
     os.replace(staging, checkpoint)
     return checkpoint
@@ -1731,6 +1838,7 @@ def generate_shard(
         command.append("--sample-turn-rivers")
     if config.compact_serving_grid:
         command.append("--compact-serving-grid")
+    if config.cash_profile: command.extend(("--cash-profile", config.cash_profile))
     if traversal_networks is not None:
         command.extend(("--networks", str(traversal_networks)))
     subprocess.run(command, check=True, cwd=run_dir, start_new_session=True)
@@ -1740,7 +1848,7 @@ def generate_shard(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--depth-bb", type=int, choices=(20, 50, 100), default=20)
+    parser.add_argument("--depth-bb", type=int, choices=(20,40,50,100,200,1000,2000), default=20)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--rounds", type=int, default=2)
     parser.add_argument(
@@ -1815,6 +1923,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--sample-turn-rivers", action="store_true")
     parser.add_argument("--compact-serving-grid", action="store_true")
+    parser.add_argument("--cash-profile", choices=("nl25", "nl25-rake-off-control"),
+        help="inactive own-payoff weights; requires --variance-baseline-scale 0")
     parser.add_argument("--keep-shards", action="store_true")
     return parser.parse_args(argv)
 
@@ -1897,13 +2007,15 @@ def main() -> None:
         flop_runout_samples=args.flop_runout_samples,
         exact_turn_rivers=not args.sample_turn_rivers,
         compact_serving_grid=args.compact_serving_grid,
+        cash_profile=args.cash_profile,
     )
+    validate_training_profile(config.cash_profile, config.depth_bb, config.variance_baseline_scale)
     root = Path(__file__).resolve().parents[2]
     run_dir = args.run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     state_path = run_dir / "state.json"
     config_hash = hashlib.sha256(
-        json.dumps(asdict(config), sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(run_config_payload(config), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     state: dict[str, Any]
     if state_path.exists():
@@ -1916,7 +2028,7 @@ def main() -> None:
     else:
         state = {
             "schema": RUN_SCHEMA,
-            "config": asdict(config),
+            "config": run_config_payload(config),
             "config_hash": config_hash,
             "completed_rounds": 0,
             "completed_traversals": 0,
@@ -1953,6 +2065,7 @@ def main() -> None:
             2,
             size=int(state.get("reservoirs", {}).get("value", {}).get("size", 0)),
             seen=int(state.get("reservoirs", {}).get("value", {}).get("seen", 0)),
+            feature_count=input_feature_count(config.cash_profile),
         )
     }
     for name in ("advantage_p0", "advantage_p1", "average_strategy"):
@@ -1963,6 +2076,7 @@ def main() -> None:
             normalize_targets=name == "average_strategy",
             size=int(state.get("reservoirs", {}).get(name, {}).get("size", 0)),
             seen=int(state.get("reservoirs", {}).get(name, {}).get("seen", 0)),
+            feature_count=state_feature_count(config.cash_profile),
         )
     reservoir_rng = random.Random(config.seed ^ 0xD1B54A32D192ED03)
     if state.get("reservoir_rng_state") is not None:
@@ -2005,6 +2119,9 @@ def main() -> None:
             traversal_networks,
         )
         metadata, records = load_jsonl_gzip(shard)
+        validate_cash_metadata(metadata, config.cash_profile)
+        if metadata.get("cash_rules") != profile_rules(config.cash_profile):
+            raise ValueError("Rust shard cash rules differ from the pinned training run")
         if int(metadata["depth_bb"]) != config.depth_bb:
             raise RuntimeError("sample shard depth changed during a pinned run")
         if metadata["sampling_mode"] != "external_sampling":
@@ -2023,6 +2140,7 @@ def main() -> None:
             round_number,
             config.advantage_alpha,
             reservoir_rng,
+            config.cash_profile,
         )
         losses: dict[str, float | None] = {}
         for name, reservoir in reservoirs.items():
@@ -2057,6 +2175,8 @@ def main() -> None:
             round_number,
             config.variance_baseline_scale,
             config.depth_bb,
+            config.cash_profile,
+            action_abstraction,
         )
         traversal_networks = checkpoint / "traversal-networks.json"
         exported_artifact: tuple[Path, Path] | None = None
@@ -2105,7 +2225,7 @@ def main() -> None:
                 {
                     "round": round_number,
                     "source": str(source_path),
-                    "binary": str(binary_path),
+                    ("native_weights" if config.cash_profile else "binary"): str(binary_path),
                     "validation_status": "training_not_activated",
                 }
             )
@@ -2138,7 +2258,7 @@ def main() -> None:
             {
                 "round": completed_round,
                 "source": str(source_path),
-                "binary": str(binary_path),
+                ("native_weights" if config.cash_profile else "binary"): str(binary_path),
                 "validation_status": "training_not_activated",
             }
         )

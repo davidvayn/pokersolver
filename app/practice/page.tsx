@@ -1,5 +1,7 @@
 'use client';
 
+import { HOME_GAME_IDENTITY, HOME_RULES_SHA256, identityForHand } from '@/lib/practice-game-identity';
+
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BarChart3, Info, Settings2, Target, X } from 'lucide-react';
@@ -58,6 +60,7 @@ import {
 } from '@/lib/push-fold-policy';
 import {
   DEFAULT_PRACTICE_SETTINGS,
+  isFullHandDepth,
   type HandState,
   type LegalAction,
   type OpponentModelSnapshot,
@@ -118,7 +121,7 @@ function fullHandDepths(manifests: PolicyManifest[]): number[] {
             manifest.validation.status === 'accepted'
         )
         .flatMap((manifest) => manifest.depthsBb)
-        .filter((depth) => [20, 50, 100].includes(depth))
+        .filter(isFullHandDepth)
     ),
   ].sort((first, second) => first - second);
 }
@@ -372,6 +375,9 @@ export default function PracticePage() {
 
       setStatus('loading');
       try {
+        if (nextSettings.gameProfileId && nextSettings.gameProfileId !== HOME_GAME_IDENTITY.profileId) {
+          throw new PolicyUnavailableError('No qualified rake-aware practice policy is installed for this profile. Select Home game to continue.');
+        }
         if (nextSettings.mode === 'push-fold') {
           const nextSpot = await createPushFoldSpot({
             depthBb: nextSettings.pushFoldDepthBb,
@@ -391,7 +397,7 @@ export default function PracticePage() {
         }
 
         const client = policyClientRef.current as PracticePolicyClient;
-        const pinned = await client.pinFullHandModel(nextSettings.depthBb);
+        const pinned = await client.pinFullHandModel(nextSettings.depthBb, nextSettings.gameProfileId);
         if (currentRequest !== requestId.current) return;
         pinnedModelRef.current = pinned;
         const neuralRuntime =
@@ -401,7 +407,8 @@ export default function PracticePage() {
         const profile = buildOpponentModel(
           recentHandsRef.current,
           neuralRuntime ? nextSettings.opponentStyle : 'baseline',
-          adaptationConfigForRuntime(neuralRuntime)
+          adaptationConfigForRuntime(neuralRuntime),
+          { rulesSha256: HOME_RULES_SHA256, depthBb: nextSettings.depthBb }
         );
         opponentModelRef.current = profile;
         setOpponentModel(profile);
@@ -506,7 +513,7 @@ export default function PracticePage() {
       setRecentHands(hands.slice(0, 100));
       const availableDepths = fullHandDepths(availableManifests);
       const effective =
-        (loaded.mode === 'full-hand' || loaded.mode === 'preflop') &&
+        loaded.mode !== 'push-fold' &&
         availableDepths.length > 0 &&
         !availableDepths.includes(loaded.depthBb)
           ? {
@@ -607,6 +614,8 @@ export default function PracticePage() {
       startedAt: handStartedAt.current || completedAt,
       completedAt,
       modelVersion: finished.modelVersion,
+      gameIdentity: identityForHand(finished),
+      cashLedger: finished.cash,
       mode: settings.mode,
       depthBb: finished.depthBb,
       button: finished.button,
@@ -689,6 +698,7 @@ export default function PracticePage() {
         answeredAt,
         responseMs,
         modelVersion: state.modelVersion,
+        gameIdentity: identityForHand(state),
         mode: settings.mode,
         depthBb: state.depthBb,
         street: state.street,

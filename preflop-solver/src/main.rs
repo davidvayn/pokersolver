@@ -21,6 +21,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "push-fold-action-values" => run_push_fold_action_values(&args[1..]),
         "blueprint" => run_blueprint(&args[1..]),
         "neural-samples" => run_neural_samples(&args[1..]),
+        "cash-full-hand-evaluate" => run_cash_full_hand_evaluate(&args[1..]),
+        "cash-causal-response" => run_cash_causal_response(&args[1..]),
+        "cash-policy-query" => run_cash_policy_query(&args[1..]),
+        "cash-turn-root-sample" => run_cash_turn_root_sample(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
         "practice-policy-server" => run_practice_policy_server(&args[1..]),
         "practice-artifacts-compile" => run_practice_artifacts_compile(&args[1..]),
@@ -69,6 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "turn-pbs-self-play-targets" => run_turn_pbs_self_play_targets(&args[1..]),
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
+        "cash-turn-value-predict" => run_cash_turn_value_predict(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -101,6 +106,18 @@ fn run_practice_artifacts_compile(args: &[String]) -> Result<(), Box<dyn Error>>
 fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args.iter().any(|a| a == "--action-abstraction-json") {
+        if args.iter().any(|a| a == "--compact-serving-grid") {
+            return Err("choose only one practice action abstraction input".into());
+        }
+        let input = value(args, "--action-abstraction-json")
+            .ok_or("--action-abstraction-json requires a JSON value")?;
+        if input.len() > 16_384 {
+            return Err("practice action abstraction exceeds its input budget".into());
+        }
+        game.action_abstraction = serde_json::from_str(&input)?;
+        game.validate()?;
+    }
     if args
         .iter()
         .any(|argument| argument == "--compact-serving-grid")
@@ -1169,6 +1186,21 @@ fn run_range_policy_add_baseline(args: &[String]) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+fn run_cash_turn_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let input = value(args, "--input").ok_or("--input is required")?;
+    let network_path = value(args, "--value-network").ok_or("--value-network is required")?;
+    let config: blueprint::public_belief::TurnRiverSolveConfig = serde_json::from_slice(&fs::read(input)?)?;
+    let network = blueprint::public_belief::PublicValueNetwork::read_cash(Path::new(&network_path), &config.game)?;
+    let values = network.predict_cash_turn(&config)?;
+    println!("{}", serde_json::to_string(&serde_json::json!({
+        "schema": "hu-cash-turn-value-prediction-v1",
+        "rules_sha256": config.game.cash_rules.as_ref().ok_or("missing cash rules")?.sha256()?,
+        "counterfactual_values_bb": values,
+        "research_only": true,
+    }))?);
+    Ok(())
+}
+
 fn run_turn_pbs_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
     let network_path = value(args, "--value-network")
         .map(PathBuf::from)
@@ -1204,6 +1236,7 @@ fn run_turn_pbs_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
+    apply_cash_profile(args, &mut game)?;
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     game.iterations = 2;
     game.averaging_delay = 0;
@@ -1233,6 +1266,11 @@ fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     let solution = if let Some(path) = value(args, "--policy-prior").map(PathBuf::from) {
         let prior: blueprint::public_belief::RiverSolution =
             serde_json::from_slice(&fs::read(path)?)?;
+        if prior.game.cash_rules != config.game.cash_rules
+            || prior.game.effective_stack_bb != config.game.effective_stack_bb
+            || prior.game.action_abstraction != config.game.action_abstraction {
+            return Err("river policy prior differs from the pinned cash game or abstraction".into());
+        }
         blueprint::public_belief::solve_river_with_prior(
             config,
             &prior.strategies,
@@ -1258,7 +1296,12 @@ fn run_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let dataset_and_state = if let Some(path) = value(args, "--dataset").map(PathBuf::from) {
+    let pinned_input = value(args, "--input").map(PathBuf::from).map(|path| -> Result<blueprint::public_belief::TurnRiverSolveConfig, Box<dyn Error>> {
+        Ok(serde_json::from_slice(&fs::read(path)?)?)
+    }).transpose()?;
+    let dataset_and_state = if let Some(input) = &pinned_input {
+        Some((input.game.clone(), input.state.clone()))
+    } else if let Some(path) = value(args, "--dataset").map(PathBuf::from) {
         let dataset: blueprint::public_belief::TurnTargetDataset =
             serde_json::from_slice(&fs::read(path)?)?;
         let state_index = parse_or(args, "--state-index", 0usize)?;
@@ -1288,6 +1331,7 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|(game, _)| game.clone())
         .unwrap_or_default();
+    apply_cash_profile(args, &mut game)?;
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", game.effective_stack_bb)?;
     game.iterations = 2;
     game.averaging_delay = 0;
@@ -1298,8 +1342,15 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
-    let iterations = parse_or(args, "--iterations", 500u64)?;
-    let averaging_delay = parse_or(args, "--averaging-delay", iterations / 10)?;
+    if let Some((source, _)) = &dataset_and_state {
+        if (source.cash_rules.is_some() || game.cash_rules.is_some())
+            && (source.cash_rules != game.cash_rules || source.effective_stack_bb != game.effective_stack_bb
+                || source.action_abstraction != game.action_abstraction) {
+            return Err("cash input/dataset rules, depth and action abstraction are immutable; legacy inputs cannot be relabelled".into());
+        }
+    }
+    let iterations = parse_or(args, "--iterations", pinned_input.as_ref().map_or(500u64, |input| input.iterations))?;
+    let averaging_delay = parse_or(args, "--averaging-delay", pinned_input.as_ref().map_or(iterations / 10, |input| input.averaging_delay))?;
     let state = if let Some((_, state)) = dataset_and_state {
         state
     } else {
@@ -1319,10 +1370,10 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
         state,
         iterations,
         averaging_delay,
-        river_refinement_iterations: parse_or(args, "--river-refinement-iterations", 0u64)?,
+        river_refinement_iterations: parse_or(args, "--river-refinement-iterations", pinned_input.as_ref().map_or(0u64, |input| input.river_refinement_iterations))?,
         regret_matching_plus: args
             .iter()
-            .any(|argument| argument == "--regret-matching-plus"),
+            .any(|argument| argument == "--regret-matching-plus") || pinned_input.as_ref().is_some_and(|input| input.regret_matching_plus),
     };
     let export_strategies = args
         .iter()
@@ -1335,6 +1386,13 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
         let solution = if let Some(path) = prior_path {
             let prior: blueprint::public_belief::TurnRiverSolution =
                 serde_json::from_slice(&fs::read(path)?)?;
+            if prior.game.cash_rules != config.game.cash_rules
+                || prior.game.effective_stack_bb != config.game.effective_stack_bb
+                || prior.game.action_abstraction != config.game.action_abstraction
+                || prior.state != config.state
+            {
+                return Err("turn-river prior belongs to a different game or public state".into());
+            }
             blueprint::public_belief::solve_turn_river_with_prior(
                 config,
                 &prior.strategies,
@@ -1348,9 +1406,17 @@ fn run_turn_river_pbs_solve(args: &[String]) -> Result<(), Box<dyn Error>> {
             serde_json::to_string_pretty(&solution.metrics)?,
         )
     } else {
+        let frozen = config.clone();
         let values = blueprint::public_belief::solve_turn_river_continuation_values(config)?;
+        let mut payload = serde_json::to_value(&values)?;
+        if frozen.game.cash_rules.is_some() {
+            // Cash research labels retain the complete input, not an inferred
+            // legacy game. This is a finite-budget reference, not a certificate.
+            payload["input"] = serde_json::to_value(&frozen)?;
+            payload["validation"] = serde_json::json!({"status": "research_only"});
+        }
         (
-            serde_json::to_string_pretty(&values)?,
+            serde_json::to_string_pretty(&payload)?,
             serde_json::to_string_pretty(&values.metrics)?,
         )
     };
@@ -2913,8 +2979,103 @@ fn run_neural_causal_attribution_evaluate(args: &[String]) -> Result<(), Box<dyn
     Ok(())
 }
 
+fn apply_cash_profile(args: &[String], game: &mut BlueprintConfig) -> Result<(), Box<dyn Error>> {
+    if let Some(name) = value(args, "--cash-profile") {
+        let rules = preflop_solver::cash_game::study_rules(&name)?;
+        game.small_blind_bb = rules.blinds_units[0] as f64 / rules.units_per_bb as f64;
+        game.big_blind_bb = 1.0;
+        // Explicit Home flag retains the old stream and checkpoint identities.
+        game.cash_rules = (name != "home").then_some(rules);
+    }
+    Ok(())
+}
+
+fn cash_evaluation_game(args: &[String]) -> Result<BlueprintConfig, Box<dyn Error>> {
+    if value(args, "--cash-profile").is_none() { return Err("--cash-profile is required; there is no Home fallback".into()); }
+    let mut game = BlueprintConfig::default();
+    apply_cash_profile(args, &mut game)?;
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    if args.iter().any(|arg| arg == "--compact-serving-grid") {
+        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
+    }
+    Ok(game)
+}
+
+fn run_cash_causal_response(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let game = cash_evaluation_game(args)?;
+    let report = blueprint::neural::evaluate_cash_causal_response(blueprint::neural::CashCausalResponseConfig {
+        game, network_path: value(args, "--networks").map(PathBuf::from).ok_or("--networks is required")?,
+        deals: parse_or(args, "--deals", 2u64)?, seed: parse_or(args, "--seed", 919u64)?, threads: parse_or(args, "--threads", 1usize)?,
+        public_branches_per_street: parse_or(args, "--public-branches", 1u32)?,
+        opponent_samples_per_runout: parse_or(args, "--opponent-samples", 2u32)?,
+        node_limit_per_seat: parse_or(args, "--node-limit-per-seat", 250_000u64)?,
+        confidence: parse_or(args, "--confidence", 0.99f64)?,
+    })?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) { fs::create_dir_all(parent)?; }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
+    Ok(())
+}
+
+fn run_cash_turn_root_sample(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let report = blueprint::neural::sample_cash_turn_roots(blueprint::neural::CashTurnRootSampleConfig {
+        game: cash_evaluation_game(args)?,
+        network_path: value(args, "--networks").map(PathBuf::from).ok_or("--networks is required")?,
+        seed: parse_or(args, "--seed", 931u64)?, roots: parse_or(args, "--roots", 6usize)?,
+        max_deals: parse_or(args, "--max-deals", 2000u64)?,
+        solve_iterations: parse_or(args, "--iterations", 8u64)?,
+    })?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    let output = value(args, "--output").ok_or("--output is required")?;
+    if let Some(parent) = Path::new(&output).parent().filter(|p| !p.as_os_str().is_empty()) { fs::create_dir_all(parent)?; }
+    fs::write(output, format!("{serialized}\n"))?;
+    println!("wrote inactive authentic cash turn roots");
+    Ok(())
+}
+
+fn run_cash_policy_query(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let engine = blueprint::neural::CashPolicyEngine::load(blueprint::neural::CashPolicyEngineConfig {
+        game: cash_evaluation_game(args)?,
+        model_version: value(args, "--model-version").ok_or("--model-version is required")?,
+        network_path: value(args, "--networks").map(PathBuf::from).ok_or("--networks is required")?,
+        rollout_samples: parse_or(args, "--rollout-samples", 128u32)?,
+        seed: parse_or(args, "--seed", 923u64)?,
+    })?;
+    let input = value(args, "--input").ok_or("--input is required")?;
+    let query: blueprint::neural::CashPolicyQuery = serde_json::from_slice(&fs::read(input)?)?;
+    let result = engine.query(query)?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) { fs::create_dir_all(parent)?; }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
+    Ok(())
+}
+
+fn run_cash_full_hand_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let network_path = value(args, "--networks").map(PathBuf::from).ok_or("--networks is required")?;
+    let game = cash_evaluation_game(args)?;
+    let report = blueprint::neural::evaluate_cash_full_hands(blueprint::neural::CashFullHandEvaluationConfig {
+        game, network_path, comparison_path: value(args, "--comparison-networks").map(PathBuf::from),
+        deals: parse_or(args, "--deals", 256u64)?, seed: parse_or(args, "--seed", 917u64)?,
+        threads: parse_or(args, "--threads", 2usize)?, confidence: parse_or(args, "--confidence", 0.99f64)?,
+    })?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output").map(PathBuf::from) {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) { fs::create_dir_all(parent)?; }
+        fs::write(path, format!("{serialized}\n"))?;
+    }
+    println!("{serialized}");
+    Ok(())
+}
+
 fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
+    apply_cash_profile(args, &mut game)?;
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
     let traversals = parse_or(args, "--traversals", 100u64)?;
     let start_iteration = parse_or(args, "--start-iteration", 0u64)?;
@@ -2976,6 +3137,7 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 fn run_blueprint(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut config = BlueprintConfig::default();
+    apply_cash_profile(args, &mut config)?;
     config.small_blind_bb = parse_or(args, "--small-blind-bb", config.small_blind_bb)?;
     config.big_blind_bb = parse_or(args, "--big-blind-bb", config.big_blind_bb)?;
     config.effective_stack_bb = parse_or(args, "--effective-stack-bb", config.effective_stack_bb)?;
@@ -3445,6 +3607,10 @@ Usage:
   preflop-solver push-fold-action-values --artifact <json> --output <json>
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
+  preflop-solver cash-full-hand-evaluate --cash-profile <nl25|nl25-rake-off-control> --networks <average-policy.json> [--comparison-networks <json>] [--deals 256] [--threads 2]
+  preflop-solver cash-causal-response --cash-profile <nl25|nl25-rake-off-control> --networks <average-policy.json> [--deals 2] [--public-branches 1] [--opponent-samples 2] [--node-limit-per-seat 250000]
+  preflop-solver cash-turn-root-sample --cash-profile <nl25|nl25-rake-off-control> --networks <average-policy.json> --output <roots.json> [--roots 6] [--max-deals 2000] [--iterations 8]
+  preflop-solver cash-policy-query --cash-profile <nl25|nl25-rake-off-control> --model-version <version> --networks <average-policy.json> --input <rules-pinned-query.json> [--rollout-samples 128]
   preflop-solver neural-certificate [options]
   preflop-solver practice-artifacts-compile --networks <json.gz> --range-policy <json.gz> --preflop-action-values <json.gz> --flop-value-network <json.gz>
   preflop-solver neural-causal-attribution [options]
@@ -3474,6 +3640,7 @@ Usage:
   preflop-solver turn-pbs-self-play-targets [options]
   preflop-solver turn-pbs-merge-targets --dataset <json> --dataset <json> [options]
   preflop-solver turn-pbs-value-predict [options]
+  preflop-solver cash-turn-value-predict --input <cash-turn-solve-config.json> --value-network <cash-value.json>
   preflop-solver flop-pbs-resolve [options]
   preflop-solver flop-pbs-convergence [options]
   preflop-solver flop-pbs-range-response [options]
@@ -3497,6 +3664,7 @@ Flop public-belief pilot option:
   --public-chance-vector-mvp      Freeze both traverser updates per DCFR round
 
 Blueprint options:
+  --cash-profile <name>          home, nl25, or nl25-rake-off-control; cash artifacts stay experimental
   --effective-stack-bb <number>   Default: 100
   --iterations <integer>          Default: 100000
   --max-information-sets <int>    Default: 5000000 memory guard

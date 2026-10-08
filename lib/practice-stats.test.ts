@@ -8,6 +8,8 @@ import type {
   PracticeGrade,
   PracticeHandRecord,
 } from '@/lib/practice-types';
+import { HOME_GAME_IDENTITY, HOME_RULES_SHA256, identityForRules } from '@/lib/practice-game-identity';
+import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
 
 const NOW = new Date(2026, 8, 3, 12).getTime();
 const DAY = 24 * 60 * 60 * 1_000;
@@ -79,6 +81,21 @@ function hand(record: PracticeDecisionRecord): PracticeHandRecord {
 }
 
 describe('practice analytics', () => {
+  it('keeps cash, Home and unknown histories separate in weaknesses and scoped evidence', () => {
+    const records = Array.from({ length: 6 }, (_, index) => hand(decision({
+      id: `profile-${index}`, dayOffset: 0, grade: 'mistake', loss: 0.3, responseMs: 1000,
+    })));
+    records[0].gameIdentity = records[1].gameIdentity = HOME_GAME_IDENTITY;
+    records[2].gameIdentity = records[3].gameIdentity = identityForRules(NL25_STUDY_RULES);
+    const all = analyzePractice(records, NOW);
+    expect(all.byGameProfile.map((group) => group.decisions)).toEqual([2, 2, 2]);
+    expect(all.weaknesses).toHaveLength(3);
+    expect(new Set(all.weaknesses.map((group) => group.label.split(' · ')[0]))).toEqual(
+      new Set(['Home game','PokerStars NL25','Unresolved legacy game']));
+    expect(all.weaknesses.every((group) => group.label.includes(' · 20bb · '))).toBe(true);
+    expect(analyzePractice(records, NOW, { rulesSha256: HOME_RULES_SHA256, depthBb: 20 }).decisions).toBe(2);
+    expect(records[4].gameIdentity).toBeUndefined();
+  });
   const decisions = [
     decision({ id: 'd1', dayOffset: 0, grade: 'perfect', loss: 0, responseMs: 1_200 }),
     decision({ id: 'd2', dayOffset: -1, grade: 'good', loss: 0.1, responseMs: 3_000 }),

@@ -1,0 +1,143 @@
+{
+  "schema": "hu-cash-accounting-fixtures-v1",
+  "identities": {
+    "home": {
+      "canonical": "hu-cash-rules-v1|home-game-v1|BB|1000|500|1000|2|0|0|0|0|half-to-even|first-left-of-button|half-up",
+      "sha256": "92121ddbdc970968be7cbb2e3519413b9c5d7f98a798d4500b55addb79f07f2d"
+    },
+    "nl25": {
+      "canonical": "hu-cash-rules-v1|pokerstars-usd-regular-hu-nl25-2026-10-06|USD|25|10|25|2|0|450|50|1|half-to-even|first-left-of-button|half-to-even",
+      "sha256": "6a31ca4bfbdf90213cd2bce3dcc0b75730bc2754bdc1fb593d789fd601a00908"
+    }
+  },
+  "settlements": [
+    {
+      "name": "online small blind folds without flop",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [10, 25], "button": 0, "reason": "fold", "outcome": "player-one", "boardCardsDealt": 0},
+      "expected": {"uncalledRefundUnits": [0, 15], "grossPotUnits": 20, "rakeUnits": 0, "netPotUnits": 20, "awardsUnits": [0, 20], "netPayoffUnits": [-10, 10]}
+    },
+    {
+      "name": "online preflop raise wins without flop",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [75, 25], "button": 0, "reason": "fold", "outcome": "player-zero", "boardCardsDealt": 0},
+      "expected": {"uncalledRefundUnits": [50, 0], "grossPotUnits": 50, "rakeUnits": 0, "netPotUnits": 50, "awardsUnits": [50, 0], "netPayoffUnits": [25, -25]}
+    },
+    {
+      "name": "ten bb pot rake rounds fractional cent down",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [125, 125], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 250, "rakeUnits": 11, "netPotUnits": 239, "awardsUnits": [239, 0], "netPayoffUnits": [114, -125]}
+    },
+    {
+      "name": "half cent rounds to lower even cent",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [50, 50], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 100, "rakeUnits": 4, "netPotUnits": 96, "awardsUnits": [96, 0], "netPayoffUnits": [46, -50]}
+    },
+    {
+      "name": "half cent rounds to upper even cent",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [150, 150], "button": 0, "reason": "showdown", "outcome": "player-one", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 300, "rakeUnits": 14, "netPotUnits": 286, "awardsUnits": [0, 286], "netPayoffUnits": [-150, 136]}
+    },
+    {
+      "name": "called twenty bb preflop all in runs out and pays rake",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [500, 500], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 1000, "rakeUnits": 45, "netPotUnits": 955, "awardsUnits": [955, 0], "netPayoffUnits": [455, -500]}
+    },
+    {
+      "name": "just below rounded cap",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [549, 549], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 1098, "rakeUnits": 49, "netPotUnits": 1049, "awardsUnits": [1049, 0], "netPayoffUnits": [500, -549]}
+    },
+    {
+      "name": "rounding reaches cap",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [550, 550], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 1100, "rakeUnits": 50, "netPotUnits": 1050, "awardsUnits": [1050, 0], "netPayoffUnits": [500, -550]}
+    },
+    {
+      "name": "one hundred bb pot reaches cap",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [1250, 1250], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 2500, "rakeUnits": 50, "netPotUnits": 2450, "awardsUnits": [2450, 0], "netPayoffUnits": [1200, -1250]}
+    },
+    {
+      "name": "two thousand bb stacks stay capped",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [50000, 50000], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 100000, "rakeUnits": 50, "netPotUnits": 99950, "awardsUnits": [99950, 0], "netPayoffUnits": [49950, -50000]}
+    },
+    {
+      "name": "uncalled flop wager is refunded before rake",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [250, 50], "button": 0, "reason": "fold", "outcome": "player-zero", "boardCardsDealt": 3},
+      "expected": {"uncalledRefundUnits": [200, 0], "grossPotUnits": 100, "rakeUnits": 4, "netPotUnits": 96, "awardsUnits": [96, 0], "netPayoffUnits": [46, -50]}
+    },
+    {
+      "name": "turn fold also incurs rake on matched pot",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [50, 250], "button": 1, "reason": "fold", "outcome": "player-one", "boardCardsDealt": 4},
+      "expected": {"uncalledRefundUnits": [0, 200], "grossPotUnits": 100, "rakeUnits": 4, "netPotUnits": 96, "awardsUnits": [0, 96], "netPayoffUnits": [-50, 46]}
+    },
+    {
+      "name": "river fold incurs rake",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [125, 150], "button": 0, "reason": "fold", "outcome": "player-one", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 25], "grossPotUnits": 250, "rakeUnits": 11, "netPotUnits": 239, "awardsUnits": [0, 239], "netPayoffUnits": [-125, 114]}
+    },
+    {
+      "name": "odd cent goes to non button seat one",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [125, 125], "button": 0, "reason": "showdown", "outcome": "split", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 250, "rakeUnits": 11, "netPotUnits": 239, "awardsUnits": [119, 120], "netPayoffUnits": [-6, -5]}
+    },
+    {
+      "name": "odd cent follows the reversed button",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [125, 125], "button": 1, "reason": "showdown", "outcome": "split", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 250, "rakeUnits": 11, "netPotUnits": 239, "awardsUnits": [120, 119], "netPayoffUnits": [-5, -6]}
+    },
+    {
+      "name": "even net pot splits exactly",
+      "rules": "nl25",
+      "terminal": {"committedUnits": [50, 50], "button": 0, "reason": "showdown", "outcome": "split", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 100, "rakeUnits": 4, "netPotUnits": 96, "awardsUnits": [48, 48], "netPayoffUnits": [-2, -2]}
+    },
+    {
+      "name": "home small blind fold remains rake free",
+      "rules": "home",
+      "terminal": {"committedUnits": [500, 1000], "button": 0, "reason": "fold", "outcome": "player-one", "boardCardsDealt": 0},
+      "expected": {"uncalledRefundUnits": [0, 500], "grossPotUnits": 1000, "rakeUnits": 0, "netPotUnits": 1000, "awardsUnits": [0, 1000], "netPayoffUnits": [-500, 500]}
+    },
+    {
+      "name": "home twenty bb all in remains zero sum",
+      "rules": "home",
+      "terminal": {"committedUnits": [20000, 20000], "button": 0, "reason": "showdown", "outcome": "player-zero", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 40000, "rakeUnits": 0, "netPotUnits": 40000, "awardsUnits": [40000, 0], "netPayoffUnits": [20000, -20000]}
+    },
+    {
+      "name": "home showdown split has no deduction",
+      "rules": "home",
+      "terminal": {"committedUnits": [2500, 2500], "button": 0, "reason": "showdown", "outcome": "split", "boardCardsDealt": 5},
+      "expected": {"uncalledRefundUnits": [0, 0], "grossPotUnits": 5000, "rakeUnits": 0, "netPotUnits": 5000, "awardsUnits": [2500, 2500], "netPayoffUnits": [0, 0]}
+    }
+  ],
+  "rounding": [
+    {"numerator": 125, "denominator": 2, "mode": "half-to-even", "expected": 62},
+    {"numerator": 125, "denominator": 2, "mode": "half-up", "expected": 63},
+    {"numerator": 127, "denominator": 2, "mode": "half-to-even", "expected": 64},
+    {"numerator": 3, "denominator": 2, "mode": "half-to-even", "expected": 2},
+    {"numerator": 1, "denominator": 2, "mode": "half-to-even", "expected": 0},
+    {"numerator": 100, "denominator": 3, "mode": "half-to-even", "expected": 33},
+    {"numerator": 101, "denominator": 3, "mode": "half-to-even", "expected": 34},
+    {"numerator": 9007199254740991, "denominator": 2, "mode": "half-to-even", "expected": 4503599627370496}
+  ],
+  "sizing": [
+    {"rules": "nl25", "ratios": [[125, 2], [62, 1], [127, 2], [1, 1], [1000, 1]], "minimum": 50, "maximum": 500, "expected": [50, 62, 64, 500]},
+    {"rules": "home", "ratios": [[4001, 2], [2001, 1], [1000, 1], [50000, 1]], "minimum": 2000, "maximum": 20000, "expected": [2000, 2001, 20000]}
+  ]
+}

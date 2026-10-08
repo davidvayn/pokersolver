@@ -9,6 +9,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { cardToStr } from '@/lib/cards';
+import { CashSettlementSummary } from '@/components/practice/CashSettlementSummary';
+import { HOME_GAME_RULES } from '@/lib/cash-game-rules';
+import { historicalGameIdentity } from '@/lib/practice-game-identity';
 import type {
   OpponentModelSnapshot,
   PolicyManifest,
@@ -18,6 +21,11 @@ import type {
 } from '@/lib/practice-types';
 import { pushFoldDepths } from '@/lib/push-fold-policy';
 import { summarizePracticeDecisions } from '@/lib/practice-stats';
+import {
+  DEFAULT_ONLINE_CASH_REFERENCE,
+  REQUESTED_PRACTICE_STACK_DEPTHS_BB,
+  practiceGameProfile,
+} from '@/lib/practice-game-profiles';
 
 export type RailTab = 'feedback' | 'history' | 'settings' | 'stats';
 
@@ -288,6 +296,46 @@ function SettingsPanel({
       )}
 
       <fieldset>
+        <legend className="text-xs font-semibold uppercase text-muted">Game type</legend>
+        <div className="mt-2 rounded-md border border-accent/35 bg-accent/10 p-3">
+          <p className="text-sm font-semibold">Home game · No rake</p>
+          <p className="mt-1 text-xs leading-5 text-muted">
+            The installed policies and EV estimates assume rake-free play.
+          </p>
+        </div>
+        <label className="mt-3 block text-xs font-semibold uppercase text-muted">
+          Game profile
+          <select value={shown.gameProfileId ?? HOME_GAME_RULES.id}
+            onChange={(event) => patch({ gameProfileId: event.target.value })}
+            className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg">
+            <option value={HOME_GAME_RULES.id}>Home game · No rake</option>
+            <option value={DEFAULT_ONLINE_CASH_REFERENCE.id} disabled>{DEFAULT_ONLINE_CASH_REFERENCE.label} · Raked · Not available</option>
+          </select>
+        </label>
+        <p className="mt-2 text-xs leading-5 text-muted">
+          USD $0.10/$0.25 blinds · {DEFAULT_ONLINE_CASH_REFERENCE.rake.rateBasisPoints / 100}%
+          {' '}rake · ${(DEFAULT_ONLINE_CASH_REFERENCE.rake.capCents / 100).toFixed(2)} cap
+          {' '}({DEFAULT_ONLINE_CASH_REFERENCE.rake.capCents / DEFAULT_ONLINE_CASH_REFERENCE.bigBlindCents}bb).
+          No rake when the hand ends before the flop. No qualified rake-aware models are installed yet.
+        </p>
+        <p className="mt-2 text-xs leading-5 text-muted">
+          NL20 is not listed in this USD schedule; NL25 is the published reference, not an exact NL20 match.
+          {' '}<a
+            href={DEFAULT_ONLINE_CASH_REFERENCE.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Published rake rules
+          </a>
+        </p>
+        <p className="mt-2 text-xs leading-5 text-muted">
+          Planned stacks: {REQUESTED_PRACTICE_STACK_DEPTHS_BB.map((depth) => `${depth.toLocaleString('en-US')}bb`).join(', ')}.
+          These are training targets, not available models or the room&apos;s buy-in limits.
+        </p>
+      </fieldset>
+
+      <fieldset>
         <legend className="text-xs font-semibold uppercase text-muted">Mode</legend>
         <div className="mt-2 grid grid-cols-2 gap-2">
           {(
@@ -336,7 +384,7 @@ function SettingsPanel({
               onChange={(event) =>
                 patch({ depthBb: Number(event.target.value) as PracticeSettings['depthBb'] })
               }
-              className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 min-h-11 w-full rounded-md border border-border bg-bg px-3 text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
               {fullDepths.length > 0 ? (
                 fullDepths.map((depth) => <option key={depth} value={depth}>{depth}bb</option>)
@@ -347,7 +395,13 @@ function SettingsPanel({
           </label>
           {fullDepths.length === 0 && (
             <p className="mt-2 text-xs leading-5 text-muted">
-              20/50/100bb stay hidden until their independent two-seed validation passes.
+              Stack depths stay hidden until matching trained policies pass their activation gates.
+            </p>
+          )}
+          {fullDepths.length > 0 && (
+            <p className="mt-2 text-xs leading-5 text-muted">
+              Only installed model depths are available. Changing the stack
+              does not reuse a policy trained for a different depth.
             </p>
           )}
         </div>
@@ -450,6 +504,7 @@ function HistoryPanel({ recentHands }: { recentHands: PracticeHandRecord[] }) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-semibold capitalize">{hand.mode.replace('-', ' ')}</p>
+              <p className="mt-1 text-xs text-muted">{practiceGameProfile(historicalGameIdentity(hand).profileId ?? '')?.label ?? 'Unresolved legacy game'}</p>
               <p className="mt-1 font-mono text-xs text-muted">
                 {hand.heroCards.map(cardToStr).join(' ')} · {hand.depthBb}bb
               </p>
@@ -465,6 +520,9 @@ function HistoryPanel({ recentHands }: { recentHands: PracticeHandRecord[] }) {
                   ? `Lost ${hand.result.potBb.toFixed(1)}bb pot`
                   : 'Round complete'}
           </p>
+          {hand.cashLedger && hand.result.cashSettlement && (
+            <div className="mt-3"><CashSettlementSummary settlement={hand.result.cashSettlement} rules={hand.cashLedger.rules} /></div>
+          )}
           {hand.opponentModel && (
             <p className="mt-1 text-xs text-muted">
               Opponent response {pct(hand.opponentModel.responseWeight)} from{' '}

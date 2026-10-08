@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { encodePolicyShard } from '@/lib/policy-codec';
 import { createHand, seededRandom } from '@/lib/practice-engine';
 import { buildOpponentModel } from '@/lib/opponent-model';
+import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
 import { neuralLegalActions } from '@/lib/neural-policy';
 import {
   PolicyUnavailableError,
@@ -50,6 +51,46 @@ const node: PolicyNode = {
 };
 
 describe('practice policy client', () => {
+  it('rejects explicit cash hands before querying a legacy Home policy', async () => {
+    const fetcher = vi.fn();
+    const client = new PracticePolicyClient(fetcher, undefined, [manifest]);
+    const state = createHand({ modelVersion: manifest.version, depthBb: 20,
+      button: 'button-small-blind', hero: 'button-small-blind', cashRules: NL25_STUDY_RULES });
+    await expect(client.lookupState({ pinned: { manifest, depthBb: 20 }, state,
+      profile: buildOpponentModel([], 'baseline'), usage: 'grading' })).rejects.toThrow('rules-pinned runtime');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('never substitutes Home at the same depth when a cash profile is requested', async () => {
+    const fetcher = vi.fn();
+    const client = new PracticePolicyClient(fetcher, undefined, [manifest]);
+    await expect(client.pinFullHandModel(20, NL25_STUDY_RULES.id)).rejects.toThrow('rules-pinned');
+    expect(fetcher).not.toHaveBeenCalled();
+    const relabelled = { ...manifest, cashGame: { rules: NL25_STUDY_RULES, rulesSha256: 'a'.repeat(64) } };
+    const poisoned = new PracticePolicyClient(fetcher, undefined, [relabelled]);
+    await expect(poisoned.pinFullHandModel(20)).rejects.toBeInstanceOf(PolicyUnavailableError);
+  });
+  it('pins newly installed depths but never substitutes the 20bb policy', async () => {
+    const forty = { ...manifest, version: 'full-40-v1', depthsBb: [40] };
+    const client = new PracticePolicyClient(vi.fn(), undefined, [manifest, forty]);
+    expect((await client.pinFullHandModel(40)).manifest.version).toBe('full-40-v1');
+    for (const depth of [75, 1000, 2000]) {
+      await expect(client.pinFullHandModel(depth)).rejects.toBeInstanceOf(PolicyUnavailableError);
+    }
+  });
+
+  it('refuses a raked manifest even if cached or returned as accepted by the API', async () => {
+    const raked = {
+      ...manifest, depthsBb: [40],
+      abstraction: { ...manifest.abstraction, rake: '5% capped at 3bb' },
+    };
+    const cached = new PracticePolicyClient(vi.fn(), undefined, [raked]);
+    await expect(cached.pinFullHandModel(40)).rejects.toBeInstanceOf(PolicyUnavailableError);
+    const fetcher = vi.fn(async () => Response.json({ manifests: [manifest, raked] }));
+    const network = new PracticePolicyClient(fetcher);
+    expect(await network.loadManifests()).toEqual([manifest]);
+    await expect(network.pinFullHandModel(40)).rejects.toBeInstanceOf(PolicyUnavailableError);
+  });
+
   it('pins one accepted version and caches immutable binary shards', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -378,4 +419,3 @@ describe('practice policy client', () => {
     expect(callCount).toBe(2);
   });
 });
-

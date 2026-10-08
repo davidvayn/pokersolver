@@ -2,6 +2,8 @@ import solvedScenarios from '@/data/preflop/solved-scenarios.json';
 import fullHandManifests from '@/data/practice/full-hand-manifests.json';
 import type { CompactPushFoldScenario } from '@/data/preflop/artifacts/types';
 import type { ActionAbstraction, PolicyManifest } from '@/lib/practice-types';
+import { isFullHandDepth } from '@/lib/practice-types';
+import { HOME_RULES_SHA256 } from '@/lib/practice-game-identity';
 
 const scenarios = solvedScenarios as CompactPushFoldScenario[];
 // Frozen in 20bb-v50-full-hand-candidate-freeze.json. Both the point estimate
@@ -52,27 +54,46 @@ export function isValidatedFullHandManifest(
   const validation = manifest.validation;
   if (
     manifest.schemaVersion !== 1 ||
+    manifest.cashGame !== undefined ||
     manifest.subtype !== 'full-hand' ||
     manifest.label !== 'Approximate GTO' ||
     manifest.active !== true ||
     typeof manifest.version !== 'string' ||
     !Array.isArray(manifest.depthsBb) ||
     manifest.depthsBb.length === 0 ||
-    !manifest.depthsBb.every((depth) => [20, 50, 100].includes(depth)) ||
+    !manifest.depthsBb.every(isFullHandDepth) ||
+    !hasHomeGameRules(manifest.abstraction) ||
     validation?.status !== 'accepted'
   ) {
     return false;
   }
   if (!validFullHandRuntime(manifest.runtime)) return false;
   return (
-    typeof validation.exploitabilityEstimateBb === 'number' &&
-    validation.exploitabilityEstimateBb <=
-      MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB &&
-    typeof validation.exploitabilityUpper99Bb === 'number' &&
-    validation.exploitabilityUpper99Bb <=
-      MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB &&
+    finiteInRange(validation.exploitabilityEstimateBb, 0, MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB) &&
+    finiteInRange(validation.exploitabilityUpper99Bb, validation.exploitabilityEstimateBb, MAX_FULL_HAND_TOTAL_EXPLOITABILITY_BB) &&
     normalFullHandGatesPass(validation)
   );
+}
+
+// All installed policies and this legacy serving route are still rake-free.
+// Relabeling a manifest as NL20 must never make those policies serve a raked
+// game. Raked profiles need their own settlement/training/evaluation support.
+export function hasHomeGameRules(
+  abstraction: PolicyManifest['abstraction'] | undefined
+): boolean {
+  return Boolean(
+    abstraction &&
+      abstraction.rake === 'none' &&
+      abstraction.anteBb === 0 &&
+      Array.isArray(abstraction.blindsBb) &&
+      abstraction.blindsBb.length === 2 &&
+      abstraction.blindsBb[0] === 0.5 &&
+      abstraction.blindsBb[1] === 1
+  );
+}
+
+export function isLegacyHomeManifest(manifest: Partial<PolicyManifest>): boolean {
+  return manifest.cashGame === undefined && hasHomeGameRules(manifest.abstraction);
 }
 
 function validActionAbstraction(action: ActionAbstraction | undefined): boolean {
@@ -200,17 +221,14 @@ function normalFullHandGatesPass(
   validation: PolicyManifest['validation']
 ): boolean {
   return (
-    typeof validation.crossSeedFrequencyMae === 'number' &&
-    validation.crossSeedFrequencyMae <= 0.05 &&
-    typeof validation.primaryActionAgreement === 'number' &&
-    validation.primaryActionAgreement >= 0.85 &&
-    typeof validation.maximumAggregateActionDelta === 'number' &&
-    validation.maximumAggregateActionDelta <= 0.03 &&
-    typeof validation.policyCoverage === 'number' &&
-    validation.policyCoverage >= 0.9999 &&
-    typeof validation.actionEvStandardErrorCoverage === 'number' &&
-    validation.actionEvStandardErrorCoverage >= 0.95 &&
+    finiteInRange(validation.crossSeedFrequencyMae, 0, 0.05) &&
+    finiteInRange(validation.primaryActionAgreement, 0.85, 1) &&
+    finiteInRange(validation.maximumAggregateActionDelta, 0, 0.03) &&
+    finiteInRange(validation.policyCoverage, 0.9999, 1) &&
+    finiteInRange(validation.actionEvStandardErrorCoverage, 0.95, 1) &&
     typeof validation.projectedStorageBytes === 'number' &&
+    Number.isSafeInteger(validation.projectedStorageBytes) &&
+    validation.projectedStorageBytes >= 0 &&
     validation.projectedStorageBytes <= 20 * 1024 ** 3 &&
     validation.rawProbabilitySumsValid === true &&
     validation.quantizedProbabilitySumsValid === true &&
@@ -221,6 +239,10 @@ function normalFullHandGatesPass(
       (hours) => Number.isFinite(hours) && hours >= 8 && hours <= 12
     )
   );
+}
+
+function finiteInRange(value: unknown, minimum: number, maximum: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum;
 }
 
 export function isExperimentalFullHandManifest(
@@ -236,7 +258,8 @@ export function isExperimentalFullHandManifest(
       typeof manifest.version === 'string' &&
       Array.isArray(manifest.depthsBb) &&
       manifest.depthsBb.length > 0 &&
-      manifest.depthsBb.every((depth) => [20, 50, 100].includes(depth)) &&
+      manifest.depthsBb.every(isFullHandDepth) &&
+      isLegacyHomeManifest(manifest) &&
       manifest.validation?.status === 'accepted' &&
       manifest.validation.exploitabilityGateDeferred === true &&
       validFullHandRuntime(manifest.runtime) &&
@@ -279,6 +302,19 @@ export function modelForFullDepth(depthBb: number): PolicyManifest | null {
       manifest.depthsBb.includes(depthBb)
     ) ?? null
   );
+}
+
+/** Exact hand identity; never select another version just because depth matches. */
+export function modelForFullHandIdentity(
+  version: string,
+  depthBb: number,
+  rulesSha256: string = HOME_RULES_SHA256
+): PolicyManifest | null {
+  const matches = ACTIVE_FULL_HAND_MANIFESTS.filter((manifest) =>
+    manifest.version === version && manifest.depthsBb.includes(depthBb)
+      && (manifest.cashGame?.rulesSha256 ?? HOME_RULES_SHA256) === rulesSha256
+  );
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export const PRACTICE_MANIFESTS_STORAGE_KEY = 'poker_lab_practice_manifests_v1';
@@ -351,4 +387,3 @@ export function warmPracticeModels(): PolicyManifest[] {
   storePracticeManifests(manifests);
   return manifests;
 }
-
