@@ -119,6 +119,11 @@ def cash_accounting_penalty(prediction, scales, joint_weights, house_target):
 def split_cash_families(source: dict, seed: int, reference: dict | None = None):
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
+    merged = source.get("source_datasets")
+    if merged is not None and merged.get("schema") == "hu-cash-value-source-prefix-merge-v2":
+        if (reference is None or seed != merged.get("split_seed")
+                or cash_values.identity_hash(reference) != merged.get("split_reference_canonical_sha256")):
+            raise ValueError("cash training must retain its pinned split seed and original reference")
     split_source = {"game": source["game"], "targets": [{"board": l["input"]["state"]["board"]} for l in source["labels"]]}
     pinned = None
     if reference is not None:

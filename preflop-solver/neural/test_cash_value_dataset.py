@@ -65,6 +65,35 @@ class CashValueDatasetTests(unittest.TestCase):
             with self.assertRaises(ValueError): split_cash_families(merged,937,changed)
             with self.assertRaisesRegex(ValueError,"no new unheldout"):
                 extend_training_corpus(original,original,937)
+            held_variant = [*held_board[:3],next(card for card in range(52) if card not in held_board)]
+            second = corpus([held_variant,[4,9,30,35]],"second")
+            with self.assertRaisesRegex(ValueError,"explicit original split reference"):
+                extend_training_corpus(merged,second,937)
+            expanded = extend_training_corpus(merged,second,937,split_reference=original)
+            validate_dataset(expanded)
+            self.assertEqual(len(expanded["labels"]),5)
+            self.assertEqual(expanded["labels"][:4],merged["labels"])
+            parents = expanded["source_datasets"]["sources"]
+            self.assertEqual(len(parents),3)
+            self.assertTrue(all("source_datasets" not in p["dataset"] for p in parents))
+            np.testing.assert_array_equal(split_cash_families(expanded,937,original)[1],baseline_splits[1])
+            np.testing.assert_array_equal(split_cash_families(expanded,937,original)[2],baseline_splits[2])
+            with self.assertRaisesRegex(ValueError,"pinned split"):
+                split_cash_families(expanded,938,original)
+            with self.assertRaisesRegex(ValueError,"pinned split"):
+                split_cash_families(expanded,937)
+            changed = copy.deepcopy(expanded)
+            changed["source_datasets"]["split_reference_canonical_sha256"] = "0"*64
+            with self.assertRaisesRegex(ValueError,"pinned split"): validate_dataset(changed)
+            changed = copy.deepcopy(expanded)
+            changed["source_datasets"]["sources"] *= 2
+            with self.assertRaisesRegex(ValueError,"merge lineage"): validate_dataset(changed)
+            changed = copy.deepcopy(expanded)
+            changed["source_datasets"]["sources"][-1]["selected_rows"] = [0,1]
+            changed["labels"].insert(4,copy.deepcopy(second["labels"][0]))
+            changed["capture_sha256"].insert(4,second["capture_sha256"][0])
+            changed["label_canonical_sha256"] = [identity_hash(l) for l in changed["labels"]]
+            with self.assertRaisesRegex(ValueError,"pinned tuning/holdout"): validate_dataset(changed)
 
     def test_nested_merge_claims_are_rejected_without_recursive_work(self):
         label = label_fixture()

@@ -126,8 +126,11 @@ def validate_dataset(source: dict) -> None:
         raise ValueError("duplicate cash inputs are not independent data")
     merged = source.get("source_datasets")
     if merged is not None:
-        if (provenance is not None or merged.get("schema") != "hu-cash-value-source-prefix-merge-v1"
-                or not isinstance(merged.get("sources"),list) or len(merged["sources"]) != 2):
+        version = merged.get("schema")
+        if (provenance is not None or version not in ("hu-cash-value-source-prefix-merge-v1","hu-cash-value-source-prefix-merge-v2")
+                or not isinstance(merged.get("sources"),list)
+                or not 2 <= len(merged["sources"]) <= 4
+                or (version == "hu-cash-value-source-prefix-merge-v1" and len(merged["sources"]) != 2)):
             raise ValueError("invalid cash continuation merge lineage")
         labels, captures = [], []
         for entry in merged["sources"]:
@@ -145,9 +148,22 @@ def validate_dataset(source: dict) -> None:
             captures.extend(original["capture_sha256"][i] for i in indices)
         if source["labels"] != labels or source["capture_sha256"] != captures:
             raise ValueError("cash merged labels differ from their captured parent rows")
+        if version == "hu-cash-value-source-prefix-merge-v2":
+            first = merged["sources"][0]
+            pinned = first["dataset"]
+            seed = merged.get("split_seed")
+            if (type(seed) is not int or not 0 <= seed < 2**32
+                    or merged.get("split_reference_canonical_sha256") != identity_hash(pinned)
+                    or first["selected_rows"] != list(range(len(pinned["labels"])) )):
+                raise ValueError("cash merge differs from its pinned split reference")
+            split_source = {"game":pinned["game"],"targets":[{"board":l["input"]["state"]["board"]} for l in pinned["labels"]]}
+            _,tuning,holdout = family_split(split_source,seed,.2,.2)
+            forbidden = {board_family(pinned["labels"][i]["input"]["state"]["board"]) for i in np.concatenate((tuning,holdout))}
+            if any(board_family(l["input"]["state"]["board"]) in forbidden for l in labels[len(pinned["labels"]):]):
+                raise ValueError("cash merge added a pinned tuning/holdout family to training")
 
 
-def extend_training_corpus(reference: dict, addition: dict, split_seed: int) -> dict:
+def extend_training_corpus(reference: dict, addition: dict, split_seed: int, split_reference: dict | None = None) -> dict:
     """Add contexts without moving or leaking a pinned tuning/holdout family.
 
     Parents are retained in this bounded research corpus so lineage can be
@@ -155,13 +171,27 @@ def extend_training_corpus(reference: dict, addition: dict, split_seed: int) -> 
     This deliberately does not pretend mixed corpora came from one root file.
     """
     validate_dataset(reference); validate_dataset(addition)
-    if reference["game"] != addition["game"] or any(s.get("source_datasets") is not None for s in (reference,addition)):
-        raise ValueError("cash extension requires two unmixed corpora in the same frozen game")
+    if reference["game"] != addition["game"] or addition.get("source_datasets") is not None:
+        raise ValueError("cash extension requires an unmixed addition in the same frozen game")
+    merged = reference.get("source_datasets")
+    if merged is not None and split_reference is None:
+        raise ValueError("extending a merged corpus requires an explicit original split reference")
+    pinned = reference if split_reference is None else split_reference
+    validate_dataset(pinned)
+    if (pinned.get("source_datasets") is not None or pinned["game"] != reference["game"]
+            or reference["labels"][:len(pinned["labels"])] != pinned["labels"]
+            or reference["capture_sha256"][:len(pinned["labels"])] != pinned["capture_sha256"]):
+        raise ValueError("cash extension changed its pinned original target prefix")
+    if merged is not None:
+        if (len(merged["sources"]) >= 4 or merged["sources"][0]["dataset"] != pinned):
+            raise ValueError("cash extension requires the same original parent and at most four flat sources")
+        if merged["schema"] == "hu-cash-value-source-prefix-merge-v2" and merged["split_seed"] != split_seed:
+            raise ValueError("cash extension changed its pinned split seed")
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("invalid pinned cash extension split seed")
-    split_source = {"game":reference["game"],"targets":[{"board":l["input"]["state"]["board"]} for l in reference["labels"]]}
+    split_source = {"game":pinned["game"],"targets":[{"board":l["input"]["state"]["board"]} for l in pinned["labels"]]}
     _,tuning,holdout = family_split(split_source,split_seed,.2,.2)
-    forbidden = {board_family(reference["labels"][i]["input"]["state"]["board"]) for i in np.concatenate((tuning,holdout))}
+    forbidden = {board_family(pinned["labels"][i]["input"]["state"]["board"]) for i in np.concatenate((tuning,holdout))}
     known = {identity_hash(label["input"]) for label in reference["labels"]}
     rows = [i for i,label in enumerate(addition["labels"])
             if board_family(label["input"]["state"]["board"]) not in forbidden and identity_hash(label["input"]) not in known]
@@ -171,9 +201,12 @@ def extend_training_corpus(reference: dict, addition: dict, split_seed: int) -> 
     source["labels"].extend(copy.deepcopy(addition["labels"][i]) for i in rows)
     source["capture_sha256"].extend(addition["capture_sha256"][i] for i in rows)
     source["label_canonical_sha256"] = [identity_hash(label) for label in source["labels"]]
-    source["source_datasets"] = {"schema":"hu-cash-value-source-prefix-merge-v1","sources":[
-        {"canonical_sha256":identity_hash(reference),"selected_rows":list(range(len(reference["labels"]))),"dataset":copy.deepcopy(reference)},
-        {"canonical_sha256":identity_hash(addition),"selected_rows":rows,"dataset":copy.deepcopy(addition)}]}
+    parents = (copy.deepcopy(merged["sources"]) if merged is not None else [
+        {"canonical_sha256":identity_hash(reference),"selected_rows":list(range(len(reference["labels"]))),"dataset":copy.deepcopy(reference)}])
+    parents.append({"canonical_sha256":identity_hash(addition),"selected_rows":rows,"dataset":copy.deepcopy(addition)})
+    source["source_datasets"] = {"schema":"hu-cash-value-source-prefix-merge-v2" if split_reference is not None else "hu-cash-value-source-prefix-merge-v1","sources":parents}
+    if split_reference is not None:
+        source["source_datasets"].update(split_seed=split_seed,split_reference_canonical_sha256=identity_hash(pinned))
     validate_dataset(source)
     return source
 
@@ -185,10 +218,13 @@ def main():
     inputs.add_argument("--extend-reference",type=Path,help="Pinned corpus prefix whose tuning/holdout must remain unchanged")
     parser.add_argument("--addition",type=Path,help="Additional independently captured corpus, training-only after family filtering")
     parser.add_argument("--split-seed",type=int,default=937)
+    parser.add_argument("--split-reference",type=Path,help="Original unmixed split corpus; required when extending an existing merge")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if bool(args.extend_reference) != bool(args.addition):
         raise ValueError("cash corpus extension requires both reference and addition")
+    if args.split_reference and not args.extend_reference:
+        raise ValueError("a pinned split reference requires a corpus extension")
     paths = []
     for path in args.label or []:
         if path.is_dir():
@@ -198,7 +234,8 @@ def main():
             paths.extend(matches)
         else:
             paths.append(path)
-    dataset = (extend_training_corpus(json.loads(args.extend_reference.read_bytes()),json.loads(args.addition.read_bytes()),args.split_seed)
+    dataset = (extend_training_corpus(json.loads(args.extend_reference.read_bytes()),json.loads(args.addition.read_bytes()),args.split_seed,
+                                     json.loads(args.split_reference.read_bytes()) if args.split_reference else None)
                if args.extend_reference else build_dataset(paths))
     # Validate every source before creating output. Training/tuning/holdout
     # splits group whole flop families across pots, never individual rows.
