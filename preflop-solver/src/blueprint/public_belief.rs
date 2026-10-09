@@ -3952,6 +3952,7 @@ struct FlopSolver {
     exact_all_in_terminal_evaluations: Cell<u64>,
     all_in_equities: OnceLock<Arc<Vec<f32>>>,
     cash_all_in: OnceLock<Arc<range_vector::ExactCashFlopTerminal>>,
+    cash_leaf_capture: Option<Arc<cash_flop::trace::CashLeafCapture>>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
     safe_root: Option<SafeResolveRoot>,
     training_round_offset: u64,
@@ -4108,6 +4109,7 @@ impl FlopSolver {
             exact_all_in_terminal_evaluations: Cell::new(0),
             all_in_equities: OnceLock::new(),
             cash_all_in: OnceLock::new(),
+            cash_leaf_capture: None,
             maximum_leaf_zero_sum_residual: Cell::new(0.0),
             safe_root: None,
             training_round_offset: 0,
@@ -4564,11 +4566,17 @@ impl FlopSolver {
         self.prepare_public_tree(self.config.state.game_state());
         for offset in 0..self.config.iterations {
             let round = self.training_round_offset + offset + 1;
+            if let Some(capture) = &self.cash_leaf_capture {
+                capture.start_round(round);
+            }
             if self.config.continuation_selection == FlopContinuationSelection::Mean {
                 self.frozen_all_player_iteration(round);
             } else {
                 self.frozen_pair_iteration(round, [0, 1])?;
             }
+        }
+        if let Some(capture) = &self.cash_leaf_capture {
+            capture.finish_training();
         }
         Ok(())
     }
@@ -5294,6 +5302,9 @@ impl FlopSolver {
         reaches: &[Vec<f64>; 2],
         traverser: Option<usize>,
     ) -> [Vec<f64>; 2] {
+        if let Some(capture) = &self.cash_leaf_capture {
+            capture.record_leaf(&self.config, state, reaches);
+        }
         self.turn_leaf_evaluations
             .set(self.turn_leaf_evaluations.get() + 1);
         let (values, residual) = self.turn_continuations.borrow_mut().get_or_compute(

@@ -3,6 +3,40 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn cash_flop_trace_rejects_overrides_invalid_sampling_and_output_collisions() {
+    for flags in [vec!["--threads","8"],vec!["--input","second"],vec!["--output"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["cash-flop-trace","--input","must-not-read","--value-network","must-not-read"])
+            .args(flags).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("immutable"));
+    }
+    use preflop_solver::blueprint::{BlueprintConfig,public_belief::{PublicBeliefState,uniform_range,
+        cash_flop::{CashFlopPilotInput,trace::CashFlopTraceInput}}};
+    let mut game = BlueprintConfig::default(); game.effective_stack_bb=20.; game.small_blind_bb=0.4;
+    game.cash_rules=Some(preflop_solver::cash_game::study_rules("nl25").unwrap());
+    let board=[0,5,10];
+    let input=CashFlopTraceInput {solve:CashFlopPilotInput {game,state:PublicBeliefState::flop_start(
+        board,1,[2.;2],[uniform_range(&board),uniform_range(&board)]),iterations:2,averaging_delay:0,threads:1},
+        sample_rounds:vec![3],leaves_per_round:2};
+    let directory=std::env::temp_dir().join(format!("cash-trace-cli-{}",std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let input_path=directory.join("input.json"); let output_path=directory.join("output.json");
+    fs::write(&input_path,serde_json::to_vec(&input).unwrap()).unwrap();
+    let check=|path:&std::path::Path| Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+        .args(["cash-flop-trace","--input",input_path.to_str().unwrap(),"--value-network","must-not-read",
+            "--output",path.to_str().unwrap()]).output().unwrap();
+    let invalid=check(&output_path);
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("sorted unique"));
+    assert!(!output_path.exists());
+    let before=fs::read(&input_path).unwrap();
+    let collision=check(&input_path);
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("cannot be overwritten"));
+    assert_eq!(before,fs::read(&input_path).unwrap());
+    fs::remove_file(input_path).unwrap(); fs::remove_dir(directory).unwrap();
+}
+
+#[test]
 fn cash_flop_cross_scoring_rejects_overrides_before_artifact_io() {
     for flags in [vec!["--cash-profile", "nl25"], vec!["--threads", "8"], vec!["--output"], vec!["--solution", "second"]] {
         let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
