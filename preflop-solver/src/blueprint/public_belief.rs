@@ -33,6 +33,7 @@ mod card_workers;
 mod cash_river;
 mod cash_turn;
 mod cash_value;
+mod cash_checkdown;
 pub mod cash_flop;
 mod continuation_cache;
 mod value_inference;

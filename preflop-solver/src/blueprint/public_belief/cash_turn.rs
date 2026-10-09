@@ -33,9 +33,21 @@ impl TurnRiverSolver {
                 self.constant_terminal_values(&reaches[1 - p], payoffs[p])
             });
         }
+        self.cash_showdown_values(rules, state.invested, reaches, river)
+    }
+
+    /// Geometry is independent of rules and commitments. Always settle with
+    /// the caller's current rules, including rake, refunds and odd-unit ties.
+    pub(super) fn cash_showdown_values(
+        &self,
+        rules: &crate::cash_game::CashGameRules,
+        invested: [f64; 2],
+        reaches: &[Vec<f64>; 2],
+        river: Option<u8>,
+    ) -> [Vec<f64>; 2] {
         let zero = cash::cash_terminal_payoffs(
             rules,
-            state.invested,
+            invested,
             TerminalReason::Showdown,
             Outcome::PlayerZero,
             5,
@@ -43,7 +55,7 @@ impl TurnRiverSolver {
         .expect("cash showdown");
         let one = cash::cash_terminal_payoffs(
             rules,
-            state.invested,
+            invested,
             TerminalReason::Showdown,
             Outcome::PlayerOne,
             5,
@@ -51,7 +63,7 @@ impl TurnRiverSolver {
         .expect("cash showdown");
         let tie = cash::cash_terminal_payoffs(
             rules,
-            state.invested,
+            invested,
             TerminalReason::Showdown,
             Outcome::Split,
             5,
