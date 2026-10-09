@@ -3,6 +3,17 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn cash_flop_cross_scoring_rejects_overrides_before_artifact_io() {
+    for flags in [vec!["--cash-profile", "nl25"], vec!["--threads", "8"], vec!["--output"], vec!["--solution", "second"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["cash-flop-evaluate", "--solution", "must-not-read", "--evaluation-value-network", "must-not-read"])
+            .args(flags).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("immutable"));
+    }
+}
+
+#[test]
 fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
     for flags in [vec!["--cash-profile", "nl25"], vec!["--threads", "8"], vec!["--output"], vec!["--input", "second"]] {
         let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))

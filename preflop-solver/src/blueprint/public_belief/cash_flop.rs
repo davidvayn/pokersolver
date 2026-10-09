@@ -85,6 +85,152 @@ pub struct CashFlopPilotSolution {
     pub validation: BlueprintValidation,
 }
 
+/// Compare continuation hypotheses on one frozen public action policy. The
+/// inner values still use an unqualified learned continuation, not exact EVs.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CashFlopFrozenEvaluation {
+    pub schema: String,
+    pub frozen_solution_sha256: String,
+    pub frozen_strategy_sha256: String,
+    pub policy_value_network_sha256: String,
+    pub evaluation_value_network_sha256: String,
+    pub updates_performed: u64,
+    pub scored: CashFlopPilotSolution,
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+pub fn evaluate_frozen(
+    input: CashFlopPilotInput,
+    frozen: &CashFlopPilotSolution,
+    frozen_solution_sha256: String,
+    evaluation_network: PublicValueNetwork,
+) -> Result<CashFlopFrozenEvaluation, String> {
+    if frozen.schema != SCHEMA
+        || frozen.validation.status != "research_only"
+        || frozen.full_game_exploitability != "unmeasured"
+        || frozen.expected_house_rake_bb.is_some()
+        || frozen.continuation_model_confidence != "unqualified-research-only"
+        || !valid_digest(&frozen_solution_sha256)
+        || !valid_digest(&frozen.value_network_sha256)
+        || !frozen.strategies.contains(&frozen.root)
+    {
+        return Err(
+            "cash cross-scoring requires an explicit immutable research-only source policy".into(),
+        );
+    }
+    input.validate()?;
+    // Reuse the exact original request, not normalized output ranges. Even an
+    // extra normalization can change f64 bits and invalidate the source hash.
+    let expected_input_sha = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(SCHEMA, &input, Some(frozen.value_network_sha256.as_str())))
+                .map_err(|e| e.to_string())?
+        )
+    );
+    if expected_input_sha != frozen.input_sha256
+        || input.game.cash_rules.as_ref().unwrap().sha256()? != frozen.rules_sha256
+        || frozen.game != input.game
+        || frozen.iterations != input.iterations
+        || frozen.threads != input.threads
+        || frozen.root.public_history != input.state.public_history
+        || frozen.root.actor != input.state.actor
+    {
+        return Err("frozen cash input/rules identity changed".into());
+    }
+    evaluation_network.validate()?;
+    evaluation_network.validate_cash_game(&input.game)?;
+    let evaluation_sha = evaluation_network
+        .artifact_sha256()
+        .filter(|v| valid_digest(v))
+        .ok_or("cash cross-scoring requires hashed frozen evaluation weights")?
+        .to_owned();
+    let policy_sha = flop_strategy_sha256(&frozen.strategies);
+    let evaluation_input_sha = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(
+                "hu-cash-frozen-flop-evaluation-v1",
+                &frozen_solution_sha256,
+                &policy_sha,
+                &evaluation_sha
+            ))
+            .map_err(|e| e.to_string())?
+        )
+    );
+    let mut solver = FlopSolver::new_impl(
+        FlopResolveConfig {
+            game: input.game,
+            state: input.state,
+            iterations: input.iterations,
+            averaging_delay: input.averaging_delay,
+            regret_matching_plus: false,
+            value_network: evaluation_network,
+            auxiliary_value_networks: vec![],
+            continuation_selection: FlopContinuationSelection::Mean,
+            threads: input.threads,
+        },
+        true,
+    )?;
+    if frozen.state != solver.config.state {
+        return Err("frozen cash state differs from its normalized original request".into());
+    }
+    solver.load_frozen_average_strategies(&frozen.strategies)?;
+    for row in &frozen.strategies {
+        for (combo, mix) in row
+            .probabilities
+            .chunks(row.action_labels.len())
+            .enumerate()
+        {
+            if mix.iter().any(|v| *v > 1.)
+                || (solver.legal[row.actor][combo]
+                    && (mix.iter().map(|v| *v as f64).sum::<f64>() - 1.).abs() > 1e-6)
+                || (!solver.legal[row.actor][combo] && mix.iter().any(|v| *v != 0.))
+            {
+                return Err(
+                    "frozen cash probabilities violate legal support or normalization".into(),
+                );
+            }
+        }
+    }
+    // No regret/average updates: only the same policy's profile/action walks.
+    let mut scored = solver.finish_cash_flop(evaluation_input_sha)?;
+    for row in &mut scored.strategies {
+        let original = frozen
+            .strategies
+            .iter()
+            .find(|old| old.public_history == row.public_history)
+            .ok_or("cross-scoring added an unexpected policy node")?;
+        // Loading f32 averages applies the same normalization used by the
+        // original solver. Export original bits, not a newly rounded policy.
+        row.probabilities.clone_from(&original.probabilities);
+    }
+    scored.root = scored
+        .strategies
+        .iter()
+        .find(|row| row.public_history == frozen.root.public_history)
+        .ok_or("cross-scoring lost its frozen root")?
+        .clone();
+    scored.action_value_method =
+        "frozen-cash-flop-policy-scored-with-learned-own-payoff-turn-leaves-v1".into();
+    scored.validation.reasons.push("Zero training updates; source iteration count is provenance, not new training. Different weights are not independent exploitability evidence.".into());
+    Ok(CashFlopFrozenEvaluation {
+        schema: "hu-cash-frozen-flop-evaluation-v1".into(),
+        frozen_solution_sha256,
+        frozen_strategy_sha256: policy_sha,
+        policy_value_network_sha256: frozen.value_network_sha256.clone(),
+        evaluation_value_network_sha256: evaluation_sha,
+        updates_performed: 0,
+        scored,
+    })
+}
+
 impl FlopSolver {
     pub(super) fn cash_flop_terminal_values(
         &self,
@@ -335,6 +481,128 @@ mod tests {
             threads: 2,
         };
         (input, network)
+    }
+
+    #[test]
+    fn frozen_cash_cross_scoring_changes_values_without_retraining_probabilities() {
+        let (input, network) = fixture();
+        let frozen = solve(input.clone(), network.clone()).unwrap();
+        let before = serde_json::to_vec(&frozen).unwrap();
+        let self_score =
+            evaluate_frozen(input.clone(), &frozen, "b".repeat(64), network.clone()).unwrap();
+        assert_eq!(self_score.updates_performed, 0);
+        assert_eq!(
+            self_score.scored.root.probabilities,
+            frozen.root.probabilities
+        );
+        for (left, right) in self_score
+            .scored
+            .profile_net_bb
+            .iter()
+            .zip(frozen.profile_net_bb)
+        {
+            assert!((left - right).abs() < 1e-6);
+        }
+        let mut changed = network;
+        changed.head[0].biases[0] = 0.01;
+        changed.artifact_sha256 = Some("c".repeat(64));
+        let cross = evaluate_frozen(input.clone(), &frozen, "b".repeat(64), changed).unwrap();
+        assert_eq!(cross.policy_value_network_sha256, "a".repeat(64));
+        assert_eq!(cross.evaluation_value_network_sha256, "c".repeat(64));
+        assert_eq!(
+            cross.frozen_strategy_sha256,
+            flop_strategy_sha256(&frozen.strategies)
+        );
+        assert_eq!(cross.scored.root.probabilities, frozen.root.probabilities);
+        for (left, right) in cross.scored.strategies.iter().zip(&frozen.strategies) {
+            assert_eq!(left.probabilities, right.probabilities);
+            assert_eq!(left.public_history, right.public_history);
+            assert_eq!(left.action_labels, right.action_labels);
+        }
+        let mut check_reaches = input.state.ranges.clone();
+        let mut check_state = input.state.game_state();
+        for _ in 0..2 {
+            let row = frozen
+                .strategies
+                .iter()
+                .find(|row| row.public_history == check_state.public_history)
+                .unwrap();
+            let width = row.action_labels.len();
+            let column = row
+                .action_labels
+                .iter()
+                .position(|label| label == "check")
+                .unwrap();
+            for (combo, reach) in check_reaches[row.actor].iter_mut().enumerate() {
+                *reach *= row.probabilities[combo * width + column] as f64;
+            }
+            let action = check_state
+                .legal_actions(&input.game)
+                .into_iter()
+                .find(|a| a.kind == ActionKind::Check)
+                .unwrap();
+            check_state = check_state.apply(&action, &input.game);
+        }
+        // At this nearly all-in root only check/check reaches the learned
+        // leaf. Its exact path probability determines the visible EV change.
+        let branch_probability = joint_compatibility_mass(&check_reaches)
+            / joint_compatibility_mass(&input.state.ranges);
+        let expected_change =
+            2. * 0.01 * input.state.invested_bb.iter().sum::<f64>() * branch_probability;
+        let actual_change = cross.scored.predicted_profile_payoff_sum_bb
+            - self_score.scored.predicted_profile_payoff_sum_bb;
+        assert!(expected_change > 1e-5);
+        assert!(
+            (actual_change - expected_change).abs() < 1e-6,
+            "{actual_change} vs {expected_change}"
+        );
+        assert!(cross.scored.expected_house_rake_bb.is_none());
+        assert_eq!(cross.scored.full_game_exploitability, "unmeasured");
+        assert_eq!(cross.scored.validation.status, "research_only");
+        assert_eq!(serde_json::to_vec(&frozen).unwrap(), before);
+    }
+
+    #[test]
+    fn frozen_cash_cross_scoring_rejects_illegal_combo_mass() {
+        let (input, network) = fixture();
+        let mut frozen = solve(input.clone(), network.clone()).unwrap();
+        let root_index = frozen
+            .strategies
+            .iter()
+            .position(|row| row.public_history == frozen.root.public_history)
+            .unwrap();
+        let blocked = input.state.ranges[frozen.root.actor]
+            .iter()
+            .position(|v| *v == 0.)
+            .unwrap();
+        let width = frozen.root.action_labels.len();
+        frozen.strategies[root_index].probabilities[blocked * width] = 0.5;
+        frozen.root = frozen.strategies[root_index].clone();
+        assert!(evaluate_frozen(input, &frozen, "b".repeat(64), network).is_err());
+    }
+
+    #[test]
+    fn frozen_cash_cross_scoring_rejects_tampering_and_incompatible_rules() {
+        let (input, network) = fixture();
+        let frozen = solve(input.clone(), network.clone()).unwrap();
+        for hash in ["".into(), "g".repeat(64), "b".repeat(63)] {
+            assert!(evaluate_frozen(input.clone(), &frozen, hash, network.clone()).is_err());
+        }
+        let mut bad = frozen.clone();
+        bad.schema = "home".into();
+        assert!(evaluate_frozen(input.clone(), &bad, "b".repeat(64), network.clone()).is_err());
+        let mut bad = frozen.clone();
+        bad.state.invested_bb = [19.92; 2];
+        assert!(evaluate_frozen(input.clone(), &bad, "b".repeat(64), network.clone()).is_err());
+        let mut bad = frozen.clone();
+        bad.strategies[0].probabilities[0] = f32::NAN;
+        assert!(evaluate_frozen(input.clone(), &bad, "b".repeat(64), network.clone()).is_err());
+        let mut bad = frozen.clone();
+        bad.root.probabilities[0] = 0.9;
+        assert!(evaluate_frozen(input.clone(), &bad, "b".repeat(64), network.clone()).is_err());
+        let mut wrong = network;
+        wrong.cash_rules = Some(crate::cash_game::study_rules("nl25-rake-off-control").unwrap());
+        assert!(evaluate_frozen(input, &frozen, "b".repeat(64), wrong).is_err());
     }
 
     #[test]
