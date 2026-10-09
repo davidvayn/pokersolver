@@ -3,6 +3,34 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
+    for flags in [vec!["--cash-profile", "nl25"], vec!["--threads", "8"], vec!["--output"], vec!["--input", "second"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["cash-flop-pilot", "--input", "must-not-read", "--value-network", "must-not-read"])
+            .args(flags).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("immutable"));
+    }
+    use preflop_solver::blueprint::{BlueprintConfig, public_belief::{PublicBeliefState, uniform_range, cash_flop::CashFlopPilotInput}};
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = 20.0; game.small_blind_bb = 0.4;
+    game.cash_rules = Some(preflop_solver::cash_game::study_rules("nl25").unwrap());
+    let board = [0, 5, 10];
+    let input = CashFlopPilotInput { game, state: PublicBeliefState::flop_start(
+        board, 1, [2.0; 2], [uniform_range(&board), uniform_range(&board)]),
+        iterations: 33, averaging_delay: 0, threads: 2,
+    };
+    let path = std::env::temp_dir().join(format!("cash-flop-cli-budget-{}.json", std::process::id()));
+    fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+        .args(["cash-flop-pilot", "--input", path.to_str().unwrap(), "--value-network", "must-not-read"])
+        .output().unwrap();
+    fs::remove_file(path).unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("2..32"));
+}
+
+#[test]
 fn practice_serving_rejects_ambiguous_or_invalid_action_grids_before_artifact_io() {
     let valid = serde_json::to_string(&preflop_solver::blueprint::ActionAbstraction::default()).unwrap();
     let invalid = valid.replace("\"open_sizes_bb\":[2.0,2.5,3.0,4.0,5.0]", "\"open_sizes_bb\":[]");

@@ -1,5 +1,5 @@
 //! Bounded exact prediction reuse, scoped to one immutable continuation model.
-use super::PublicValueNetwork;
+use super::{PublicValueNetwork, TurnRiverSolveConfig};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -55,6 +55,35 @@ impl ValueInferenceSession {
         invested: [f64; 2],
         ranges: &[Vec<f64>; 2],
     ) -> [Vec<f64>; 2] {
+        self.predict_with(board, actor, invested, ranges, || {
+            self.network.predict(board, actor, invested, ranges)
+        })
+    }
+
+    pub(super) fn predict_cash(&self, config: &TurnRiverSolveConfig) -> Result<[Vec<f64>; 2], String> {
+        // Validate *before* a cache hit. Same board/ranges do not excuse a
+        // changed rules digest, abstraction, depth, or mid-turn query.
+        let state = self.network.validated_cash_turn(config)?;
+        let values = self.predict_with(&state.board, state.actor, state.invested_bb, &state.ranges, || {
+            self.network.predict_shared_combo_with_bounds(
+                &state.board, state.actor, state.invested_bb, &state.ranges,
+                [self.network.target_scale_bb; 2],
+            )
+        });
+        if values.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("cash prediction is nonfinite; no fallback".into());
+        }
+        Ok(values)
+    }
+
+    fn predict_with(
+        &self,
+        board: &[u8],
+        actor: usize,
+        invested: [f64; 2],
+        ranges: &[Vec<f64>; 2],
+        compute: impl FnOnce() -> [Vec<f64>; 2],
+    ) -> [Vec<f64>; 2] {
         // Preserve every input bit; no probabilistic hash, rounded ranges,
         // epsilon pruning, private-card shortcut, or global model-independent key.
         let key = Key {
@@ -78,7 +107,7 @@ impl ValueInferenceSession {
         #[cfg(test)]
         self.preparations
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let values = Arc::new(self.network.predict(board, actor, invested, ranges));
+        let values = Arc::new(compute());
         // Include both retained FIFO/map keys and vector capacities, not only
         // their lengths. In-flight work/model storage are outside this budget.
         let bytes = 2

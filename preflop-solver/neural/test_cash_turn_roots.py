@@ -33,6 +33,25 @@ def fixture():
 
 
 class CashTurnRootTests(unittest.TestCase):
+    def test_fresh_flop_capture_does_not_inherit_turn_card_conditioning(self):
+        source,model = fixture(); root = source["roots"][0]
+        source["schema"] = "hu-cash-authentic-flop-roots-v1"
+        config = root["solve_input"]; state = config["state"]
+        state.update(street="flop",board=state["board"][:3],public_history=["public_belief:flop_start"])
+        legal = legal_combos(state["board"])
+        state["ranges"] = np.broadcast_to(legal / legal.sum(),(2,1326)).tolist()
+        config.pop("river_refinement_iterations"); config.pop("regret_matching_plus"); config["threads"] = 2
+        root["source_public_actions"] = root["source_public_actions"][:2]
+        ranges = np.asarray(state["ranges"])
+        root["compatible_joint_mass"] = float(np.sum(ranges*compatible_masses(ranges),axis=1)[0])
+        root["root_sha256"] = root_fingerprint("a"*64,root)
+        validate_roots(source,model,"a"*64,"nl25",street="flop")
+        self.assertEqual(np.count_nonzero(ranges[0]),1176)
+        with self.assertRaises(ValueError): validate_roots(source,model,"a"*64,"nl25")
+        config["iterations"] = 33
+        root["root_sha256"] = root_fingerprint("a"*64,root)
+        with self.assertRaises(ValueError): validate_roots(source,model,"a"*64,"nl25",street="flop")
+
     def test_validated_public_capture_is_not_conditioned_on_a_sampled_private_hand(self):
         source,model = fixture(); validate_roots(source,model,"a"*64,"nl25")
         ranges = np.asarray(source["roots"][0]["solve_input"]["state"]["ranges"])

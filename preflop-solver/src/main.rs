@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "cash-causal-response" => run_cash_causal_response(&args[1..]),
         "cash-policy-query" => run_cash_policy_query(&args[1..]),
         "cash-turn-root-sample" => run_cash_turn_root_sample(&args[1..]),
+        "cash-flop-root-sample" => run_cash_flop_root_sample(&args[1..]),
         "neural-certificate" => run_neural_certificate(&args[1..]),
         "practice-policy-server" => run_practice_policy_server(&args[1..]),
         "practice-artifacts-compile" => run_practice_artifacts_compile(&args[1..]),
@@ -74,6 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "turn-pbs-merge-targets" => run_turn_pbs_merge_targets(&args[1..]),
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
         "cash-turn-value-predict" => run_cash_turn_value_predict(&args[1..]),
+        "cash-flop-pilot" => run_cash_flop_pilot(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -1198,6 +1200,26 @@ fn run_cash_turn_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
         "counterfactual_values_bb": values,
         "research_only": true,
     }))?);
+    Ok(())
+}
+
+fn run_cash_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() % 2 != 0 || args.chunks(2).any(|pair| {
+        !["--input", "--value-network", "--output"].contains(&pair[0].as_str())
+            || pair[1].starts_with("--")
+    }) || args.chunks(2).map(|pair| &pair[0]).collect::<std::collections::BTreeSet<_>>().len() != args.len() / 2 {
+        return Err("cash flop pilot accepts only immutable --input, --value-network, and optional --output paths".into());
+    }
+    let input_path = value(args, "--input").ok_or("--input is required")?;
+    let network_path = value(args, "--value-network").ok_or("--value-network is required")?;
+    let input: blueprint::public_belief::cash_flop::CashFlopPilotInput = serde_json::from_slice(&fs::read(input_path)?)?;
+    input.validate()?;
+    let network = blueprint::public_belief::PublicValueNetwork::read_cash(Path::new(&network_path), &input.game)?;
+    let solution = blueprint::public_belief::cash_flop::solve(input, network)?;
+    let serialized = serde_json::to_string(&solution)?;
+    if let Some(output) = value(args, "--output") {
+        fs::write(output, format!("{serialized}\n"))?;
+    } else { println!("{serialized}"); }
     Ok(())
 }
 
@@ -3036,6 +3058,19 @@ fn run_cash_turn_root_sample(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_cash_flop_root_sample(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let report = blueprint::neural::sample_cash_flop_roots(blueprint::neural::CashTurnRootSampleConfig {
+        game: cash_evaluation_game(args)?,
+        network_path: value(args, "--networks").map(PathBuf::from).ok_or("--networks is required")?,
+        seed: parse_or(args, "--seed", 953u64)?, roots: parse_or(args, "--roots", 2usize)?,
+        max_deals: parse_or(args, "--max-deals", 2000u64)?, solve_iterations: parse_or(args, "--iterations", 2u64)?,
+    })?;
+    let output = value(args, "--output").ok_or("--output is required")?;
+    fs::write(output, format!("{}\n", serde_json::to_string_pretty(&report)?))?;
+    println!("wrote inactive authentic cash flop roots");
+    Ok(())
+}
+
 fn run_cash_policy_query(args: &[String]) -> Result<(), Box<dyn Error>> {
     let engine = blueprint::neural::CashPolicyEngine::load(blueprint::neural::CashPolicyEngineConfig {
         game: cash_evaluation_game(args)?,
@@ -3641,6 +3676,8 @@ Usage:
   preflop-solver turn-pbs-merge-targets --dataset <json> --dataset <json> [options]
   preflop-solver turn-pbs-value-predict [options]
   preflop-solver cash-turn-value-predict --input <cash-turn-solve-config.json> --value-network <cash-value.json>
+  preflop-solver cash-flop-pilot --input <cash-flop-pilot.json> --value-network <cash-value.json> [--output <research.json>]
+  preflop-solver cash-flop-root-sample --cash-profile nl25 --networks <cash-average.json> --output <roots.json> [--roots 2 --iterations 2]
   preflop-solver flop-pbs-resolve [options]
   preflop-solver flop-pbs-convergence [options]
   preflop-solver flop-pbs-range-response [options]
