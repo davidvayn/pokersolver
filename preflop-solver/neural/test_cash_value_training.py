@@ -4,6 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 import mlx.core as mx
+import mlx.optimizers as optim
 import numpy as np
 from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,context_loss_multipliers,run,split_cash_families
 from cash_profiles import profile_rules,rules_digest
@@ -12,6 +13,20 @@ from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SC
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_adam_moment_correction_is_an_explicit_matched_pilot_option(self):
+        with mx.stream(mx.cpu):
+            gradient = {"x":mx.array([1.])}; initial = {"x":mx.array([0.])}
+            corrected = optim.Adam(learning_rate=.001,bias_correction=True).apply_gradients(gradient,initial)
+            uncorrected = optim.Adam(learning_rate=.001,bias_correction=False).apply_gradients(gradient,initial)
+            self.assertAlmostEqual(float(corrected["x"].item()),-.001,places=7)
+            self.assertAlmostEqual(float(uncorrected["x"].item()),-.001 * .1 / np.sqrt(.001),places=7)
+        for invalid in (1,0,None,"yes"):
+            with self.assertRaisesRegex(ValueError,"Adam bias correction"):
+                run(Path("must-not-read"),Path("must-not-create"),7101,2,adam_bias_correction=invalid)
+        for invalid in (-1.,0.,True,float("nan"),float("inf"),.101,"yes"):
+            with self.assertRaisesRegex(ValueError,"learning rate"):
+                run(Path("must-not-read"),Path("must-not-create"),7101,2,learning_rate=invalid)
+
     def test_baseline_conditioned_head_retains_original_inputs_and_initial_parameters(self):
         mx.random.seed(7171); old = OwnComboValueNetwork("wide-pooled")
         mx.random.seed(7171); added = OwnComboValueNetwork("wide-baseline-conditioned")
@@ -67,11 +82,19 @@ class CashValueTrainingTests(unittest.TestCase):
                 export_cash_model(model,path,7101,source,"a"*64)
                 payload=json.loads(path.read_text())
                 self.assertEqual(payload["schema"],schema)
+                self.assertIs(payload["adamBiasCorrection"],False)
+                self.assertEqual(payload["learningRate"],.001)
                 self.assertEqual(payload["projection"],"independent-full-stack-clip-and-board-mask-no-zero-sum")
                 embeddings=payload["contextTower"][-1]["outputSize"]+payload["queryTower"][-1]["outputSize"]*(3 if architecture in ("wide-pooled","wide-blocker-pooled") else 1)
                 self.assertEqual(payload["head"][0]["inputSize"],embeddings)
                 if architecture == "wide-blocker-pooled":
                     self.assertEqual(payload["predictionContract"],BLOCKER_POOLED_CONTRACT)
+            explicit=Path(directory)/"explicit-optimizer.json"
+            export_cash_model(OwnComboValueNetwork("wide-pooled"),explicit,7101,source,"a"*64,
+                              adam_bias_correction=True,learning_rate=.003445078064)
+            payload=json.loads(explicit.read_text())
+            self.assertIs(payload["adamBiasCorrection"],True)
+            self.assertEqual(payload["learningRate"],.003445078064)
         with self.assertRaisesRegex(ValueError,"architecture"):
             run(Path('must-not-read'),Path('must-not-create'),1,2,architecture="unknown")
 

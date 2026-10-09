@@ -117,7 +117,7 @@ def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0.):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3):
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
@@ -131,6 +131,8 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,
                    profileValueLossWeight=profile_value_loss_weight,
+                   adamBiasCorrection=adam_bias_correction,
+                   learningRate=learning_rate,
                    flopLeafLossWeight=flop_leaf_loss_weight,
                    projection="independent-full-stack-clip-and-board-mask-no-zero-sum",
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
@@ -217,7 +219,7 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3):
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
@@ -230,6 +232,11 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         raise ValueError("cash pilot architecture must be a supported own-payoff network")
     if feature_schema not in CASH_FEATURE_SCHEMAS:
         raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
+    if type(adam_bias_correction) is not bool:
+        raise ValueError("cash Adam bias correction option must be a boolean")
+    if (type(learning_rate) not in (int,float) or not np.isfinite(learning_rate)
+            or not 0 < learning_rate <= .1):
+        raise ValueError("cash learning rate must be finite in (0,0.1]")
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -242,7 +249,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
     contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source,feature_schema)
-    mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema); optimizer = optim.Adam(learning_rate=1e-3)
+    mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema)
+    optimizer = optim.Adam(learning_rate=learning_rate,bias_correction=adam_bias_correction)
     tensors = [mx.array(v) for v in (contexts, queries, weights, scales, baselines, legal)]
     tensors.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
     target = mx.array(targets); loss_weight = mx.array(loss_weights)
@@ -310,11 +318,12 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight)
+    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
               "steps":steps,"selected_step":best_step,"training_initial_mse_bb":initial_mse,
+              "adam_bias_correction":adam_bias_correction,"learning_rate":learning_rate,
               "split_seed":split_seed,
               "split_reference_sha256":hashlib.sha256(reference_bytes).hexdigest() if reference_bytes else None,
               "training_initial_objective_bb_squared":initial_loss,
@@ -344,8 +353,10 @@ def main():
     parser.add_argument("--flop-leaf-loss-weight",type=float,default=1.,help="Training weight for captured forced-coverage leaf parents; does not change beliefs or targets")
     parser.add_argument("--architecture",choices=CASH_ARCHITECTURES,default="compact")
     parser.add_argument("--feature-schema",choices=CASH_FEATURE_SCHEMAS,default=FEATURE_SCHEMA_BOARD_RELATIVE)
+    parser.add_argument("--adam-bias-correction",action="store_true",help="Explicit matched-pilot comparison; legacy default remains uncorrected")
+    parser.add_argument("--learning-rate",type=float,default=1e-3,help="Explicit bounded pilot rate; original default remains unchanged")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate), indent=2))
 
 
 if __name__ == "__main__": main()
