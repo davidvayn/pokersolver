@@ -20,19 +20,23 @@ import numpy as np
 
 import cash_value_dataset as cash_values
 from cash_profiles import PAYOFF_CONTRACT
-from cash_checkdown import exact_cash_checkdown
+from cash_checkdown import exact_cash_checkdown_features
 from cash_range_pooling import card_removed_opponent_pool
 from native_value_dataset import family_split, legal_combos, training_weights
 from serving_value_projection import OwnPayoffValueProjection, own_payoff_conservation_residual
 from train_public_value_network import (SharedComboValueNetwork, build_features,
-    export_model, FEATURE_SCHEMA_BOARD_RELATIVE, value_scale_bb)
+    export_model, FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT, value_scale_bb)
+
+CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
 
 
 class OwnComboValueNetwork(SharedComboValueNetwork):
-    def __init__(self, architecture="compact"):
+    def __init__(self, architecture="compact", feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
         if architecture not in ("compact", "wide", "wide-pooled", "wide-blocker-pooled"):
             raise ValueError("cash pilot architecture must be compact, wide, wide-pooled, or wide-blocker-pooled")
-        super().__init__(True, "wide-pooled" if architecture == "wide-blocker-pooled" else architecture, "pot", FEATURE_SCHEMA_BOARD_RELATIVE)
+        if feature_schema not in CASH_FEATURE_SCHEMAS:
+            raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
+        super().__init__(True, "wide-pooled" if architecture == "wide-blocker-pooled" else architecture, "pot", feature_schema)
         self.architecture = architecture
         # The exact checkdown is already a meaningful reference. Start the
         # learned future-betting correction at zero, not random multi-bb EVs.
@@ -76,7 +80,9 @@ def reference_predictions(model, tensors, scales, legal):
     return OwnPayoffValueProjection(raw_bb, legal.astype(bool)).values
 
 
-def feature_arrays(source: dict):
+def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
+    if feature_schema not in CASH_FEATURE_SCHEMAS:
+        raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
     cash_values.validate_dataset(source)
     contexts, queries, weights, loss_weights, scales, baselines, legal, targets = [], [], [], [], [], [], [], []
     for label in source["labels"]:
@@ -85,11 +91,17 @@ def feature_arrays(source: dict):
         ranges = np.asarray(state["ranges"], dtype=np.float64)
         masses = np.asarray(label["opponent_compatible_mass"], dtype=np.float64)
         context, query = build_features(board, state["actor"], np.asarray(state["invested_bb"]), ranges, masses, FEATURE_SCHEMA_BOARD_RELATIVE)
+        baseline, equity = exact_cash_checkdown_features(board,ranges,state["invested_bb"],source["game"]["cash_rules"])
+        if feature_schema == FEATURE_SCHEMA_EXACT_RUNOUT:
+            # Shared v2/v3 features differ only at this equity slot. Reuse the
+            # baseline's exact 44-river win/tie traversal instead of evaluating
+            # every showdown a second time through the generic Home builder.
+            query[:,:,94] = equity
         scale = value_scale_bb(state["invested_bb"], "pot")
         contexts.append(context); queries.append(query); weights.append(ranges * masses)
         loss_weights.append(training_weights(board, ranges, masses, .1).reshape(-1))
         scales.append(scale); legal.append(legal_combos(board))
-        baselines.append(exact_cash_checkdown(board,ranges,state["invested_bb"],source["game"]["cash_rules"]))
+        baselines.append(baseline)
         targets.append(np.asarray(label["counterfactual_values_bb"]).reshape(-1) / scale)
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
@@ -191,7 +203,7 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0.):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE):
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
@@ -202,6 +214,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         raise ValueError("forced flop leaf loss weight must be finite in (0,1]")
     if architecture not in ("compact", "wide", "wide-pooled", "wide-blocker-pooled"):
         raise ValueError("cash pilot architecture must be compact, wide, wide-pooled, or wide-blocker-pooled")
+    if feature_schema not in CASH_FEATURE_SCHEMAS:
+        raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -213,8 +227,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     reference = json.loads(reference_bytes) if reference_bytes else None
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
-    contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source)
-    mx.random.seed(seed); model = OwnComboValueNetwork(architecture); optimizer = optim.Adam(learning_rate=1e-3)
+    contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source,feature_schema)
+    mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema); optimizer = optim.Adam(learning_rate=1e-3)
     tensors = [mx.array(v) for v in (contexts, queries, weights, scales, baselines, legal)]
     tensors.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
     target = mx.array(targets); loss_weight = mx.array(loss_weights)
@@ -284,7 +298,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     network_path = output / "value-network.json"
     export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
-    report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,
+    report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
               "steps":steps,"selected_step":best_step,"training_initial_mse_bb":initial_mse,
               "split_seed":split_seed,
@@ -315,8 +329,9 @@ def main():
     parser.add_argument("--split-reference",type=Path,help="Keep tuning/holdout families unchanged when adding training contexts")
     parser.add_argument("--flop-leaf-loss-weight",type=float,default=1.,help="Training weight for captured forced-coverage leaf parents; does not change beliefs or targets")
     parser.add_argument("--architecture",choices=("compact","wide","wide-pooled","wide-blocker-pooled"),default="compact")
+    parser.add_argument("--feature-schema",choices=CASH_FEATURE_SCHEMAS,default=FEATURE_SCHEMA_BOARD_RELATIVE)
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema), indent=2))
 
 
 if __name__ == "__main__": main()

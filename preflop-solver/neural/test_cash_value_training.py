@@ -8,9 +8,21 @@ import numpy as np
 from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,context_loss_multipliers,run,split_cash_families
 from cash_profiles import profile_rules,rules_digest
 from cash_value_dataset import NETWORK_SCHEMA,POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_CONTRACT
+from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_exact_runout_features_are_explicit_in_weights_and_reject_unknown_inputs(self):
+        rules=profile_rules("nl25"); source=dict(game=dict(cash_rules=rules),rules_sha256=rules_digest(rules))
+        with tempfile.TemporaryDirectory() as directory:
+            for features in (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT):
+                model = OwnComboValueNetwork("wide-pooled", features)
+                path = Path(directory) / f"{features}.json"
+                export_cash_model(model, path, 7101, source, "a"*64)
+                self.assertEqual(json.loads(path.read_text())["featureSchema"], features)
+        with self.assertRaisesRegex(ValueError, "feature schema"):
+            run(Path("must-not-read"), Path("must-not-create"), 7101, 2, feature_schema="unknown")
+
     def test_profile_supervision_detects_equal_and_opposite_errors_without_projection(self):
         with mx.stream(mx.cpu):
             own = np.zeros((1,2,1326),np.float32); own[:,0] = 4.56; own[:,1] = -5.
