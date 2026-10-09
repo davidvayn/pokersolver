@@ -28,32 +28,43 @@ from train_public_value_network import (SharedComboValueNetwork, build_features,
     export_model, FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT, value_scale_bb)
 
 CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
+CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned")
 
 
 class OwnComboValueNetwork(SharedComboValueNetwork):
     def __init__(self, architecture="compact", feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
-        if architecture not in ("compact", "wide", "wide-pooled", "wide-blocker-pooled"):
-            raise ValueError("cash pilot architecture must be compact, wide, wide-pooled, or wide-blocker-pooled")
+        if architecture not in CASH_ARCHITECTURES:
+            raise ValueError("cash pilot architecture must be a supported own-payoff network")
         if feature_schema not in CASH_FEATURE_SCHEMAS:
             raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
-        super().__init__(True, "wide-pooled" if architecture == "wide-blocker-pooled" else architecture, "pot", feature_schema)
+        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned") else architecture, "pot", feature_schema)
         self.architecture = architecture
+        if architecture == "wide-baseline-conditioned":
+            weight = self.head.layers[0].weight
+            # Preserve every original feature and initialized parameter. The
+            # appended exact-payoff feature initially has no effect, but its
+            # coefficient can learn without removing current-board equity.
+            self.head.layers[0].weight = mx.concatenate((weight,mx.zeros((weight.shape[0],1))),axis=1)
         # The exact checkdown is already a meaningful reference. Start the
         # learned future-betting correction at zero, not random multi-bb EVs.
         self.head.layers[-1].weight = mx.zeros_like(self.head.layers[-1].weight)
         self.head.layers[-1].bias = mx.zeros_like(self.head.layers[-1].bias)
 
     def raw_values(self, context, queries, joint_weights, scales, own_baseline, ranges=None):
-        if self.architecture == "wide-blocker-pooled":
-            if ranges is None:
+        if self.architecture in ("wide-blocker-pooled","wide-baseline-conditioned"):
+            if self.architecture == "wide-blocker-pooled" and ranges is None:
                 raise ValueError("blocker-conditioned cash pooling requires raw exact ranges")
             context_embedding = self.context_tower(context)
             query_embedding = self.query_tower(queries)
             reach = joint_weights / mx.maximum(mx.sum(joint_weights,axis=2,keepdims=True),1e-9)
             own = mx.sum(query_embedding*reach[:,:,:,None],axis=2)
+            opponent = (card_removed_opponent_pool(query_embedding,ranges) if self.architecture == "wide-blocker-pooled"
+                        else mx.broadcast_to(own[:,::-1,None,:],query_embedding.shape))
             combined = mx.concatenate((mx.broadcast_to(context_embedding[:,:,None,:],query_embedding.shape),
                         mx.broadcast_to(own[:,:,None,:],query_embedding.shape),
-                        card_removed_opponent_pool(query_embedding,ranges),query_embedding),axis=-1)
+                        opponent,query_embedding),axis=-1)
+            if self.architecture == "wide-baseline-conditioned":
+                combined = mx.concatenate((combined,own_baseline[:,:,:,None]/20.),axis=-1)
             correction = self.head(combined).reshape((-1,2,1326))
             return correction + own_baseline / scales[:,None,None]
         old_raw = super().raw_values(context, queries, joint_weights, scales)
@@ -110,12 +121,13 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
-    payload.update(schema=(cash_values.BLOCKER_POOLED_NETWORK_SCHEMA if blocker_pooled else
+    baseline_conditioned = model.architecture == "wide-baseline-conditioned"
+    payload.update(schema=(cash_values.BASELINE_CONDITIONED_NETWORK_SCHEMA if baseline_conditioned else cash_values.BLOCKER_POOLED_NETWORK_SCHEMA if blocker_pooled else
                           cash_values.POOLED_NETWORK_SCHEMA if model.pools_exact_ranges else cash_values.NETWORK_SCHEMA),
                    cashRules=source["game"]["cash_rules"],
                    sourceGame=source["game"], baseline="exact-own-payoff-forced-turn-checkdown-44-compatible-rivers",
                    rulesSha256=source["rules_sha256"], payoffContract=PAYOFF_CONTRACT,
-                   predictionContract=cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT,
+                   predictionContract=(cash_values.BASELINE_CONDITIONED_CONTRACT if baseline_conditioned else cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT),
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,
                    profileValueLossWeight=profile_value_loss_weight,
@@ -124,6 +136,8 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
     if blocker_pooled:
         payload["rangeAggregation"] = "per-query-card-removed-opponent-and-joint-own-pooling"
+    if baseline_conditioned:
+        payload["headAdditionalInput"] = "exact-own-cash-checkdown-net-bb-divided-by-full-stack"
     path.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
 
 
@@ -212,8 +226,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         raise ValueError("cash profile value loss weight must be finite and in 0..100")
     if not np.isfinite(flop_leaf_loss_weight) or not 0 < flop_leaf_loss_weight <= 1:
         raise ValueError("forced flop leaf loss weight must be finite in (0,1]")
-    if architecture not in ("compact", "wide", "wide-pooled", "wide-blocker-pooled"):
-        raise ValueError("cash pilot architecture must be compact, wide, wide-pooled, or wide-blocker-pooled")
+    if architecture not in CASH_ARCHITECTURES:
+        raise ValueError("cash pilot architecture must be a supported own-payoff network")
     if feature_schema not in CASH_FEATURE_SCHEMAS:
         raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
     split_seed = seed if split_seed is None else split_seed
@@ -328,7 +342,7 @@ def main():
     parser.add_argument("--split-seed", type=int, help="Pin identical flop-family splits across independent training seeds")
     parser.add_argument("--split-reference",type=Path,help="Keep tuning/holdout families unchanged when adding training contexts")
     parser.add_argument("--flop-leaf-loss-weight",type=float,default=1.,help="Training weight for captured forced-coverage leaf parents; does not change beliefs or targets")
-    parser.add_argument("--architecture",choices=("compact","wide","wide-pooled","wide-blocker-pooled"),default="compact")
+    parser.add_argument("--architecture",choices=CASH_ARCHITECTURES,default="compact")
     parser.add_argument("--feature-schema",choices=CASH_FEATURE_SCHEMAS,default=FEATURE_SCHEMA_BOARD_RELATIVE)
     args = parser.parse_args()
     print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema), indent=2))

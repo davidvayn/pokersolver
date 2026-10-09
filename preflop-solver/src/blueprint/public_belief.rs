@@ -796,7 +796,8 @@ impl PublicValueNetwork {
             | "hu-public-belief-combo-value-network-v6"
             | cash_value::NETWORK_SCHEMA
             | cash_value::POOLED_NETWORK_SCHEMA
-            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA => {
+            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
+            | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -836,6 +837,7 @@ impl PublicValueNetwork {
                         | cash_value::NETWORK_SCHEMA
                         | cash_value::POOLED_NETWORK_SCHEMA
                         | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
+                        | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -855,7 +857,7 @@ impl PublicValueNetwork {
                         query_size * 3
                     } else {
                         query_size
-                    };
+                    } + usize::from(self.schema == cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA);
                 let heads = if self.schema == "hu-public-belief-combo-value-network-v6" {
                     if !self.head.is_empty() || self.pot_expert_heads.len() != 3 {
                         return Err(
@@ -1123,7 +1125,15 @@ impl PublicValueNetwork {
                     batch.extend_from_slice(&query_embeddings[player][span]);
                 }
                 batch
-            });
+            }).or_else(|| (self.schema == cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA).then(|| {
+                let baseline = cash_baseline.as_ref().expect("validated cash head input");
+                let mut batch = Vec::with_capacity(legal_combos[player].len() * (query_embedding_size + 1));
+                for (row, combo) in legal_combos[player].iter().copied().enumerate() {
+                    batch.extend_from_slice(&query_embeddings[player][row * query_embedding_size..(row+1) * query_embedding_size]);
+                    batch.push((baseline[player][combo] / self.target_scale_bb) as f32);
+                }
+                batch
+            }));
             let output = forward_batch_head(
                 selected_head,
                 &head_context,
@@ -1156,6 +1166,7 @@ impl PublicValueNetwork {
                         | cash_value::NETWORK_SCHEMA
                         | cash_value::POOLED_NETWORK_SCHEMA
                         | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
+                        | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -1186,7 +1197,7 @@ impl PublicValueNetwork {
     fn pools_exact_query_ranges(&self) -> bool {
         matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v5"
             | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA
-            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA)
+            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {

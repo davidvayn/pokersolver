@@ -30,6 +30,8 @@ class CashValueParityTests(unittest.TestCase):
             {"schema": "hu-cash-public-belief-combo-value-network-v3", "architecture": "unknown"},
             {"schema": "hu-cash-public-belief-combo-value-network-v4", "architecture": "wide-blocker-pooled",
              "predictionContract": "cash-turn-start-cfv-full-stack-v1"},
+            {"schema": "hu-cash-public-belief-combo-value-network-v5", "architecture": "wide-baseline-conditioned",
+             "predictionContract": "cash-turn-start-cfv-full-stack-v1"},
         ):
             with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, "architecture"):
                 cash_architecture(payload)
@@ -38,7 +40,7 @@ class CashValueParityTests(unittest.TestCase):
         rules = profile_rules("nl25")
         source = dict(game=dict(cash_rules=rules), rules_sha256=rules_digest(rules))
         with tempfile.TemporaryDirectory() as directory:
-            for architecture in ("compact", "wide", "wide-pooled", "wide-blocker-pooled"):
+            for architecture in ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned"):
                 with self.subTest(architecture=architecture), mx.stream(mx.cpu):
                     model = OwnComboValueNetwork(architecture)
                     for tower in (model.context_tower, model.query_tower, model.head):
@@ -54,10 +56,12 @@ class CashValueParityTests(unittest.TestCase):
                     model.query_tower.layers[2].weight = mx.array(weight)
                     embedding = weight.shape[0]
                     weight = np.array(model.head.layers[0].weight)
-                    if architecture in ("wide-pooled","wide-blocker-pooled"):
+                    if architecture in ("wide-pooled","wide-blocker-pooled","wide-baseline-conditioned"):
                         weight[0, embedding] = .2
                         weight[0, embedding * 2] = .1
                         weight[0, embedding * 3] = .05
+                        if architecture == "wide-baseline-conditioned":
+                            weight[0, -1] = .1
                     else:
                         weight[0, embedding] = .05
                     model.head.layers[0].weight = mx.array(weight)
@@ -87,7 +91,7 @@ class CashValueParityTests(unittest.TestCase):
                         dense = python_predictions(source, payload)
                         cpu = mlx_predictions(source, payload, mx.cpu)
                     expected = baselines + .05 * scales[:, None, None] * queries[:, :, :, 94]
-                    if architecture in ("wide-pooled","wide-blocker-pooled"):
+                    if architecture in ("wide-pooled","wide-blocker-pooled","wide-baseline-conditioned"):
                         own = np.array([.65, .45], np.float32)
                         expected += scales[:, None, None] * (.2 * own)[None, :, None]
                         if architecture == "wide-blocker-pooled":
@@ -98,6 +102,8 @@ class CashValueParityTests(unittest.TestCase):
                                         expected[0,player,query] += .4 * (weights @ queries[0,1-player,1:3,94]) / weights.sum()
                         else:
                             expected += scales[:,None,None] * (.1 * own[::-1])[None,:,None]
+                    if architecture == "wide-baseline-conditioned":
+                        expected += scales[:,None,None] * .1 * baselines / 20.
                     expected *= legal[:, None, :]
                     np.testing.assert_allclose(dense, expected, atol=2e-6, rtol=0)
                     np.testing.assert_allclose(cpu, expected, atol=2e-6, rtol=0)
