@@ -7,7 +7,7 @@ import mlx.core as mx
 import numpy as np
 from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,context_loss_multipliers,run,split_cash_families
 from cash_profiles import profile_rules,rules_digest
-from cash_value_dataset import NETWORK_SCHEMA,POOLED_NETWORK_SCHEMA
+from cash_value_dataset import NETWORK_SCHEMA,POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_CONTRACT
 
 
 class CashValueTrainingTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class CashValueTrainingTests(unittest.TestCase):
     def test_pooled_cash_export_has_versioned_layout_and_zero_correction_baseline(self):
         rules=profile_rules("nl25"); source=dict(game=dict(cash_rules=rules),rules_sha256=rules_digest(rules))
         with tempfile.TemporaryDirectory() as directory:
-            for architecture, schema in [("compact",NETWORK_SCHEMA),("wide",NETWORK_SCHEMA),("wide-pooled",POOLED_NETWORK_SCHEMA)]:
+            for architecture, schema in [("compact",NETWORK_SCHEMA),("wide",NETWORK_SCHEMA),("wide-pooled",POOLED_NETWORK_SCHEMA),("wide-blocker-pooled",BLOCKER_POOLED_NETWORK_SCHEMA)]:
                 model=OwnComboValueNetwork(architecture)
                 self.assertTrue((np.array(model.head.layers[-1].weight) == 0).all())
                 self.assertTrue((np.array(model.head.layers[-1].bias) == 0).all())
@@ -38,8 +38,10 @@ class CashValueTrainingTests(unittest.TestCase):
                 payload=json.loads(path.read_text())
                 self.assertEqual(payload["schema"],schema)
                 self.assertEqual(payload["projection"],"independent-full-stack-clip-and-board-mask-no-zero-sum")
-                embeddings=payload["contextTower"][-1]["outputSize"]+payload["queryTower"][-1]["outputSize"]*(3 if architecture == "wide-pooled" else 1)
+                embeddings=payload["contextTower"][-1]["outputSize"]+payload["queryTower"][-1]["outputSize"]*(3 if architecture in ("wide-pooled","wide-blocker-pooled") else 1)
                 self.assertEqual(payload["head"][0]["inputSize"],embeddings)
+                if architecture == "wide-blocker-pooled":
+                    self.assertEqual(payload["predictionContract"],BLOCKER_POOLED_CONTRACT)
         with self.assertRaisesRegex(ValueError,"architecture"):
             run(Path('must-not-read'),Path('must-not-create'),1,2,architecture="unknown")
 

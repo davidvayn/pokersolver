@@ -8,6 +8,7 @@ import mlx.core as mx
 import numpy as np
 
 from cash_profiles import profile_rules, rules_digest
+from native_value_dataset import COMBOS
 from train_cash_value_network import OwnComboValueNetwork, export_cash_model
 from validate_cash_value_parity import cash_architecture, mlx_predictions, python_predictions
 
@@ -19,6 +20,8 @@ class CashValueParityTests(unittest.TestCase):
             {"schema": "hu-cash-public-belief-combo-value-network-v3", "architecture": "wide"},
             {"schema": "hu-public-belief-combo-value-network-v5", "architecture": "wide-pooled"},
             {"schema": "hu-cash-public-belief-combo-value-network-v3", "architecture": "unknown"},
+            {"schema": "hu-cash-public-belief-combo-value-network-v4", "architecture": "wide-blocker-pooled",
+             "predictionContract": "cash-turn-start-cfv-full-stack-v1"},
         ):
             with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, "architecture"):
                 cash_architecture(payload)
@@ -27,7 +30,7 @@ class CashValueParityTests(unittest.TestCase):
         rules = profile_rules("nl25")
         source = dict(game=dict(cash_rules=rules), rules_sha256=rules_digest(rules))
         with tempfile.TemporaryDirectory() as directory:
-            for architecture in ("compact", "wide", "wide-pooled"):
+            for architecture in ("compact", "wide", "wide-pooled", "wide-blocker-pooled"):
                 with self.subTest(architecture=architecture), mx.stream(mx.cpu):
                     model = OwnComboValueNetwork(architecture)
                     for tower in (model.context_tower, model.query_tower, model.head):
@@ -43,7 +46,7 @@ class CashValueParityTests(unittest.TestCase):
                     model.query_tower.layers[2].weight = mx.array(weight)
                     embedding = weight.shape[0]
                     weight = np.array(model.head.layers[0].weight)
-                    if architecture == "wide-pooled":
+                    if architecture in ("wide-pooled","wide-blocker-pooled"):
                         weight[0, embedding] = .2
                         weight[0, embedding * 2] = .1
                         weight[0, embedding * 3] = .05
@@ -63,6 +66,8 @@ class CashValueParityTests(unittest.TestCase):
                     reaches = np.zeros((1, 2, 1326), np.float32)
                     reaches[0, 0, 1:3] = [1., 3.]
                     reaches[0, 1, 1:3] = [3., 1.]
+                    raw_ranges = reaches / reaches.sum(axis=2,keepdims=True)
+                    source["labels"] = [{"input":{"state":{"ranges":raw_ranges[0].tolist()}}}]
                     scales = np.array([4.], np.float32)
                     baselines = np.zeros((1, 2, 1326), np.float32)
                     baselines[:, 0] = 2.
@@ -74,9 +79,17 @@ class CashValueParityTests(unittest.TestCase):
                         dense = python_predictions(source, payload)
                         cpu = mlx_predictions(source, payload, mx.cpu)
                     expected = baselines + .05 * scales[:, None, None] * queries[:, :, :, 94]
-                    if architecture == "wide-pooled":
+                    if architecture in ("wide-pooled","wide-blocker-pooled"):
                         own = np.array([.65, .45], np.float32)
-                        expected += scales[:, None, None] * (.2 * own + .1 * own[::-1])[None, :, None]
+                        expected += scales[:, None, None] * (.2 * own)[None, :, None]
+                        if architecture == "wide-blocker-pooled":
+                            for player in (0,1):
+                                for query,(a,b) in enumerate(COMBOS):
+                                    weights = raw_ranges[0,1-player,1:3] * ~((COMBOS[1:3] == a).any(axis=1) | (COMBOS[1:3] == b).any(axis=1))
+                                    if weights.sum() > 0:
+                                        expected[0,player,query] += .4 * (weights @ queries[0,1-player,1:3,94]) / weights.sum()
+                        else:
+                            expected += scales[:,None,None] * (.1 * own[::-1])[None,:,None]
                     expected *= legal[:, None, :]
                     np.testing.assert_allclose(dense, expected, atol=2e-6, rtol=0)
                     np.testing.assert_allclose(cpu, expected, atol=2e-6, rtol=0)

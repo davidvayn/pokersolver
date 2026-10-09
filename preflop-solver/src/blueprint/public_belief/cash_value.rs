@@ -3,11 +3,55 @@ use super::*;
 
 pub(super) const NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v2";
 pub(super) const POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v3";
+pub(super) const BLOCKER_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v4";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
+const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-pooled-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
 fn is_cash_schema(schema: &str) -> bool {
-    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA)
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA)
+}
+
+/// Each query conditions on its own two cards, using raw opponent reaches.
+/// Jointly weighted summaries can censor an opponent hand that conflicts with
+/// all currently reached own hands but is compatible with a zero-own-reach query.
+pub(super) fn card_removed_opponent_embeddings(
+    embeddings: &[Vec<f32>; 2],
+    keys: &[usize],
+    ranges: &[Vec<f64>; 2],
+    masses: &[Vec<f64>; 2],
+    width: usize,
+) -> [Vec<f32>; 2] {
+    let combos = all_combos();
+    let mut totals = [vec![0.0f64; width], vec![0.0f64; width]];
+    let mut cards: [Vec<Vec<f64>>; 2] = std::array::from_fn(|_| vec![vec![0.0; width]; 52]);
+    for player in 0..2 {
+        for (row, key) in keys.iter().copied().enumerate() {
+            let weight = ranges[player][key];
+            let [a, b] = combos[key].cards();
+            for col in 0..width {
+                let value = weight * embeddings[player][row * width + col] as f64;
+                totals[player][col] += value;
+                cards[player][a as usize][col] += value;
+                cards[player][b as usize][col] += value;
+            }
+        }
+    }
+    std::array::from_fn(|player| {
+        let other = 1 - player;
+        let mut result = vec![0.0; keys.len() * width];
+        for (row, key) in keys.iter().copied().enumerate() {
+            if masses[player][key] <= EPSILON { continue; }
+            let [a, b] = combos[key].cards();
+            for col in 0..width {
+                let numerator = totals[other][col] - cards[other][a as usize][col]
+                    - cards[other][b as usize][col]
+                    + ranges[other][key] * embeddings[other][row * width + col] as f64;
+                result[row * width + col] = (numerator / masses[player][key]) as f32;
+            }
+        }
+        result
+    })
 }
 
 impl PublicValueNetwork {
@@ -36,7 +80,9 @@ impl PublicValueNetwork {
             || source.cash_rules != self.cash_rules
             || source.effective_stack_bb != self.target_scale_bb
             || self.payoff_contract.as_deref() != Some(PAYOFF)
-            || self.prediction_contract.as_deref() != Some(CONTRACT)
+            || self.prediction_contract.as_deref() != Some(if self.schema == BLOCKER_POOLED_NETWORK_SCHEMA {
+                BLOCKER_POOLED_CONTRACT
+            } else { CONTRACT })
             || !self.uses_exact_ranges
             || self.source_validation_status.as_deref() != Some("research_only")
             || self.source_dataset_sha256.as_ref().map_or(true, |s| {
@@ -258,6 +304,13 @@ mod tests {
         network.head[0].weights = vec![0.0; 4];
         network.validate().unwrap();
         network.validate_cash_game(&config.game).unwrap();
+        network.schema = BLOCKER_POOLED_NETWORK_SCHEMA.into();
+        assert!(network.validate().is_err(), "new pooling cannot silently reinterpret old weights");
+        network.prediction_contract = Some(BLOCKER_POOLED_CONTRACT.into());
+        network.validate().unwrap();
+        network.schema = POOLED_NETWORK_SCHEMA.into();
+        assert!(network.validate().is_err(), "blocker weights cannot downgrade to global pooling");
+        network.prediction_contract = Some(CONTRACT.into());
         network.schema = NETWORK_SCHEMA.into();
         assert!(network.validate().is_err(), "old compact schema cannot discard pooling");
         network.schema = "hu-public-belief-combo-value-network-v5".into();
@@ -295,6 +348,10 @@ mod tests {
                 / weights.iter().sum::<f64>()
         });
         let baseline = network.cash_checkdown_baseline(&state.board, state.actor, state.invested_bb, &state.ranges);
+        for schema in [POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_NETWORK_SCHEMA] {
+        network.schema = schema.into();
+        network.prediction_contract = Some(if schema == BLOCKER_POOLED_NETWORK_SCHEMA { BLOCKER_POOLED_CONTRACT } else { CONTRACT }.into());
+        network.validate().unwrap();
         let actual = network.predict_cash_turn(&config).unwrap();
         let mut aggregate = 0.0;
         for p in 0..2 {
@@ -304,7 +361,12 @@ mod tests {
                     assert_eq!(actual[p][key], 0.0);
                     continue;
                 }
-                let residual = -0.1 + 0.025*pools[p] + 0.075*pools[1-p]
+                let opponent_pool = if schema == BLOCKER_POOLED_NETWORK_SCHEMA {
+                    combos.iter().filter(|other| !other.cards().iter().any(|c| combo.cards().contains(c)))
+                        .map(|other| state.ranges[1-p][other.key()] * (queries[1-p][other.key()][94] * 0.5) as f64).sum::<f64>()
+                        / masses[p][key]
+                } else { pools[1-p] };
+                let residual = -0.1 + 0.025*pools[p] + 0.075*opponent_pool
                     + 0.05*(queries[p][key][94]*0.5) as f64;
                 assert!((actual[p][key] - baseline[p][key] - residual*4.0).abs() < 1e-6);
                 aggregate += state.ranges[p][key]*masses[p][key]*actual[p][key];
@@ -312,5 +374,37 @@ mod tests {
         }
         assert!(actual[0][absent].abs() > 0.01, "zero own reach must not censor a query");
         assert!(aggregate < -0.1, "pooled cash values must not be projected to zero sum");
+        }
+    }
+
+    #[test]
+    fn card_removed_pool_uses_raw_opponent_reaches_for_counterfactual_queries() {
+        let combos = all_combos();
+        let board = [8, 13, 22, 31];
+        let keys = combos.iter().filter(|c| !c.cards().iter().any(|v| board.contains(v)))
+            .map(|c| c.key()).collect::<Vec<_>>();
+        let embeddings: [Vec<f32>; 2] = std::array::from_fn(|_| keys.iter()
+            .map(|key| combos[*key].cards().iter().map(|c| *c as f32).sum()).collect());
+        let mut ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        ranges[0][Combo::new(50, 51).key()] = 1.0;
+        for (cards, weight) in [([50, 40], 0.25), ([51, 44], 0.25), ([32, 33], 0.5)] {
+            ranges[1][Combo::new(cards[0], cards[1]).key()] = weight;
+        }
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|p|
+            compatible_masses_from_card_marginals(&combos, &ranges[1-p]));
+        let actual = card_removed_opponent_embeddings(&embeddings, &keys, &ranges, &masses, 1);
+        for player in 0..2 {
+            for (row, key) in keys.iter().copied().enumerate() {
+                let expected = if masses[player][key] > EPSILON {
+                    combos.iter().filter(|other| !other.cards().iter().any(|c| combos[key].cards().contains(c)))
+                        .map(|other| ranges[1-player][other.key()] * other.cards().iter().map(|c| *c as f64).sum::<f64>())
+                        .sum::<f64>() / masses[player][key]
+                } else { 0.0 };
+                assert!((actual[player][row] as f64 - expected).abs() < 1e-5);
+            }
+        }
+        let row = keys.iter().position(|key| *key == Combo::new(32, 33).key()).unwrap();
+        assert_eq!(ranges[0][keys[row]], 0.0);
+        assert_eq!(actual[0][row], 92.5, "joint pooling would censor both compatible opponent hands");
     }
 }
