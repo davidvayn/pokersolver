@@ -6,13 +6,53 @@ from pathlib import Path
 import mlx.core as mx
 import mlx.optimizers as optim
 import numpy as np
-from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,context_loss_multipliers,run,split_cash_families
+from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,cash_regression_losses,context_loss_multipliers,run,split_cash_families
 from cash_profiles import profile_rules,rules_digest
 from cash_value_dataset import NETWORK_SCHEMA,POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_CONTRACT
 from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_huber_uses_net_bb_errors_and_retains_mse_metric_and_local_gradients(self):
+        with mx.stream(mx.cpu):
+            errors = mx.array([-2.,-.5,0.,.5,2.]); weights = mx.ones((5,))
+            mse,objective = cash_regression_losses(errors,weights,"huber",1.)
+            self.assertAlmostEqual(float(mse.item()),1.7,places=6)
+            self.assertAlmostEqual(float(objective.item()),1.3,places=6)
+            gradient = mx.grad(lambda values: cash_regression_losses(values,weights,"huber",1.)[1])(errors)
+            np.testing.assert_allclose(np.array(gradient),[-.4,-.2,0.,.2,.4],atol=1e-7)
+            small = mx.array([-.5,0.,.5])
+            first,second = cash_regression_losses(small,mx.ones((3,)),"huber",1.)
+            self.assertEqual(float(first.item()),float(second.item()))
+            weighted_mse,weighted_huber = cash_regression_losses(mx.array([.5,2.]),mx.array([1.,3.]),"huber",1.)
+            self.assertAlmostEqual(float(weighted_mse.item()),3.0625,places=6)
+            self.assertAlmostEqual(float(weighted_huber.item()),2.3125,places=6)
+            baseline,baseline_objective = cash_regression_losses(errors,weights)
+            self.assertEqual(float(baseline.item()),float(mse.item()))
+            self.assertEqual(float(baseline_objective.item()),float(mse.item()))
+
+    def test_invalid_regression_options_fail_before_dataset_io(self):
+        for invalid in (None,True,1,"unknown",["mse"]):
+            with self.assertRaisesRegex(ValueError,"regression loss"):
+                run(Path("must-not-read"),Path("must-not-create"),7101,2,regression_loss=invalid)
+        for invalid in (None,True,0.,-.1,.009,20.1,float("nan"),float("inf"),"1"):
+            with self.assertRaisesRegex(ValueError,"Huber threshold"):
+                run(Path("must-not-read"),Path("must-not-create"),7101,2,huber_delta_bb=invalid)
+
+    def test_frozen_cash_weights_record_loss_and_unchanged_checkpoint_criterion(self):
+        rules = profile_rules("nl25"); source = dict(game=dict(cash_rules=rules),rules_sha256=rules_digest(rules))
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in ("mse","huber"):
+                path = Path(directory)/f"{mode}.json"
+                export_cash_model(OwnComboValueNetwork("wide-pooled"),path,7101,source,"a"*64,
+                                  regression_loss=mode,huber_delta_bb=1.)
+                payload = json.loads(path.read_text())
+                self.assertEqual(payload["regressionLoss"],mode)
+                self.assertEqual(payload["huberDeltaBb"],1.)
+                self.assertEqual(payload["checkpointSelectionCriterion"],"tuning-own-payoff-mse-plus-explicit-auxiliary-penalties")
+                self.assertEqual(payload["regressionLossNormalization"],
+                    "twice-standard-huber-local-mse-match" if mode=="huber" else "squared-net-bb-error")
+
     def test_adam_moment_correction_is_an_explicit_matched_pilot_option(self):
         with mx.stream(mx.cpu):
             gradient = {"x":mx.array([1.])}; initial = {"x":mx.array([0.])}

@@ -117,7 +117,8 @@ def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1.):
+    validate_cash_regression_options(regression_loss,huber_delta_bb)
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
@@ -133,6 +134,9 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    profileValueLossWeight=profile_value_loss_weight,
                    adamBiasCorrection=adam_bias_correction,
                    learningRate=learning_rate,
+                   regressionLoss=regression_loss, huberDeltaBb=huber_delta_bb,
+                   regressionLossNormalization=("twice-standard-huber-local-mse-match" if regression_loss=="huber" else "squared-net-bb-error"),
+                   checkpointSelectionCriterion="tuning-own-payoff-mse-plus-explicit-auxiliary-penalties",
                    flopLeafLossWeight=flop_leaf_loss_weight,
                    projection="independent-full-stack-clip-and-board-mask-no-zero-sum",
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
@@ -179,6 +183,33 @@ def cash_profile_value_penalty(prediction, scales, joint_weights, own_targets):
     return mx.mean(mx.sum((means-own_targets)**2,axis=1))
 
 
+def validate_cash_regression_options(regression_loss: str, huber_delta_bb: float):
+    if type(regression_loss) is not str or regression_loss not in ("mse","huber"):
+        raise ValueError("cash regression loss must be mse or huber")
+    if (type(huber_delta_bb) not in (int,float) or not np.isfinite(huber_delta_bb)
+            or not .01 <= huber_delta_bb <= 20):
+        raise ValueError("cash Huber threshold must be finite in [0.01,20] net bb")
+
+
+def cash_regression_losses(errors_bb, weights, regression_loss: str = "mse", huber_delta_bb: float = 1.):
+    """Return unchanged weighted MSE and a separately selected fit objective.
+
+    Errors arrive in net bb, not pot-scaled network units. Twice the standard
+    Huber preserves MSE's local value/gradient; only its outlier gradients are
+    bounded. No target/output clipping or inference projection is introduced.
+    """
+    validate_cash_regression_options(regression_loss,huber_delta_bb)
+    squared = errors_bb**2
+    denominator = mx.maximum(mx.sum(weights),1e-9)
+    mse = mx.sum(weights*squared)/denominator
+    if regression_loss == "mse":
+        return mse,mse
+    absolute = mx.abs(errors_bb)
+    terms = mx.where(absolute <= huber_delta_bb,squared,
+                     huber_delta_bb*(2*absolute-huber_delta_bb))
+    return mse,mx.sum(weights*terms)/denominator
+
+
 def split_cash_families(source: dict, seed: int, reference: dict | None = None):
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -219,7 +250,7 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1.):
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
@@ -237,6 +268,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     if (type(learning_rate) not in (int,float) or not np.isfinite(learning_rate)
             or not 0 < learning_rate <= .1):
         raise ValueError("cash learning rate must be finite in (0,0.1]")
+    validate_cash_regression_options(regression_loss,huber_delta_bb)
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -276,18 +308,18 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         weighted = loss_weight[rows]
         if weight_training_contexts:
             weighted = weighted * context_weight[rows, None]
-        regression = mx.sum(weighted * errors**2) / mx.maximum(mx.sum(weighted), 1e-9)
+        mse,regression = cash_regression_losses(errors,weighted,regression_loss,huber_delta_bb)
         if accounting_loss_weight == 0 and profile_value_loss_weight == 0:
-            return regression, mx.array(0.)
+            return mse,regression,mx.array(0.)
         penalty = mx.array(0.)
         if accounting_loss_weight:
             penalty += accounting_loss_weight * cash_accounting_penalty(prediction,tensors[3][rows],tensors[2][rows],house_target[rows])
         if profile_value_loss_weight:
             penalty += profile_value_loss_weight * cash_profile_value_penalty(prediction,tensors[3][rows],tensors[2][rows],own_target[rows])
-        return regression, penalty
+        return mse,regression,penalty
 
     def loss_fn(current, rows, weight_training_contexts=True):
-        regression, penalty = loss_components(current,rows,weight_training_contexts)
+        _,regression,penalty = loss_components(current,rows,weight_training_contexts)
         return regression + penalty
 
     loss_grad = nn.value_and_grad(model, loss_fn); train_rows = mx.array(train)
@@ -299,7 +331,10 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         mx.eval(model.parameters(), optimizer.state, loss)
         if step == 1 or step % 10 == 0 or step == steps:
             with mx.stream(mx.cpu):
-                value = float(loss_fn(model, mx.array(tuning),False).item())
+                # Isolate the fit objective: checkpoint selection retains the
+                # original MSE plus any explicitly requested auxiliary terms.
+                tuning_mse,_,tuning_penalty = loss_components(model,mx.array(tuning),False)
+                value = float((tuning_mse+tuning_penalty).item())
             if value < best_tuning:
                 best_tuning, best_step = value, step
                 best_parameters = [(key, np.array(value)) for key, value in tree_flatten(model.parameters())]
@@ -318,12 +353,14 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate)
+    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
               "steps":steps,"selected_step":best_step,"training_initial_mse_bb":initial_mse,
               "adam_bias_correction":adam_bias_correction,"learning_rate":learning_rate,
+              "regression_loss":regression_loss,"huber_delta_bb":huber_delta_bb,
+              "checkpoint_selection_criterion":"tuning-own-payoff-mse-plus-explicit-auxiliary-penalties",
               "split_seed":split_seed,
               "split_reference_sha256":hashlib.sha256(reference_bytes).hexdigest() if reference_bytes else None,
               "training_initial_objective_bb_squared":initial_loss,
@@ -355,8 +392,10 @@ def main():
     parser.add_argument("--feature-schema",choices=CASH_FEATURE_SCHEMAS,default=FEATURE_SCHEMA_BOARD_RELATIVE)
     parser.add_argument("--adam-bias-correction",action="store_true",help="Explicit matched-pilot comparison; legacy default remains uncorrected")
     parser.add_argument("--learning-rate",type=float,default=1e-3,help="Explicit bounded pilot rate; original default remains unchanged")
+    parser.add_argument("--regression-loss",choices=("mse","huber"),default="mse",help="Matched cash fit objective; checkpoint selection and reporting retain MSE")
+    parser.add_argument("--huber-delta-bb",type=float,default=1.,help="Huber fit threshold in net bb; small-error gradients match original squared loss")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb), indent=2))
 
 
 if __name__ == "__main__": main()
