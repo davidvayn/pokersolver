@@ -78,7 +78,7 @@ def feature_arrays(source: dict):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0.):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1.):
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     payload.update(schema=cash_values.NETWORK_SCHEMA, cashRules=source["game"]["cash_rules"],
@@ -87,6 +87,7 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    predictionContract=cash_values.PREDICTION_CONTRACT,
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,
+                   flopLeafLossWeight=flop_leaf_loss_weight,
                    projection="independent-full-stack-clip-and-board-mask-no-zero-sum",
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
     path.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -134,11 +135,35 @@ def split_cash_families(source: dict, seed: int, reference: dict | None = None):
     return family_split(split_source, seed, .2, .2,reference=pinned)
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None):
+def context_loss_multipliers(source: dict, flop_leaf_loss_weight: float):
+    """Retain authentic supervision while testing forced-coverage curricula.
+
+Only captured, replayable frozen-flop leaf parents receive the multiplier.
+It never alters reaches, native values, or tuning/holdout membership.
+"""
+    if not np.isfinite(flop_leaf_loss_weight) or not 0 < flop_leaf_loss_weight <= 1:
+        raise ValueError("forced flop leaf loss weight must be finite in (0,1]")
+    result = np.ones(len(source["labels"]), dtype=np.float32)
+    parents = source.get("source_datasets", {}).get("sources", [])
+    cursor = 0; leaf_rows = 0
+    for parent in parents:
+        size = len(parent["selected_rows"])
+        if parent["dataset"].get("flop_leaf_provenance") is not None:
+            result[cursor:cursor+size] = flop_leaf_loss_weight
+            leaf_rows += size
+        cursor += size
+    if flop_leaf_loss_weight != 1 and (not parents or not leaf_rows or cursor != len(result)):
+        raise ValueError("weighted coverage requires a validated mixed frozen-flop leaf corpus")
+    return result
+
+
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1.):
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
         raise ValueError("cash accounting loss weight must be finite and in 0..100")
+    if not np.isfinite(flop_leaf_loss_weight) or not 0 < flop_leaf_loss_weight <= 1:
+        raise ValueError("forced flop leaf loss weight must be finite in (0,1]")
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -149,27 +174,32 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     reference_bytes = split_reference.read_bytes() if split_reference else None
     reference = json.loads(reference_bytes) if reference_bytes else None
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
+    context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
     contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source)
     mx.random.seed(seed); model = OwnComboValueNetwork(); optimizer = optim.Adam(learning_rate=1e-3)
     tensors = [mx.array(v) for v in (contexts, queries, weights, scales, baselines, legal)]
     target = mx.array(targets); loss_weight = mx.array(loss_weights)
+    context_weight = mx.array(context_weights)
     # Supervised regularization against an independently traversed target
     # house ledger. Never infer rake by negating the predicted own values, add
     # rake as an inference feature, or project a failing prediction to pass.
     house = np.asarray([l["metrics"]["cash"]["expected_house_rake_bb"] for l in source["labels"]])
     house_target = mx.array(house.astype(np.float32))
 
-    def loss_components(current, rows):
+    def loss_components(current, rows, weight_training_contexts=True):
         prediction = current(*(v[rows] for v in tensors))
         errors = (prediction - target[rows]) * tensors[3][rows, None]
-        regression = mx.sum(loss_weight[rows] * errors**2) / mx.maximum(mx.sum(loss_weight[rows]), 1e-9)
+        weighted = loss_weight[rows]
+        if weight_training_contexts:
+            weighted = weighted * context_weight[rows, None]
+        regression = mx.sum(weighted * errors**2) / mx.maximum(mx.sum(weighted), 1e-9)
         if accounting_loss_weight == 0:
             return regression, mx.array(0.)
         penalty = cash_accounting_penalty(prediction,tensors[3][rows],tensors[2][rows],house_target[rows])
         return regression, penalty
 
-    def loss_fn(current, rows):
-        regression, penalty = loss_components(current,rows)
+    def loss_fn(current, rows, weight_training_contexts=True):
+        regression, penalty = loss_components(current,rows,weight_training_contexts)
         return regression + accounting_loss_weight * penalty
 
     loss_grad = nn.value_and_grad(model, loss_fn); train_rows = mx.array(train)
@@ -181,7 +211,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         mx.eval(model.parameters(), optimizer.state, loss)
         if step == 1 or step % 10 == 0 or step == steps:
             with mx.stream(mx.cpu):
-                value = float(loss_fn(model, mx.array(tuning)).item())
+                value = float(loss_fn(model, mx.array(tuning),False).item())
             if value < best_tuning:
                 best_tuning, best_step = value, step
                 best_parameters = [(key, np.array(value)) for key, value in tree_flatten(model.parameters())]
@@ -201,7 +231,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight)
+    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
@@ -210,6 +240,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "split_reference_sha256":hashlib.sha256(reference_bytes).hexdigest() if reference_bytes else None,
               "training_initial_objective_bb_squared":initial_loss,
               "accounting_loss_weight":accounting_loss_weight,
+              "flop_leaf_loss_weight":flop_leaf_loss_weight,
               "heldout_rmse_bb":rmse,"maximum_own_payoff_accounting_bias_bb":float(residuals.max()),
               "exact_checkdown_heldout_rmse_bb":baseline_rmse,"beats_checkdown_on_holdout":rmse < baseline_rmse,
               "native_python_maximum_difference_bb":parity,
@@ -229,8 +260,9 @@ def main():
     parser.add_argument("--accounting-loss-weight", type=float, default=0.)
     parser.add_argument("--split-seed", type=int, help="Pin identical flop-family splits across independent training seeds")
     parser.add_argument("--split-reference",type=Path,help="Keep tuning/holdout families unchanged when adding training contexts")
+    parser.add_argument("--flop-leaf-loss-weight",type=float,default=1.,help="Training weight for captured forced-coverage leaf parents; does not change beliefs or targets")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight), indent=2))
 
 
 if __name__ == "__main__": main()
