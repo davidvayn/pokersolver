@@ -91,7 +91,9 @@ describe('AnalystRail decision feedback', () => {
   it('identifies Home game and keeps the chosen online reference visibly unavailable', () => {
     const html = renderFeedback(null, 'settings');
     expect(html).toContain('Home game · No rake');
-    expect(html).toMatch(/<option[^>]*disabled=""[^>]*>PokerStars NL25 · Raked · Not available<\/option>/);
+    expect(html).toContain('PokerStars NL25 · Raked · Not available');
+    expect(html).toContain('role="combobox"');
+    expect(html).not.toContain('<select');
     expect(html).toContain('4.5%');
     expect(html).toContain('0.50 cap');
     expect(html).toContain('NL20 is not listed in this USD schedule');
@@ -108,8 +110,8 @@ describe('AnalystRail decision feedback', () => {
       pendingSettings: null, onSettingsChange: vi.fn(), fullDepths: [20, 40],
       manifest: null, sessionDecisions: [], historyWarning: '', opponentModel: null,
     }));
-    expect(html).toContain('<option value="40" selected="">40bb</option>');
-    expect(html).not.toContain('<option value="100">100bb</option>');
+    expect(html).toContain('40 bb</span>');
+    expect(html).not.toContain('100 bb</span>');
     expect(html).toContain('Only installed model depths are available');
   });
 

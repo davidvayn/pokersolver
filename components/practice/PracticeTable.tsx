@@ -19,10 +19,7 @@ import { PokerCard } from '@/components/cards/PokerCard';
 import { CashSettlementSummary } from '@/components/practice/CashSettlementSummary';
 import { practiceGameProfile } from '@/lib/practice-game-profiles';
 import { usePracticeTableSounds } from '@/components/practice/usePracticeTableSounds';
-import {
-  playPracticeSound,
-  unlockPracticeAudio,
-} from '@/lib/practice-sounds';
+import { playPracticeSound, unlockPracticeAudio } from '@/lib/practice-sounds';
 import { totalPotBb } from '@/lib/practice-engine';
 import { playableActionChoices } from '@/lib/practice-grading';
 import type {
@@ -226,7 +223,7 @@ export function PracticeTable({
     : 'big-blind';
   const pot = state
     ? state.terminal
-      ? state.result?.potBb ?? 0
+      ? (state.result?.potBb ?? 0)
       : totalPotBb(state)
     : 1.5;
   const latestAction = state?.actionHistory.at(-1) ?? null;
@@ -269,16 +266,19 @@ export function PracticeTable({
                 ? `${actionAnnouncement} Hand review complete. Continue when ready.`
                 : status === 'unavailable'
                   ? 'Practice model unavailable'
-                  : errorMessage ?? 'Practice error';
+                  : (errorMessage ?? 'Practice error');
 
   return (
     <section aria-labelledby="practice-table-title" className="min-w-0">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="practice-table-header mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 id="practice-table-title" className="text-xl font-semibold sm:text-2xl">
-            Heads-up table
-          </h1>
-          <p className="mt-1 text-sm text-muted">
+          <h2
+            id="practice-table-title"
+            className="text-xl font-semibold sm:text-2xl"
+          >
+            Your table
+          </h2>
+          <p className={state?.cash ? 'mt-1 text-sm text-muted' : 'sr-only'}>
             {state?.cash
               ? `${practiceGameProfile(state.cash.rules.id)?.label ?? 'Cash study'} · ${modeLabel(mode)} · ${state.depthBb}bb · ${state.cash.rules.blindsUnits.map((units) => units / state.cash!.rules.unitsPerBb).join('/')}bb · ${state.cash.rules.rake.rateBasisPoints / 100}% rake`
               : `Home game · ${modeLabel(mode)} · ${state?.depthBb ?? 20}bb · 0.5/1bb · no rake`}
@@ -322,7 +322,10 @@ export function PracticeTable({
                   state={state}
                   opponent
                   revealOpponent={revealOpponent}
-                  folding={latestAction?.kind === 'fold' && latestAction.actor === opponent}
+                  folding={
+                    latestAction?.kind === 'fold' &&
+                    latestAction.actor === opponent
+                  }
                 />
               </div>
 
@@ -331,9 +334,11 @@ export function PracticeTable({
                   <span
                     key={`${index}-${state.board[index] ?? 'empty'}`}
                     className={`practice-board-card ${state.board[index] !== undefined ? 'practice-board-card-dealt' : ''}`}
-                    style={{
-                      '--practice-deal-order': index,
-                    } as CSSProperties}
+                    style={
+                      {
+                        '--practice-deal-order': index,
+                      } as CSSProperties
+                    }
                   >
                     <PokerCard card={state.board[index]} />
                   </span>
@@ -350,7 +355,10 @@ export function PracticeTable({
                   state={state}
                   opponent={false}
                   revealOpponent
-                  folding={latestAction?.kind === 'fold' && latestAction.actor === state.hero}
+                  folding={
+                    latestAction?.kind === 'fold' &&
+                    latestAction.actor === state.hero
+                  }
                 />
               </div>
 
@@ -378,22 +386,31 @@ export function PracticeTable({
               )}
 
               <div className="practice-action-strip">
-                <div className="practice-action-strip-heading" aria-hidden="true">
+                <div
+                  className="practice-action-strip-heading"
+                  aria-hidden="true"
+                >
                   <History />
                   Table log
                 </div>
                 <ol aria-label="Action history">
-                  {state.actionHistory.slice(-6).map((action, index, actions) => (
-                    <li
-                      key={action.id}
-                      className={index === actions.length - 1 ? 'practice-action-log-latest' : ''}
-                    >
-                      <span className="practice-action-log-actor">
-                        {action.actor === state.hero ? 'You' : 'Opponent'}
-                      </span>
-                      <strong>{action.label}</strong>
-                    </li>
-                  ))}
+                  {state.actionHistory
+                    .slice(-6)
+                    .map((action, index, actions) => (
+                      <li
+                        key={action.id}
+                        className={
+                          index === actions.length - 1
+                            ? 'practice-action-log-latest'
+                            : ''
+                        }
+                      >
+                        <span className="practice-action-log-actor">
+                          {action.actor === state.hero ? 'You' : 'Opponent'}
+                        </span>
+                        <strong>{action.label}</strong>
+                      </li>
+                    ))}
                   {state.actionHistory.length === 0 && (
                     <li className="practice-action-log-latest">
                       <span className="practice-action-log-actor">Table</span>
@@ -436,11 +453,20 @@ export function PracticeTable({
             <div className="practice-table-overlay">
               <div className="max-w-md rounded-lg border border-white/15 bg-neutral-950/85 p-5 text-center text-white shadow-2xl backdrop-blur-sm">
                 {status === 'loading' || status === 'solving' ? (
-                  <LoaderCircle className="mx-auto h-6 w-6 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  <LoaderCircle
+                    className="mx-auto h-6 w-6 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
                 ) : status === 'unavailable' ? (
-                  <ShieldAlert className="mx-auto h-6 w-6 text-amber-300" aria-hidden="true" />
+                  <ShieldAlert
+                    className="mx-auto h-6 w-6 text-amber-300"
+                    aria-hidden="true"
+                  />
                 ) : (
-                  <AlertTriangle className="mx-auto h-6 w-6 text-red-300" aria-hidden="true" />
+                  <AlertTriangle
+                    className="mx-auto h-6 w-6 text-red-300"
+                    aria-hidden="true"
+                  />
                 )}
                 <p className="mt-3 text-sm font-semibold">
                   {status === 'loading'
@@ -482,7 +508,10 @@ export function PracticeTable({
 
       {state?.cash && state.result?.cashSettlement && (
         <div className="mt-4">
-          <CashSettlementSummary settlement={state.result.cashSettlement} rules={state.cash.rules} />
+          <CashSettlementSummary
+            settlement={state.result.cashSettlement}
+            rules={state.cash.rules}
+          />
         </div>
       )}
 

@@ -18,7 +18,7 @@ describe('study areas keep their own rake assumptions', () => {
       format: TABLE_FORMATS.find((format) => format.seats === 2)!,
       hero: 'BTN', villain: 'BB', scenarios: [scenario], scenario,
       available: scenario.charts, active: scenario.charts[0], strategy: {}, summary: [],
-      onFormat: noop, onMatchup: noop, onScenario: noop,
+      onFormat: noop, onMatchup: noop, onScenario: noop, onChart: noop,
     }));
     expect(html).toContain(label);
     expect(html).toContain(economics);

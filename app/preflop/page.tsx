@@ -84,6 +84,7 @@ export default function PreflopPage() {
         setScenarioId(id);
         setSelectedId(null);
       }}
+      onChart={setSelectedId}
     />
   );
 }

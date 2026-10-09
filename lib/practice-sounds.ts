@@ -21,18 +21,15 @@ interface QueuedPracticeSound {
   delaySeconds: number;
 }
 
-const WAGER_ACTIONS = new Set<ActionKind>([
-  'call',
-  'bet',
-  'raise',
-  'all-in',
-]);
+const WAGER_ACTIONS = new Set<ActionKind>(['call', 'bet', 'raise', 'all-in']);
 
 const SOUND_URLS = {
   cardSlide: '/sounds/card-slide-1.ogg',
   chipLay: '/sounds/chip-lay-1.ogg',
   chipsCollide: '/sounds/chips-collide-1.ogg',
 } as const;
+
+const CHIP_VOLUME = 0.3;
 
 let audioContext: AudioContext | null = null;
 let soundBuffers: PracticeSoundBuffers | null = null;
@@ -186,9 +183,23 @@ function playChipStack(
   delaySeconds: number
 ): void {
   const start = context.currentTime + delaySeconds;
-  scheduleSample(context, buffers.chipLay, start, 0.48, 0.97);
-  scheduleSample(context, buffers.chipsCollide, start + 0.025, 0.38, 0.94, true);
-  scheduleSample(context, buffers.chipsCollide, start + 0.075, 0.23, 1.08, true);
+  scheduleSample(context, buffers.chipLay, start, 0.48 * CHIP_VOLUME, 0.97);
+  scheduleSample(
+    context,
+    buffers.chipsCollide,
+    start + 0.025,
+    0.38 * CHIP_VOLUME,
+    0.94,
+    true
+  );
+  scheduleSample(
+    context,
+    buffers.chipsCollide,
+    start + 0.075,
+    0.23 * CHIP_VOLUME,
+    1.08,
+    true
+  );
 }
 
 function playLoadedPracticeSound(
@@ -210,7 +221,11 @@ function playLoadedPracticeSound(
 }
 
 function flushPendingSounds(context: AudioContext): void {
-  if (context.state !== 'running' || !soundBuffers || pendingSounds.length === 0) {
+  if (
+    context.state !== 'running' ||
+    !soundBuffers ||
+    pendingSounds.length === 0
+  ) {
     return;
   }
 

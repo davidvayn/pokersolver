@@ -25,9 +25,14 @@ export function SettingsModal() {
       if (e.key !== 'Tab' || !panelRef.current) return;
       const focusable = [
         ...panelRef.current.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          'button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])'
         ),
-      ].filter((element) => !element.hasAttribute('disabled'));
+      ].filter(
+        (element) =>
+          !element.hasAttribute('disabled') &&
+          element.tabIndex >= 0 &&
+          element.getClientRects().length > 0
+      );
       if (focusable.length === 0) {
         e.preventDefault();
         panelRef.current.focus();

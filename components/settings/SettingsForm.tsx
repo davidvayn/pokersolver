@@ -2,25 +2,20 @@
 
 import { useEffect, useId, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
-import {
-  PROVIDER_LIST,
-  PROVIDERS,
-  type ProviderId,
-} from '@/lib/ai/providers';
-import {
-  type AiSettings,
-  loadSettings,
-  saveSettings,
-} from '@/lib/ai/settings';
+import { PROVIDER_LIST, PROVIDERS, type ProviderId } from '@/lib/ai/providers';
+import { type AiSettings, loadSettings, saveSettings } from '@/lib/ai/settings';
 import { useUi } from '@/lib/ui-store';
 import { ChatGptConnection } from './ChatGptConnection';
+import { Select } from '@/components/ui/Select';
 
 interface SettingsFormProps {
   sectionHeadingLevel?: 'h2' | 'h3';
+  page?: boolean;
 }
 
 export function SettingsForm({
   sectionHeadingLevel = 'h2',
+  page = false,
 }: SettingsFormProps) {
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [saved, setSaved] = useState(false);
@@ -30,7 +25,6 @@ export function SettingsForm({
   const solverStatsDescriptionId = useId();
   const aiSettingsHeadingId = useId();
   const providerLabelId = useId();
-  const aiModelId = useId();
   const aiKeyId = useId();
   const SectionHeading = sectionHeadingLevel;
 
@@ -48,7 +42,8 @@ export function SettingsForm({
   if (!settings) return null;
 
   const provider = PROVIDERS[settings.provider];
-  const chatGptAuth = settings.provider === 'openai' && settings.openaiAuth === 'chatgpt';
+  const chatGptAuth =
+    settings.provider === 'openai' && settings.openaiAuth === 'chatgpt';
 
   function update(next: Partial<AiSettings>) {
     const merged = { ...settings!, ...next };
@@ -67,7 +62,7 @@ export function SettingsForm({
   }
 
   return (
-    <div>
+    <div className={page ? 'settings-form' : ''}>
       <section
         aria-labelledby={solverDisplayHeadingId}
         className="border-b border-border pb-5"
@@ -78,14 +73,14 @@ export function SettingsForm({
         >
           Solver display
         </SectionHeading>
-        <label className="mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-4 rounded-md border border-border bg-surface-2 px-3 py-2.5">
+        <label className="settings-toggle mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-4 rounded-md border border-border bg-surface-2 px-3 py-2.5">
           <span>
-            <span className="block text-sm font-medium">Stats for nerds</span>
+            <span className="block text-sm font-medium">Solve diagnostics</span>
             <span
               id={solverStatsDescriptionId}
               className="mt-0.5 block text-xs leading-relaxed text-muted"
             >
-              Show solve diagnostics below the strategy.
+              Iterations, time, and convergence.
             </span>
           </span>
           <span className="relative shrink-0">
@@ -116,16 +111,13 @@ export function SettingsForm({
         >
           AI analysis
         </SectionHeading>
-        <div
-          id={providerLabelId}
-          className="mb-2 block text-sm font-medium"
-        >
+        <div id={providerLabelId} className="sr-only">
           AI Provider
         </div>
         <div
           role="group"
           aria-labelledby={providerLabelId}
-          className="mb-4 flex flex-wrap gap-2"
+          className="settings-providers mb-4 flex flex-wrap gap-2"
         >
           {PROVIDER_LIST.map((p) => (
             <button
@@ -140,90 +132,128 @@ export function SettingsForm({
                   : 'border-border text-muted hover:text-fg')
               }
             >
-              {p.label}
+              {p.id === 'anthropic'
+                ? 'Claude'
+                : p.id === 'openai'
+                  ? 'OpenAI'
+                  : 'Gemini'}
             </button>
           ))}
         </div>
 
         {settings.provider === 'openai' && (
           <>
-            <div className="mb-4 flex gap-2" role="group" aria-label="OpenAI connection method">
+            <div
+              className="mb-4 flex gap-2"
+              role="group"
+              aria-label="OpenAI connection method"
+            >
               {(['chatgpt', 'key'] as const).map((method) => (
-                <button key={method} type="button" onClick={() => update({ openaiAuth: method, model: provider.defaultModel })}
+                <button
+                  key={method}
+                  type="button"
+                  onClick={() =>
+                    update({ openaiAuth: method, model: provider.defaultModel })
+                  }
                   aria-pressed={(settings.openaiAuth ?? 'key') === method}
-                  className="min-h-11 rounded-md border border-border px-3 py-2 text-sm aria-pressed:border-accent focus-visible:ring-2 focus-visible:ring-accent">
+                  className="min-h-11 rounded-md border border-border px-3 py-2 text-sm aria-pressed:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+                >
                   {method === 'chatgpt' ? 'ChatGPT login' : 'API key'}
                 </button>
               ))}
             </div>
-            {chatGptAuth && <ChatGptConnection settings={settings} update={update} />}
+            {chatGptAuth && (
+              <ChatGptConnection settings={settings} update={update} />
+            )}
           </>
         )}
 
-        {!chatGptAuth && <>
-        <label htmlFor={aiModelId} className="mb-2 block text-sm font-medium">
-          Model
-        </label>
-        <select
-          id={aiModelId}
-          value={settings.model}
-          onChange={(e) => update({ model: e.target.value })}
-          className="mb-4 min-h-11 w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-fg outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          {provider.models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
+        {!chatGptAuth && (
+          <>
+            <Select
+              label="Model"
+              value={settings.model}
+              options={provider.models.map((model) => ({
+                value: model,
+                label: model,
+              }))}
+              onChange={(model) => update({ model })}
+              className="mb-4"
+            />
 
-        <label htmlFor={aiKeyId} className="mb-2 block text-sm font-medium">
-          {provider.label} API Key
-        </label>
-        <input
-          id={aiKeyId}
-          name="ai-api-key"
-          type="password"
-          autoComplete="off"
-          value={settings.apiKeys[settings.provider] ?? ''}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder={provider.keyPlaceholder}
-          spellCheck={false}
-          className="min-h-11 w-full rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-base outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
-        />
-        <div className="mt-2 flex items-center justify-between text-xs">
-          <a
-            href={provider.keyUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex min-h-11 items-center gap-1 text-muted underline hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            Get a key
-            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-          </a>
-          <span role="status" aria-live="polite" className="text-accent">
-            {saved ? 'Saved' : ''}
-          </span>
-        </div>
+            <label htmlFor={aiKeyId} className="mb-2 block text-sm font-medium">
+              API key
+            </label>
+            <input
+              id={aiKeyId}
+              name="ai-api-key"
+              type="password"
+              autoComplete="off"
+              value={settings.apiKeys[settings.provider] ?? ''}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder={provider.keyPlaceholder}
+              spellCheck={false}
+              className="min-h-11 w-full rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-base outline-none focus:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+            />
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <a
+                href={provider.keyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-11 items-center gap-1 text-muted underline hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                Get a key
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              </a>
+              <span role="status" aria-live="polite" className="text-accent">
+                {saved ? 'Saved' : ''}
+              </span>
+            </div>
 
-        <p className="mt-4 text-xs text-muted">
-          Your key is stored only in this browser and forwarded through a
-          serverless proxy to the provider. It is never persisted on the server.
-        </p>
-        {settings.provider === 'gemini' && (
-          <p className="mt-3 text-xs leading-relaxed text-muted">
-            Google login requires an OAuth client and Cloud project registered for this app.
-            A Gemini subscription does not provide API access automatically.{' '}
-            <a href="https://ai.google.dev/gemini-api/docs/oauth" target="_blank" rel="noreferrer" className="underline">Google OAuth setup</a>
-          </p>
+            <p className="mt-2 text-sm text-muted">
+              Stored in this browser. Saved automatically.
+            </p>
+            <details className="study-disclosure mt-4">
+              <summary>Connection details</summary>
+              <div>
+                <p className="text-sm text-muted">
+                  Your key is stored only in this browser and forwarded through
+                  a serverless proxy to the provider. It is never persisted on
+                  the server.
+                </p>
+                {settings.provider === 'gemini' && (
+                  <p className="mt-3 text-xs leading-relaxed text-muted">
+                    Google login requires an OAuth client and Cloud project
+                    registered for this app. A Gemini subscription does not
+                    provide API access automatically.{' '}
+                    <a
+                      href="https://ai.google.dev/gemini-api/docs/oauth"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline"
+                    >
+                      Google OAuth setup
+                    </a>
+                  </p>
+                )}
+                {settings.provider === 'anthropic' && (
+                  <p className="mt-3 text-xs leading-relaxed text-muted">
+                    Claude account login is not available for this app. Use a
+                    Console API key.{' '}
+                    <a
+                      href="https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline"
+                    >
+                      Claude integration options
+                    </a>
+                  </p>
+                )}
+              </div>
+            </details>
+          </>
         )}
-        {settings.provider === 'anthropic' && (
-          <p className="mt-3 text-xs leading-relaxed text-muted">
-            Claude account login is not available for this app. Use a Console API key.{' '}
-            <a href="https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account" target="_blank" rel="noreferrer" className="underline">Claude integration options</a>
-          </p>
-        )}
-        </>}
       </section>
     </div>
   );
