@@ -10,10 +10,18 @@ import numpy as np
 from cash_profiles import profile_rules, rules_digest
 from native_value_dataset import COMBOS
 from train_cash_value_network import OwnComboValueNetwork, export_cash_model
-from validate_cash_value_parity import cash_architecture, mlx_predictions, python_predictions
+from validate_cash_value_parity import cash_architecture, cash_feature_schema, mlx_predictions, python_predictions
+from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT
 
 
 class CashValueParityTests(unittest.TestCase):
+    def test_feature_schema_is_required_and_cannot_silently_fall_back(self):
+        for invalid in (None, "unknown", "rank-suit-invariant-combo-query-v1"):
+            with self.assertRaisesRegex(ValueError,"feature schema"):
+                cash_feature_schema({"featureSchema":invalid})
+        for supported in (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT):
+            self.assertEqual(cash_feature_schema({"featureSchema":supported}),supported)
+
     def test_architecture_and_cash_schema_cannot_be_relabelled(self):
         for payload in (
             {"schema": "hu-cash-public-belief-combo-value-network-v2", "architecture": "wide-pooled"},

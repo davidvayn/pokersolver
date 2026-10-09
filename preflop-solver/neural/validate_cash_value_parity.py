@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import numpy as np
 import mlx.core as mx
-from train_cash_value_network import OwnComboValueNetwork
+from train_cash_value_network import OwnComboValueNetwork, CASH_FEATURE_SCHEMAS
 from train_cash_value_network import feature_arrays
 from cash_value_dataset import NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_CONTRACT
 from cash_range_pooling import numpy_card_removed_opponent_pool
@@ -27,7 +27,8 @@ def cash_architecture(model):
 
 def python_predictions(source, model):
     architecture = cash_architecture(model)
-    contexts, queries, weights, scales, baselines, legal, _, _ = feature_arrays(source)
+    features = cash_feature_schema(model)
+    contexts, queries, weights, scales, baselines, legal, _, _ = feature_arrays(source,features)
     embeddings = dense_forward(contexts,model["contextTower"])
     combo_embeddings = dense_forward(queries,model["queryTower"])
     expanded = np.broadcast_to(embeddings[:,:,None,:],combo_embeddings.shape)
@@ -46,7 +47,8 @@ def python_predictions(source, model):
 
 def mlx_predictions(source, payload, device):
     with mx.stream(device):
-        model = OwnComboValueNetwork(cash_architecture(payload))
+        features = cash_feature_schema(payload)
+        model = OwnComboValueNetwork(cash_architecture(payload),features)
         names = {"context_tower":"contextTower", "query_tower":"queryTower", "head":"head"}
         weights = []
         for tower, name in names.items():
@@ -54,11 +56,17 @@ def mlx_predictions(source, payload, device):
                 weights.extend([(f"{tower}.layers.{index*2}.weight", mx.array(np.asarray(layer["weights"],dtype=np.float32).reshape(layer["outputSize"],layer["inputSize"]))),
                                 (f"{tower}.layers.{index*2}.bias", mx.array(layer["biases"]))])
         model.load_weights(weights)
-        contexts, queries, weights, scales, baselines, legal, _, _ = feature_arrays(source)
+        contexts, queries, weights, scales, baselines, legal, _, _ = feature_arrays(source,features)
         arrays = [mx.array(v) for v in (contexts,queries,weights,scales,baselines,legal)]
         if model.architecture == "wide-blocker-pooled":
             arrays.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
         return np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
+
+
+def cash_feature_schema(model):
+    if model.get("featureSchema") not in CASH_FEATURE_SCHEMAS:
+        raise ValueError("cash parity requires an explicit supported feature schema")
+    return model["featureSchema"]
 
 
 def compare(source, model_path: Path, binary: Path, work: Path):

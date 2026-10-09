@@ -9,8 +9,10 @@ import mlx.core as mx
 from cash_profiles import profile_rules, rules_digest
 from cash_value_dataset import LABEL_SCHEMA, build_dataset, validate_label, validate_dataset, extend_training_corpus
 from native_value_dataset import compatible_masses, family_split, legal_combos, identity_hash
-from train_cash_value_network import OwnComboValueNetwork, reference_predictions, split_cash_families
+from train_cash_value_network import OwnComboValueNetwork, feature_arrays, reference_predictions, split_cash_families
 from cash_checkdown import exact_cash_checkdown
+from train_public_value_network import build_features, FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT
+from unittest.mock import patch
 
 
 def label_fixture():
@@ -209,6 +211,27 @@ class CashValueDatasetTests(unittest.TestCase):
         total = np.sum(weights*values,axis=1)/weights.sum(axis=1)
         self.assertAlmostEqual(total.sum(),-1.72,places=9)
         self.assertTrue(np.all(values[:,~legal_combos(state["board"])] == 0))
+
+    def test_exact_runout_input_reuses_checkdown_and_preserves_targets_and_other_features(self):
+        label = label_fixture(); state = label["input"]["state"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"label.json"; path.write_text(json.dumps(label))
+            source = build_dataset([path])
+            old = feature_arrays(source, FEATURE_SCHEMA_BOARD_RELATIVE)
+            # The generic builder independently enumerates exact equity. It
+            # must agree, but the cash feature path must not repeat that work.
+            expected_context, expected_query = build_features(np.asarray(state["board"]),state["actor"],
+                np.asarray(state["invested_bb"]),np.asarray(state["ranges"]),
+                np.asarray(label["opponent_compatible_mass"]),FEATURE_SCHEMA_EXACT_RUNOUT)
+            with patch("train_public_value_network.exact_turn_range_equities",side_effect=AssertionError("duplicate runouts")):
+                actual = feature_arrays(source, FEATURE_SCHEMA_EXACT_RUNOUT)
+            np.testing.assert_array_equal(actual[0][0],expected_context)
+            np.testing.assert_allclose(actual[1][0],expected_query,atol=1e-7,rtol=0)
+            mask = np.arange(actual[1].shape[-1]) != 94
+            np.testing.assert_array_equal(actual[1][:,:,:,mask],old[1][:,:,:,mask])
+            for index in (0,2,3,4,5,6,7):
+                np.testing.assert_array_equal(actual[index],old[index])
+            self.assertGreater(float(np.max(np.abs(actual[1][:,:,:,94]-old[1][:,:,:,94]))),.01)
 
     def test_optional_authentic_reach_lineage_stays_bound_to_label_inputs(self):
         label = label_fixture()
