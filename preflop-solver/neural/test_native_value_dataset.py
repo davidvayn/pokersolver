@@ -367,6 +367,27 @@ class NativeValueDatasetTests(unittest.TestCase):
             np.testing.assert_allclose(dataset.projection_weights[0], ranges * dataset.masses[0])
             self.assertIn("finite-budget", training.complete_turn_release_reasons(dataset.source)[0])
 
+    def test_counterfactual_fraction_changes_loss_weights_not_game_or_label_inputs(self):
+        from types import SimpleNamespace
+        from run_action_contrast_students import load_training_dataset
+        source = corpus()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "targets.json.gz"
+            path.write_bytes(gzip.compress(json.dumps(source).encode(), mtime=0))
+            control = load_training_dataset(SimpleNamespace(), path)
+            changed = load_training_dataset(SimpleNamespace(native_counterfactual_fraction=.5), path)
+        self.assertEqual(control.source, changed.source)
+        self.assertEqual(control.source_sha256, changed.source_sha256)
+        for field in ("boards", "actors", "invested", "ranges", "masses", "targets",
+                      "target_scales", "projection_weights", "groups"):
+            np.testing.assert_array_equal(getattr(control, field), getattr(changed, field))
+        legal = native.legal_combos(control.boards[0])
+        zero_own = (control.ranges[0] == 0) & legal & (control.masses[0] > 0)
+        old = control.weights[0].reshape(2, 1326)
+        new = changed.weights[0].reshape(2, 1326)
+        np.testing.assert_allclose(new[zero_own], 5 * old[zero_own], rtol=1e-6)
+        np.testing.assert_array_equal(new[:, ~legal], 0)
+
     def test_family_split_keeps_suits_turns_histories_and_iterations_together(self):
         boards = [[0, 5, 10, 15], [1, 4, 11, 18], [8, 12, 16, 20],
                   [8, 12, 16, 24], [32, 36, 40, 44], [16, 17, 18, 23]]

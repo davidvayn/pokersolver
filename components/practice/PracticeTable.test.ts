@@ -4,8 +4,32 @@ import { describe, expect, it, vi } from 'vitest';
 import { PracticeTable } from '@/components/practice/PracticeTable';
 import { applyAction, createHand, seededRandom } from '@/lib/practice-engine';
 import type { PolicyNode } from '@/lib/practice-types';
+import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
 
 describe('PracticeTable decision controls', () => {
+  it('shows actual raked blinds and separates refunds, gross pot, rake and awards', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const state = createHand({ modelVersion: 'inactive-cash-test', depthBb: 20,
+      button: 'button-small-blind', hero: 'button-small-blind', cashRules: NL25_STUDY_RULES,
+      random: seededRandom(3) });
+    const terminal = applyAction(applyAction(state, { id: 'call', kind: 'call', label: 'Call' }),
+      { id: 'all-in', kind: 'all-in', label: 'All-in', amountToBb: 20 });
+    const called = applyAction(terminal, { id: 'call', kind: 'call', label: 'Call' });
+    const html = renderToStaticMarkup(React.createElement(PracticeTable, {
+      state: called, node: null, status: 'review', mode: 'full-hand', revealOpponent: true,
+      selectedActionId: null, onAction: vi.fn(), onContinue: vi.fn(), onRetry: vi.fn(),
+    }));
+    expect(html).toContain('0.4/1bb');
+    expect(html).toContain('4.5%');
+    expect(html).toContain('aria-label="Cash hand settlement"');
+    expect(html).toContain('Gross contestable pot');
+    expect(html).toContain('40.00bb');
+    expect(html).toContain('House rake');
+    expect(html).toContain('1.80bb');
+    expect(html).toContain('Net awarded pot');
+    expect(html).toContain('38.20bb');
+    expect(html).toContain('Uncalled wagers returned');
+  });
   it('distinguishes both player stacks from the central pot with labeled chips', () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const state = createHand({
@@ -39,6 +63,7 @@ describe('PracticeTable decision controls', () => {
     expect(html.match(/practice-chip-pile-secondary/g)).toHaveLength(1);
     expect(html).toContain('aria-label="Table sounds"');
     expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain('Home game · Full hand · 20bb · 0.5/1bb · no rake');
   });
 
   it('does not reveal policy percentages before the user acts', () => {
@@ -154,13 +179,11 @@ describe('PracticeTable decision controls', () => {
       id: 'call',
       kind: 'call',
       label: 'Call 0.5bb',
-      amountBb: 0.5,
     });
     const flop = applyAction(called, {
       id: 'check',
       kind: 'check',
       label: 'Check',
-      amountBb: 0,
     });
 
     const html = renderToStaticMarkup(

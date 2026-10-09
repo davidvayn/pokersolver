@@ -33,6 +33,7 @@ export function resolverQueryPayload(
   modelVersion: string,
   depthBb: number
 ): Record<string, unknown> {
+  if (state.cash) throw new Error('The legacy Home resolver cannot consume a cash ledger');
   if (!state.toAct || state.terminal) {
     throw new Error('A resolver query requires a live decision');
   }

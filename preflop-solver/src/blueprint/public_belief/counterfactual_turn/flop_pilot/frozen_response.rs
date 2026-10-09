@@ -51,6 +51,14 @@ pub(super) struct Frozen {
 
 impl Frozen {
     pub(super) fn new(input: &Solution) -> Result<Self, String> {
+        if let Some(schedule) = input.leaf_schedule {
+            schedule.validate(input.iterations)?;
+            if input.learned_leaf_model_sha256.is_none() || input.chance_baseline.is_some()
+                || input.complete_root_support.is_some() || input.root_realization_turn_averages.is_some()
+            {
+                return Err("invalid frozen scheduled proposer identity or combined intervention".into());
+            }
+        }
         if input.schema != "hu-native-counterfactual-turn-flop-pilot-v1"
             || input.iterations < 2
             || input.turn_iterations < 2
@@ -392,10 +400,10 @@ impl Frozen {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    pub(super) fn royal_fixture() -> Solution {
+    pub(in super::super) fn royal_fixture() -> Solution {
         let mut game = BlueprintConfig::default();
         game.effective_stack_bb = 2.0;
         let mut ranges = std::array::from_fn(|_| vec![0.0; COMBO_COUNT]);
@@ -434,6 +442,7 @@ mod tests {
             learned_leaf_model_sha256: None,
             complete_root_support: None,
             root_realization_turn_averages: None,
+            leaf_schedule: None,
             zero_joint_turn_queries: 0,
             chance_baseline: None,
             turn_samples_per_iteration: None,
@@ -603,6 +612,65 @@ mod tests {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
         format!("{:x}", Sha256::digest(&bytes))
+    }
+
+    fn response_candidate_bytes(bytes: &[u8], expected_sha: &str, iterations: u64) -> Result<Vec<u8>, String> {
+        if bytes.len() > 8 * 1024 * 1024 || !(2..=128).contains(&iterations)
+            || format!("{:x}", Sha256::digest(bytes)) != expected_sha {
+            return Err("invalid response-export source digest/size/budget".into());
+        }
+        let mut candidate: Solution = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if candidate.response_turn_iterations.is_some() || candidate.learned_leaf_model_sha256.is_some()
+            || iterations <= candidate.turn_iterations {
+            return Err("response export requires an unchanged native policy and a stronger budget".into());
+        }
+        if Frozen::new(&candidate)?.candidate_sha256 != expected_sha {
+            return Err("response-export source is not canonical Rust JSON".into());
+        }
+        candidate.response_turn_iterations = Some(iterations);
+        let output = serde_json::to_vec(&candidate).map_err(|e| e.to_string())?;
+        let mut decoded: Solution = serde_json::from_slice(&output).map_err(|e| e.to_string())?;
+        if Frozen::new(&decoded)?.candidate_sha256 != format!("{:x}", Sha256::digest(&output)) {
+            return Err("response export changed identity on round trip".into());
+        }
+        decoded.response_turn_iterations = None;
+        if serde_json::to_vec(&decoded).map_err(|e| e.to_string())? != bytes {
+            return Err("response export changed the original trained policy".into());
+        }
+        Ok(output)
+    }
+
+    #[test]
+    fn stronger_response_export_is_canonical_and_preserves_every_training_byte() {
+        let candidate = royal_fixture();
+        let source = serde_json::to_vec(&candidate).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&source));
+        let bytes = response_candidate_bytes(&source, &sha, 8).unwrap();
+        let decoded: Solution = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.turn_iterations, 4);
+        assert_eq!(decoded.response_turn_iterations, Some(8));
+        assert_eq!(Frozen::new(&decoded).unwrap().candidate_sha256, format!("{:x}", Sha256::digest(&bytes)));
+        // The real caller used pretty Python JSON: equal fields, different identity.
+        let pretty = serde_json::to_vec_pretty(&candidate).unwrap();
+        let pretty_sha = format!("{:x}", Sha256::digest(&pretty));
+        assert!(response_candidate_bytes(&pretty, &pretty_sha, 8).is_err());
+        assert!(response_candidate_bytes(&source, &"0".repeat(64), 8).is_err());
+        assert!(response_candidate_bytes(&source, &sha, 4).is_err());
+        assert!(response_candidate_bytes(&source, &sha, 129).is_err());
+    }
+
+    #[test]
+    #[ignore = "hash-pinned native policy and bounded canonical stronger-response export; no training"]
+    fn saved_native_flop_response_candidate() {
+        let source = fs::read(std::env::var("POKER_NATIVE_FLOP_CANDIDATE").unwrap()).unwrap();
+        let sha = std::env::var("POKER_NATIVE_FLOP_CANDIDATE_SHA").unwrap();
+        let iterations = std::env::var("POKER_NATIVE_FLOP_RESPONSE_ITERATIONS").unwrap().parse().unwrap();
+        let bytes = response_candidate_bytes(&source, &sha, iterations).unwrap();
+        let path = std::env::var("POKER_NATIVE_FLOP_OUTPUT").unwrap();
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path).unwrap();
+        file.write_all(&bytes).unwrap(); file.sync_all().unwrap();
+        println!("{}", serde_json::json!({"stage":"native_flop_stronger_response_export",
+            "sourceSha256":sha,"responseTurnIterations":iterations,"outputSha256":format!("{:x}",Sha256::digest(&bytes))}));
     }
 
     #[test]

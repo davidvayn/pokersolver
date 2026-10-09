@@ -31,7 +31,30 @@ fn pinned_policy() -> NativeFullHandPolicy {
 #[test]
 #[ignore = "one pinned full-hand LBR cluster; explicit inputs/output and external resource guard"]
 fn compact_native_full_hand_lbr_probe() {
-    let policy = pinned_policy();
+    lbr_probe(pinned_policy(), "compact-native-full-hand-lbr-cluster-v1");
+}
+
+#[test]
+#[ignore = "matched native32/native64 complete-hand response cost probe; explicit immutable inputs and external guard"]
+fn accurate_native_full_hand_lbr_probe() {
+    assert!(std::env::var("POKER_NATIVE_VALUE_MODEL").is_err());
+    assert!(std::env::var("POKER_NATIVE_VALUE_MODEL_SHA").is_err());
+    let source = PathBuf::from(std::env::var("POKER_NATIVE_CHECKPOINT").unwrap());
+    let source_sha = std::env::var("POKER_NATIVE_CHECKPOINT_SHA").unwrap();
+    assert_eq!(sha256_file(&source).unwrap(), source_sha);
+    let preflop = Arc::new(FrozenPreflopPolicy::read(&source).unwrap());
+    assert_eq!(preflop.rounds, 32);
+    assert_eq!(preflop.game.effective_stack_bb, 20.0);
+    let iterations = std::env::var("POKER_NATIVE_FLOP_ITERATIONS").unwrap().parse().unwrap();
+    let seed = std::env::var("POKER_NATIVE_POLICY_SEED").unwrap().parse().unwrap();
+    assert!([32,64].contains(&iterations));
+    assert!([100101,100102].contains(&seed));
+    let policy = NativeFullHandPolicy::with_compact_native_continuation(preflop,
+        NativeFlopOptions { seed, iterations, training_turn_iterations:64, response_turn_iterations:64 }, 4).unwrap();
+    lbr_probe(policy, "accurate-native-full-hand-lbr-cluster-v1");
+}
+
+fn lbr_probe(policy: NativeFullHandPolicy, schema: &str) {
     let game = policy.preflop.game.clone();
     let cohort = std::env::var("POKER_NATIVE_LBR_COHORT").unwrap();
     let domain = match cohort.as_str() {
@@ -58,7 +81,7 @@ fn compact_native_full_hand_lbr_probe() {
     );
     let started = Instant::now();
     let report = sampled_flop_policy::paired_lbr_hand(&policy, &game, &deal, action_seed).unwrap();
-    let value = serde_json::json!({"schema":"compact-native-full-hand-lbr-cluster-v1",
+    let value = serde_json::json!({"schema":schema,
         "cohort":cohort,"index":index,"chanceSeed":chance_seed,
         "deal":{"holes":deal.holes,"board":deal.board},"report":report,
         "seconds":started.elapsed().as_secs_f64(),

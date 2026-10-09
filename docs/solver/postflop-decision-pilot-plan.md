@@ -1,15 +1,16 @@
 # Cheap, decision-relevant postflop pilots
 
 Date: October 3, 2026 (PDT).
-Status: **Replay rejected; sampled Stage 2 data inconclusive; focused exact-chance continuation underway.**
-No model has been promoted. Execution is recorded in
+Status: **Replay, full-chance and TRAIN-coverage student pairs rejected; bounded coverage intervention complete.**
+No model has been promoted. Earlier execution is recorded in
 [the replay pilot report](postflop-replay-pilot-2026-10-03.md) and
 [the action-contrast report](postflop-action-contrast-pilot-2026-10-04.md).
 The reserved chance block exposed action-ranking instability larger than the
 intended improvement. Per Section 6B, no C0/C1 fit or conditional expansion
-was started. The next experiment needs more reliable chance-integrated targets,
-not another unchanged fitting run. The user authorized continuing on October 4;
-the focused experiment below changes chance coverage only.
+was started at that boundary. The subsequent all49 pilot improved frozen
+training rankings but failed the actual-policy screen. The user authorized
+continuing on October 4; Section 11 now tests broader TRAIN board/search
+coverage with that reliable chance integration, not unchanged iteration scaling.
 
 This refines Step 3 of [the postflop gap plan](postflop-gap-implementation-plan.md).
 It specifies what to implement, how to avoid another expensive false positive,
@@ -487,3 +488,1012 @@ data. Reduce their bundle cadence equally *before* fitting if needed for the
 existing resource cap. If teacher drift or costs are the blocker instead,
 preserve the evidence and choose a targeted reference or validated chance
 control-variate pilot; do not launch another unchanged fit.
+
+### October 4 completion and branch decision
+
+The [full-chance pilot report](postflop-full-chance-pilot-2026-10-04.md)
+records completion of all49 references, guarded conditioning, both fixed-step
+student pairs, exhaustive export parity, cached TRAIN contrast probes and both
+full49 actual-policy screens. C1 reduces frozen TRAIN ranking loss by 42.6%,
+but neither arm passes the actual-policy regression screen. C1's mean benefit
+versus C0 is only 0.000078bb with opposing seed means; both regress high-rainbow
+versus retained. **Reject both; do not trigger Stage 3 expansion/integration.**
+
+Targeted own-policy and same-board retained-policy probes localize a large
+continuation action-value mismatch at BTN after BB checks. It persists under
+retained-policy ranges, so pure own-policy range drift is insufficient as an
+explanation. The next bounded intervention should broaden TRAIN board/search
+belief contrast coverage, retaining frozen evaluation families and old-data
+replay. First diagnose that small block with reused/bounded native references;
+do not repeat an unchanged fit, silently relax the screen, or buy compute
+before establishing a useful effect. The pilot boundary is complete; broad
+full-hand/serving qualification remains conditional on an accepted policy.
+
+## 11. Bounded TRAIN coverage intervention (October 4)
+
+1. Freeze three new TRAIN families from an authentic 128-root bank (seed
+   2026100417): first two unpaired Q-or-higher rainbow and first two-tone
+   five-leaf three-bet families, in bank order. Exclude every family in the
+   frozen 615-state corpus and all twelve benchmark roots, before inspecting
+   any model errors. Bank indices 22, 76, 115 become TRAIN IDs 100, 101, 102.
+2. Use the rejected C1 pair only as an exploratory proposer, never active play.
+   Capture 16 native64-labeled queries per root from early/middle/late search
+   and final-average beliefs at 128 flop updates. Check observation/no-
+   observation policy parity on the first root. Export its complete final
+   prefix and label all 49 legal public turns at native64; one native256
+   sentinel per root checks measured teacher drift.
+3. Keep the original 615 corpus/split unchanged. Store each new family as a
+   separate 261-state calibration shard (245 final-prefix leaf labels plus
+   16 search queries), retaining existing 640-state/256MiB decoded guards.
+   Zero-pad the affine contrast coefficients for the extra queries: search
+   calibration cannot silently alter frozen action targets.
+4. Diagnose continuation/action-ranking errors on these new training inputs.
+   Only trustworthy complete targets can proceed to fitting; a finite
+   sentinel loss comparable to the 0.02bb intended benefit is inconclusive.
+   Native64/256 stability is not an exploitability certificate.
+5. If justified, join the three old and three registered new TRAIN shards.
+   Run matched C0/C1, seeds 10601/10602, at 600 fixed steps. Both arms receive
+   identical calibration, primary replay, architecture, optimizer and features;
+   only the contrast auxiliary differs. Resource-only cadence changes must
+   preserve equal counts for all six families (cadence 4 gives 25 each).
+   TRAIN-only gradient conditioning may change its coefficient; comparison
+   against older pilots is therefore diagnostic, not a pure coverage estimate.
+6. Verify full 615-state independent NumPy/native export parity, probe frozen
+   TRAIN decisions, then run the same four cheap actual-policy controls using
+   all49/native64 responses. Advance only on actual playing benefit without
+   known-regression failures. Otherwise reject/inconclusive, diagnose, and
+   preserve the retained model. Full-hand and serving work remain conditional.
+
+Resource limits: two native workers total, 2GiB per worker, 90-minute labeling
+cap with a separate three-minute finalization allowance; first two turns per
+family establish cost before complete labeling. New artifacts stay below
+10GiB with 20GiB free disk reserve. Fit one MLX process at a time within 6GiB
+and two hours including conditioning/parity. Honor system memory pressure.
+No paid compute, UI changes, or model promotion in this intervention.
+
+### Section 11 completion
+
+[The coverage report](postflop-training-coverage-pilot-2026-10-04.md) records
+all three complete native label shards, old-model diagnosis, both matched
+600-step pairs, full-615-state export parity, and six-family frozen probes.
+New C1 reduces ranking loss on the new TRAIN block by 57.5% and improves the
+first known policy control from the prior C1's 0.418741bb to 0.350730bb.
+However, retained is 0.278335bb on that control. C0 and C1 both exceed the
+0.01bb known-case regression limit, so remaining evaluations were stopped
+without scoring partial cases or inventing paired means. **Reject both; no
+conditional full-hand/serving expansion.** All pilot processes have stopped.
+
+The same remaining continuation-ranking problem is measurable from cached
+own-policy packets. Old TRAIN accuracy also worsened with the six-family
+schedule. Next distinguish representation/target mismatch from retention:
+hash-matched input diagnostics, then a bounded retained-weight fine-tune with
+protected old replay versus the from-scratch control. This proposed next pilot
+is not started, not a paid-run recommendation, and not a guaranteed fix.
+Use the new optional control-first automatic rejection to avoid spending the
+rest of a screen after a completed audited case already fails its fixed limit.
+
+## 12. Retained-initialization isolation (October 4, in progress)
+
+First change only initialization: warm-start seeds 10601/10602 from the
+retained benchmark pair with a fresh AdamW optimizer. Reuse Section 11's
+immutable scratch C1 pair as the matched control; do not repeat unchanged fits.
+Keep its exact six bounded TRAIN bundles, frozen 474/69/72 split, 600 final
+steps, batch 8, 0.0003-to-0.00003 learning rate, cadence 4, chunk 4 and original
+TRAIN-conditioned contrast coefficient 1.883306130920223. Do not select a
+checkpoint or recondition its coefficient using response scores.
+
+Validate the wide/v3/full-stack/payoff-exposure JSON contract and all parameter
+dimensions/finite values before transferring any weights. Compare imported
+MLX predictions against independent NumPy on two frozen TRAIN states, every
+private combo and both players; validate the finished students against native
+inference on all 615 states. No optimizer state or regrets are imported.
+The retained sources themselves are research-only, not accepted GTO models.
+
+Run the consumed high-rainbow/monotone four-case actual-policy control first,
+stopping after any independently audited >0.01bb regression. No positive
+partial case can accept a policy. If useful and all controls pass, proceed to
+the existing broader qualification sequence. If initialization alone fails,
+test a TRAIN-only retained-prediction protection constraint, distinguish it
+from the already failed replay-only intervention, then diagnose representation
+or target limitations. Advance based on actual policy outcomes, not RMSE alone.
+
+Use one MLX process within 6GiB and a two-hour fit/parity cap; at most two native
+workers, system-pressure stops and a 20GiB free disk reserve. No paid compute,
+serving-route changes or automatic model promotion. Continue to the next
+supported intervention without awaiting user permission for each local pilot.
+
+### Numerical follow-up and research basis
+
+The new import preflight exposed an additional, measured numerical mismatch:
+with MLX 0.32.0's default GPU arithmetic, a retained-network serving prediction
+differs from independent NumPy by 0.015009bb on a cached input. Tower errors
+are already present before the value projection. [MLX's precision documentation](https://ml-explore.github.io/mlx/build/html/usage/precision.html)
+explains that float32 matrix multiplication can use reduced precision, and
+documents `MLX_ENABLE_TF32=0` as the full-float32 switch. Do not silently change
+training precision inside an initialization-only comparison. Verify import on
+full-float32 CPU, preserve the prior training arithmetic, then compare a
+separately pinned full-float32 GPU fit with the same warm-start arm. Measure
+parity and throughput before committing to the same fixed 600-step schedule.
+Numerical agreement is necessary bookkeeping, not an exploitability result.
+
+If old behavior still degrades, a frozen-output retention constraint is an
+adaptation of [Learning without Forgetting](https://arxiv.org/abs/1606.09282),
+not a new source of poker truth: penalize value drift on original TRAIN-only
+inputs while retaining native labels for learning. This differs from the
+already rejected sampling-only replay pair. It can preserve old errors as well
+as old strengths, so only native actual-policy results justify advancement.
+[DeepStack](https://arxiv.org/abs/1701.01724) motivates accurate range-conditioned
+continuation values; its continual-re-solving guarantees do not transfer to
+our current unsafeguarded route merely because a local fit improves.
+
+## 13. Frozen-output retention constraint (October 4, in progress)
+
+Both initialization and full-float32 arms failed the first audited control.
+Full precision improved that one conditional response gain from 0.359659bb to
+0.347476bb, but retained remains 0.278335bb. Stop both screens; there are no
+paired means or new full-game exploitability results. Keep full float32 for
+the next comparison because it removes the demonstrated arithmetic mismatch.
+
+Change only frozen-output retention relative to the completed full-float32
+pair. Anchor original-prefix (`group < 508`) TRAIN states with positive joint
+reach; exclude tuning/holdout, appended states and all new board shards. Freeze
+the corresponding retained network's normalized outputs. Apply the same
+Huber/depth auxiliary form using authentic joint-reach weights, not a new
+solver target. Do not replace native labels or anchor zero-joint states.
+
+Use a separate deterministic RNG so the existing training draws stay identical.
+Add an eight-state anchor gradient every four steps, combined into the existing
+single optimizer update: 150 anchor updates and 1,200 draws per fixed 600-step
+seed. The six native calibration/contrast bundles still receive 25 updates
+each. Do not retain the reference network as a live trainable submodule.
+
+Before fitting, choose one common coefficient from frozen TRAIN gradients at
+the full-float32 seed-10601 step-200 checkpoint: 0.5 times the learning-gradient
+norm divided by the anchor-gradient norm, capped at 32. Conditioning includes
+the ordinary loss and equal-family mean calibrated contrast gradients; no
+response scores, holdout errors or checkpoint selection enter this rule. Pin
+the checkpoint and resulting settings before fitting either seed.
+
+Run full-corpus parity and the same automatically rejecting actual-policy
+controls. If useful, expand the policy screen; otherwise reject the retention
+arm and investigate a function-preserving richer range representation. No
+automatic promotion or longer unchanged training run. Existing local resource
+caps apply; no paid compute. This constraint tests retention, not equilibrium
+safety, and may preserve the retained model's own mistakes.
+
+## 14. Align contrast optimization with bounded serving (October 4)
+
+Section 13 completed all fits/parity but failed the first audited control:
+0.350971bb versus retained 0.278335bb. Do not tune its coefficient against
+that response or repeat an unchanged fit. The subsequent hash-matched TRAIN
+probe measured optimization/serving action-contrast RMSE as high as 0.198796bb,
+authentic value differences up to 0.636126bb, and local ranking changes.
+Serving occasionally improves rankings, so this is a contract discrepancy,
+not proof that it explains the policy failure.
+
+1. Expose the unchanged network's raw pre-projection values without altering
+   its existing value-calibration forward or exported inference contract.
+2. Implement the same legal-card mask, +/-20bb clipping, native 1e-9 joint
+   denominator and bounded zero-sum correction used by serving. Vectorize the
+   80-step bisection over a complete family to avoid thousands of Python loops.
+3. Use its implicit derivative with respect to raw values, including both
+   clips and the cross-player dependence of the weighted target. Bisection's
+   discrete branches themselves are not a useful autodiff program. Verify
+   native forward parity, zero/tiny joint cases, directional finite differences
+   and the real two-pass network-parameter gradient before fitting.
+4. Change only the contrast forward/VJP relative to Section 13. Retain all
+   ordinary/calibration losses, data/split, architecture, seeds, full float32,
+   600 fixed steps, native bundle cadence and coefficients. Reuse its frozen
+   retention settings (0.42899030580264763); do not recondition them. Raw value
+   calibration remains active so a clipped auxiliary cannot prevent recovery
+   of oversaturated predictions.
+5. Cost/parity-preflight the largest TRAIN family at retained initialization.
+   Require complete private-vector agreement within 0.0001bb and a projected
+   pair below two hours. Do not quietly lower counts or alter the matched game.
+6. Verify all-615 export parity, then the same control-first actual-policy
+   screen with automatic rejection. Verify the original training/serving
+   mismatch is removed *for the new contrast forward*, not by pretending the
+   intentionally unbounded calibration forward changed.
+
+Keep the two-native-worker, 6GiB fitting, pressure and disk guards. No paid
+compute, serving changes or automatic activation. If alignment alone fails,
+use targeted own-policy diagnostics before choosing a range-representation or
+target-coverage intervention; isolated correct gradients cannot certify GTO.
+
+## 15. Function-preserving range augmentation (October 5)
+
+Section 14 fixed contrast-forward parity (maximum 0.0000001413bb), but its first
+control regressed retained by 0.065077bb and was rejected. Cached own-policy
+replay isolates the large after-check ranking error: 0.269730bb local ranking
+loss and 0.748897bb contrast RMSE; all-in branches match exactly. This motivates
+a representation test, not another unchanged fit. It does not prove that
+representation rather than labels/coverage is the dominant cause.
+
+1. Add an explicit research-only wide-to-wide-pooled transfer. Validate the
+   original v4 wide/v3/20bb contract completely before mutation. Keep both
+   encoder towers, biases and final head identical. Expand the first head's
+   128 inputs to 256: copy context columns to 0:64 and query columns to
+   192:256, with new own/opponent pooled columns 64:192 exactly zero. This
+   preserves the original function, with newly available trainable range
+   inputs. Unsupported transforms must fail closed.
+2. Prove raw/training/serving forward equivalence, zero added columns, nonzero
+   gradients into those columns, and independent NumPy/native v5 export parity
+   before fitting. Native already supports this research v5 contract. Use
+   joint-reach-weighted pooling with the existing native 1e-9 denominator.
+3. Change only this representation relative to the completed aligned arm:
+   frozen retained source weights, seeds, data/split, six bundles, coefficients
+   1.883306130920223 and 0.42899030580264763, full float32, fresh AdamW, 600
+   fixed steps, cadence/chunk 4 and identical reference/anchor sampling.
+   Preserve the non-pooled reference network; never train on consumed controls.
+4. Preflight the largest TRAIN family and full-615 initial exported v5 parity;
+   require <=0.0001bb and projected two-seed fitting/parity <=2h, 6GiB worker,
+   two-native-worker response and existing memory/disk guards.
+5. Run full-615 finished parity and control-first actual-policy screening. The
+   retained regression limit remains 0.01bb; a first failed completed case
+   stops remaining work. If all matched controls improve credibly, expand to
+   the broader frozen screen before any full-hand qualification. No promotion
+   from value RMSE or an isolated conditional root.
+6. If this fails, use the resulting frozen replay to discriminate label/profile
+   mismatch and off-policy belief coverage; do not repeat earlier scratch
+   pooling or increase unchanged iterations automatically.
+
+Research: [Net2Net](https://arxiv.org/abs/1511.05641) motivates function-preserving
+transfer; [Deep Sets](https://arxiv.org/abs/1703.06114) motivates learned
+permutation-invariant aggregation. This weighted finite representation and
+zero-column transfer are adaptations, not the papers' poker results or GTO
+guarantees. Earlier scratch pooling gave mixed facing gains and worse root
+rankings; retaining the starting function is the specific new hypothesis.
+
+## 16. Diagnose interference before gradient projection (October 5)
+
+Section 15 completed and failed the first control (0.352513bb versus retained
+0.278335bb), despite improved holdout value RMSE. A-GEM/PCGrad are plausible
+only if the relevant objectives interfere. Measure gradients on both frozen
+aligned-model seeds at steps 0, 200, 400 and 600, on TRAIN only. Compare primary,
+mean bundle calibration, weighted contrast and their combined active-bundle
+direction with the 366 original positive-joint states' authentic native-value
+gradient. Include ordinary calibration weighting as a separate diagnostic.
+No new fit, labels, evaluation scores or checkpoint selection.
+
+Result: all eight combined cosines are positive; no checkpoint meets the
+predeclared <-0.2 conflict screen. Original authentic TRAIN loss decreases
+45.2%/40.2%. The requiring-both-seeds-degrade-by-5% criterion fails as well.
+**Do not implement or fit projection from this evidence.** Some individual
+contrast gradients conflict, but the combined direction does not. This does
+not exclude stochastic or region-specific interference. Raw-gradient geometry
+is also not an AdamW-step guarantee; any later constraint would need to inspect
+the actual preconditioned/momentum update rather than promise safety from raw
+gradient projection.
+
+Sources: [A-GEM](https://arxiv.org/abs/1812.00420),
+[PCGrad](https://arxiv.org/abs/2001.06782). Probe artifacts:
+`preflop-solver/neural/runs/local-training-gradient-conflict-20261005-a/`.
+
+## 17. Test policy-induced calibration shift before dataset aggregation
+
+Earlier frozen-belief probes improved rankings at retained beliefs while the
+new policy's own response worsened. The new models' improved TRAIN/holdout
+regression but persistent own-policy ranking error makes induced-belief shift
+a live hypothesis. [DAgger](https://arxiv.org/abs/1011.0686) motivates relabeling
+learner-induced states; its supervised sequential-learning guarantees do not
+transfer directly to adversarial poker or unsafe re-solving.
+
+1. Pin the completed aligned wide pair, existing three registered TRAIN roots
+   100/101/102, their old 16-state captures, root hashes, trunk/sampling seeds,
+   native64 labels and 128 flop updates. Use every registered family; no
+   score-based choice or reuse of control/holdout boards.
+2. Generate only 16 new stratified early/middle/late/final-average native labels
+   per family with the corresponding current model. Preserve the exact root,
+   seed stream and counts. Verify policy-observation parity. Native labels,
+   not model predictions, remain truth for this finite-budget test.
+3. On both old and new captures, evaluate the same current predictor using the
+   actual native inference and independent NumPy parity. Report equal-state
+   authentic RMSE, per-band error, and native label response residuals. These
+   sampled leaf errors do not establish action ranking or exploitability.
+4. Use a 30-minute stage cap, 2GiB native and 6GiB analysis workers, 20GiB disk
+   reserve and memory-pressure stop. Time the first family and reject a cost
+   projection above the remaining cap; do not silently reduce labels.
+5. Dataset replacement becomes worth a matched pilot only if error on current
+   induced states exceeds the old-distribution error by >=10% in at least two
+   of three family/seed pairs. Inspect native-label residuals before blaming
+   the model. If the screen fails, do not launch a DAgger-style fit merely
+   because data aggregation is fashionable.
+6. If supported, replace (do not duplicate) the 16 calibration-only extra
+   states per new-family bundle, preserving its original all49 affine targets.
+   Pin the foreign proposal identity and exact root independently; new states
+   have zero affine coefficients and cannot be mistaken for the original
+   profile's action targets. Preserve counts, data split, wide architecture,
+   weights/optimizer initialization, frozen coefficients and 600-step budget.
+   Require finished export parity and the same rejecting policy screen before
+   broader confirmation. Mixed-policy calibration provenance must be explicit.
+
+Completed in 147.2s, with all 48 new labels and all six independent/native
+prediction comparisons. Current/old authentic RMSE changes are +1.7%, +0.7%
+and -1.1%; zero families reach the +10% criterion. Dataset replacement is
+**not supported**, so no aggregation fit follows. Current native label mean
+response residuals are 0.00447–0.00746bb, versus model RMSE 0.724–1.038bb;
+these are different metrics, not an error decomposition or proof of exact
+labels. See `postflop-objective-diagnostics-2026-10-05.md`.
+
+## 18. Inspect decision-gradient allocation before changing the auxiliary
+
+Two cheap diagnostics failed their prespecified intervention screens. Do not
+force projection or dataset aggregation anyway. The remaining learned-value
+error is large and existing affine TRAIN decisions still have wrong rankings.
+The next hypothesis is objective allocation, not longer unchanged training.
+
+1. Pin all six existing TRAIN bundles and both aligned-model seeds at retained
+   initialization and the fixed 600-step endpoint. No evaluation boards,
+   checkpoint selection, native labels or fitting.
+2. Decompose the exact existing unique-pair Huber derivative into already
+   correctly ordered pairs, inverted pairs, and near-tie pairs. Retain the same
+   authentic/profile-consistent weights, complete chance integration, 20bb
+   normalization and bounded-serving VJP. Check that components reconstruct
+   the original derivative exactly. Measure pairwise derivative allocation and
+   native ranking losses, not only value RMSE.
+3. At the endpoint, compare the original contrast parameter gradient with a
+   bounded-margin, native-gap-aware ranking direction. Do not call a ranking
+   auxiliary exploitability descent: it lacks best-response policy gradients
+   and game-wide guarantees. Near ties below 0.05bb provide no ranking signal;
+   keep ordinary native-value calibration to preserve EV and indifference.
+4. A matched auxiliary pilot is warranted only if both seeds retain >=0.03bb
+   equal-group TRAIN ranking loss and >=75% of the exact pairwise Huber
+   derivative magnitude comes from already correctly ordered pairs. Inspect
+   parameter-gradient agreement too; cancellation/representation may defeat
+   the allocation hypothesis. A failed screen means no ranking fit.
+5. If supported, freeze the alternative auxiliary and coefficient from TRAIN
+   gradient norms before fitting; change only that auxiliary relative to the
+   completed aligned control. Preserve weights, optimizer, primary/bundle
+   data, split, seeds, 600 steps, retention, precision and cadence. Verify the
+   derivative numerically and by an actual network VJP, full export parity,
+   then the same automatic-rejection actual-policy response screen.
+
+Research: [Exploitability Descent](https://arxiv.org/abs/1903.05614) optimizes
+policies against best responses. It helps distinguish actual worst-case policy
+optimization from this proposed supervised ranking surrogate; its convergence
+claims do not apply to a leaf-value loss. No automatic cloud spending or
+website/model activation is authorized.
+
+Section 18 completed: endpoint TRAIN ranking loss is 0.063204/0.069243bb,
+down from 0.215331/0.198206bb. Correctly ordered pairs receive 75.54%/73.62%
+of pairwise derivative magnitude. The requiring-both-seeds >=75% screen fails;
+**no ranking-auxiliary fit follows**. Original/margin parameter-gradient
+cosines are -0.052/-0.068 at the endpoints, but different directions do not
+prove policy benefit. The range-scale invariance hypothesis was also checked:
+native inference already normalizes raw ranges and its qualified Rust test
+passes; no augmentation/normalization patch is needed.
+
+## 19. Measure a cheaper native-continuation construction budget
+
+Native64 leaves have the strongest measured actual-policy effect (selected
+32-update root mean 0.7062bb learned versus 0.2592bb native), but 20–33 minutes
+per construction limits offline coverage. Test the existing native4 budget
+before building a larger neural architecture or buying compute. This is an
+offline generator cost/quality comparison, not a proposal to serve native4.
+
+1. Pin the completed October 2 matched32 comparison, original benchmark roots,
+   binary, input hashes and cached native64/learned32 candidates/responses.
+   Use the same two predeclared roots and both chance seeds, in original order.
+   No new fit, parameter tuning or untouched-validation claim.
+2. Construct native4 candidates at the same 32 flop updates and one leaf worker.
+   Change only the inner continuation update budget. Preserve an immutable
+   raw training candidate. Export a separate evaluation candidate with explicit
+   response_turn_iterations=64, proving all policy probabilities unchanged.
+   Construction and played/evaluation budgets must never be conflated.
+3. First time the limped seed-100101 construction; retain the existing 2.5GiB
+   serial worker guard. Target <=20% of its cached native64 construction time.
+   Project the remaining complete comparison with margin and a two-hour cap;
+   stop if it cannot fit. Do not silently reduce chance/evaluation counts.
+4. Evaluate each completed policy using native64 played continuations, all49
+   exact turns and the independent JavaScript accounting/backup audit. Limit
+   packet concurrency to two workers, retain pressure/disk stops, pin every
+   artifact and source. No score from partial packets.
+5. Stop after an audited case if its gain exceeds native64 by >0.05bb or retains
+   less than half the native-versus-learned32 improvement. Advance only after
+   all four complete comparisons and cost/quality checks pass. This pragmatic
+   generator screen is not an Approximate GTO release gate. If rejected, use
+   sampled CPU attribution to identify reusable work in the accurate native
+   solver rather than scaling failed student fits.
+
+Research: [Value Functions for Depth-Limited Solving](https://arxiv.org/abs/1906.06412)
+ties useful depth-limited play to suitable value functions and reports limited
+benefit from its explored loss variations. Together with this repository's
+matched native-versus-learned result, it motivates addressing accurate-target
+cost directly. It does not guarantee a four-update continuation is sufficient.
+
+The first native4 construction was interrupted at 43.943s by the original
+2.5GiB physical-footprint guard (sampled peak 2,703,821,728 bytes). No policy or
+quality score exists from that attempt. An explicitly separate memory-only
+retry permits 4GiB for the one serial constructor, leaving the same two
+1.5GiB evaluation workers, system-pressure/disk stops and unchanged cost and
+quality thresholds. The original failure remains immutable. A three-second
+macOS CPU sample attributes time to repeated training/profile walks, compatible
+mass calculations, policy serialization and SHA-256; this is not evidence of
+a leak, nor a measured whole-run percentage. No target/algorithm changes are
+made by this retry.
+
+The retry completed in 205.690s (9.51x faster construction) at 3.513GiB
+sampled footprint. The projected full response comparison was 13,842.9s,
+so it stopped at the two-hour stage cap without a quality score. Do not
+confuse passing construction speed with passing the generator pilot.
+
+## 20. Reduce native allocation overhead, then stage the quality screen
+
+1. Preserve the completed native4 raw candidate and all failed-attempt records.
+   Inspect one owned CPU/memory snapshot rather than increasing iteration
+   counts or launching another unsupported student fit.
+2. Stream the exact native policy JSON into SHA-256 with a bounded 64KiB
+   buffer. Leave all mathematical operations, policy rows, export rounding and
+   best-response accounting unchanged. Compare the new hash with buffered
+   export bytes, then replay a pinned native64 turn serially before/after and
+   require complete byte parity with the cached original control.
+3. Separate native canonical export from Python manifest writing. A new
+   response-budget candidate must round-trip to its exact Rust identity and
+   recover every original training byte when the override is removed. Reject
+   cosmetic JSON identity drift; never bypass the native reader's check.
+4. Stage only the original limped seed-100101 quality control first. Reuse the
+   completed native4 construction, explicitly export native64 evaluation,
+   and solve all49 turns with two guarded workers plus the independent JS
+   audit. Retain the two-hour cap and original >0.05bb/half-benefit rejection
+   rules. Resume only identical interrupted jobs. This first control does
+   not establish a paired mean or full-game quality.
+5. Reject on a complete failed quality screen. If it passes, use actual new
+   packet timings to plan the remaining seed/root comparisons; do not expand
+   a run from a stale optimistic estimate. Require all four before accepting
+   a generator budget, and separately validate any subsequently fitted model.
+
+Step 2's first frozen packet passed exact parity, using 621MB buffered versus
+336MB streamed footprint. Time was essentially unchanged (54.5/54.0s). The
+first step-4 launch caught noncanonical Python candidate JSON before solving;
+step 3 now has a Rust exporter and a regression test. This is a research
+controller fix, not a website or solver-policy improvement. The updated
+binary's packet parity passed. The first-control screen completed all49 turns
+and its independent JS audit in 1817.4s. Native4 response gain is 0.542281bb,
+versus native64 0.187585bb and learned32 0.519529bb. It regresses native64 by
+0.354696bb, well above the 0.05bb tolerance, and retains none of the measured
+native benefit. **Rejected: do not construct/evaluate the other unchanged
+native4 cases or use native4 as an accepted label generator.** Its speedup
+does not offset this quality failure. Streaming hash memory savings and exact
+packet parity remain valid independent implementation improvements.
+
+## 21. Test counterfactual calibration weighting, not invented reach
+
+While the first native4 quality control runs, a six-second saved-prediction
+probe inspected only the existing 474 TRAIN states, using the original 284
+split reference and refreshed-TRAIN split. Both serving-aligned seeds have
+authentic RMSE 0.856532/0.889458bb versus zero-own-reach completed-value RMSE
+2.497332/2.474706bb. Zero-own loss weight is already positive: the current
+calibration uses a 10% uniform-legal / 90% authentic mixture. No missing-label
+or absent-supervision bug is claimed. The zero-own target differs from the
+frozen-profile target by 3.732402bb RMSE, so changing labels to profile values
+would erase the existing counterfactual-completion contract, not fix it.
+
+1. Finish section 20's first quality result before launching another fit.
+   Keep both result and raw candidate regardless of acceptance.
+2. Freeze one intervention: increase the existing uniform-legal calibration
+   fraction from 0.1 to 0.5, for primary and bundle calibration alike. Keep
+   actual ranges, projection/pooling weights, labels, context/query features,
+   chance integration and contrast coefficients unchanged. Do not invent
+   positive reach or add another auxiliary. Legal zero-own hands get more
+   loss weight; blocked cards still get zero weight.
+3. Require the exact completed serving-aligned wide control and its retained
+   initialization/retention coefficient. Keep both seeds, fresh AdamW,
+   full-float32, 600 fixed steps, 474/69/72 split, six-family cadence/chunks,
+   draw streams and all49 affine targets. Do not combine pooled transfer,
+   data aggregation or ranking loss with this intervention.
+4. Use the existing two-hour fit/parity controller, 6GiB fit guard, system
+   pressure stop and 20GiB disk reserve. Verify all615 native/NumPy predictions;
+   record the changed loss distribution explicitly. A unit test must prove
+   that only loss weights change at the real dataset-loading seam.
+5. Reuse the original control-first actual-policy test with native64 played
+   continuations and all49 turns, independent JS audit and automatic rejection
+   above the existing 0.01bb per-case regression tolerance. Require complete
+   paired controls before interpreting the existing >=0.02bb mean-improvement
+   criterion; also compare against the completed 10% aligned control where
+   available. A partial pass or lower TRAIN/value error is not acceptance.
+6. If rejected, stop that configuration. Do not tune the fraction repeatedly
+   on these consumed controls. If promising, evaluate other predeclared roots
+   and then a pinned full-hand candidate; no website promotion follows from
+   this diagnostic pilot alone.
+
+Research: [Value Functions for Depth-Limited Solving](https://arxiv.org/abs/1906.06412)
+distinguishes counterfactual values used by DL-CFR from public-state aggregate
+values. Its experiments did not establish that range-weighted losses improve
+playing strength. Our weighting change is a falsifiable empirical hypothesis
+motivated by measured TRAIN error, not a research-backed guarantee or a new
+exploitability metric. No paid compute is authorized.
+
+Section 21 completed: the fixed pair passed all615 NumPy/native predictions
+(maximum error 0.00000535bb), in 358.5s including preflight/fit/parity.
+Zero-own TRAIN RMSE fell 10.0%/11.6% to 2.246592/2.186768bb; authentic
+TRAIN RMSE stayed 0.858920/0.888735bb. The complete first all49 policy control
+improved from the 10% experimental arm's 0.343412bb to 0.311409bb, but still
+regresses the retained 0.278335bb baseline by 0.033074bb. The unchanged
+0.01bb tolerance rejects it. Other cases and paired mean are unmeasured.
+Do not activate it or sweep fractions on these controls.
+
+## 22. Allocate accurate native work to a final averaging window
+
+Native64 everywhere improved the original matched policies, whereas native4
+everywhere lost that benefit and supervised-loss changes still fail the
+retained control. Test a different compute allocation, not another loss grid.
+DeepStack's supplementary implementation used an auxiliary estimator in
+omitted early iterations and the stronger evaluator in averaged late
+iterations ([primary paper](https://arxiv.org/html/1701.01724v3), table 4 and
+the following paragraph). Our sampled DCFR/native64 setting differs, so
+this motivates an experiment, not a safety or convergence claim.
+
+1. Pin the original matched32 roots, seed order, exact retained leaf-model
+   hashes and native64/learned32 responses. Preserve the current release
+   binary/source state before editing; prove the rebuilt default learned128
+   pilot still reproduces the frozen candidate byte-for-byte.
+2. Add an explicit research-only leaf schedule and averaging start. Defaults
+   must remain byte-compatible. Validate schedules before work and record
+   them in candidate identity. No changes to chance draws, regret discount,
+   legal trees, leaf depth, exact terminals or raw-reach scaling.
+3. First use limped seed 100101. Both new arms use 32 flop updates and only
+   average rounds 25–32. Control: learned leaves throughout. Intervention:
+   the same learned model in rounds 1–24, native64 in rounds 25–32. Clear only
+   average accumulators at round 25; preserve regrets and discount clocks.
+   This paired control separates accurate late values from omitting early
+   averages. Do not resume a frozen average as if it contains training regrets.
+4. Tests must check exact switch boundaries, invalid schedules, unchanged
+   regrets/strategy/discount clocks when clearing averages, default serialized
+   identity and actual default solver parity. Never emit predicted values as
+   measured native labels; partial native diagnostics are not complete ones.
+5. Time the serial hybrid construction under a 4GiB guard. Target <=40% of
+   the cached native64 construction time. Reject an estimated stage above
+   two hours. Evaluate both policies with native64 played continuations, all49
+   exact turns, four separately guarded 1.5GiB packet workers and the JS audit.
+   Keep system-pressure stops and 20GiB disk reserve; do not score partials.
+6. A first case is promising only if the hybrid improves the tail-only learned
+   control by >=0.05bb, retains at least half of the original native-versus-
+   learned benefit, and meets the construction cost target. This is a compute
+   allocation screen, not acceptance at native64 quality or Approximate GTO.
+   If promising, confirm the other seed and predeclared root before extending
+   work or integrating. If not, diagnose the schedule once; no blind iteration
+   escalation or paid compute spending follows.
+
+Section 22 implementation is verified and its first comparison is running.
+The rebuilt default learned128 policy reproduced the frozen three-bet
+candidate exactly (`90b41a1ee7177663a0aa55d62438925414201f84dd25958a87926e550c65ba83`).
+All362 native unit tests and nine CLI tests pass, plus 14 targeted Python
+controller tests. The six new native tests cover schedule boundaries,
+invalid bounds, averaging-only resets, metadata identity and frozen-policy
+validation. Source and binary snapshots are immutable for the active run.
+The pilot uses the original retained model, not the rejected 50% student.
+No policy result or release acceptance is implied by these checks.
+
+Artifacts under `preflop-solver/neural/runs/local-late-native-tail-20261005-a/`:
+`baseline-build.json`, `scheduled-build.json`, `default-preflight/manifest.json`
+and `first-control/manifest.json`. Binary SHA-256:
+`287b52cbf0a01a867deddb316dffe64f7ae0729565976e7dcbcf814e890f8016`.
+Default parity receipt SHA-256:
+`85c18fea5b0616c40d87fc5b7465948a1564f97e10f07ce7808ac03ba32bd31f`.
+
+Section 22 completed and is **rejected**, without expansion to other cases.
+The full49-turn audited learned-tail control scores1.592275bb and the native8
+hybrid scores1.070927bb. Native finishing improves the weakened matched tail
+control by0.521348bb, but regresses the original learned32 average (0.519529bb)
+by0.551397bb, and the native32 reference (0.187585bb) by0.883342bb. It retains
+none of the original native benefit. Construction took499.527s at661,521,224
+bytes sampled footprint, 25.53% of the cached all-native construction time;
+passing that cost target does not rescue its failed quality screen. Complete
+construction/evaluation/audits took3954.4s. No model or generator is accepted.
+
+The rebuilt default learned32 policy additionally reproduces its original
+candidate exactly (`f1faa095fc4b905786d446f32bf9927db645fb8008258187e49b33d812e1fe4d`),
+so default solver drift does not explain the averaging intervention's failure.
+Cached action audits show BB's opening-decision local loss increasing from
+0.389613bb (original full average) to1.465955bb (learned tail-only average).
+These local losses are not additive exploitability components or full-game
+bb/hand. Do not retain the truncated-average schedule or run longer hybrids
+unchanged. Native eight-update finishing partially helps, but does not establish
+whether bad inherited regrets, noisy late draws or continuation approximation
+accounts for the remaining regression.
+
+Completed manifest SHA-256:
+`84000457d3211f142c05eeb10c0126f8bd436ea570c9bc86265fdaa8caf65dd7`.
+Native8 candidate SHA-256:
+`d140d603b7d0e61a7adfe8be17297e149e33878e7a35cf711ee388c384f36ab1`;
+native8 response SHA-256:
+`741b5423e2f095bf41b6ad79c8a543398867e7b66891528d0deaef560dacb1e9`.
+
+## 23. Measure exact parallel native continuation construction
+
+The original all-native64, full-average policies remain stronger than the
+learned32 policies on the four consumed matched cases. Native4 and late-native8
+failed; do not trade accuracy or truncate averaging again. The existing parallel
+leaf evaluator solves independent continuation queries from a frozen flop
+strategy, then applies backups in the original order. Test implementation cost
+without changing the strategy computation.
+
+1. Pin the unchanged `287b52c` binary, all Rust sources, original limped root,
+   seed 100101 and matched32 native candidate. No inherited neural model or
+   tail/averaging settings. Use turn64, one uniform turn sample, no baseline
+   and ordinary full averaging. Only leaf workers changes from one to four.
+2. Start with eight flop updates under a 4GiB whole-process memory guard and
+   900s limit. Stop for sustained memory pressure or disk below 20GiB. This
+   stage measures cost and memory only, not strategy quality. Require exact
+   parity with the completed serial eight-update preflight as well.
+3. If the eight-update measurement projects 32 updates below 1800s with a
+   25% margin, construct 32 with four workers under the same 4GiB guard.
+   Require byte-identical output to the cached serial32 candidate
+   `ba4d571c0e9bd7820a0be03083a449a38fdb4adf3b8ad95e3911bf0d5f9d7710`.
+   A parity failure stops the path. A cost failure does not justify more workers
+   or relaxed guards automatically. Total preflight limit: 3000s.
+4. Identical candidate bytes reuse the existing complete all49 response and
+   independent audit; do not recompute the same policy's quality. Cached timing
+   comparisons are hardware-state-sensitive and not a guaranteed speedup.
+5. Only after useful cost/parity evidence, preregister an all-native32 versus
+   all-native64 flop-update comparison with full averaging. Keep the inner and
+   played continuation budgets at 64. Add the explicit research CLI budget if
+   needed, test it and prove default parity before training. Require meaningful
+   actual response improvement, then another seed/root, before full-hand work.
+
+This sequence targets the measured continuation bottleneck without another
+neural-loss grid. No paid compute, model promotion or full-game exploitability
+claim follows from a cost preflight.
+
+Section 23 completed: both eight- and 32-update parallel policies match their
+cached serial controls byte-for-byte. Eight updates took 263.425s (cached serial
+455.752s), 32 took 1196.997s (cached serial 1956.564s). Peaks were
+1,274,807,568 / 1,179,747,528 bytes; system pressure stayed normal. The cached
+timing comparison is hardware-state-sensitive, not a controlled speed ratio.
+The resulting 32-update policy is unchanged, so its complete 0.187585bb
+conditional response gain and audit can be reused without another evaluation.
+Artifacts: `runs/local-native-parallel-cost-20261005-a/manifest.json` and the
+two guarded construction receipts/candidates.
+
+## 24. Accurate 32-to-64 flop-update quality comparison
+
+1. Keep the consumed limped root and seed 100101 fixed. Use the exact cached
+   native32 control from section 23, not the rejected learned-tail/native4 arms.
+2. Add 64 only to the explicit research CLI's allowed flop budgets. Rebuild,
+   run native release tests and reproduce the frozen default learned32 policy
+   byte-for-byte. Freeze binary and all Rust/controller sources before launch.
+3. Construct from scratch with 64 flop updates, native64 continuation queries,
+   one seeded turn draw per update, no learned model/baseline, full averaging
+   and four leaf workers. No new loss function or numerical algorithm change.
+4. Use a 4GiB/3600s construction guard and a 7200s total limit. Reject a total
+   projection above two hours from the completed parallel32 and original all49
+   native64 packet timings. Keep system-pressure stops and the 20GiB reserve.
+5. Evaluate every legal turn under the same native64 played policy; four
+   separately guarded 1.5GiB packet workers, complete aggregate and independent
+   JS audit. Do not score partial turns or a faster inner continuation budget.
+6. Require >=0.02bb improvement over the complete native32 conditional response
+   gain before expansion. Otherwise reject unchanged scaling. A first pass is
+   only a consumed-root feasibility signal: next confirm the other seed/root,
+   then evaluate a pinned combined full-hand route. It is not Approximate GTO
+   qualification, a generator acceptance or a website-ready release.
+
+This tests additional accurate regret updates after demonstrating affordable
+local construction, rather than repeatedly fitting better loss metrics that
+did not produce better policy actions. No paid compute is authorized.
+
+Section 24 is implemented and its first quality run is active. Native release
+validation passed 362 unit and nine CLI tests (57 research jobs skipped), and
+17 targeted Python tests pass. The rebuilt default learned32 policy remains
+byte-identical to the frozen `f1faa095` candidate. The controller pins that
+proof and all sources, requires section 23's complete parity result, and
+projects 5186.2s including guarded construction, all49 packets and audits.
+No quality result has been observed yet.
+
+Section 23 receipt SHA-256:
+`8980fdb8f8dce1ba6fd8ad3889c12ee15bff10f6f3a2bbbc49d0e0c4bedf3855`.
+Section 24 artifacts: `runs/local-native-update64-20261005-a/build.json`,
+`default-parity/manifest.json`, `first-control/manifest.json`.
+New binary SHA-256:
+`87e7e1b36d2896a4ae75fe9243c5e8b27c19d0e9d7c88642bc4b4750c749978d`.
+Default parity receipt SHA-256:
+`7f97ff767d2aabccf87e405cba93595a36a21f6cf875698d3270d4b1f50b39b6`.
+
+Section 24's first screen completed and is **promising**, not release accepted.
+Conditional response gain fell 0.187584887→0.127664771bb, an improvement of
+0.059920116bb (31.94%), exceeding the predeclared 0.02bb screen. Construction
+took 2145.307s with 1,260,750,072 bytes peak sampled footprint. All49 native64
+packets and the independent audit passed; total elapsed time was 3554.3s,
+with normal system pressure. Other seeds/roots and full-game improvement are
+not yet measured. No neural weights or website policy has been promoted.
+
+Completed first manifest SHA-256:
+`d583d8396c900924391341898027069fb7947741c366a4153c90840e7f5a10eb`.
+Native64 candidate SHA-256:
+`348b402894439c8ae1130fa2c067408ca9b3564bc54383357b6969c0a2b8ced4`.
+Native64 response SHA-256:
+`1f2e046894415fcb63bcb2002956f238a1f5a2ed64e2cb7adc5f9ee08dc9fcb3`.
+
+## 25. Confirm accurate-update improvement across the matched seed
+
+1. Pin section 24's completed first policy, response, all49 packet hashes,
+   successful audit and original native32 control. Require its original
+   improvement criterion before allocating a second run.
+2. Change only the solver seed to 100102 on the same limped root. Keep native64
+   leaves, 64 flop updates, full averaging, one turn sample and four leaf
+   workers. Use the same immutable native binary and default-parity proof.
+3. Reuse that seed's already complete native32 response (0.246098758bb), not
+   another redundant 32-update construction/evaluation. Preserve the original
+   two-hour projection, 4GiB/3600s construction, 1.5GiB packet limits, system
+   pressure and 20GiB disk reserve. Evaluate all49 turns and run the JS audit.
+4. Require the second seed not to regress its own control by more than 0.01bb
+   and the two-seed mean improvement to be at least 0.02bb. Do not average away
+   a larger seed regression. A pass justifies the other predeclared root/seed
+   comparisons; it is not evidence of full-game exploitability or GTO safety.
+5. If the pair fails, preserve both outcomes and stop unchanged scaling.
+   Do not tune seeds or the window to rescue the original favorable result.
+
+Section 25 completed and **passes its paired feasibility criteria**. Seed
+100102 improves 0.246098758→0.118057507bb, a 0.128041251bb reduction. The two
+limped seeds' mean improves 0.216841822→0.122861139bb (43.34%), with neither
+seed regressing. This is conditional response gain, not full-game bb/hand.
+Second-seed construction took 2163.730s at 1,181,484,232 bytes peak sampled
+footprint; complete all49 evaluation and independent audit took 3506.1s total.
+Memory pressure stayed normal. No website model has been promoted.
+
+Paired manifest SHA-256:
+`b58a53ecc7092d0590e9eba75f0e1f4f574e06b4fc7dcb65b1b5c2daa81039f5`.
+Second native64 candidate SHA-256:
+`2657c0e8c020779f2af14ce85c07390ceb62f20e85560d1385a30c75776b5be4`.
+Second native64 response SHA-256:
+`7828433377ef37de666d77fbbdb328ea58c2adda3a44b61602b5cddeefe45177`.
+
+## 26. Test transfer to the original single-raised high-rainbow root
+
+1. Require the completed, promising limped pair and recheck both policies,
+   all98 packet identities and independent audits before expansion. Reuse the
+   original native32 single-raised controls, 0.303985955/0.299026003bb.
+2. Run seed 100101 first on the original single-raised input; change only the
+   root. Keep 64 flop/native64 continuation updates, one turn sample, full
+   averaging, four leaf workers and the exact same native binary. Keep all
+   prior memory, pressure, disk, two-hour projection and time stops.
+3. Require >=0.02bb improvement before seed 100102 confirmation. The root's
+   completed pair must improve mean gain >=0.02bb, with second-seed regression
+   <=0.01bb. No favorable-root substitution or reduced evaluation budget.
+4. Evaluate all49 legal turns and run the independent audit for each accepted
+   construction. Report the complete four-case comparison, not just the best
+   root/seed. Other boards, betting histories, full-hand safety and deployable
+   neural quality remain separate unresolved questions.
+5. A complete successful transfer justifies a pinned full-hand feasibility
+   route and measured next iteration budget. It does not authorize cloud spend,
+   model promotion, new fit-loss grids or claiming Approximate GTO.
+
+Section 26's first single-raised screen completed and **passes**. Seed 100101
+improves 0.303985955→0.160506433bb, a 0.143479522bb reduction (47.20%).
+Construction took 1318.545s with 724,976,504 bytes peak sampled footprint;
+all49 turn evaluations and the independent audit passed. Total elapsed time
+was 2234.4s, with normal memory pressure. Its first32 update logs match the
+original native32 control exactly. This is another consumed-root conditional
+result, not a full-game or serving acceptance. Next: unchanged seed 100102.
+
+First single-raised manifest SHA-256:
+`c9888bf370c3e0f2c6fed524f137c51f4fa7fb49443e763a2f488b14b39f96ee`.
+First single-raised native64 candidate SHA-256:
+`fd33f404c21d239cb4c70f3ce50bcfbe20ff9d3679c53488080d4b786efbce01`.
+Artifacts: `runs/local-native-update64-20261005-a/single-raised-first/`.
+
+Section 26's unchanged second seed also **passes**: 0.299026003→0.146287312bb.
+The single-raised mean improves 0.301505979→0.153396873bb (49.12%), with neither
+seed regressing. Construction took 1350.598s at 724,288,376 bytes peak sampled
+footprint. All49 turns and the independent audit passed; total 2279.3s, normal
+system pressure. First32 update logs again match the original control.
+
+The complete four-case iteration comparison is:
+
+| Consumed root | Seed | Native32 gain (bb) | Native64 gain (bb) |
+| --- | ---: | ---: | ---: |
+| Limped paired | 100101 | 0.187585 | 0.127665 |
+| Limped paired | 100102 | 0.246099 | 0.118058 |
+| Single-raised high-rainbow | 100101 | 0.303986 | 0.160506 |
+| Single-raised high-rainbow | 100102 | 0.299026 | 0.146287 |
+| Equal root/seed mean | — | **0.259174** | **0.138129** |
+
+Mean improvement is 0.121044895bb (46.70%). These are half-summed conditional
+response gains on two consumed roots, not a representative board sample,
+full-game bb/hand estimate, or proof of general safe resolving. The neural
+weights and website policy are unchanged.
+
+Second single-raised manifest SHA-256:
+`da46c687b7cd03b6c8d6c407e352355ffb1be81a1543caa1b4d402d171e37d6a`.
+Second single-raised candidate SHA-256:
+`d8d66c3346f9f1a1b4b53b3adc9066d55a81d0e8b8657e0b2dd231bdf2e93a5e`.
+Second single-raised response SHA-256:
+`59bb94fd5a1371e97baa67093d0a83883ee391f416d3673516f3b0d05a609825`.
+Artifacts: `runs/local-native-update64-20261005-a/single-raised-paired/`.
+
+## 27. Pin accurate continuations into the full-hand research route
+
+1. Require both completed two-seed quality pairs, their original controls,
+   all196 turn packets and independent audits. Keep the same retained compact
+   preflop checkpoint from the benchmark. No neural or website promotion.
+2. Reuse the existing strict full-hand adapter and native playback. Add an
+   explicit native compact-continuation entry point: reset only the inherited
+   preflop optimizer schedule, retain the action/card/stack abstraction, and
+   use the existing counterfactual root-support averaging for all board-legal
+   holdings. Preserve true zero ranges; do not insert a range floor or uniform
+   fallback. Existing learned and ordinary native entries remain unchanged.
+3. Test the actual caller, hidden-card/future-card independence, root-support
+   and worker-copy identities, invalid budgets, and normalization. Run native
+   release tests, freeze a new binary/source snapshot, and reproduce the
+   existing default learned32 candidate byte-for-byte before the cost probe.
+4. Run one deterministic forced check/call hand through all four streets at
+   64 flop/native64 continuation updates with four leaf workers. Exhaustively
+   inspect its frozen preflop lookup coverage; pin every input. Keep a 4GiB
+   whole-worker memory limit, 3600s worker/3900s total limit, system-pressure
+   stops and the 20GiB disk reserve. Stop rather than silently lower the actual
+   continuation budget if the route is too expensive or incomplete.
+5. Record cold/warm street costs and exact route identity. This is integration
+   and cost feasibility only: a forced hand does not measure strength. Only
+   after this passes, preregister a small matched complete-hand response pilot
+   on the same preflop/game and fixed deal clusters. Reuse the existing legal
+   LBR with unchanged sampling; never call its observed gain an exploitability
+   upper bound. Generalization and release gates remain separate.
+
+This moves the supported native improvement toward a measurable combined
+policy rather than starting another loss grid or extrapolating conditional
+root gains into a full-game claim. No paid compute is authorized.
+
+Section 27's implementation and prelaunch validation are complete. Native
+release tests pass 364 unit and nine CLI tests (58 explicit research jobs
+ignored); 24 targeted Python tests pass. The new actual-caller test covers
+all streets, hidden/future-card independence and parallel-copy consistency.
+Existing learned32 default output still reproduces `f1faa095` byte-for-byte.
+The controller also independently reconstructs the Rust full-hand route hash
+and checks its original paired admissions, budgets, preflop coverage, every
+served probability mix and complete eight-decision output. The root-support
+entry is an explicit additional route contract, not a claim that the four
+conditional policies already certify full-hand coverage.
+
+Frozen native binary SHA-256:
+`cebe4fa6cb3fc4825f39c6c967322aada41333e96973111681b2201df05937c8`.
+Build/source receipt SHA-256:
+`19318c98f30bc6194e15261618b49c9bdb125bc2cc1cd4a55ad6823662ddb211`.
+Default parity receipt SHA-256:
+`458848bb18df0a7591771bdce8c895cdc869ee787781b08585741e8710f248bb`.
+Artifacts: `runs/local-accurate-full-hand-20261005-a/`.
+
+Section 27's accurate full-hand cost probe **passed**. All eight forced
+decisions and the independent Rust/Python route identity check passed.
+Exhaustive preflop coverage: 132,600 queries, zero missing rows, maximum
+probability-sum error 6.661338e-16. Cold flop solving took 2597.924s; cold turn
+playback took 22.782s. Subsequent flop/turn/river decisions took at most
+0.0000321s. Total elapsed time 2621.378s; peak sampled footprint 1,162,953,904
+bytes; memory pressure stayed normal. This establishes offline integration
+feasibility, **not interactive cold-serving readiness or playing strength**.
+
+Cost manifest SHA-256:
+`0aa9ec68ecbecd96f7d86b65e4b98ecb260bb5409fa7e2f850e833740a1d4c95`.
+Probe SHA-256:
+`aa620ed5abc7a8c0831a83832ec64edb44d93935740cb8e29a1816fd6256c209`.
+Route SHA-256:
+`5dad23fc43e5db520fbabad33d4320388577500297bc02e421007d5d25a9cc29`.
+
+## 28. Cost-first matched complete-hand response pilot
+
+1. Admit only section 27's complete cost/coverage/route receipt and the same
+   benchmark preflop checkpoint. Reuse the existing frozen legal LBR:
+   seed 90001, 16 early runouts per opposing combo, exact river equity. Keep
+   its own information limited to visible cards and observed actions.
+2. Freeze one declared screening deal cluster, index 0, from the existing
+   chance/action seed rule. Use policy seed 100101 for both native32 and
+   native64 arms. Keep full counterfactual root support, four leaf workers,
+   native64 training/played turn values, game abstraction and preflop fixed.
+   No neural model or postflop solver settings may be substituted.
+3. Play both attacker seats for each arm, without an extra baseline rollout:
+   zero-sum self-play payoffs cancel in the paired total. Preserve exact deal
+   identity across arms. Report **total** response gain, not the earlier
+   half-summed conditional-root convention. Count independent deal clusters,
+   not seats or private combos; one cluster cannot qualify strength.
+4. Preflight cost sequentially under a 4GiB whole-worker limit: 4500s for
+   native32, 7200s for native64, 12000s total. A full-deal pair can touch two
+   different flop ancestors, unlike the forced one-root cost probe. These
+   caps include a margin over the observed 2597.924s cold root and possible
+   additional native continuation queries. Retain pressure stops and the
+   20GiB disk reserve; stop rather than quietly change the policy budget.
+5. Require complete legal reports, route/hash/budget parity, bounded payoff
+   accounting and at least an explicit count of postflop decisions. A hand
+   ending preflop is still recorded, not replaced with a favorable deal.
+   Observe cost before declaring a larger fixed cohort. Do not promote or
+   expand based on one favorable payoff; its confidence is insufficient.
+
+This is a matched complete-hand cost/response feasibility test, not a global
+exploitability upper bound. The unmodified learned route and website remain
+unchanged; paid compute remains unauthorized.
+
+Section 28's controller and explicit native research entry are implemented.
+Release validation passes 364 unit and nine CLI tests (59 explicit jobs
+ignored), plus 29 targeted Python tests. The existing default learned32
+candidate still reproduces byte-for-byte. The controller reconstructs both
+route identities independently, requires the complete section 27 cost probe,
+and validates exact cards, paired attacker randomness, legal recorded actions,
+complete seat payoffs and total-scale accounting. It explicitly retains
+preflop-only deals and sets no strength acceptance from this one-deal pilot.
+
+Frozen paired-response binary SHA-256:
+`fa4f8d254a47bb822b781cd27d8f3dab01bbaa77af8cdf4e488da8b939610603`.
+Build/source receipt SHA-256:
+`d97340dfc9a75640195ccd0c559f50d0e36fc12a5df781e27b1a9ce7c5267d41`.
+Default parity receipt SHA-256:
+`b6f62941247bfe59f9d9e5adb58a8a5eae1bc01ff608ea26d62124f405b9e5e7`.
+Artifacts: `runs/local-accurate-full-hand-pair-20261005-a/`.
+
+Section 28's first complete-hand pair finished. Native32/64 realized total
+attacker gains were **-3.0/-2.0bb**, respectively: a 1.0bb adverse paired
+sample for native64, not an exploitability estimate. Both attacker paths had
+three postflop decisions. Inspection shows the same losing holding bluffs
+2.5bb versus 1.5bb on the flop, then checks turn/river and loses showdown;
+the other seat's attack ends preflop with +0.5bb in both arms. A negative
+realized sample is not a passed equilibrium gate, and this single private
+holding/runout cannot establish a strategy regression or improvement.
+
+Native32 took 1366.557s at 1,334,560,040 bytes peak sampled footprint; native64
+took 2188.386s at 1,364,051,336 bytes. Total active elapsed time was 3555.0s,
+with normal pressure. Calendar time advanced while guard samples and update
+counts barely advanced; elapsed durations use a monotonic clock, not the
+wall-clock timestamps. The
+first32 update streams are exact matches. No missing lookups, source changes,
+invalid actions, accounting errors or route mismatches occurred.
+
+Completed first-pair manifest SHA-256:
+`68318c065c3e3b9d645128c3ee4246b1b5e960cc55820234bf30e3a630aadad9`.
+Native32/64 report SHA-256:
+`7702631ffb44bfd9b0b25123c62d012cc6b74a0668f8b0db4fbb6c4e72f9959a` /
+`1d7002052fada1f889a1aa644f5baca7920c355c68c2cf464c332155f02ed70b`.
+
+## 29. Fixed four-deal matched screening, not one-payoff selection
+
+1. Keep completed screening index 0; do not replace its unfavorable sample.
+   Require its complete pinned two-arm reports, route/accounting validation,
+   normal-pressure receipts, <=7200s active total and <=2GiB observed worker
+   peak before expansion. Admission depends on feasibility, not the payoff.
+2. Declare exactly the remaining indices 1, 2, 3 from the same deterministic
+   screening seed rule. Policy seed is 100102 on odd indices and 100101 on
+   even indices, fixed before their outcomes. Both native32/64 arms on each
+   deal share that seed, preflop artifact and attacker randomness. This compares
+   training configurations across two policy seeds, not one frozen route.
+3. Reuse the same tested native binary and default-parity proof. Only extend
+   controller admission/reporting; do not change the solver or trained models.
+   Retain 4GiB per-worker, 4500s/7200s arm limits and 12000s per-pair limit.
+4. Permit at most two simultaneous independent pair controllers (eight leaf
+   threads total), using the observed <1.4GiB worker peaks as the feasibility
+   basis. Preserve global pressure stops and 20GiB reserve. Monitor both, then
+   start the third after a slot clears; stop the remaining expansion at 18000s
+   active time. Parallelism changes execution only, not seeded policies.
+5. Keep every declared deal, including preflop-only and adverse outcomes.
+   Report all four paired differences, per-policy-seed means and postflop
+   exposure counts. Never clip negative payoffs, count seats as independent
+   boards, or call four deals a 99% exploitability bound. Missing/failed pairs
+   leave the cohort incomplete rather than improving the reported average.
+6. Use this as a cheap full-hand directional screen. No website promotion or
+   unconditional iteration extension follows from a favorable tiny sample.
+   If evidence is inconclusive, choose a variance-reducing exact conditional
+   check on captured public roots or a preregistered larger cohort according
+   to measured cost; do not pretend the original full-game gate was tested.
+
+This extends a measured feasible workload, includes both policy seeds and
+preserves the first adverse result. It is not an overnight convergence promise
+or authorization to spend on cloud compute.
+
+Section 29's gated controller extension is implemented; 31 targeted Python
+tests pass, including actual completed-report admission and rejected partial,
+changed-route and over-budget receipts. The original first-deal comparison
+remains byte-preserved. Native Rust, its frozen `fa4f8d25` binary and default
+parity proof are unchanged; no redundant native rebuild is required. The
+expansion derives its policy seed from the declared index rather than offering
+a best-seed selection switch. A bounded local two-controller launcher will
+enforce the cohort's 18000s stop and preserve incomplete status on failures.
+
+### October 6 priority change: interactive solving speed
+
+The user clarified that the goal is faster solving for usability. The local
+four-deal expansion was stopped through its owned controller's signal handler;
+indices 1 and 2 had not completed either pair, and index 3 had not started.
+The expansion remains **incomplete**, with logs preserved under
+`local-accurate-full-hand-pair-20261006-cohort-a`. No partial reports are used
+as evidence of playing-strength improvement. The completed index-0 evidence
+above remains unchanged. Do not resume strength runs under this speed task.
+
+The interactive website's pinned resolver uses two iterations per street,
+not the research native32/native64 budgets. Speed work measures that actual
+serving configuration, preserves model artifacts, exact card removal and
+the solver budget, and checks complete policy/EV output parity. It does not
+promote this experimental model to Approximate GTO or waive any strength gate.

@@ -16,6 +16,8 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { PokerCard } from '@/components/cards/PokerCard';
+import { CashSettlementSummary } from '@/components/practice/CashSettlementSummary';
+import { practiceGameProfile } from '@/lib/practice-game-profiles';
 import { usePracticeTableSounds } from '@/components/practice/usePracticeTableSounds';
 import { playPracticeSound, unlockPracticeAudio } from '@/lib/practice-sounds';
 import { totalPotBb } from '@/lib/practice-engine';
@@ -276,8 +278,10 @@ export function PracticeTable({
           >
             Your table
           </h2>
-          <p className="sr-only">
-            {modeLabel(mode)} · {state?.depthBb ?? 20}bb · 0.5/1bb · no rake
+          <p className={state?.cash ? 'mt-1 text-sm text-muted' : 'sr-only'}>
+            {state?.cash
+              ? `${practiceGameProfile(state.cash.rules.id)?.label ?? 'Cash study'} · ${modeLabel(mode)} · ${state.depthBb}bb · ${state.cash.rules.blindsUnits.map((units) => units / state.cash!.rules.unitsPerBb).join('/')}bb · ${state.cash.rules.rake.rateBasisPoints / 100}% rake`
+              : `Home game · ${modeLabel(mode)} · ${state?.depthBb ?? 20}bb · 0.5/1bb · no rake`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -501,6 +505,15 @@ export function PracticeTable({
       <p id="table-status" className="sr-only" role="status" aria-live="polite">
         {liveMessage}
       </p>
+
+      {state?.cash && state.result?.cashSettlement && (
+        <div className="mt-4">
+          <CashSettlementSummary
+            settlement={state.result.cashSettlement}
+            rules={state.cash.rules}
+          />
+        </div>
+      )}
 
       <div className="practice-action-dock">
         {status === 'decision' && node ? (

@@ -1,0 +1,36 @@
+{
+  "home": {
+    "schema": "hu-cash-rules-v1",
+    "id": "home-game-v1",
+    "currency": "BB",
+    "unitsPerBb": 1000,
+    "blindsUnits": [500, 1000],
+    "playersDealt": 2,
+    "anteUnits": 0,
+    "rake": {
+      "rateBasisPoints": 0,
+      "capUnits": 0,
+      "noFlopNoDrop": false,
+      "rounding": "half-to-even"
+    },
+    "splitPotRule": "first-left-of-button",
+    "betRounding": "half-up"
+  },
+  "nl25": {
+    "schema": "hu-cash-rules-v1",
+    "id": "pokerstars-usd-regular-hu-nl25-2026-10-06",
+    "currency": "USD",
+    "unitsPerBb": 25,
+    "blindsUnits": [10, 25],
+    "playersDealt": 2,
+    "anteUnits": 0,
+    "rake": {
+      "rateBasisPoints": 450,
+      "capUnits": 50,
+      "noFlopNoDrop": true,
+      "rounding": "half-to-even"
+    },
+    "splitPotRule": "first-left-of-button",
+    "betRounding": "half-to-even"
+  }
+}

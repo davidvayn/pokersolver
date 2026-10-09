@@ -284,6 +284,14 @@ export function PreflopWorkspace(props: PreflopWorkspaceProps) {
           {active && (
             <HandDetail label={pinned ?? hovered} strategy={strategy} />
           )}
+          {scenario && (
+            <p className="text-sm leading-5 text-muted" data-preflop-rules>
+              {scenario.provenance.source === 'offline-solver'
+                ? 'Home game · Rake-free push/fold charts. Not an NL25-trained policy.'
+                : 'Curated reference · Rake assumptions not verified. Not an NL25-trained policy.'}{' '}
+              Online practice settings do not change these charts.
+            </p>
+          )}
           <section
             className="preflop-seat-ranges"
             aria-label="Opening ranges by seat"

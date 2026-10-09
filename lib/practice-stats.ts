@@ -6,6 +6,8 @@ import type {
   PracticeStats,
   PracticeTrendPoint,
 } from '@/lib/practice-types';
+import { historicalGameIdentity, handsForGame, type PracticeEvidenceScope } from '@/lib/practice-game-identity';
+import { practiceGameProfile } from '@/lib/practice-game-profiles';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const TREND_DAYS = 21;
@@ -198,10 +200,13 @@ export function summarizePracticeDecisions(
 
 export function analyzePractice(
   hands: PracticeHandRecord[],
-  now = Date.now()
+  now = Date.now(),
+  scope?: PracticeEvidenceScope
 ): PracticeStats {
-  const decisions = hands
-    .flatMap((hand) => hand.decisions)
+  if (scope) hands = handsForGame(hands, scope);
+  const decisions: PracticeDecisionRecord[] = hands
+    .flatMap((hand) => hand.decisions.map((decision) => ({ ...decision,
+      gameIdentity: decision.gameIdentity ?? historicalGameIdentity(hand) })))
     .sort((first, second) => second.answeredAt - first.answeredAt);
   const summary = summarizePracticeDecisions(decisions);
   const recent = decisions.slice(0, 50);
@@ -257,9 +262,9 @@ export function analyzePractice(
   const weaknesses = breakdown(
     decisions.slice(0, 200),
     (record) =>
-      [record.street, record.position, record.depthBb, record.handBucket, record.facingAction].join('|'),
+      [record.gameIdentity?.rulesSha256 ?? 'unresolved', record.street, record.position, record.depthBb, record.handBucket, record.facingAction].join('|'),
     (record) =>
-      `${record.street} · ${record.position === 'button-small-blind' ? 'BTN / SB' : 'BB'} · ${record.handBucket} · ${record.facingAction}`
+      `${practiceGameProfile(record.gameIdentity?.profileId ?? '')?.label ?? 'Unresolved legacy game'} · ${record.depthBb}bb · ${record.street} · ${record.position === 'button-small-blind' ? 'BTN / SB' : 'BB'} · ${record.handBucket} · ${record.facingAction}`
   )
     .filter((item) => item.decisions >= 2)
     .slice(0, 6);
@@ -318,6 +323,8 @@ export function analyzePractice(
         grade: record.grade,
       })),
     byStreet,
+    byGameProfile: breakdown(decisions, (record) => record.gameIdentity?.profileId ?? 'unresolved',
+      (record) => practiceGameProfile(record.gameIdentity?.profileId ?? '')?.label ?? 'Unresolved legacy game'),
     byStack,
     byPosition,
     byAction,

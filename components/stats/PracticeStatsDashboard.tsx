@@ -897,6 +897,11 @@ export function PracticeStatsDashboard({
                 items={stats.byMode}
               />
               <BreakdownChart
+                title="By game profile"
+                subtitle="Separate frozen rules; unknown history stays unresolved"
+                items={stats.byGameProfile}
+              />
+              <BreakdownChart
                 title="By response time"
                 subtitle="Average EV loss"
                 items={stats.byResponseTime}

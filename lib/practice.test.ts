@@ -145,6 +145,27 @@ describe('heads-up hand engine', () => {
     assertChipConservation(called);
   });
 
+  it.each([20, 40, 50, 100, 200, 1000, 2000])(
+    'keeps exact blind, all-in, and rake-free settlement accounting at %ibb',
+    (depthBb) => {
+      const initial = hand(7, depthBb);
+      expect(initial.stacksBb['button-small-blind']).toBe(depthBb - 0.5);
+      expect(initial.stacksBb['big-blind']).toBe(depthBb - 1);
+      assertChipConservation(initial);
+      const shoved = applyAction(initial, {
+        id: 'all-in', kind: 'all-in', label: `All-in ${depthBb}bb`, amountToBb: depthBb,
+      });
+      assertChipConservation(shoved);
+      const called = applyAction(shoved, {
+        id: 'call', kind: 'call', label: `Call ${depthBb - 1}bb`,
+      });
+      expect(called.terminal).toBe(true);
+      expect(called.result?.potBb).toBe(depthBb * 2);
+      expect(called.result!.netBb['button-small-blind'] + called.result!.netBb['big-blind']).toBe(0);
+      assertChipConservation(called);
+    }
+  );
+
   it('offers only generic legal actions and rejects undersized non-all-in raises', () => {
     expect(engineLegalActions(hand()).map((action) => action.kind)).toEqual([
       'fold',
@@ -337,7 +358,25 @@ describe('EV grading and settings', () => {
     expect(postflopStreetForHand([], 1)).toBe('turn');
   });
 
+  it('retains new stack-depth preferences but rejects malformed depths', () => {
+    for (const depthBb of [40, 75, 150, 200, 1000, 2000]) {
+      expect(sanitizePracticeSettings({ depthBb }).depthBb).toBe(depthBb);
+    }
+    for (const depthBb of [null, '40', 0, 1, -20, 40.5, Infinity, NaN]) {
+      expect(sanitizePracticeSettings({ depthBb }).depthBb).toBe(20);
+    }
+  });
+
   it('queues structural table changes but treats a decision goal as run metadata', () => {
+    const nl25 = 'pokerstars-usd-regular-hu-nl25-2026-10-06';
+    expect(sanitizePracticeSettings({ gameProfileId: nl25 }).gameProfileId).toBe(nl25);
+    expect(sanitizePracticeSettings({ gameProfileId: 'untrained-room' }).gameProfileId).toBe('home-game-v1');
+    expect(structuralSettingsChanged(DEFAULT_PRACTICE_SETTINGS, {
+      ...DEFAULT_PRACTICE_SETTINGS, gameProfileId: nl25,
+    })).toBe(true);
+    expect(structuralSettingsChanged(DEFAULT_PRACTICE_SETTINGS, {
+      ...DEFAULT_PRACTICE_SETTINGS, gameProfileId: undefined,
+    })).toBe(false);
     expect(
       structuralSettingsChanged(DEFAULT_PRACTICE_SETTINGS, {
         ...DEFAULT_PRACTICE_SETTINGS,

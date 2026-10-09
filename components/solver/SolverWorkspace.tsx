@@ -480,6 +480,9 @@ export function SolverWorkspace(props: SolverWorkspaceProps) {
   return (
     <section data-solver-workspace className="solver-workspace min-w-0 text-fg">
       <h1 className="sr-only">Postflop solver</h1>
+      <p className="text-xs leading-5 text-muted" data-solver-rules>
+        Home game · Rake-free, single-street all-in-equity model. Online practice settings do not change this solver.
+      </p>
       <StrategySurface context={context} />
     </section>
   );

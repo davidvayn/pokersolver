@@ -5,6 +5,7 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_flatten
 import numpy as np
+import native_value_dataset as native
 
 from action_contrast_dataset import AffineGroup
 from action_contrast_loss import BundleObjective, TrainingBundle
@@ -17,6 +18,9 @@ class TinyValue(nn.Module):
 
     def __call__(self, contexts, queries, projection_weights, scales):
         return self.linear(queries).reshape(queries.shape[0], -1)
+
+    def raw_values(self, contexts, queries, projection_weights, scales):
+        return self.linear(queries).reshape(queries.shape[0], 2, 1326)
 
 
 class ContrastGradientTests(unittest.TestCase):
@@ -76,6 +80,27 @@ class ContrastGradientTests(unittest.TestCase):
             np.testing.assert_allclose(np.asarray(gb), np.asarray(gc + .5*gd))
         self.assertEqual(off.scheduled_families, on.scheduled_families)
         self.assertEqual(off.updates, 1)
+
+    def test_actual_serving_aligned_two_pass_parameter_gradient(self):
+        from action_contrast_dataset import contrast_loss_and_q_gradient
+        from serving_value_projection import BoundedValueProjection
+        model, bundle = TinyValue(), self.fixture()
+        model.linear.weight = mx.array([[6.]])
+        model.linear.bias = mx.array([.3])
+        bundle.dataset.boards = np.tile(np.array([0,5,10,15]),(3,1))
+        legal = np.array([native.legal_combos(b) for b in bundle.dataset.boards])
+        bundle.dataset.ranges = np.tile(legal[:,None],(1,2,1)).astype(float)/1128.
+        weights = np.array([r*native.compatible_masses(r) for r in bundle.dataset.ranges])
+        objective = BundleObjective([bundle],1.,chunk_size=1,serving_aligned=True)
+        _, gradient, _ = objective.gradients(model,bundle,self.value_loss)
+        def loss(weight):
+            model.linear.weight=mx.array([[weight]])
+            raw=np.asarray(model.raw_values(*objective.inputs(bundle,0,3)))*bundle.dataset.target_scales[:,None,None]
+            projection=BoundedValueProjection(raw,weights,legal)
+            g=bundle.groups[0]
+            return contrast_loss_and_q_gradient(g.backup(projection.values[:,g.actor]),g.target,g.weights*g.support)[0]
+        measured=(loss(6.001)-loss(5.999))/.002
+        self.assertAlmostEqual(float(gradient["linear"]["weight"].item()),measured,delta=2e-4)
 
 
 if __name__ == "__main__": unittest.main()

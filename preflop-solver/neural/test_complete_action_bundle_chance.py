@@ -1,4 +1,5 @@
 import unittest
+import threading
 from unittest.mock import patch
 
 import numpy as np
@@ -8,6 +9,20 @@ import complete_action_bundle_chance as module
 
 
 class FullChanceBundleTests(unittest.TestCase):
+    def test_resource_stop_blocks_finalization_and_phase_gets_separate_bounded_timer(self):
+        stop = threading.Event()
+        with patch.object(module.threading, "Timer") as timer:
+            old = unittest.mock.Mock()
+            module.begin_finalization(stop, old)
+            old.cancel.assert_called_once()
+            timer.assert_called_once_with(180, stop.set)
+            timer.return_value.start.assert_called_once()
+        stop.set()
+        with patch.object(module.threading, "Timer") as timer:
+            with self.assertRaisesRegex(ValueError, "before finalization"):
+                module.begin_finalization(stop, old)
+            timer.assert_not_called()
+
     def setUp(self):
         self.prefix = dict(candidate_sha256="a" * 64, root=dict(board=[0, 5, 10]))
         self.turns = sorted(set(range(52)) - {0, 5, 10})

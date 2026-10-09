@@ -3,6 +3,82 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
+    for flags in [vec!["--cash-profile", "nl25"], vec!["--threads", "8"], vec!["--output"], vec!["--input", "second"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["cash-flop-pilot", "--input", "must-not-read", "--value-network", "must-not-read"])
+            .args(flags).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("immutable"));
+    }
+    use preflop_solver::blueprint::{BlueprintConfig, public_belief::{PublicBeliefState, uniform_range, cash_flop::CashFlopPilotInput}};
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = 20.0; game.small_blind_bb = 0.4;
+    game.cash_rules = Some(preflop_solver::cash_game::study_rules("nl25").unwrap());
+    let board = [0, 5, 10];
+    let input = CashFlopPilotInput { game, state: PublicBeliefState::flop_start(
+        board, 1, [2.0; 2], [uniform_range(&board), uniform_range(&board)]),
+        iterations: 33, averaging_delay: 0, threads: 2,
+    };
+    let path = std::env::temp_dir().join(format!("cash-flop-cli-budget-{}.json", std::process::id()));
+    fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+        .args(["cash-flop-pilot", "--input", path.to_str().unwrap(), "--value-network", "must-not-read"])
+        .output().unwrap();
+    fs::remove_file(path).unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("2..32"));
+}
+
+#[test]
+fn practice_serving_rejects_ambiguous_or_invalid_action_grids_before_artifact_io() {
+    let valid = serde_json::to_string(&preflop_solver::blueprint::ActionAbstraction::default()).unwrap();
+    let invalid = valid.replace("\"open_sizes_bb\":[2.0,2.5,3.0,4.0,5.0]", "\"open_sizes_bb\":[]");
+    assert_ne!(valid,invalid);
+    for (options,message) in [
+        (vec!["--action-abstraction-json",valid.as_str(),"--compact-serving-grid"],"choose only one"),
+        (vec!["--action-abstraction-json",invalid.as_str()],"action grids"),
+        (vec!["--action-abstraction-json","not-json"],"Error"),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["practice-policy-server","--networks","must-not-read","--range-policy","must-not-read",
+                   "--model-version","test"])
+            .args(options).output().unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains(message),"{stderr}");
+        assert!(!stderr.contains("No such file"),"invalid grid must fail before reading weights: {stderr}");
+    }
+}
+
+#[test]
+fn cash_turn_inputs_cannot_be_relabelled_and_keep_their_explicit_budget() {
+    use preflop_solver::blueprint::{BlueprintConfig, public_belief::{PublicBeliefState, TurnRiverSolveConfig, uniform_range}};
+    let path = std::env::temp_dir().join(format!("cash-cli-input-{}.json", std::process::id()));
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = 20.0;
+    game.small_blind_bb = 0.4;
+    game.cash_rules = Some(preflop_solver::cash_game::study_rules("nl25").unwrap());
+    let board = [0,5,10,15];
+    let input = TurnRiverSolveConfig { game, state: PublicBeliefState::turn_start(board, 1, [19.0;2],
+        [uniform_range(&board), uniform_range(&board)]), iterations: 2, averaging_delay: 0,
+        river_refinement_iterations: 0, regret_matching_plus: false };
+    fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+    for flags in [vec!["--cash-profile", "nl25-rake-off-control"], vec!["--effective-stack-bb", "40"], vec!["--compact-serving-grid"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver")).args(["turn-river-pbs-solve", "--input", path.to_str().unwrap()])
+            .args(flags).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("immutable"));
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver")).args(["turn-river-pbs-solve", "--input", path.to_str().unwrap()]).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let label: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(label["joint_iterations"], 2);
+    assert_eq!(label["input"]["iterations"], 2);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn streetwise_blueprint_rejects_incompatible_modes_before_artifact_io() {
     let path = std::env::temp_dir().join(format!(
         "streetwise-cli-invalid-{}.json", std::process::id()

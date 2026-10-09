@@ -464,7 +464,7 @@ class SharedComboValueNetwork(nn.Module):
         else:
             raise ValueError(f"unknown shared-combo architecture {architecture}")
 
-    def __call__(
+    def raw_values(
         self,
         context: mx.array,
         queries: mx.array,
@@ -540,12 +540,21 @@ class SharedComboValueNetwork(nn.Module):
             residual = self.head(combined).reshape(
                 (combined.shape[0], 2, COMBO_COUNT)
             )
-        raw = baseline + residual
+        return baseline + residual
+
+    def __call__(
+        self,
+        context: mx.array,
+        queries: mx.array,
+        projection_weights: mx.array,
+        value_scales: mx.array,
+    ) -> mx.array:
+        raw = self.raw_values(context, queries, projection_weights, value_scales)
         joint_mass = mx.maximum(mx.sum(projection_weights[:, 0, :], axis=1), 1e-8)
         aggregate = mx.sum(raw * projection_weights, axis=2) / joint_mass[:, None]
         residual = mx.sum(aggregate, axis=1)
         projected = raw - residual[:, None, None] / 2.0
-        return projected.reshape((combined.shape[0], COMBO_COUNT * 2))
+        return projected.reshape((raw.shape[0], COMBO_COUNT * 2))
 
 
 def parse_args() -> argparse.Namespace:
@@ -1849,6 +1858,8 @@ def train_one(
     fixed_final_checkpoint: bool = False,
     bundle_objective: Any = None,
     checkpoint_callback: Any = None,
+    initial_model: dict[str, Any] | None = None,
+    initialization_transform: str | None = None,
 ) -> tuple[SharedComboValueNetwork, np.ndarray, np.ndarray, dict[str, Any]]:
     mx.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -1856,6 +1867,12 @@ def train_one(
         use_ranges, architecture, value_normalization, feature_schema
     )
     mx.eval(model.parameters())
+    initialization = None
+    if initial_model is not None:
+        from retained_initialization import import_retained_weights
+        initialization = import_retained_weights(model, initial_model, seed, initialization_transform)
+    elif initialization_transform is not None:
+        raise ValueError("initialization transform requires retained weights")
     optimizer = optim.AdamW(
         learning_rate=learning_rate_schedule(
             learning_rate, learning_rate_final, steps
@@ -2028,6 +2045,8 @@ def train_one(
                              dataset.target_scales[validation_rows])
             if authentic.sum() > 0 else None
         )
+    if initialization is not None:
+        metrics["retainedInitialization"] = initialization
     return model, prediction, final_tuning_prediction, metrics
 
 

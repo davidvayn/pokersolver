@@ -5,8 +5,11 @@ import {
 import { canonicalPolicyHash } from '@/lib/practice-engine';
 import {
   getStoredPracticeManifests,
+  isLegacyHomeManifest,
   storePracticeManifests,
 } from '@/lib/practice-models';
+import { HOME_GAME_RULES } from '@/lib/cash-game-rules';
+import { HOME_GAME_IDENTITY } from '@/lib/practice-game-identity';
 import type { NeuralPolicyResult } from '@/lib/neural-policy';
 import { neuralLegalActions } from '@/lib/neural-policy';
 import { NeuralPolicyWorkerClient } from '@/lib/neural-policy-worker-client';
@@ -16,6 +19,7 @@ import type {
   OpponentModelSnapshot,
   PolicyManifest,
   PolicyNode,
+  PracticeGameIdentity,
 } from '@/lib/practice-types';
 
 export class PolicyUnavailableError extends Error {
@@ -28,6 +32,7 @@ export class PolicyUnavailableError extends Error {
 export interface PinnedPracticeModel {
   manifest: PolicyManifest;
   depthBb: number;
+  gameIdentity?: PracticeGameIdentity;
   neuralReady?: true;
 }
 
@@ -80,7 +85,9 @@ export class PracticePolicyClient {
             body as { manifests: PolicyManifest[] }
           ).manifests.filter(
             (manifest) =>
-              manifest.active && manifest.validation?.status === 'accepted'
+              manifest.active &&
+              manifest.validation?.status === 'accepted' &&
+              isLegacyHomeManifest(manifest)
           );
           if (validated.length > 0) {
             this.manifests = validated;
@@ -105,11 +112,16 @@ export class PracticePolicyClient {
     throw new PolicyUnavailableError('Model manifest service is unavailable');
   }
 
-  async pinFullHandModel(depthBb: number): Promise<PinnedPracticeModel> {
+  async pinFullHandModel(depthBb: number, profileId = HOME_GAME_RULES.id): Promise<PinnedPracticeModel> {
+    if (profileId !== HOME_GAME_RULES.id) {
+      throw new PolicyUnavailableError('No compatible rules-pinned cash runtime is installed for this profile');
+    }
     const manifests = await this.loadManifests();
     const manifest = manifests.find(
       (candidate) =>
-        candidate.subtype === 'full-hand' && candidate.depthsBb.includes(depthBb)
+        candidate.subtype === 'full-hand' &&
+        candidate.depthsBb.includes(depthBb) &&
+        isLegacyHomeManifest(candidate)
     );
     if (!manifest) {
       throw new PolicyUnavailableError(`No accepted full-hand model at ${depthBb}bb`);
@@ -121,7 +133,7 @@ export class PracticePolicyClient {
           modelVersion: manifest.version,
           depthBb,
         });
-        return { manifest, depthBb, neuralReady: true };
+        return { manifest, depthBb, gameIdentity: HOME_GAME_IDENTITY, neuralReady: true };
       } catch (error) {
         throw new PolicyUnavailableError(
           error instanceof Error
@@ -131,9 +143,9 @@ export class PracticePolicyClient {
       }
     }
     if (manifest.runtime?.kind === 'rust-continual-resolver-v1') {
-      return { manifest, depthBb };
+      return { manifest, depthBb, gameIdentity: HOME_GAME_IDENTITY };
     }
-    return { manifest, depthBb };
+    return { manifest, depthBb, gameIdentity: HOME_GAME_IDENTITY };
   }
 
   private async shard(url: string): Promise<PolicyNode[]> {
@@ -157,6 +169,9 @@ export class PracticePolicyClient {
     pinned: PinnedPracticeModel,
     stateHash: string
   ): Promise<PolicyNode> {
+    if (!isLegacyHomeManifest(pinned.manifest)) {
+      throw new PolicyUnavailableError('Policy shard belongs to an unsupported cash runtime');
+    }
     if (pinned.manifest.runtime?.kind === 'neural-deep-cfr-v1') {
       throw new PolicyUnavailableError(
         'A neural policy lookup requires the exact hand state'
@@ -186,6 +201,9 @@ export class PracticePolicyClient {
     profile: OpponentModelSnapshot;
     usage: 'grading' | 'opponent';
   }): Promise<NeuralPolicyResult> {
+    if (input.state.cash || !isLegacyHomeManifest(input.pinned.manifest)) {
+      throw new PolicyUnavailableError('Explicit cash hands require a matching rules-pinned runtime; legacy Home policies cannot grade them');
+    }
     const runtime = input.pinned.manifest.runtime;
     if (runtime?.kind === 'neural-deep-cfr-v1') {
       if (!input.pinned.neuralReady) {

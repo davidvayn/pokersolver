@@ -10,7 +10,7 @@ use super::neural::{FrozenPolicy, MAX_TRAJECTORY_ACTIONS};
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -29,6 +29,13 @@ pub(super) mod frozen_turn_response;
 #[cfg(test)]
 pub(in crate::blueprint) mod counterfactual_turn;
 mod compact_marginals;
+mod card_workers;
+mod cash_river;
+mod cash_turn;
+mod cash_value;
+pub mod cash_flop;
+mod continuation_cache;
+mod value_inference;
 
 pub const COMBO_COUNT: usize = 1_326;
 const RIVER_SCHEMA: &str = "hu-river-public-belief-solution-v1";
@@ -61,16 +68,28 @@ pub(super) const RIVER_SAFE_RESOLVE_MAXIMUM_CFV_EXCESS_BB: f64 = 1e-12;
 pub(super) const MINIMUM_DEPLOYED_ACTION_PROBABILITY: f64 = 1e-9;
 const SAFE_RESOLVE_PROJECTION_BISECTIONS: usize = 8;
 const DENSE_ALL_IN_EQUITY_CACHE_BOARDS: usize = 16;
-const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 64;
+// Two live cold flops can require up to 98 canonical turn matrices. Retain
+// both populations so parallel serving cannot evict and recompute each other.
+const DENSE_TURN_EQUITY_CACHE_BOARDS: usize = 128;
 const BOARD_QUERY_FEATURE_CACHE_ENTRIES: usize = DENSE_ALL_IN_EQUITY_CACHE_BOARDS * 49;
 
 type DenseAllInEquityCell = Arc<OnceLock<Arc<Vec<f32>>>>;
 type DenseTurnEquityCell = Arc<OnceLock<Arc<Vec<u8>>>>;
 
-#[derive(Default)]
 struct DenseTurnEquityCache {
     clock: u64,
     entries: BTreeMap<[u8; 4], (u64, DenseTurnEquityCell)>,
+    capacity: usize,
+}
+
+impl Default for DenseTurnEquityCache {
+    fn default() -> Self {
+        Self {
+            clock: 0,
+            entries: BTreeMap::new(),
+            capacity: DENSE_TURN_EQUITY_CACHE_BOARDS,
+        }
+    }
 }
 
 impl DenseTurnEquityCache {
@@ -80,7 +99,7 @@ impl DenseTurnEquityCache {
             *last_used = self.clock;
             return cell.clone();
         }
-        if self.entries.len() >= DENSE_TURN_EQUITY_CACHE_BOARDS {
+        if self.entries.len() >= self.capacity {
             let least_recent = self
                 .entries
                 .iter()
@@ -92,6 +111,21 @@ impl DenseTurnEquityCache {
         let cell = Arc::new(OnceLock::new());
         self.entries.insert(key, (self.clock, cell.clone()));
         cell
+    }
+
+    /// Snapshot only completed matrices. A flop shortcut must never wait on a
+    /// turn initialization or force cache population for a sparse-only solve.
+    fn completed_flop_turns(&self, flop: [u8; 3]) -> Option<Vec<(Vec<usize>, Arc<Vec<u8>>)>> {
+        (0..52u8)
+            .filter(|turn| !flop.contains(turn))
+            .map(|turn| {
+                let (key, permutation) =
+                    canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]);
+                let matrix = self.entries.get(&key)?.1.get()?.clone();
+                let mapping = suit_combo_keys(permutation).to_vec();
+                Some((mapping, matrix))
+            })
+            .collect()
     }
 }
 
@@ -248,6 +282,27 @@ impl PublicBeliefState {
         street: Street,
         board_len: usize,
     ) -> Result<Self, String> {
+        self.validate_street_and_normalize_impl(game, street, board_len, false)
+    }
+
+    fn validate_street_and_normalize_impl(
+        &self,
+        game: &BlueprintConfig,
+        street: Street,
+        board_len: usize,
+        cash_flop_pilot: bool,
+    ) -> Result<Self, String> {
+        if game.cash_rules.is_some() && !matches!(street, Street::River | Street::Turn)
+            && !(cash_flop_pilot && street == Street::Flop && board_len == 3)
+        {
+            return Err("raked flop continuations require new own-payoff targets and artifacts".into());
+        }
+        if let Some(rules) = &game.cash_rules {
+            for amount in self.invested_bb.into_iter().chain(self.street_invested_bb) {
+                cash::cash_units(amount, rules)?;
+            }
+            cash::cash_units(self.last_full_raise_bb, rules)?;
+        }
         if self.street != street || self.board.len() != board_len {
             return Err(format!(
                 "public-belief state must be {street:?} with {board_len} board cards"
@@ -637,6 +692,14 @@ pub struct PublicValueNetwork {
     source_validation_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prediction_contract: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cash_rules: Option<crate::cash_game::CashGameRules>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rules_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payoff_contract: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_game: Option<BlueprintConfig>,
     #[serde(default)]
     feature_schema: Option<String>,
     #[serde(default)]
@@ -666,6 +729,9 @@ impl PublicValueNetwork {
         let (mut network, sha256): (Self, String) = super::read_model_artifact(path)?;
         network.artifact_sha256 = Some(sha256);
         network.validate()?;
+        if network.cash_rules.is_some() {
+            return Err("cash value weights require the explicit rules-aware reader".into());
+        }
         Ok(network)
     }
 
@@ -681,7 +747,8 @@ impl PublicValueNetwork {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if let Some(contract) = &self.prediction_contract {
+        self.validate_cash_contract()?;
+        if let Some(contract) = self.prediction_contract.as_ref().filter(|_| self.cash_rules.is_none()) {
             if contract != "native-turn-cfv-full-stack-v1"
                 || !matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v4" | "hu-public-belief-combo-value-network-v5")
                 || !self.uses_exact_ranges
@@ -726,7 +793,9 @@ impl PublicValueNetwork {
             "hu-public-belief-combo-value-network-v3"
             | "hu-public-belief-combo-value-network-v4"
             | "hu-public-belief-combo-value-network-v5"
-            | "hu-public-belief-combo-value-network-v6" => {
+            | "hu-public-belief-combo-value-network-v6"
+            | cash_value::NETWORK_SCHEMA
+            | cash_value::POOLED_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -763,6 +832,8 @@ impl PublicValueNetwork {
                     "hu-public-belief-combo-value-network-v4"
                         | "hu-public-belief-combo-value-network-v5"
                         | "hu-public-belief-combo-value-network-v6"
+                        | cash_value::NETWORK_SCHEMA
+                        | cash_value::POOLED_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -778,11 +849,7 @@ impl PublicValueNetwork {
                     query_size = layer.validate(query_size)?;
                 }
                 let head_size = context_size
-                    + if matches!(
-                        self.schema.as_str(),
-                        "hu-public-belief-combo-value-network-v5"
-                            | "hu-public-belief-combo-value-network-v6"
-                    ) {
+                    + if self.pools_exact_query_ranges() {
                         query_size * 3
                     } else {
                         query_size
@@ -825,6 +892,7 @@ impl PublicValueNetwork {
         invested: [f64; 2],
         ranges: &[Vec<f64>; 2],
     ) -> [Vec<f64>; 2] {
+        assert!(self.cash_rules.is_none(), "cash values require predict_cash_turn with pinned rules");
         if matches!(
             self.schema.as_str(),
             "hu-public-belief-combo-value-network-v3"
@@ -1010,11 +1078,7 @@ impl PublicValueNetwork {
             .last()
             .expect("validated shared query tower")
             .output_size;
-        let pooled_queries: Option<[Vec<f32>; 2]> = matches!(
-            self.schema.as_str(),
-            "hu-public-belief-combo-value-network-v5" | "hu-public-belief-combo-value-network-v6"
-        )
-        .then(|| {
+        let pooled_queries: Option<[Vec<f32>; 2]> = self.pools_exact_query_ranges().then(|| {
             std::array::from_fn(|player| {
                 let denominator = legal_combos[player]
                     .iter()
@@ -1036,6 +1100,7 @@ impl PublicValueNetwork {
             })
         });
         let selected_head = self.selected_value_head(invested);
+        let cash_baseline = self.cash_rules.as_ref().map(|_| self.cash_checkdown_baseline(board, actor, invested, ranges));
         let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
             let mut head_context = context_embeddings[player].clone();
             if let Some(pooled) = &pooled_queries {
@@ -1061,13 +1126,18 @@ impl PublicValueNetwork {
                     query[65] as f64
                 };
                 let opponent = 1 - player;
-                let baseline = equity * invested[opponent] - (1.0 - equity) * invested[player];
+                let baseline = cash_baseline.as_ref().map_or_else(
+                    || equity * invested[opponent] - (1.0 - equity) * invested[player],
+                    |values| values[player][combo],
+                );
                 let residual = output[row * output_size] as f64;
                 values[combo] = if matches!(
                     self.schema.as_str(),
                     "hu-public-belief-combo-value-network-v4"
                         | "hu-public-belief-combo-value-network-v5"
                         | "hu-public-belief-combo-value-network-v6"
+                        | cash_value::NETWORK_SCHEMA
+                        | cash_value::POOLED_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -1076,8 +1146,28 @@ impl PublicValueNetwork {
             }
             values
         });
-        project_value_predictions_to_payoff_bounds(&mut result, board, payoff_bounds, ranges, &masses);
+        if self.cash_rules.is_some() {
+            // Bounds and board removal only. Never transfer one player's rake
+            // loss into the other player's payoff to impose zero sum.
+            for player in 0..2 {
+                for combo in all_combos() {
+                    let value = &mut result[player][combo.key()];
+                    *value = if combo.cards().iter().any(|card| board.contains(card)) {
+                        0.0
+                    } else {
+                        value.clamp(-payoff_bounds[player], payoff_bounds[player])
+                    };
+                }
+            }
+        } else {
+            project_value_predictions_to_payoff_bounds(&mut result, board, payoff_bounds, ranges, &masses);
+        }
         result
+    }
+
+    fn pools_exact_query_ranges(&self) -> bool {
+        matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v5"
+            | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {
@@ -1312,6 +1402,7 @@ impl RangeConditionedPolicyNetwork {
         game: &BlueprintConfig,
         source_policy: Option<&[f64]>,
     ) -> Result<Vec<f64>, String> {
+        game.require_legacy_home()?;
         // Served artifacts are immutable and validated once by `read`. Walking
         // every weight again at every public node dominates full-game response
         // evaluation without adding any safety. Directly constructed internal
@@ -3145,22 +3236,20 @@ fn shared_combo_features(
             }
         }
     }
-    let immediate_equity = [
-        current_range_equity(
-            &board_features.strengths,
-            &ranges[1],
-            &compatible_masses[1],
-            conflicts,
-        ),
-        current_range_equity(
-            &board_features.strengths,
-            &ranges[0],
-            &compatible_masses[0],
-            conflicts,
-        ),
-    ];
-    let exact_runout_equity = (feature_schema == SHARED_FEATURE_SCHEMA_V3)
-        .then(|| exact_turn_range_equities(board, ranges));
+    // Schema v3 replaces immediate strength equity with exact runout equity;
+    // do not calculate the unused strength/rank distribution as well.
+    let query_equity = if feature_schema == SHARED_FEATURE_SCHEMA_V3 {
+        exact_turn_range_equities(board, ranges)
+    } else {
+        std::array::from_fn(|player| {
+            current_range_equity(
+                &board_features.strengths,
+                &ranges[1 - player],
+                &compatible_masses[1 - player],
+                conflicts,
+            )
+        })
+    };
     let blocked_board_relative: [Vec<[f64; 29]>; 2] = std::array::from_fn(|player| {
         conflict_feature_masses_from_card_marginals(
             &combos,
@@ -3312,9 +3401,7 @@ fn shared_combo_features(
             }
             query[92] = range_totals[player] as f32;
             query[93] = range_totals[opponent] as f32;
-            query[94] = exact_runout_equity
-                .as_ref()
-                .map_or(immediate_equity[player][key], |values| values[player][key]);
+            query[94] = query_equity[player][key];
             if uses_board_relative {
                 let compatible = compatible_masses[opponent][key];
                 for feature in 0..29 {
@@ -3395,17 +3482,7 @@ fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>;
     );
     let original: [u8; 4] = board.try_into().expect("validated turn board");
     let (key, suit_permutation) = canonical_turn_board_suits(original);
-    let canonical_combo_keys = all_combos()
-        .into_iter()
-        .map(|combo| {
-            let [first, second] = combo.cards();
-            Combo::new(
-                permute_card_suit(first, suit_permutation),
-                permute_card_suit(second, suit_permutation),
-            )
-            .key()
-        })
-        .collect::<Vec<_>>();
+    let canonical_combo_keys = suit_combo_keys(suit_permutation);
     let cell = {
         let mut cache = DENSE_TURN_EQUITY_CACHE
             .lock()
@@ -3419,17 +3496,24 @@ fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>;
     let compatible_masses: [Vec<f64>; 2] = std::array::from_fn(|player| {
         compatible_masses_from_card_marginals(&combos, &ranges[1 - player])
     });
+    // Preserve original combo/summation order. Only exact zero weights are
+    // omitted: no epsilon threshold, range quantization, or hand pruning.
+    let weighted_columns: [Vec<(usize, f64)>; 2] = std::array::from_fn(|player| {
+        ranges[1 - player].iter().zip(canonical_combo_keys)
+            .filter(|(weight, _)| **weight != 0.0)
+            .map(|(&weight, &column)| (column, weight))
+            .collect()
+    });
     std::array::from_fn(|player| {
         (0..COMBO_COUNT)
             .map(|own| {
                 let compatible = compatible_masses[player][own];
                 if compatible > EPSILON {
                     let row = canonical_combo_keys[own] * COMBO_COUNT;
-                    let numerator = ranges[1 - player]
+                    let numerator = weighted_columns[player]
                         .iter()
-                        .enumerate()
-                        .map(|(opponent, weight)| {
-                            weight * f64::from(matrix[row + canonical_combo_keys[opponent]]) / 88.0
+                        .map(|(column, weight)| {
+                            weight * f64::from(matrix[row + column]) / 88.0
                         })
                         .sum::<f64>();
                     (numerator / compatible).clamp(0.0, 1.0) as f32
@@ -3443,6 +3527,26 @@ fn exact_turn_range_equities(board: &[u8], ranges: &[Vec<f64>; 2]) -> [Vec<f32>;
 
 fn permute_card_suit(card: u8, permutation: [u8; 4]) -> u8 {
     (card & !3) | permutation[(card & 3) as usize]
+}
+
+/// The 24 suit permutations are immutable and board-independent. Reuse their
+/// exact combo indices instead of rebuilding 1,326 keys at every value leaf.
+fn suit_combo_keys(permutation: [u8; 4]) -> &'static [usize] {
+    static KEYS: LazyLock<BTreeMap<[u8; 4], Vec<usize>>> = LazyLock::new(|| {
+        let combos = all_combos();
+        (0..256u16).filter_map(|packed| {
+            let permutation: [u8; 4] = std::array::from_fn(|suit| ((packed >> (2 * suit)) & 3) as u8);
+            if permutation.iter().fold(0u8, |mask, suit| mask | (1 << suit)) != 15 {
+                return None;
+            }
+            let mapping = combos.iter().map(|combo| {
+                let [first, second] = combo.cards();
+                Combo::new(permute_card_suit(first, permutation), permute_card_suit(second, permutation)).key()
+            }).collect();
+            Some((permutation, mapping))
+        }).collect()
+    });
+    &KEYS[&permutation]
 }
 
 /// Returns the lexicographically smallest suit-isomorphic turn board and the
@@ -3491,7 +3595,7 @@ fn compute_exact_turn_equity_units(board: [u8; 4]) -> Arc<Vec<u8>> {
             .enumerate()
             .filter_map(|(key, combo)| {
                 let cards = combo.cards();
-                (legal[key] && !cards.contains(&river)).then_some((
+                (legal[key] && !cards.contains(&river)).then(|| (
                     key,
                     *combo,
                     evaluate(&[
@@ -3805,12 +3909,18 @@ pub struct FlopContinuationValues {
 #[derive(Clone)]
 struct FlopSolver {
     config: FlopResolveConfig,
+    card_workers: Arc<card_workers::CardWorkers>,
+    value_inference: Arc<Vec<value_inference::ValueInferenceSession>>,
+    turn_continuations: RefCell<continuation_cache::ContinuationCache>,
+    #[cfg(test)]
+    turn_leaf_computations: Cell<u64>,
     legal: [Vec<bool>; 2],
     conflicts: Arc<Vec<Vec<usize>>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
     turn_leaf_evaluations: Cell<u64>,
     exact_all_in_terminal_evaluations: Cell<u64>,
     all_in_equities: OnceLock<Arc<Vec<f32>>>,
+    cash_all_in: OnceLock<Arc<range_vector::ExactCashFlopTerminal>>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
     safe_root: Option<SafeResolveRoot>,
     training_round_offset: u64,
@@ -3871,9 +3981,27 @@ struct ResolverRootLeafCheckpoint {
 }
 
 impl FlopSolver {
-    fn new(mut config: FlopResolveConfig) -> Result<Self, String> {
+    fn new(config: FlopResolveConfig) -> Result<Self, String> {
+        config.game.require_legacy_home()?;
+        if config.value_network.cash_rules.is_some()
+            || config.auxiliary_value_networks.iter().any(|n| n.cash_rules.is_some())
+        {
+            return Err("Home flop resolving cannot use cash continuation weights".into());
+        }
+        Self::new_impl(config, false)
+    }
+
+    fn new_impl(mut config: FlopResolveConfig, cash_flop_pilot: bool) -> Result<Self, String> {
         config.game.validate()?;
         config.value_network.validate()?;
+        if cash_flop_pilot {
+            config.value_network.validate_cash_game(&config.game)?;
+            if !config.auxiliary_value_networks.is_empty()
+                || config.continuation_selection != FlopContinuationSelection::Mean
+            {
+                return Err("cash flop pilot requires one pinned own-payoff value network".into());
+            }
+        }
         for network in &config.auxiliary_value_networks {
             network.validate()?;
             if !config.value_network.has_distinct_training_identity(network) {
@@ -3926,25 +4054,51 @@ impl FlopSolver {
         }
         config.state = config
             .state
-            .validate_street_and_normalize(&config.game, Street::Flop, 3)?;
+            .validate_street_and_normalize_impl(&config.game, Street::Flop, 3, cash_flop_pilot)?;
         let legal = std::array::from_fn(|player| {
             config.state.ranges[player]
                 .iter()
                 .map(|weight| *weight > 0.0)
                 .collect()
         });
+        let value_inference = Self::value_inference_sessions(&config);
+        let card_workers = card_workers::CardWorkers::shared(config.threads)?;
         Ok(Self {
             config,
+            card_workers,
+            value_inference,
+            turn_continuations: RefCell::new(continuation_cache::ContinuationCache::default()),
+            #[cfg(test)]
+            turn_leaf_computations: Cell::new(0),
             legal,
             conflicts: combo_conflicts(),
             nodes: BTreeMap::new(),
             turn_leaf_evaluations: Cell::new(0),
             exact_all_in_terminal_evaluations: Cell::new(0),
             all_in_equities: OnceLock::new(),
+            cash_all_in: OnceLock::new(),
             maximum_leaf_zero_sum_residual: Cell::new(0.0),
             safe_root: None,
             training_round_offset: 0,
         })
+    }
+
+    fn value_inference_sessions(
+        config: &FlopResolveConfig,
+    ) -> Arc<Vec<value_inference::ValueInferenceSession>> {
+        Arc::new(
+            std::iter::once(config.value_network.clone())
+                .chain(config.auxiliary_value_networks.iter().cloned())
+                .map(value_inference::ValueInferenceSession::new)
+                .collect(),
+        )
+    }
+
+    fn replace_continuation_network(&mut self, network: PublicValueNetwork) {
+        self.config.value_network = network;
+        self.config.auxiliary_value_networks.clear();
+        self.value_inference = Self::value_inference_sessions(&self.config);
+        self.turn_continuations = RefCell::new(continuation_cache::ContinuationCache::default());
     }
 
     fn install_safe_root(
@@ -5038,6 +5192,9 @@ impl FlopSolver {
     }
 
     fn terminal_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
+        if self.config.game.cash_rules.is_some() {
+            return self.cash_flop_terminal_values(state, reaches);
+        }
         match state.terminal.as_ref().expect("terminal") {
             Terminal::Fold { winner } => {
                 let utility_p0 = if *winner == 0 {
@@ -5108,51 +5265,58 @@ impl FlopSolver {
     ) -> [Vec<f64>; 2] {
         self.turn_leaf_evaluations
             .set(self.turn_leaf_evaluations.get() + 1);
+        let (values, residual) = self.turn_continuations.borrow_mut().get_or_compute(
+            &self.config,
+            state,
+            reaches,
+            traverser,
+            || self.compute_turn_leaf_values(state, reaches, traverser),
+        );
+        self.maximum_leaf_zero_sum_residual
+            .set(self.maximum_leaf_zero_sum_residual.get().max(residual));
+        values
+    }
+
+    fn compute_turn_leaf_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        traverser: Option<usize>,
+    ) -> ([Vec<f64>; 2], f64) {
+        if self.config.game.cash_rules.is_some() {
+            return (self.compute_cash_turn_leaf_values(state, reaches), 0.0);
+        }
+        #[cfg(test)]
+        self.turn_leaf_computations
+            .set(self.turn_leaf_computations.get() + 1);
         let mut result = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
         let turns = (0..52u8)
             .filter(|turn| !self.config.state.board.contains(turn))
             .collect::<Vec<_>>();
         let worker_count = self.config.threads.min(turns.len()).max(1);
         let continuation_selection = self.config.continuation_selection;
-        let solved = std::thread::scope(|scope| {
-            let mut workers = Vec::with_capacity(worker_count);
-            for worker in 0..worker_count {
-                let assigned = turns
-                    .iter()
-                    .copied()
-                    .skip(worker)
-                    .step_by(worker_count)
-                    .collect::<Vec<_>>();
-                let network = &self.config.value_network;
-                let auxiliary_networks = &self.config.auxiliary_value_networks;
-                let board = self.config.state.board.clone();
-                workers.push(scope.spawn(move || {
-                    assigned
-                        .into_iter()
-                        .filter_map(|turn| {
-                            turn_leaf_card_values(
-                                network,
-                                auxiliary_networks,
-                                &board,
-                                state.actor,
-                                state.invested,
-                                reaches,
-                                turn,
-                                continuation_selection,
-                                traverser,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                }));
-            }
-            let mut values = Vec::with_capacity(turns.len());
-            for worker in workers {
-                values.extend(worker.join().expect("turn value worker panicked"));
-            }
-            values
+        // Preserve the previous strided-worker fold order exactly. Execution
+        // is dynamically balanced, but floating-point aggregation stays serial
+        // and deterministic; regret updates never run concurrently.
+        let ordered = (0..worker_count)
+            .flat_map(|worker| turns.iter().copied().skip(worker).step_by(worker_count))
+            .collect::<Vec<_>>();
+        let networks = &self.value_inference;
+        let board = &self.config.state.board;
+        let solved = self.card_workers.map(&ordered, |turn| {
+            turn_leaf_card_values(
+                networks,
+                board,
+                state.actor,
+                state.invested,
+                reaches,
+                *turn,
+                continuation_selection,
+                traverser,
+            )
         });
-        let mut maximum_residual = self.maximum_leaf_zero_sum_residual.get();
-        for (contribution, residual) in solved {
+        let mut maximum_residual = 0.0f64;
+        for (contribution, residual) in solved.into_iter().flatten() {
             maximum_residual = maximum_residual.max(residual);
             for player in 0..2 {
                 for combo in 0..COMBO_COUNT {
@@ -5160,8 +5324,7 @@ impl FlopSolver {
                 }
             }
         }
-        self.maximum_leaf_zero_sum_residual.set(maximum_residual);
-        result
+        (result, maximum_residual)
     }
 
     fn capture_average_turn_leaves(&self) -> Vec<ResolverTurnLeaf> {
@@ -5676,9 +5839,59 @@ fn exact_flop_all_in_equities(
                 .map(|combo| !combo.cards().iter().any(|card| flop.contains(card)))
                 .collect::<Vec<_>>()
         });
-        compute_exact_flop_all_in_equities(flop, &dense_legal, threads)
+        let completed_turns = DENSE_TURN_EQUITY_CACHE
+            .lock()
+            .expect("dense turn equity cache poisoned")
+            .completed_flop_turns(flop);
+        if let Some(turns) = completed_turns {
+            compute_flop_equities_from_turns(&dense_legal, threads, &turns)
+        } else {
+            compute_exact_flop_all_in_equities(flop, &dense_legal, threads)
+        }
     })
     .clone()
+}
+
+/// Exact flop equity from completed turn matrices, without evaluating the
+/// same showdowns again. Each compatible pair has 45 legal turns and 44 legal
+/// rivers. Ordered runouts count each unordered flop runout twice, hence
+/// sum(turn equity units) / 3,960 == direct flop units / 1,980 exactly.
+/// Board/hand-blocked entries in the turn matrices are already zero.
+fn compute_flop_equities_from_turns(
+    legal: &[Vec<bool>; 2],
+    threads: usize,
+    turns: &[(Vec<usize>, Arc<Vec<u8>>)],
+) -> Arc<Vec<f32>> {
+    debug_assert_eq!(turns.len(), 49);
+    let combos = all_combos();
+    let mut equities = vec![f32::NAN; COMBO_COUNT * COMBO_COUNT];
+    let rows_per_worker = COMBO_COUNT.div_ceil(threads.clamp(1, COMBO_COUNT));
+    std::thread::scope(|scope| {
+        for (chunk, output) in equities.chunks_mut(rows_per_worker * COMBO_COUNT).enumerate() {
+            let combos = &combos;
+            scope.spawn(move || {
+                let mut counts = vec![0u16; COMBO_COUNT];
+                for (local_row, row) in output.chunks_mut(COMBO_COUNT).enumerate() {
+                    let own = chunk * rows_per_worker + local_row;
+                    if !legal[0][own] { continue; }
+                    counts.fill(0);
+                    for (mapping, matrix) in turns {
+                        let start = mapping[own] * COMBO_COUNT;
+                        let turn_row = &matrix[start..start + COMBO_COUNT];
+                        for (count, &opponent) in counts.iter_mut().zip(mapping) {
+                            *count += u16::from(turn_row[opponent]);
+                        }
+                    }
+                    for opponent in 0..COMBO_COUNT {
+                        if legal[1][opponent] && !combos[own].overlaps(combos[opponent]) {
+                            row[opponent] = counts[opponent] as f32 / 3_960.0;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Arc::new(equities)
 }
 
 pub(crate) fn exact_flop_showdown_continuation_values(
@@ -5836,8 +6049,7 @@ fn equity_units(first: u32, second: u32) -> u16 {
 }
 
 fn turn_leaf_card_values(
-    network: &PublicValueNetwork,
-    auxiliary_networks: &[PublicValueNetwork],
+    networks: &[value_inference::ValueInferenceSession],
     flop_board: &[u8],
     actor: usize,
     invested: [f64; 2],
@@ -5874,16 +6086,14 @@ fn turn_leaf_card_values(
         (predicted, residual.abs(), projected_aggregates)
     };
 
-    let networks = std::iter::once(network)
-        .chain(auxiliary_networks)
-        .collect::<Vec<_>>();
+    let network = networks.first().expect("primary continuation hypothesis exists");
     let (predicted, residual) = if continuation_selection
         == FlopContinuationSelection::OpponentPublicChoice
         && traverser.is_some()
     {
         let traverser = traverser.expect("checked robust traverser");
         let mut candidates = networks
-            .into_iter()
+            .iter()
             .map(|candidate| project(candidate.predict(&board, actor, invested, &masked)))
             .collect::<Vec<_>>();
         let maximum_residual = candidates
@@ -5899,7 +6109,7 @@ fn turn_leaf_card_values(
         (candidates.swap_remove(selected).0, maximum_residual)
     } else {
         let mut mean = network.predict(&board, actor, invested, &masked);
-        for auxiliary in auxiliary_networks {
+        for auxiliary in &networks[1..] {
             let prediction = auxiliary.predict(&board, actor, invested, &masked);
             for player in 0..2 {
                 for combo in 0..COMBO_COUNT {
@@ -5907,7 +6117,7 @@ fn turn_leaf_card_values(
                 }
             }
         }
-        if !auxiliary_networks.is_empty() {
+        if networks.len() > 1 {
             let inverse_network_count = 1.0 / networks.len() as f64;
             for player in &mut mean {
                 for value in player {
@@ -6226,8 +6436,7 @@ pub fn solve_flop_cross_evaluated(
     let regret_matching_plus = config.regret_matching_plus;
     let mut solver = FlopSolver::new(config)?;
     solver.train();
-    solver.config.value_network = evaluation_value_network;
-    solver.config.auxiliary_value_networks.clear();
+    solver.replace_continuation_network(evaluation_value_network);
     solver.turn_leaf_evaluations.set(0);
     solver.exact_all_in_terminal_evaluations.set(0);
     solver.maximum_leaf_zero_sum_residual.set(0.0);
@@ -6318,8 +6527,7 @@ pub fn diagnose_flop_cross_evaluated_convergence(
         completed = *checkpoint;
         let mut evaluator = solver.clone();
         evaluator.config.iterations = *checkpoint;
-        evaluator.config.value_network = evaluation_value_network.clone();
-        evaluator.config.auxiliary_value_networks.clear();
+        evaluator.replace_continuation_network(evaluation_value_network.clone());
         evaluator.turn_leaf_evaluations.set(0);
         evaluator.exact_all_in_terminal_evaluations.set(0);
         evaluator.maximum_leaf_zero_sum_residual.set(0.0);
@@ -6745,6 +6953,18 @@ pub struct RiverSolveMetrics {
     pub exact_abstract_exploitability_bb_per_hand: f64,
     pub zero_sum_residual_bb: f64,
     pub maximum_probability_sum_error: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash: Option<CashRiverMetrics>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CashRiverMetrics {
+    pub rules_sha256: String,
+    pub unilateral_gain_bb: [f64; 2],
+    pub nash_conv_bb_per_hand: f64,
+    pub maximum_deviation_gain_bb_per_hand: f64,
+    pub expected_house_rake_bb: f64,
+    pub conservation_residual_bb: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -7925,6 +8145,9 @@ impl RiverSolver {
     }
 
     fn terminal_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
+        if self.config.game.cash_rules.is_some() {
+            return self.cash_terminal_values(state, reaches);
+        }
         match state.terminal.as_ref().expect("terminal public state") {
             Terminal::Fold { winner } => {
                 let utility_p0 = if *winner == 0 {
@@ -8139,7 +8362,7 @@ impl RiverSolver {
         let joint_mass = joint_compatibility_mass(&reaches);
         let profile = self.profile_walk(root.clone(), reaches.clone(), None);
         let br0 = self.profile_walk(root.clone(), reaches.clone(), Some(0));
-        let br1 = self.profile_walk(root, reaches.clone(), Some(1));
+        let br1 = self.profile_walk(root.clone(), reaches.clone(), Some(1));
         let aggregate = |values: &[f64], player: usize| {
             reaches[player]
                 .iter()
@@ -8152,7 +8375,21 @@ impl RiverSolver {
         let profile_p1 = aggregate(&profile[1], 1);
         let best_p0 = aggregate(&br0[0], 0);
         let best_p1 = aggregate(&br1[1], 1);
-        let exploitability = ((best_p0 - profile_p0) + (best_p1 - profile_p1)) / 2.0;
+        let nash_conv = (best_p0 - profile_p0) + (best_p1 - profile_p1);
+        let cash_metrics = self.config.game.cash_rules.as_ref().map(|rules| {
+            let expected_house_rake_bb = self.profile_house_rake(root, reaches.clone()) / joint_mass;
+            CashRiverMetrics {
+                rules_sha256: rules.sha256().expect("validated cash rules"),
+                unilateral_gain_bb: [(best_p0 - profile_p0).max(0.0), (best_p1 - profile_p1).max(0.0)],
+                nash_conv_bb_per_hand: nash_conv.max(0.0),
+                maximum_deviation_gain_bb_per_hand: (best_p0 - profile_p0).max(best_p1 - profile_p1).max(0.0),
+                expected_house_rake_bb,
+                conservation_residual_bb: (profile_p0 + profile_p1 + expected_house_rake_bb).abs(),
+            }
+        });
+        // v2 explicit-cash results use total NashConv, never halve it to clear
+        // a gate. Preserve historical zero-sum river reports byte-for-byte.
+        let exploitability = if cash_metrics.is_some() { nash_conv } else { nash_conv / 2.0 };
         let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
             compatible_masses_from_card_marginals(&self.combos, &reaches[1 - player])
                 .into_iter()
@@ -8214,12 +8451,14 @@ impl RiverSolver {
             exact_abstract_exploitability_bb_per_hand: exploitability.max(0.0),
             zero_sum_residual_bb: zero_sum_residual,
             maximum_probability_sum_error,
+            cash: cash_metrics,
         };
         let mut reasons = Vec::new();
-        if metrics.zero_sum_residual_bb > 1e-8 {
+        let conservation_residual = metrics.cash.as_ref().map_or(metrics.zero_sum_residual_bb, |cash| cash.conservation_residual_bb);
+        if conservation_residual > 1e-8 {
             reasons.push(format!(
-                "zero-sum residual {:.3e} exceeds 1e-8",
-                metrics.zero_sum_residual_bb
+                "payoff conservation residual {:.3e} exceeds 1e-8",
+                conservation_residual
             ));
         }
         if metrics.maximum_probability_sum_error > 1e-6 {
@@ -8235,7 +8474,7 @@ impl RiverSolver {
             ));
         }
         RiverSolution {
-            schema: RIVER_SCHEMA.to_owned(),
+            schema: if self.config.game.cash_rules.is_some() { "hu-public-belief-cash-river-v2" } else { RIVER_SCHEMA }.to_owned(),
             method:
                 "paired_alternating_vectorized_dcfr_exact_private-card_and_river_chance_enumeration"
                     .to_owned(),
@@ -8343,6 +8582,7 @@ fn solve_river_safe_policy_with_method(
     resolving_player: usize,
     maxmargin: bool,
 ) -> Result<SafeRiverPolicy, String> {
+    config.game.require_legacy_home()?;
     if resolving_player > 1 || resolving_player != config.state.actor {
         return Err("safe river resolving must target the acting player".to_owned());
     }
@@ -8417,7 +8657,7 @@ fn solve_river_safe_policy_with_method(
     })
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnRiverSolveConfig {
     pub game: BlueprintConfig,
     pub state: PublicBeliefState,
@@ -8443,6 +8683,8 @@ pub struct TurnRiverSolveMetrics {
     pub current_strategy_exploitability_bb_per_hand: f64,
     pub zero_sum_residual_bb: f64,
     pub maximum_probability_sum_error: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash: Option<CashRiverMetrics>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -9334,6 +9576,11 @@ impl TurnRiverSolver {
         river: Option<u8>,
         traverser: usize,
     ) -> [Vec<f64>; 2] {
+        if self.config.game.cash_rules.is_some() {
+            let mut values = self.cash_terminal_values(state, reaches, river);
+            values[1 - traverser].fill(0.0);
+            return values;
+        }
         #[cfg(test)]
         if self.reference_both_value_players {
             return self.terminal_values(state, reaches, river);
@@ -9392,6 +9639,9 @@ impl TurnRiverSolver {
         reaches: &[Vec<f64>; 2],
         river: Option<u8>,
     ) -> [Vec<f64>; 2] {
+        if self.config.game.cash_rules.is_some() {
+            return self.cash_terminal_values(state, reaches, river);
+        }
         match state.terminal.as_ref().expect("terminal turn-river state") {
             Terminal::Fold { winner } => {
                 let utility_p0 = if *winner == 0 {
@@ -9856,7 +10106,11 @@ impl TurnRiverSolver {
             method.push_str("_frozen_average_turn_river_refinement");
         }
         TurnRiverContinuationValues {
-            schema: "hu-turn-river-public-belief-continuation-values-v2".to_owned(),
+            schema: if self.config.game.cash_rules.is_some() {
+                "hu-cash-turn-river-continuation-values-v1"
+            } else {
+                "hu-turn-river-public-belief-continuation-values-v2"
+            }.to_owned(),
             method,
             joint_iterations: self.config.iterations,
             river_refinement_iterations: self.config.river_refinement_iterations,
@@ -9873,23 +10127,24 @@ impl TurnRiverSolver {
                 best_response_value_p1_bb: best_p1,
                 exact_abstract_exploitability_bb_per_hand: (((best_p0 - profile_p0)
                     + (best_p1 - profile_p1))
-                    / 2.0)
+                    / if self.config.game.cash_rules.is_some() { 1.0 } else { 2.0 })
                     .max(0.0),
                 turn_only_best_response_gain_bb_per_hand: (((turn_best_p0 - profile_p0)
                     + (turn_best_p1 - profile_p1))
-                    / 2.0)
+                    / if self.config.game.cash_rules.is_some() { 1.0 } else { 2.0 })
                     .max(0.0),
                 river_only_best_response_gain_bb_per_hand: (((river_best_p0 - profile_p0)
                     + (river_best_p1 - profile_p1))
-                    / 2.0)
+                    / if self.config.game.cash_rules.is_some() { 1.0 } else { 2.0 })
                     .max(0.0),
                 current_strategy_exploitability_bb_per_hand: (((current_best_p0
                     - current_profile_p0)
                     + (current_best_p1 - current_profile_p1))
-                    / 2.0)
+                    / if self.config.game.cash_rules.is_some() { 1.0 } else { 2.0 })
                     .max(0.0),
                 zero_sum_residual_bb: (profile_p0 + profile_p1).abs(),
                 maximum_probability_sum_error,
+                cash: self.cash_metrics([profile_p0, profile_p1], [best_p0, best_p1], joint_mass),
             },
         }
     }
@@ -9958,7 +10213,8 @@ impl TurnRiverSolver {
         let current_profile_p1 = aggregate(&current_profile[1], 1);
         let current_best_p0 = aggregate(&current_br0[0], 0);
         let current_best_p1 = aggregate(&current_br1[1], 1);
-        let exploitability = ((best_p0 - profile_p0) + (best_p1 - profile_p1)) / 2.0;
+        let deviation_divisor = if self.config.game.cash_rules.is_some() { 1.0 } else { 2.0 };
+        let exploitability = ((best_p0 - profile_p0) + (best_p1 - profile_p1)) / deviation_divisor;
         let compatible_mass: [Vec<f32>; 2] = std::array::from_fn(|player| {
             compatible_masses_from_card_marginals(&self.combos, &reaches[1 - player])
                 .into_iter()
@@ -10052,24 +10308,26 @@ impl TurnRiverSolver {
             exact_abstract_exploitability_bb_per_hand: exploitability.max(0.0),
             turn_only_best_response_gain_bb_per_hand: (((turn_best_p0 - profile_p0)
                 + (turn_best_p1 - profile_p1))
-                / 2.0)
+                / deviation_divisor)
                 .max(0.0),
             river_only_best_response_gain_bb_per_hand: (((river_best_p0 - profile_p0)
                 + (river_best_p1 - profile_p1))
-                / 2.0)
+                / deviation_divisor)
                 .max(0.0),
             current_strategy_exploitability_bb_per_hand: (((current_best_p0 - current_profile_p0)
                 + (current_best_p1 - current_profile_p1))
-                / 2.0)
+                / deviation_divisor)
                 .max(0.0),
             zero_sum_residual_bb: zero_sum_residual,
             maximum_probability_sum_error,
+            cash: self.cash_metrics([profile_p0, profile_p1], [best_p0, best_p1], joint_mass),
         };
         let mut reasons = Vec::new();
-        if metrics.zero_sum_residual_bb > 1e-8 {
+        let accounting_residual = metrics.cash.as_ref().map_or(metrics.zero_sum_residual_bb, |cash| cash.conservation_residual_bb);
+        if accounting_residual > 1e-8 {
             reasons.push(format!(
-                "zero-sum residual {:.3e} exceeds 1e-8",
-                metrics.zero_sum_residual_bb
+                "payoff accounting residual {:.3e} exceeds 1e-8",
+                accounting_residual
             ));
         }
         if metrics.maximum_probability_sum_error > 1e-6 {
@@ -10092,7 +10350,11 @@ impl TurnRiverSolver {
             method.push_str("_frozen_average_turn_river_refinement");
         }
         TurnRiverSolution {
-            schema: "hu-turn-river-public-belief-solution-v2".to_owned(),
+            schema: if self.config.game.cash_rules.is_some() {
+                "hu-cash-turn-river-public-belief-solution-v1"
+            } else {
+                "hu-turn-river-public-belief-solution-v2"
+            }.to_owned(),
             method,
             approximate: true,
             game: self.config.game,
@@ -10196,6 +10458,7 @@ pub(super) fn solve_turn_river_safe_policy_for_seat(
     blueprint_strategies: &[PublicBeliefStrategy],
     resolving_player: usize,
 ) -> Result<SafeTurnRiverPolicy, String> {
+    config.game.require_legacy_home()?;
     if resolving_player > 1 {
         return Err("safe turn resolving requires a valid seat".to_owned());
     }
@@ -13793,6 +14056,10 @@ mod tests {
             source_policy_sha256: None,
             source_validation_status: Some("accepted".to_owned()),
             prediction_contract: None,
+            cash_rules: None,
+            rules_sha256: None,
+            payoff_contract: None,
+            source_game: None,
             feature_schema: None,
             context_public_count: 0,
             context_size: 0,
@@ -13833,6 +14100,10 @@ mod tests {
             source_policy_sha256: None,
             source_validation_status: Some("rejected".to_owned()),
             prediction_contract: None,
+            cash_rules: None,
+            rules_sha256: None,
+            payoff_contract: None,
+            source_game: None,
             feature_schema: Some("rank-suit-invariant-combo-query-v1".to_owned()),
             context_public_count: SHARED_CONTEXT_PUBLIC_COUNT,
             context_size: SHARED_CONTEXT_COUNT,
@@ -14330,9 +14601,9 @@ mod tests {
         network.head[0].biases[..COMBO_COUNT].fill(0.1);
         network.head[0].biases[COMBO_COUNT..].fill(-0.1);
         let turn = 15;
+        let networks = [value_inference::ValueInferenceSession::new(network)];
         let (values, residual) = turn_leaf_card_values(
-            &network,
-            &[],
+            &networks,
             &board,
             0,
             [1.0, 1.0],
@@ -14373,9 +14644,11 @@ mod tests {
         second.head[0].biases[COMBO_COUNT..].fill(0.15);
         let turn = 15;
         let values = |primary: &PublicValueNetwork, auxiliary: &[PublicValueNetwork]| {
+            let networks = std::iter::once(primary.clone())
+                .chain(auxiliary.iter().cloned())
+                .map(value_inference::ValueInferenceSession::new).collect::<Vec<_>>();
             turn_leaf_card_values(
-                primary,
-                auxiliary,
+                &networks,
                 &board,
                 0,
                 [1.0, 1.0],
@@ -14416,10 +14689,10 @@ mod tests {
         second.source_validation_status = Some("accepted".to_owned());
         second.head[0].biases[..COMBO_COUNT].fill(-0.1);
         second.head[0].biases[COMBO_COUNT..].fill(0.1);
+        let networks = [first, second].map(value_inference::ValueInferenceSession::new);
         let evaluate = |traverser| {
             turn_leaf_card_values(
-                &first,
-                std::slice::from_ref(&second),
+                &networks,
                 &board,
                 0,
                 [1.0, 1.0],
@@ -15454,6 +15727,42 @@ mod tests {
     }
 
     #[test]
+    fn compact_turn_equity_dot_products_match_dense_original_order() {
+        let board = [0, 20, 40, 47];
+        let combos = all_combos();
+        let ranges: [Vec<f64>; 2] = std::array::from_fn(|player| combos.iter().enumerate().map(|(key, combo)| {
+            if combo.cards().iter().any(|card| board.contains(card)) || key % (player + 2) == 0 {
+                0.0
+            } else if key % 17 == 0 {
+                1e-40 // Positive tiny weights must not be threshold-pruned.
+            } else {
+                (key % 13 + 1) as f64 / 13_260.0
+            }
+        }).collect());
+        let actual = exact_turn_range_equities(&board, &ranges);
+        let (key, permutation) = canonical_turn_board_suits(board);
+        let mapping = suit_combo_keys(permutation);
+        for (combo, &mapped) in combos.iter().zip(mapping) {
+            let [first, second] = combo.cards();
+            assert_eq!(mapped, Combo::new(permute_card_suit(first, permutation), permute_card_suit(second, permutation)).key());
+        }
+        let cell = DENSE_TURN_EQUITY_CACHE.lock().unwrap().cell(key);
+        let matrix = cell.get_or_init(|| compute_exact_turn_equity_units(key));
+        for player in 0..2 {
+            let masses = compatible_masses_from_card_marginals(&combos, &ranges[1-player]);
+            for own in 0..COMBO_COUNT {
+                let expected = if masses[own] > EPSILON {
+                    let numerator = ranges[1-player].iter().enumerate().map(|(opponent, weight)| {
+                        weight * f64::from(matrix[mapping[own]*COMBO_COUNT + mapping[opponent]]) / 88.0
+                    }).sum::<f64>();
+                    (numerator / masses[own]).clamp(0.0, 1.0) as f32
+                } else { 0.0 };
+                assert_eq!(expected.to_bits(), actual[player][own].to_bits());
+            }
+        }
+    }
+
+    #[test]
     fn dense_turn_equity_cache_evicts_the_least_recently_used_board() {
         let mut cache = DenseTurnEquityCache::default();
         let keys = (0..=DENSE_TURN_EQUITY_CACHE_BOARDS)
@@ -15467,6 +15776,103 @@ mod tests {
         assert!(cache.entries.contains_key(&keys[0]));
         assert!(!cache.entries.contains_key(&keys[1]));
         assert_eq!(cache.entries.len(), DENSE_TURN_EQUITY_CACHE_BOARDS);
+    }
+
+    #[test]
+    fn dense_turn_cache_retains_two_live_flop_populations() {
+        let flops = [[0, 18, 44], [9, 26, 51]];
+        let populate = |capacity| {
+            let mut cache = DenseTurnEquityCache {
+                capacity,
+                ..Default::default()
+            };
+            for flop in flops {
+                for turn in 0..52u8 {
+                    if !flop.contains(&turn) {
+                        let key = canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]).0;
+                        cache.cell(key).get_or_init(|| Arc::new(vec![0]));
+                    }
+                }
+            }
+            cache
+        };
+        // The former 64-entry limit loses matrices from the first active flop.
+        assert!(populate(64).completed_flop_turns(flops[0]).is_none());
+        let cache = populate(DENSE_TURN_EQUITY_CACHE_BOARDS);
+        assert!(cache.entries.len() > 64);
+        assert!(cache.entries.len() <= DENSE_TURN_EQUITY_CACHE_BOARDS);
+        for flop in flops {
+            assert_eq!(cache.completed_flop_turns(flop).unwrap().len(), 49);
+        }
+    }
+
+    #[test]
+    fn completed_flop_turns_requires_every_initialized_canonical_matrix() {
+        let flop = [0, 20, 40];
+        let mut cache = DenseTurnEquityCache::default();
+        assert!(cache.completed_flop_turns(flop).is_none());
+        for turn in 0..52u8 {
+            if !flop.contains(&turn) {
+                let key = canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]).0;
+                cache.cell(key);
+            }
+        }
+        assert!(cache.completed_flop_turns(flop).is_none());
+        let shared = Arc::new(vec![0u8; COMBO_COUNT * COMBO_COUNT]);
+        for (_, cell) in cache.entries.values() {
+            cell.set(shared.clone()).unwrap();
+        }
+        let turns = cache.completed_flop_turns(flop).unwrap();
+        // Do not collapse suit-isomorphic turns: each physical card has its
+        // own chance weight and original-to-canonical combo permutation.
+        assert_eq!(turns.len(), 49);
+        assert!(turns.iter().all(|(mapping, _)| mapping.len() == COMBO_COUNT));
+    }
+
+    #[test]
+    fn cached_turn_counts_reproduce_exact_flop_equities_bit_for_bit() {
+        let combos = all_combos();
+        for flop in [[0, 5, 10], [0, 20, 40], [2, 22, 42]] {
+            let hands = [Combo::new(47, 51), Combo::new(4, 9), Combo::new(45, 49)];
+            let legal = std::array::from_fn(|_| {
+                combos.iter().map(|combo| hands.contains(combo)).collect::<Vec<_>>()
+            });
+            let direct = compute_exact_flop_all_in_equities(flop, &legal, 2);
+            let mut turns = Vec::new();
+            for turn in 0..52u8 {
+                if flop.contains(&turn) { continue; }
+                let (_, permutation) =
+                    canonical_turn_board_suits([flop[0], flop[1], flop[2], turn]);
+                let mapping = combos.iter().map(|combo| {
+                    let [a, b] = combo.cards();
+                    Combo::new(permute_card_suit(a, permutation), permute_card_suit(b, permutation)).key()
+                }).collect::<Vec<_>>();
+                let mut units = vec![0u8; COMBO_COUNT * COMBO_COUNT];
+                for left in hands {
+                    for right in hands {
+                        if left.overlaps(right) || left.cards().contains(&turn) || right.cards().contains(&turn) {
+                            continue;
+                        }
+                        for river in 0..52u8 {
+                            if flop.contains(&river) || river == turn || left.cards().contains(&river) || right.cards().contains(&river) {
+                                continue;
+                            }
+                            let a = left.cards(); let b = right.cards();
+                            let first = evaluate(&[a[0], a[1], flop[0], flop[1], flop[2], turn, river]);
+                            let second = evaluate(&[b[0], b[1], flop[0], flop[1], flop[2], turn, river]);
+                            units[mapping[left.key()] * COMBO_COUNT + mapping[right.key()]] += equity_units(first, second) as u8;
+                        }
+                    }
+                }
+                turns.push((mapping, Arc::new(units)));
+            }
+            for threads in [1, 2] {
+                let reused = compute_flop_equities_from_turns(&legal, threads, &turns);
+                for (old, new) in direct.iter().zip(reused.iter()) {
+                    assert_eq!(old.to_bits(), new.to_bits());
+                }
+            }
+        }
     }
 
     #[test]
@@ -16286,6 +16692,43 @@ mod tests {
         )
         .unwrap_err()
         .contains("provenance"));
+    }
+
+    #[test]
+    fn repeated_exact_turn_continuation_is_computed_once() {
+        let board = [0, 5, 10];
+        let ranges = std::array::from_fn(|_| uniform_range(&board));
+        let solver = FlopSolver::new(FlopResolveConfig {
+            game: tiny_game(),
+            state: PublicBeliefState::flop_start(board, 1, [1.0, 1.0], ranges.clone()),
+            iterations: 2,
+            averaging_delay: 0,
+            regret_matching_plus: false,
+            value_network: zero_shared_value_network(),
+            auxiliary_value_networks: Vec::new(),
+            continuation_selection: FlopContinuationSelection::Mean,
+            threads: 4,
+        })
+        .unwrap();
+        let state = solver.config.state.game_state();
+        let first = solver.turn_leaf_values(&state, &ranges, None);
+        let second = solver.turn_leaf_values(&state, &ranges, Some(0));
+        let third = solver.turn_leaf_values(&state, &ranges, Some(1));
+        assert_eq!(first, second);
+        assert_eq!(first, third);
+        // Mean continuations are independent of the traverser. Identical
+        // betting state and exact reaches must not launch another card sweep.
+        assert_eq!(solver.turn_leaf_computations.get(), 1);
+        assert_eq!(solver.turn_leaf_evaluations.get(), 3);
+        let mut changed = ranges.clone();
+        changed[1][Combo::new(50, 51).key()] =
+            f64::from_bits(changed[1][Combo::new(50, 51).key()].to_bits() + 1);
+        solver.turn_leaf_values(&state, &changed, None);
+        assert_eq!(solver.turn_leaf_computations.get(), 2);
+        let mut solver = solver;
+        solver.replace_continuation_network(zero_shared_value_network());
+        assert_eq!(solver.turn_leaf_values(&state, &ranges, None), first);
+        assert_eq!(solver.turn_leaf_computations.get(), 3);
     }
 
     #[test]
