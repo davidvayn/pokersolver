@@ -10,6 +10,16 @@ const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-po
 const BASELINE_CONDITIONED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-baseline-conditioned-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
+#[cfg(test)]
+thread_local! {
+    static GEOMETRY_PREPARATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn note_geometry_preparation() {
+    GEOMETRY_PREPARATIONS.with(|count| count.set(count.get() + 1));
+}
+
 fn is_cash_schema(schema: &str) -> bool {
     matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA)
 }
@@ -124,47 +134,16 @@ impl PublicValueNetwork {
     pub(super) fn cash_checkdown_baseline(
         &self,
         board: &[u8],
-        actor: usize,
+        _actor: usize,
         invested: [f64; 2],
         ranges: &[Vec<f64>; 2],
     ) -> [Vec<f64>; 2] {
-        let game = self
-            .source_game
+        let rules = self
+            .cash_rules
             .as_ref()
-            .expect("validated cash source game")
-            .clone();
-        let state = PublicBeliefState::turn_start(
-            board.try_into().expect("cash turn board"),
-            actor,
-            invested,
-            // Prepare ranks/legality for every board-legal query hand, not
-            // just positive own reach. Regret matching can assign zero own
-            // behavioral mass to a hand whose counterfactual EV is needed.
-            std::array::from_fn(|_| uniform_range(board)),
-        );
-        let config = TurnRiverSolveConfig {
-            game,
-            state,
-            iterations: 2,
-            averaging_delay: 0,
-            river_refinement_iterations: 0,
-            regret_matching_plus: false,
-        };
-        let solver = TurnRiverSolver::new(config).expect("validated cash root");
-        let mut terminal = solver.config.state.game_state();
-        terminal.terminal = Some(Terminal::Showdown);
-        let cfvs = solver.cash_terminal_values(&terminal, ranges, None);
-        std::array::from_fn(|player| {
-            let mass = compatible_masses_from_card_marginals(
-                &solver.combos,
-                &ranges[1 - player],
-            );
-            cfvs[player]
-                .iter()
-                .zip(mass)
-                .map(|(value, m)| if m > 0.0 { value / m } else { 0.0 })
-                .collect()
-        })
+            .expect("validated cash rules");
+        cash_checkdown::kernel(board.try_into().expect("cash turn board"))
+            .values(rules, invested, ranges)
     }
 
     pub fn predict_cash_turn(
@@ -256,6 +235,25 @@ mod tests {
             regret_matching_plus: false,
         };
         (network, config)
+    }
+
+    #[test]
+    fn cash_value_queries_reuse_geometry_when_only_beliefs_and_commitments_change() {
+        let (network, config) = fixture();
+        let before = GEOMETRY_PREPARATIONS.with(Cell::get);
+        let mut ranges = config.state.ranges.clone();
+        for query in 0..3 {
+            ranges[0][Combo::new(50, 51).key()] = query as f64 * 0.01;
+            let values = network.cash_checkdown_baseline(
+                &config.state.board,
+                query % 2,
+                [2.0 + query as f64; 2],
+                &ranges,
+            );
+            assert!(values.iter().flatten().all(|value| value.is_finite()));
+        }
+        let prepared = GEOMETRY_PREPARATIONS.with(Cell::get) - before;
+        assert!(prepared <= 1, "one board rebuilt {prepared} times across value queries");
     }
 
     #[test]
