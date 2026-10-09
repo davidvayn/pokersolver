@@ -76,6 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "turn-pbs-value-predict" => run_turn_pbs_value_predict(&args[1..]),
         "cash-turn-value-predict" => run_cash_turn_value_predict(&args[1..]),
         "cash-flop-pilot" => run_cash_flop_pilot(&args[1..]),
+        "cash-flop-evaluate" => run_cash_flop_evaluate(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -1217,6 +1218,30 @@ fn run_cash_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
     let network = blueprint::public_belief::PublicValueNetwork::read_cash(Path::new(&network_path), &input.game)?;
     let solution = blueprint::public_belief::cash_flop::solve(input, network)?;
     let serialized = serde_json::to_string(&solution)?;
+    if let Some(output) = value(args, "--output") {
+        fs::write(output, format!("{serialized}\n"))?;
+    } else { println!("{serialized}"); }
+    Ok(())
+}
+
+fn run_cash_flop_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() % 2 != 0 || args.chunks(2).any(|pair| {
+        !["--input", "--solution", "--evaluation-value-network", "--output"].contains(&pair[0].as_str())
+            || pair[1].starts_with("--")
+    }) || args.chunks(2).map(|pair| &pair[0]).collect::<std::collections::BTreeSet<_>>().len() != args.len() / 2 {
+        return Err("cash cross-scoring accepts only immutable --input, --solution, --evaluation-value-network, and optional --output paths".into());
+    }
+    let input_path = value(args, "--input").ok_or("--input is required")?;
+    let solution_path = value(args, "--solution").ok_or("--solution is required")?;
+    let network_path = value(args, "--evaluation-value-network").ok_or("--evaluation-value-network is required")?;
+    let input: blueprint::public_belief::cash_flop::CashFlopPilotInput = serde_json::from_slice(&fs::read(input_path)?)?;
+    input.validate()?;
+    let bytes = fs::read(solution_path)?;
+    let frozen: blueprint::public_belief::cash_flop::CashFlopPilotSolution = serde_json::from_slice(&bytes)?;
+    let network = blueprint::public_belief::PublicValueNetwork::read_cash(Path::new(&network_path), &input.game)?;
+    let scored = blueprint::public_belief::cash_flop::evaluate_frozen(
+        input, &frozen, format!("{:x}", Sha256::digest(&bytes)), network)?;
+    let serialized = serde_json::to_string(&scored)?;
     if let Some(output) = value(args, "--output") {
         fs::write(output, format!("{serialized}\n"))?;
     } else { println!("{serialized}"); }
@@ -3677,6 +3702,7 @@ Usage:
   preflop-solver turn-pbs-value-predict [options]
   preflop-solver cash-turn-value-predict --input <cash-turn-solve-config.json> --value-network <cash-value.json>
   preflop-solver cash-flop-pilot --input <cash-flop-pilot.json> --value-network <cash-value.json> [--output <research.json>]
+  preflop-solver cash-flop-evaluate --input <original-cash-flop-pilot.json> --solution <frozen-cash-flop.json> --evaluation-value-network <cash-value.json> [--output <research.json>]
   preflop-solver cash-flop-root-sample --cash-profile nl25 --networks <cash-average.json> --output <roots.json> [--roots 2 --iterations 2]
   preflop-solver flop-pbs-resolve [options]
   preflop-solver flop-pbs-convergence [options]
