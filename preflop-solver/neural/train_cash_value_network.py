@@ -22,6 +22,7 @@ import cash_value_dataset as cash_values
 from cash_profiles import PAYOFF_CONTRACT
 from cash_checkdown import exact_cash_checkdown_features
 from cash_range_pooling import card_removed_opponent_pool
+from cash_value_initialization import initialize_cash_from_frozen
 from native_value_dataset import family_split, legal_combos, training_weights
 from serving_value_projection import OwnPayoffValueProjection, own_payoff_conservation_residual
 from train_public_value_network import (SharedComboValueNetwork, build_features,
@@ -117,7 +118,7 @@ def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1.):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initialization: dict | None = None):
     validate_cash_regression_options(regression_loss,huber_delta_bb)
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
@@ -144,6 +145,16 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
         payload["rangeAggregation"] = "per-query-card-removed-opponent-and-joint-own-pooling"
     if baseline_conditioned:
         payload["headAdditionalInput"] = "exact-own-cash-checkdown-net-bb-divided-by-full-stack"
+    if initialization is not None:
+        payload.update(residualInitialization="frozen-cash-weights-with-fresh-adam",
+                       initialValueNetworkSha256=initialization["network_sha256"],
+                       initialTrainingDatasetSha256=initialization["dataset_sha256"],
+                       initialTrainingReportSha256=initialization["training_report_sha256"],
+                       initialModelSeed=initialization["parent_seed"],
+                       initialModelTrainingSteps=initialization["source_training_steps"],
+                       initialModelSelectedStep=initialization["source_selected_step"],
+                       optimizerInitialization=initialization["optimizer_initialization"],
+                       checkpointSelectionIncludesInitialModel=True)
     path.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
 
 
@@ -250,7 +261,13 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1.):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None):
+    if ((initial_value_network is None) != (initial_dataset is None)
+            or any(value is not None and not isinstance(value,Path)
+                   for value in (initial_value_network,initial_dataset))):
+        raise ValueError("initial cash weights require both network and dataset paths")
+    if initial_value_network is not None and output.resolve() == initial_value_network.parent.resolve():
+        raise ValueError("cash fit output cannot overwrite its frozen parent directory")
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
@@ -282,6 +299,9 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
     contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source,feature_schema)
     mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema)
+    initialization = (initialize_cash_from_frozen(model,initial_value_network,initial_dataset,
+                      source,(train,tuning,holdout),seed,split_seed)
+                      if initial_value_network is not None else None)
     optimizer = optim.Adam(learning_rate=learning_rate,bias_correction=adam_bias_correction)
     tensors = [mx.array(v) for v in (contexts, queries, weights, scales, baselines, legal)]
     tensors.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
@@ -326,6 +346,13 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     initial_loss = float(loss_fn(model, train_rows).item())
     initial_mse = float(loss_components(model,train_rows)[0].item())
     best_parameters, best_tuning, best_step = None, float("inf"), 0
+    if initialization is not None:
+        # Do not replace a working frozen model if every attempted update
+        # worsens the same tuning criterion. No holdout-based selection.
+        with mx.stream(mx.cpu):
+            mse,_,penalty = loss_components(model,mx.array(tuning),False)
+            best_tuning = float((mse+penalty).item())
+        best_parameters = [(key,np.array(value)) for key,value in tree_flatten(model.parameters())]
     for step in range(1, steps + 1):
         loss, gradients = loss_grad(model, train_rows); optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state, loss)
@@ -353,7 +380,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb)
+    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
@@ -362,6 +389,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "regression_loss":regression_loss,"huber_delta_bb":huber_delta_bb,
               "checkpoint_selection_criterion":"tuning-own-payoff-mse-plus-explicit-auxiliary-penalties",
               "split_seed":split_seed,
+              "initial_value_network":initialization,
               "split_reference_sha256":hashlib.sha256(reference_bytes).hexdigest() if reference_bytes else None,
               "training_initial_objective_bb_squared":initial_loss,
               "accounting_loss_weight":accounting_loss_weight,
@@ -394,8 +422,10 @@ def main():
     parser.add_argument("--learning-rate",type=float,default=1e-3,help="Explicit bounded pilot rate; original default remains unchanged")
     parser.add_argument("--regression-loss",choices=("mse","huber"),default="mse",help="Matched cash fit objective; checkpoint selection and reporting retain MSE")
     parser.add_argument("--huber-delta-bb",type=float,default=1.,help="Huber fit threshold in net bb; small-error gradients match original squared loss")
+    parser.add_argument("--initial-value-network",type=Path,help="Frozen cash weights with sibling report.json; same seed/architecture/rules/split required")
+    parser.add_argument("--initial-dataset",type=Path,help="Byte-pinned initial training corpus; must remain an unchanged current prefix")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset), indent=2))
 
 
 if __name__ == "__main__": main()
