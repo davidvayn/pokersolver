@@ -129,6 +129,7 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    cashRules=source["game"]["cash_rules"],
                    sourceGame=source["game"], baseline="exact-own-payoff-forced-turn-checkdown-44-compatible-rivers",
                    rulesSha256=source["rules_sha256"], payoffContract=PAYOFF_CONTRACT,
+                   trainingTargetSemantics=cash_values.TARGET_SEMANTICS,
                    predictionContract=(cash_values.BASELINE_CONDITIONED_CONTRACT if baseline_conditioned else cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT),
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,

@@ -15,8 +15,9 @@ from native_value_dataset import compatible_masses, legal_combos, identity_hash,
 from cash_flop_leaves import leaf_input
 from cash_turn_roots import root_fingerprint
 
-SCHEMA = "hu-cash-turn-start-cfv-dataset-v1"
-LABEL_SCHEMA = "hu-cash-turn-river-continuation-values-v1"
+SCHEMA = "hu-cash-turn-start-cfv-dataset-v2"
+LABEL_SCHEMA = "hu-cash-turn-river-continuation-values-v2"
+TARGET_SEMANTICS = "profile-positive-own-reach-cbr-zero-own-reach-v1"
 NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v2"
 POOLED_NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v3"
 BLOCKER_POOLED_NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v4"
@@ -29,7 +30,7 @@ MAX_FLAT_SOURCES = 5  # One bounded coverage extension; still reject nested merg
 
 def validate_label(label: dict) -> None:
     if label.get("schema") != LABEL_SCHEMA or label.get("validation", {}).get("status") != "research_only":
-        raise ValueError("cash labels must be explicit finite-budget own-payoff research references")
+        raise ValueError("cash labels must be explicit completed counterfactual own-payoff research references")
     config = label["input"]
     game, state = config["game"], config["state"]
     rules = game["cash_rules"]
@@ -81,6 +82,24 @@ def validate_label(label: dict) -> None:
             or not np.isclose(gains.sum(), metrics["exact_abstract_exploitability_bb_per_hand"], atol=1e-8)
             or metrics["maximum_probability_sum_error"] > 1e-6):
         raise ValueError("cash response gains or probability diagnostics are inconsistent")
+    # The 10% counterfactual loss mixture and trunk deviations include legal
+    # hands with zero own reach. Legacy profile-only zeros are not targets.
+    profile = np.asarray(label.get("profile_counterfactual_values_bb"), dtype=float)
+    best = np.asarray(label.get("best_response_counterfactual_values_bb"), dtype=float)
+    completed = label.get("completed_zero_own_reach")
+    expected_counts = np.sum((ranges == 0) & legal[None,:], axis=1).tolist()
+    if (label.get("training_target_semantics") != TARGET_SEMANTICS
+            or not isinstance(completed,list) or len(completed) != 2
+            or any(type(n) is not int for n in completed) or completed != expected_counts
+            or any(v.shape != (2,1326) or not np.isfinite(v).all()
+                   or (v[:,~legal] != 0).any() or (np.abs(v) > 20+1e-5).any()
+                   or (v[masses == 0] != 0).any() for v in (profile,best))
+            or (best < profile-1e-5).any()
+            or not np.array_equal(values,np.where(ranges > 0,profile,best))):
+        raise ValueError("cash counterfactual completion differs from frozen-profile / zero-own best-response targets")
+    response_gains = np.sum(weights * (best-profile), axis=1) / joint
+    if not np.allclose(response_gains,gains,atol=1e-5,rtol=1e-6):
+        raise ValueError("cash completed references disagree with frozen-policy response gains")
 
 
 def build_dataset(paths: list[Path]) -> dict:
@@ -99,14 +118,17 @@ def build_dataset(paths: list[Path]) -> dict:
     if not labels:
         raise ValueError("cash corpus is empty")
     result = {"schema": SCHEMA, "game": game, "rules_sha256": rules_digest(game["cash_rules"]),
-              "payoff_contract": PAYOFF_CONTRACT, "validation": {"status": "research_only"},
+              "payoff_contract": PAYOFF_CONTRACT, "training_target_semantics":TARGET_SEMANTICS,
+              "validation": {"status": "research_only"},
               "capture_sha256": captures, "label_canonical_sha256": [identity_hash(l) for l in labels], "labels": labels}
     validate_dataset(result)
     return result
 
 
 def validate_dataset(source: dict) -> None:
-    if source.get("schema") != SCHEMA or source.get("payoff_contract") != PAYOFF_CONTRACT or source.get("validation", {}).get("status") != "research_only":
+    if (source.get("schema") != SCHEMA or source.get("payoff_contract") != PAYOFF_CONTRACT
+            or source.get("training_target_semantics") != TARGET_SEMANTICS
+            or source.get("validation", {}).get("status") != "research_only"):
         raise ValueError("incompatible cash continuation dataset")
     if source.get("rules_sha256") != rules_digest(source["game"]["cash_rules"]):
         raise ValueError("cash dataset rules digest mismatch")
