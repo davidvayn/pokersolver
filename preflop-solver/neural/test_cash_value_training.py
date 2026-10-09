@@ -5,12 +5,27 @@ import tempfile
 from pathlib import Path
 import mlx.core as mx
 import numpy as np
-from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,context_loss_multipliers,run,split_cash_families
+from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,context_loss_multipliers,run,split_cash_families
 from cash_profiles import profile_rules,rules_digest
 from cash_value_dataset import NETWORK_SCHEMA,POOLED_NETWORK_SCHEMA
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_profile_supervision_detects_equal_and_opposite_errors_without_projection(self):
+        with mx.stream(mx.cpu):
+            own = np.zeros((1,2,1326),np.float32); own[:,0] = 4.56; own[:,1] = -5.
+            shifted = own.copy(); shifted[:,0] += 1.; shifted[:,1] -= 1.
+            scale = mx.array([2.]); reaches = mx.ones((1,2,1326)); targets = mx.array([[4.56,-5.]])
+            correct = mx.array(own.reshape((1,2652))/2.)
+            errors = mx.array(shifted.reshape((1,2652))/2.)
+            self.assertAlmostEqual(float(cash_profile_value_penalty(correct,scale,reaches,targets).item()),0.,places=8)
+            self.assertAlmostEqual(float(cash_accounting_penalty(errors,scale,reaches,mx.array([.44])).item()),0.,places=8)
+            self.assertAlmostEqual(float(cash_profile_value_penalty(errors,scale,reaches,targets).item()),2.,places=5)
+            np.testing.assert_array_equal(np.array(errors),shifted.reshape((1,2652))/2.)
+        for invalid in (-1.,float('nan'),float('inf'),101.):
+            with self.assertRaisesRegex(ValueError,'profile value loss weight'):
+                run(Path('must-not-read'),Path('must-not-create'),7101,2,profile_value_loss_weight=invalid)
+
     def test_pooled_cash_export_has_versioned_layout_and_zero_correction_baseline(self):
         rules=profile_rules("nl25"); source=dict(game=dict(cash_rules=rules),rules_sha256=rules_digest(rules))
         with tempfile.TemporaryDirectory() as directory:

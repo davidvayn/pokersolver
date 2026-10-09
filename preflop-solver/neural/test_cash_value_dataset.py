@@ -82,6 +82,17 @@ class CashValueDatasetTests(unittest.TestCase):
                 split_cash_families(expanded,938,original)
             with self.assertRaisesRegex(ValueError,"pinned split"):
                 split_cash_families(expanded,937)
+            third = corpus([[12,18,25,40]],"third")
+            fourth = corpus([[0,16,35,45]],"fourth")
+            four_parents = extend_training_corpus(expanded,third,937,split_reference=original)
+            five_parents = extend_training_corpus(four_parents,fourth,937,split_reference=original)
+            validate_dataset(five_parents)
+            self.assertEqual(len(five_parents["source_datasets"]["sources"]),5)
+            self.assertEqual(five_parents["labels"][:len(expanded["labels"])],expanded["labels"])
+            np.testing.assert_array_equal(split_cash_families(five_parents,937,original)[1],baseline_splits[1])
+            np.testing.assert_array_equal(split_cash_families(five_parents,937,original)[2],baseline_splits[2])
+            with self.assertRaisesRegex(ValueError,"at most five flat sources"):
+                extend_training_corpus(five_parents,third,937,split_reference=original)
             changed = copy.deepcopy(expanded)
             changed["source_datasets"]["split_reference_canonical_sha256"] = "0"*64
             with self.assertRaisesRegex(ValueError,"pinned split"): validate_dataset(changed)
