@@ -794,7 +794,8 @@ impl PublicValueNetwork {
             | "hu-public-belief-combo-value-network-v4"
             | "hu-public-belief-combo-value-network-v5"
             | "hu-public-belief-combo-value-network-v6"
-            | cash_value::NETWORK_SCHEMA => {
+            | cash_value::NETWORK_SCHEMA
+            | cash_value::POOLED_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -832,6 +833,7 @@ impl PublicValueNetwork {
                         | "hu-public-belief-combo-value-network-v5"
                         | "hu-public-belief-combo-value-network-v6"
                         | cash_value::NETWORK_SCHEMA
+                        | cash_value::POOLED_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -847,11 +849,7 @@ impl PublicValueNetwork {
                     query_size = layer.validate(query_size)?;
                 }
                 let head_size = context_size
-                    + if matches!(
-                        self.schema.as_str(),
-                        "hu-public-belief-combo-value-network-v5"
-                            | "hu-public-belief-combo-value-network-v6"
-                    ) {
+                    + if self.pools_exact_query_ranges() {
                         query_size * 3
                     } else {
                         query_size
@@ -1080,11 +1078,7 @@ impl PublicValueNetwork {
             .last()
             .expect("validated shared query tower")
             .output_size;
-        let pooled_queries: Option<[Vec<f32>; 2]> = matches!(
-            self.schema.as_str(),
-            "hu-public-belief-combo-value-network-v5" | "hu-public-belief-combo-value-network-v6"
-        )
-        .then(|| {
+        let pooled_queries: Option<[Vec<f32>; 2]> = self.pools_exact_query_ranges().then(|| {
             std::array::from_fn(|player| {
                 let denominator = legal_combos[player]
                     .iter()
@@ -1143,6 +1137,7 @@ impl PublicValueNetwork {
                         | "hu-public-belief-combo-value-network-v5"
                         | "hu-public-belief-combo-value-network-v6"
                         | cash_value::NETWORK_SCHEMA
+                        | cash_value::POOLED_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -1168,6 +1163,11 @@ impl PublicValueNetwork {
             project_value_predictions_to_payoff_bounds(&mut result, board, payoff_bounds, ranges, &masses);
         }
         result
+    }
+
+    fn pools_exact_query_ranges(&self) -> bool {
+        matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v5"
+            | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {

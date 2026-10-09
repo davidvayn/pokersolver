@@ -18,6 +18,7 @@ from cash_turn_roots import root_fingerprint
 SCHEMA = "hu-cash-turn-start-cfv-dataset-v1"
 LABEL_SCHEMA = "hu-cash-turn-river-continuation-values-v1"
 NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v2"
+POOLED_NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v3"
 PREDICTION_CONTRACT = "cash-turn-start-cfv-full-stack-v1"
 
 
