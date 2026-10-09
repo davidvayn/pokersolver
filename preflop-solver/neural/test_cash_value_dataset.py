@@ -7,7 +7,7 @@ import numpy as np
 import mlx.core as mx
 
 from cash_profiles import profile_rules, rules_digest
-from cash_value_dataset import LABEL_SCHEMA, build_dataset, validate_label, validate_dataset, extend_training_corpus
+from cash_value_dataset import LABEL_SCHEMA, TARGET_SEMANTICS, build_dataset, validate_label, validate_dataset, extend_training_corpus
 from native_value_dataset import compatible_masses, family_split, legal_combos, identity_hash
 from train_cash_value_network import OwnComboValueNetwork, feature_arrays, reference_predictions, split_cash_families
 from cash_checkdown import exact_cash_checkdown
@@ -15,21 +15,60 @@ from train_public_value_network import build_features, FEATURE_SCHEMA_BOARD_RELA
 from unittest.mock import patch
 
 
+def complete_fixture_targets(label):
+    """Synthetic targets only; real labels must come from a native traversal."""
+    legal = legal_combos(label["input"]["state"]["board"])
+    ranges = np.asarray(label["input"]["state"]["ranges"])
+    masses = np.asarray(label["opponent_compatible_mass"])
+    profile = np.asarray(label["counterfactual_values_bb"]).copy()
+    best = profile + .1 * legal[None,:]
+    profile[masses == 0] = 0; best[masses == 0] = 0
+    label.update(training_target_semantics=TARGET_SEMANTICS,
+                 completed_zero_own_reach=np.sum((ranges == 0) & legal[None,:],axis=1).tolist(),
+                 profile_counterfactual_values_bb=profile.tolist(),
+                 best_response_counterfactual_values_bb=best.tolist(),
+                 counterfactual_values_bb=np.where(ranges > 0,profile,best).tolist())
+    return label
+
+
 def label_fixture():
     rules = profile_rules("nl25"); board = [8,13,22,31]
     legal = legal_combos(board); ranges = np.tile(legal / legal.sum(), (2,1))
     values = np.tile(legal * -.86, (2,1))
-    return {"schema":LABEL_SCHEMA,"validation":{"status":"research_only"},"joint_iterations":2,
+    return complete_fixture_targets({"schema":LABEL_SCHEMA,"validation":{"status":"research_only"},"joint_iterations":2,
             "input":{"iterations":2,"averaging_delay":0,"game":{"cash_rules":rules,"effective_stack_bb":20,"small_blind_bb":.4,"big_blind_bb":1},
                 "state":{"street":"turn","board":board,"actor":1,"invested_bb":[19,19],"street_invested_bb":[0,0],
                          "last_full_raise_bb":1,"aggressions":0,"checks":0,"raise_reopened":True,"public_history":["public_belief:turn_start"],"ranges":ranges.tolist()}},
             "counterfactual_values_bb":values.tolist(),"opponent_compatible_mass":compatible_masses(ranges).tolist(),
             "metrics":{"exact_river_cards":48,"maximum_probability_sum_error":0,"exact_abstract_exploitability_bb_per_hand":.2,
                        "cash":{"rules_sha256":rules_digest(rules),"expected_house_rake_bb":1.72,"conservation_residual_bb":0,
-                               "unilateral_gain_bb":[.1,.1],"nash_conv_bb_per_hand":.2}}}
+                               "unilateral_gain_bb":[.1,.1],"nash_conv_bb_per_hand":.2}}})
 
 
 class CashValueDatasetTests(unittest.TestCase):
+    def test_profile_only_legacy_labels_are_not_full_counterfactual_targets(self):
+        label = label_fixture()
+        label["schema"] = "hu-cash-turn-river-continuation-values-v1"
+        with self.assertRaisesRegex(ValueError, "counterfactual"):
+            validate_label(label)
+
+    def test_zero_own_reach_placeholders_cannot_receive_counterfactual_loss(self):
+        label = label_fixture()
+        legal = legal_combos(label["input"]["state"]["board"])
+        key = int(np.flatnonzero(legal)[0])
+        ranges = np.asarray(label["input"]["state"]["ranges"])
+        ranges[0,key] = 0
+        ranges[0] /= ranges[0].sum()
+        label["input"]["state"]["ranges"] = ranges.tolist()
+        label["opponent_compatible_mass"] = compatible_masses(ranges).tolist()
+        label["counterfactual_values_bb"][0][key] = 0
+        label["training_target_semantics"] = "profile-positive-own-reach-cbr-zero-own-reach-v1"
+        label["completed_zero_own_reach"] = [1,0]
+        label["profile_counterfactual_values_bb"] = np.tile(legal * -.86,(2,1)).tolist()
+        label["best_response_counterfactual_values_bb"] = np.tile(legal * -.76,(2,1)).tolist()
+        with self.assertRaisesRegex(ValueError, "completion"):
+            validate_label(label)
+
     def test_training_extension_retains_parent_provenance_and_unchanged_holdout(self):
         with tempfile.TemporaryDirectory() as directory:
             def corpus(boards,prefix):
@@ -40,6 +79,7 @@ class CashValueDatasetTests(unittest.TestCase):
                     label["input"]["state"].update(board=board,ranges=ranges.tolist())
                     label["counterfactual_values_bb"] = np.tile(legal*-.86,(2,1)).tolist()
                     label["opponent_compatible_mass"] = compatible_masses(ranges).tolist()
+                    complete_fixture_targets(label)
                     path = Path(directory)/f"{prefix}-{i}.json"; path.write_text(json.dumps(label)); paths.append(path)
                 return build_dataset(paths)
             original = corpus([[8,13,22,31],[48,45,26,3],[32,29,18,7]],"original")
@@ -61,6 +101,7 @@ class CashValueDatasetTests(unittest.TestCase):
             legal = legal_combos(mutated["labels"][0]["input"]["state"]["board"])
             values[0,legal] += .1; values[1,legal] -= .1
             mutated["labels"][0]["counterfactual_values_bb"] = values.tolist()
+            complete_fixture_targets(mutated["labels"][0])
             mutated["label_canonical_sha256"] = [identity_hash(l) for l in mutated["labels"]]
             with self.assertRaisesRegex(ValueError,"captured parent rows"): validate_dataset(mutated)
             changed = copy.deepcopy(original); changed["labels"][0]["input"]["iterations"] = 3
@@ -163,6 +204,7 @@ class CashValueDatasetTests(unittest.TestCase):
                 house = .16 if invested == 2 else 1.72
                 label["counterfactual_values_bb"] = np.tile(legal * (-house/2),(2,1)).tolist()
                 label["opponent_compatible_mass"] = compatible_masses(ranges).tolist()
+                complete_fixture_targets(label)
                 label["metrics"]["cash"]["expected_house_rake_bb"] = house
                 labels.append(label)
         with tempfile.TemporaryDirectory() as directory:

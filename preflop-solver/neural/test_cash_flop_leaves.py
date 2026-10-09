@@ -13,7 +13,7 @@ from probe_cash_flop_leaves import check_check_input, reference, evaluate
 from native_value_dataset import COMBOS
 import test_cash_flop_pilot as pilot_tests
 from test_cash_turn_roots import fixture
-from test_cash_value_dataset import label_fixture
+from test_cash_value_dataset import label_fixture, complete_fixture_targets
 from native_value_dataset import compatible_masses, identity_hash, legal_combos
 
 
@@ -124,6 +124,7 @@ class CashFlopLeafTests(unittest.TestCase):
         label.update(input=config,counterfactual_values_bb=np.tile(legal*-.04,(2,1)).tolist(),
                      opponent_compatible_mass=compatible_masses(ranges).tolist())
         label["metrics"]["cash"]["expected_house_rake_bb"]=.08
+        complete_fixture_targets(label)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/"label.json"; path.write_text(json.dumps(label))
             source=build_dataset([path])

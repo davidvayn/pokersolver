@@ -8755,6 +8755,16 @@ pub struct TurnRiverContinuationValues {
     pub joint_iterations: u64,
     pub river_refinement_iterations: u64,
     pub counterfactual_values_bb: [Vec<f32>; 2],
+    /// Cash training's zero-own-reach completion is not a deployed policy.
+    /// Keep the frozen profile and response references separately auditable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_target_semantics: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_counterfactual_values_bb: Option<[Vec<f32>; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_response_counterfactual_values_bb: Option<[Vec<f32>; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_zero_own_reach: Option<[usize; 2]>,
     pub opponent_compatible_mass: [Vec<f32>; 2],
     pub metrics: TurnRiverSolveMetrics,
 }
@@ -10104,18 +10114,44 @@ impl TurnRiverSolver {
                 .map(|mass| mass as f32)
                 .collect()
         });
-        let counterfactual_values_bb = std::array::from_fn(|player| {
+        let cash_training = self.config.game.cash_rules.is_some();
+        let profile_values: [Vec<f32>; 2] = std::array::from_fn(|player| {
             profile[player]
                 .iter()
-                .zip(&compatible_mass[player])
-                .map(|(value, mass)| {
-                    if *mass > 0.0 {
-                        (*value / *mass as f64) as f32
+                .enumerate()
+                .map(|(combo, value)| {
+                    let mass = compatible_mass[player][combo];
+                    if mass > 0.0 && (!cash_training || self.legal[player][combo]) {
+                        (*value / mass as f64) as f32
                     } else {
                         0.0
                     }
                 })
                 .collect()
+        });
+        let best_values: Option<[Vec<f32>; 2]> = cash_training.then(|| {
+            std::array::from_fn(|player| {
+                let best = if player == 0 { &br0[0] } else { &br1[1] };
+                (0..COMBO_COUNT).map(|combo| {
+                    let mass = compatible_mass[player][combo];
+                    if self.legal[player][combo] && mass > 0.0 {
+                        (best[combo] / mass as f64) as f32
+                    } else { 0.0 }
+                }).collect()
+            })
+        });
+        let mut counterfactual_values_bb = profile_values.clone();
+        let completed_zero_own_reach = best_values.as_ref().map(|best| {
+            std::array::from_fn(|player| {
+                let mut completed = 0;
+                for combo in 0..COMBO_COUNT {
+                    if self.legal[player][combo] && reaches[player][combo] == 0.0 {
+                        counterfactual_values_bb[player][combo] = best[player][combo];
+                        completed += 1;
+                    }
+                }
+                completed
+            })
         });
         let mut turn_information_sets = 0usize;
         let mut river_information_sets = 0usize;
@@ -10149,7 +10185,7 @@ impl TurnRiverSolver {
         }
         TurnRiverContinuationValues {
             schema: if self.config.game.cash_rules.is_some() {
-                "hu-cash-turn-river-continuation-values-v1"
+                "hu-cash-turn-river-continuation-values-v2"
             } else {
                 "hu-turn-river-public-belief-continuation-values-v2"
             }.to_owned(),
@@ -10157,6 +10193,11 @@ impl TurnRiverSolver {
             joint_iterations: self.config.iterations,
             river_refinement_iterations: self.config.river_refinement_iterations,
             counterfactual_values_bb,
+            training_target_semantics: cash_training.then(||
+                "profile-positive-own-reach-cbr-zero-own-reach-v1".to_owned()),
+            profile_counterfactual_values_bb: cash_training.then_some(profile_values),
+            best_response_counterfactual_values_bb: best_values,
+            completed_zero_own_reach,
             opponent_compatible_mass: compatible_mass,
             metrics: TurnRiverSolveMetrics {
                 information_sets: self.nodes.len(),
@@ -11796,7 +11837,11 @@ pub fn generate_postflop_action_targets(
 pub fn solve_turn_river_continuation_values(
     config: TurnRiverSolveConfig,
 ) -> Result<TurnRiverContinuationValues, String> {
-    let mut solver = TurnRiverSolver::new(config)?;
+    let mut solver = if config.game.cash_rules.is_some() {
+        TurnRiverSolver::new_cash_training(config)?
+    } else {
+        TurnRiverSolver::new(config)?
+    };
     solver.train();
     Ok(solver.finish_continuation_values())
 }

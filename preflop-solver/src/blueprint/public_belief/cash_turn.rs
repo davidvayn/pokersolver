@@ -4,6 +4,24 @@ use super::*;
 use crate::cash_game::{Outcome, TerminalReason};
 
 impl TurnRiverSolver {
+    /// Training CFVs need all card-legal deviation queries, not just hands
+    /// reached by the current action mix. Construction support is discarded
+    /// before training: actual normalized ranges, including zeros, are kept.
+    /// This is isolated from ordinary frozen cash/Home policy evaluation.
+    pub(super) fn new_cash_training(mut config: TurnRiverSolveConfig) -> Result<Self, String> {
+        if config.game.cash_rules.is_none() {
+            return Err("cash counterfactual training requires explicit rules".into());
+        }
+        let actual = config
+            .state
+            .validate_street_and_normalize(&config.game, Street::Turn, 4)?;
+        config.state = actual.clone();
+        config.state.ranges = std::array::from_fn(|_| uniform_range(&actual.board));
+        let mut solver = Self::new(config)?;
+        solver.config.state = actual;
+        Ok(solver)
+    }
+
     pub(super) fn cash_terminal_values(
         &self,
         state: &GameState,
@@ -259,5 +277,92 @@ mod tests {
                 .abs()
                 < 1e-9
         );
+    }
+
+    #[test]
+    fn cash_training_cfv_retains_zero_own_reach_royal_flush_deviation() {
+        let mut input = config();
+        // Tc Jc Qc Kc: Ac2c is already unbeatable, but its actual own reach is
+        // zero. It still needs a deviation target for trunk regret updates.
+        input.state.board = vec![32, 36, 40, 44];
+        input.state.ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        let nuts = Combo::new(48, 0).key();
+        let own = Combo::new(49, 45).key();
+        let opponent = Combo::new(41, 37).key();
+        input.state.ranges[0][own] = 1.0;
+        input.state.ranges[1][opponent] = 1.0;
+        let actual = input.state.ranges.clone();
+        let minimum = cash::cash_terminal_payoffs(
+            input.game.cash_rules.as_ref().unwrap(),
+            [1.0, 1.0],
+            TerminalReason::Showdown,
+            Outcome::PlayerZero,
+            5,
+        )
+        .unwrap()[0];
+        let result = solve_turn_river_continuation_values(input.clone()).unwrap();
+        assert!(
+            result.counterfactual_values_bb[0][nuts] as f64 >= minimum - 1e-6,
+            "a zero-own-reach royal query must retain its guaranteed cash payoff; got {}",
+            result.counterfactual_values_bb[0][nuts]
+        );
+        assert_eq!(input.state.ranges, actual);
+        assert_eq!(input.state.ranges[0][nuts], 0.0);
+        assert_eq!(result.schema, "hu-cash-turn-river-continuation-values-v2");
+        assert_eq!(
+            result.training_target_semantics.as_deref(),
+            Some("profile-positive-own-reach-cbr-zero-own-reach-v1")
+        );
+        let profile = result.profile_counterfactual_values_bb.unwrap();
+        let best = result.best_response_counterfactual_values_bb.unwrap();
+        assert_eq!(result.counterfactual_values_bb[0][nuts], best[0][nuts]);
+        assert_eq!(result.counterfactual_values_bb[0][own], profile[0][own]);
+        assert_eq!(
+            result.counterfactual_values_bb[1][opponent],
+            profile[1][opponent]
+        );
+        assert_eq!(result.completed_zero_own_reach, Some([1127, 1127]));
+        let blocked = Combo::new(32, 1).key();
+        for p in 0..2 {
+            assert_eq!(result.counterfactual_values_bb[p][blocked], 0.0);
+        }
+        assert!(result.metrics.cash.unwrap().conservation_residual_bb < 1e-8);
+    }
+
+    #[test]
+    fn cash_training_support_does_not_change_actual_beliefs_or_reached_policy() {
+        let mut input = config();
+        let own = Combo::new(48, 49).key();
+        let opponent = Combo::new(4, 5).key();
+        input.state.ranges = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        input.state.ranges[0][own] = 1.0;
+        input.state.ranges[1][opponent] = 1.0;
+        let mut legacy = TurnRiverSolver::new(input.clone()).unwrap();
+        let mut training = TurnRiverSolver::new_cash_training(input.clone()).unwrap();
+        assert_eq!(training.config.state.ranges, input.state.ranges);
+        assert_eq!(
+            training.legal[0].iter().filter(|legal| **legal).count(),
+            1128
+        );
+        legacy.train();
+        training.train();
+        let root = input.state.game_state();
+        let reaches = input.state.ranges;
+        let old = legacy.profile_walk(root.clone(), reaches.clone(), None, None, None, true);
+        let new = training.profile_walk(root, reaches, None, None, None, true);
+        assert!((old[0][own] - new[0][own]).abs() < 1e-10);
+        assert!((old[1][opponent] - new[1][opponent]).abs() < 1e-10);
+        for (history, node) in &legacy.nodes {
+            let counterpart = training.nodes.get(history).unwrap();
+            let river = TurnRiverSolver::river_from_key(history);
+            let key = if node.actor == 0 { own } else { opponent };
+            let old = node.average_strategy(legacy.legal_for(river, node.actor));
+            let new = counterpart.average_strategy(training.legal_for(river, node.actor));
+            let count = node.action_labels.len();
+            assert_eq!(
+                &old[key * count..(key + 1) * count],
+                &new[key * count..(key + 1) * count]
+            );
+        }
     }
 }

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from cash_value_dataset import build_dataset
 from cash_value_initialization import initialize_cash_from_frozen
 from native_value_dataset import compatible_masses, legal_combos
-from test_cash_value_dataset import label_fixture
+from test_cash_value_dataset import label_fixture, complete_fixture_targets
 from train_cash_value_network import OwnComboValueNetwork, export_cash_model, split_cash_families, run
 
 
@@ -26,6 +26,7 @@ class CashValueInitializationTests(unittest.TestCase):
             label["input"]["state"].update(board=board, ranges=ranges.tolist())
             label["counterfactual_values_bb"] = np.tile(legal*-.86, (2,1)).tolist()
             label["opponent_compatible_mass"] = compatible_masses(ranges).tolist()
+            complete_fixture_targets(label)
             path = directory/f"label-{index}.json"; path.write_text(json.dumps(label)); paths.append(path)
         source = build_dataset(paths)
         dataset = directory/"dataset.json"; dataset.write_text(json.dumps(source))
