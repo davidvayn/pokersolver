@@ -795,7 +795,8 @@ impl PublicValueNetwork {
             | "hu-public-belief-combo-value-network-v5"
             | "hu-public-belief-combo-value-network-v6"
             | cash_value::NETWORK_SCHEMA
-            | cash_value::POOLED_NETWORK_SCHEMA => {
+            | cash_value::POOLED_NETWORK_SCHEMA
+            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -834,6 +835,7 @@ impl PublicValueNetwork {
                         | "hu-public-belief-combo-value-network-v6"
                         | cash_value::NETWORK_SCHEMA
                         | cash_value::POOLED_NETWORK_SCHEMA
+                        | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -1100,17 +1102,32 @@ impl PublicValueNetwork {
             })
         });
         let selected_head = self.selected_value_head(invested);
+        let conditioned_opponent = (self.schema == cash_value::BLOCKER_POOLED_NETWORK_SCHEMA).then(|| {
+            cash_value::card_removed_opponent_embeddings(&query_embeddings, &legal_combos[0], ranges,
+                                                         &masses, query_embedding_size)
+        });
         let cash_baseline = self.cash_rules.as_ref().map(|_| self.cash_checkdown_baseline(board, actor, invested, ranges));
         let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
             let mut head_context = context_embeddings[player].clone();
             if let Some(pooled) = &pooled_queries {
                 head_context.extend_from_slice(&pooled[player]);
-                head_context.extend_from_slice(&pooled[1 - player]);
+                if conditioned_opponent.is_none() {
+                    head_context.extend_from_slice(&pooled[1 - player]);
+                }
             }
+            let conditioned_queries = conditioned_opponent.as_ref().map(|opponent| {
+                let mut batch = Vec::with_capacity(legal_combos[player].len() * query_embedding_size * 2);
+                for row in 0..legal_combos[player].len() {
+                    let span = row * query_embedding_size..(row + 1) * query_embedding_size;
+                    batch.extend_from_slice(&opponent[player][span.clone()]);
+                    batch.extend_from_slice(&query_embeddings[player][span]);
+                }
+                batch
+            });
             let output = forward_batch_head(
                 selected_head,
                 &head_context,
-                &query_embeddings[player],
+                conditioned_queries.as_deref().unwrap_or(&query_embeddings[player]),
                 legal_combos[player].len(),
             );
             let output_size = selected_head
@@ -1138,6 +1155,7 @@ impl PublicValueNetwork {
                         | "hu-public-belief-combo-value-network-v6"
                         | cash_value::NETWORK_SCHEMA
                         | cash_value::POOLED_NETWORK_SCHEMA
+                        | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -1167,7 +1185,8 @@ impl PublicValueNetwork {
 
     fn pools_exact_query_ranges(&self) -> bool {
         matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v5"
-            | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA)
+            | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA
+            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {

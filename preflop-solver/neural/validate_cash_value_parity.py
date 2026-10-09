@@ -8,7 +8,8 @@ import numpy as np
 import mlx.core as mx
 from train_cash_value_network import OwnComboValueNetwork
 from train_cash_value_network import feature_arrays
-from cash_value_dataset import NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA
+from cash_value_dataset import NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_CONTRACT
+from cash_range_pooling import numpy_card_removed_opponent_pool
 from train_public_value_network import RANGE_POOL_EPSILON
 from validate_public_value_parity import dense_forward
 from serving_value_projection import OwnPayoffValueProjection
@@ -17,7 +18,9 @@ from serving_value_projection import OwnPayoffValueProjection
 def cash_architecture(model):
     architecture = model.get("architecture")
     if ((model.get("schema") == NETWORK_SCHEMA and architecture in ("compact", "wide"))
-            or (model.get("schema") == POOLED_NETWORK_SCHEMA and architecture == "wide-pooled")):
+            or (model.get("schema") == POOLED_NETWORK_SCHEMA and architecture == "wide-pooled")
+            or (model.get("schema") == BLOCKER_POOLED_NETWORK_SCHEMA and architecture == "wide-blocker-pooled"
+                and model.get("predictionContract") == BLOCKER_POOLED_CONTRACT)):
         return architecture
     raise ValueError("cash parity requires matching versioned architecture and own-payoff schema")
 
@@ -28,11 +31,12 @@ def python_predictions(source, model):
     embeddings = dense_forward(contexts,model["contextTower"])
     combo_embeddings = dense_forward(queries,model["queryTower"])
     expanded = np.broadcast_to(embeddings[:,:,None,:],combo_embeddings.shape)
-    if architecture == "wide-pooled":
+    if architecture in ("wide-pooled","wide-blocker-pooled"):
         reach = weights / np.maximum(weights.sum(axis=2,keepdims=True),RANGE_POOL_EPSILON)
         pooled = np.sum(combo_embeddings * reach[:,:,:,None],axis=2)
         own = np.broadcast_to(pooled[:,:,None,:],combo_embeddings.shape)
-        opponent = np.broadcast_to(pooled[:,::-1,None,:],combo_embeddings.shape)
+        opponent = (numpy_card_removed_opponent_pool(combo_embeddings,np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32))
+                    if architecture == "wide-blocker-pooled" else np.broadcast_to(pooled[:,::-1,None,:],combo_embeddings.shape))
         combined = np.concatenate((expanded,own,opponent,combo_embeddings),axis=-1)
     else:
         combined = np.concatenate((expanded,combo_embeddings),axis=-1)
@@ -52,6 +56,8 @@ def mlx_predictions(source, payload, device):
         model.load_weights(weights)
         contexts, queries, weights, scales, baselines, legal, _, _ = feature_arrays(source)
         arrays = [mx.array(v) for v in (contexts,queries,weights,scales,baselines,legal)]
+        if model.architecture == "wide-blocker-pooled":
+            arrays.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
         return np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
 
 

@@ -19,7 +19,9 @@ SCHEMA = "hu-cash-turn-start-cfv-dataset-v1"
 LABEL_SCHEMA = "hu-cash-turn-river-continuation-values-v1"
 NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v2"
 POOLED_NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v3"
+BLOCKER_POOLED_NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v4"
 PREDICTION_CONTRACT = "cash-turn-start-cfv-full-stack-v1"
+BLOCKER_POOLED_CONTRACT = "cash-turn-start-cfv-full-stack-blocker-pooled-v1"
 MAX_FLAT_SOURCES = 5  # One bounded coverage extension; still reject nested merges.
 
 
