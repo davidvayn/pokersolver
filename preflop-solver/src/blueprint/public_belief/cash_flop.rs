@@ -3,7 +3,28 @@
 use super::*;
 use crate::cash_game::{Outcome, TerminalReason};
 
+pub mod trace;
+
 const SCHEMA: &str = "hu-cash-depth-limited-flop-pilot-v1";
+
+// Shared by inference and observation so captured ranges cannot drift from
+// the actual model query. The returned masses preserve raw chance weighting.
+fn turn_prediction_input(
+    game: &BlueprintConfig,
+    flop: &[u8],
+    state: &GameState,
+    reaches: &[Vec<f64>; 2],
+    turn: u8,
+) -> Option<(TurnRiverSolveConfig, [f64; 2], f64)> {
+    let (ranges, totals, joint_mass) = normalized_turn_ranges(reaches, turn)?;
+    let mut board = flop.to_vec();
+    board.push(turn);
+    Some((TurnRiverSolveConfig {
+        game: game.clone(),
+        state: PublicBeliefState::turn_start(board.try_into().expect("cash turn board"), state.actor, state.invested, ranges),
+        iterations: 2, averaging_delay: 0, river_refinement_iterations: 0, regret_matching_plus: false,
+    }, totals, joint_mass))
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CashFlopPilotInput {
@@ -296,22 +317,8 @@ impl FlopSolver {
         let game = &self.config.game;
         let inference = &self.value_inference[0];
         let chunks = self.card_workers.map(&turns, |turn| {
-            let (ranges, totals, _) = normalized_turn_ranges(reaches, *turn)?;
-            let mut board = flop.clone();
-            board.push(*turn);
-            let input = TurnRiverSolveConfig {
-                game: game.clone(),
-                state: PublicBeliefState::turn_start(
-                    board.try_into().expect("cash turn board"),
-                    state.actor,
-                    state.invested,
-                    ranges.clone(),
-                ),
-                iterations: 2,
-                averaging_delay: 0,
-                river_refinement_iterations: 0,
-                regret_matching_plus: false,
-            };
+            let (input, totals, _) = turn_prediction_input(game, flop, state, reaches, *turn)?;
+            let ranges = &input.state.ranges;
             let own = inference
                 .predict_cash(&input)
                 .expect("validated cash leaf; no fallback");
@@ -416,6 +423,15 @@ pub fn solve(
     input: CashFlopPilotInput,
     network: PublicValueNetwork,
 ) -> Result<CashFlopPilotSolution, String> {
+    let (mut solver, input_sha256) = prepare_solver(input, network)?;
+    solver.train_frozen_public_chance_pairs()?;
+    solver.finish_cash_flop(input_sha256)
+}
+
+fn prepare_solver(
+    input: CashFlopPilotInput,
+    network: PublicValueNetwork,
+) -> Result<(FlopSolver, String), String> {
     input.validate()?;
     network.validate()?;
     network.validate_cash_game(&input.game)?;
@@ -429,7 +445,7 @@ pub fn solve(
                 .map_err(|e| e.to_string())?
         )
     );
-    let mut solver = FlopSolver::new_impl(
+    let solver = FlopSolver::new_impl(
         FlopResolveConfig {
             game: input.game,
             state: input.state,
@@ -443,15 +459,14 @@ pub fn solve(
         },
         true,
     )?;
-    solver.train_frozen_public_chance_pairs()?;
-    solver.finish_cash_flop(input_sha256)
+    Ok((solver, input_sha256))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fixture() -> (CashFlopPilotInput, PublicValueNetwork) {
+    pub(super) fn fixture() -> (CashFlopPilotInput, PublicValueNetwork) {
         let mut game = BlueprintConfig::default();
         game.small_blind_bb = 0.4;
         game.effective_stack_bb = 20.0;
