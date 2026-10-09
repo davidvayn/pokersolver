@@ -333,6 +333,45 @@ Main release tests pass **464 / 60 ignored**, clean publishing tests **460 / 59 
 
 The next bounded comparison changes **family coverage alone**. Preselect source-order seed-1013 roots 4 through 11, disjoint from every original corpus and inspected diagnostic family, before looking at new targets. Capture at most four current queries per root under the original MSE-7101 proposer, rounds 1 / 16, 32 flop updates. Match each with the same board, pot and public branch under the final-average ranges. Retain only pairs whose two inputs are new; no missing state is invented. Solve at most 64 new 64-update references with two independent native processes. Retain the previous eight matched additions as a prefix inside one combined addition parent, keeping at most five flat lineage parents and **207 total contexts**. Fit seeds 7101 / 7102 serially per arm using the unchanged architecture, MSE, optimizer, 240 steps, split seed 937 and original tuning/holdout families. Judge both seeds on the same separate current-belief diagnostic roots and original holdout before any action comparison or longer run. The hypothesis follows ReBeL's need for accuracy on intermediate-iteration beliefs, not just final-policy leaves; its zero-sum guarantee does not transfer to this raked game. [ReBeL Sections 5.2 and Appendix I](https://arxiv.org/html/2007.13544v2)
 
+### Broader-family results and deployment-distribution check (October 9)
+
+The predeclared extension completed all eight additional families, 32 matched input pairs and 64 new references. Both arms have **207 contexts**. At unchanged 240-step budgets, current-belief supervision improves every one of the eight separate diagnostic states against the corresponding seed's average-range control.
+
+| Arm | Seed | Original holdout RMSE | Separate current-belief RMSE | 90/10 mixture diagnostic |
+| --- | --- | --- | --- | --- |
+| Average controls | 7101 | 0.6212bb | 1.2993bb | 1.3648bb |
+| Current beliefs | 7101 | 0.7285bb | 0.8915bb | 0.9440bb |
+| Average controls | 7102 | 0.7732bb | 1.6183bb | 1.7142bb |
+| Current beliefs | 7102 | 0.6138bb | 0.9989bb | 1.0391bb |
+
+Separate-board actual-joint-reach error improves **31.4% / 38.3%** against matched controls, and **37.6% / 31.7%** against the previous 175-context current-belief fits. Original holdout remains a trade-off, especially seed 7101 versus the original 167-context MSE baseline (0.5597bb). This is credible distribution-specific improvement, not a qualified overall candidate. The complete capture/reference/four-fit/evaluation sequence took **895 seconds**, peaked at **6.8GB** process footprint and reported no swaps. Native/Python parity is below 0.000013bb. Report SHA-256: `42deba5fb84d877a86ccfe58e02d74aac07bbc25a96b0bddc68c5f8e1fb6c7bc`.
+
+An additional bounded action comparison runs both 207-context arms/seeds for 32 updates on diagnostic flop roots 2 / 3 only, with two processes. These families remain excluded from fitting. Results:
+
+| Diagnostic root | Original 167 primary agreement | 207 current primary agreement | 207 current action MAE | 207 current maximum aggregate delta |
+| --- | --- | --- | --- | --- |
+| 2 | 90.48% | 97.18% | 5.14pp | 11.27pp |
+| 3 | 86.00% | 98.20% | 2.68pp | 2.35pp |
+
+Ranking agreement improves, but root 2 still has substantial mixed-frequency disagreement and action-value sensitivity. These are conditional value-seed comparisons under the same deterministic solver, **not** independent full-hand policy seeds or passing release gates. Each policy's EV estimates still use its own unqualified continuation network. Eight solves took **237 seconds**. Report SHA-256: `fbb80e7bd1ef50bcf029833c30f31bdf25f34e91635d27af60278339be813079`.
+
+To test whether the apparent value gains survive the changed policy, 16 fresh 64-update references were generated on the current students' **own final-average leaf ranges**, retaining all eight previously selected diagnostic board/branch proposals per student. Actual-joint-reach RMSE is **1.3475bb / 1.3409bb** for each student's own predictions. On the very same inputs, the corresponding original 167 students yield **1.5930bb / 1.5479bb**, but the corresponding 207 average-control students yield **1.3883bb / 1.3374bb**. Thus improvements against the old students survive partially; the large fixed-current-belief advantage does not transfer consistently to updated average-policy leaves. Maximum conditional teacher NashConv is 0.0799bb, not a full-game bound. This diagnostic took **51 seconds**. Report SHA-256: `8b97acfa1c950499cc5cc1fe05629eccfba8374d09d3c49aedd0a3cd09952b01`.
+
+The next cheap control mixes the existing 40 current and 40 average additions, keeping 167 original states, the same split and 240 steps. The resulting **247-context** corpus includes **no diagnostic-family labels** and needs no additional native references. It does not consistently repair the trade-off:
+
+| Mixed seed | Original holdout | Fixed current-belief diagnostic | Current-7101 own-leaf cohort | Current-7102 own-leaf cohort |
+| --- | --- | --- | --- | --- |
+| 7101 | 0.7703bb | 1.1068bb | 1.4200bb | 1.2802bb |
+| 7102 | 0.9223bb | 1.2908bb | 1.1317bb | 1.1135bb |
+
+One mixed seed fits updated-average inputs better, but original holdout worsens in both and current-belief accuracy regresses relative to the 207 current arm. No mixed model is promoted or extended. Two fits plus evaluation took **249 seconds**, peak footprint **7.6GB**, no swaps. Report SHA-256: `a85010e979df3e963dc988fdc7bca384accf5ee7cb8e2309a2b3d82ea7cac823`.
+
+Before spending on repeated architecture fits, frozen earlier blocker-pooled and baseline-conditioned pairs were tested on the same three new cohorts. Their own-leaf errors remain approximately **1.52–1.66bb**, versus the newer current students' approximately 1.34bb. This is legacy-model triage, not a matched architecture experiment; it does not support retraining those variants immediately. Report SHA-256: `6ea119b254596ab584511f2b6fcd6ec5615e800c064459f777d29427d294c858`.
+
+The diagnosed remaining issue is **policy-induced belief-distribution shift**, with original-domain regressions and mixed-frequency instability still present. All cash models stay inactive. Full-hand deviation evaluation, cash preflop/continuation routing, EV confidence, coverage and serving qualification remain outstanding; none of these development results establishes lower full-game exploitability.
+
+The next matched control refreshes only the **40 training-family final-average endpoints** under the newer frozen 207 current policies, using alternating proposer seeds by source root index. Keep their existing boards, pots and public betting branches; leave the 40 old current endpoints and 167 original states unchanged. Retain the same **247-context count**, 240 steps, seeds, architecture, optimizer and split. Capture ten training-family 32-update policies (source roots 0 / 1 / 4–11) with at most two processes, then compute at most 40 new 64-update references. Diagnostic roots 2 / 3 and their new own-leaf references remain evaluation-only. This tests a bounded replay-buffer refresh without adding architecture, longer iteration budgets, or paid compute. ReBeL motivates updating belief examples as self-play policies change, but this partial refresh does not inherit its zero-sum safety result.
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
