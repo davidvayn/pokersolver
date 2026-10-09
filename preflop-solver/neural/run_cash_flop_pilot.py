@@ -84,7 +84,7 @@ def generate(binary: Path, output: Path, root: dict, network: Path, rules_sha: s
         raise ValueError("cash flop cached solution lacks its immutable capture")
     result = json.loads(path.read_text())
     validate_solution(result,request["input"],request["value_network_sha256"],rules_sha)
-    return dict(path=str(path),root_sha256=root["root_sha256"],value_network_sha256=request["value_network_sha256"],
+    return dict(path=str(path),solution_sha256=sha(path),root_sha256=root["root_sha256"],value_network_sha256=request["value_network_sha256"],
                 native_binary_sha256=request["native_binary_sha256"],cache_hit=cached,elapsed_seconds=time.monotonic()-start)
 
 

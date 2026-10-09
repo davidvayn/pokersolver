@@ -12,6 +12,8 @@ import numpy as np
 
 from cash_profiles import PAYOFF_CONTRACT, rules_digest, equal_cash_investment_units
 from native_value_dataset import compatible_masses, legal_combos, identity_hash, family_split, board_family
+from cash_flop_leaves import leaf_input
+from cash_turn_roots import root_fingerprint
 
 SCHEMA = "hu-cash-turn-start-cfv-dataset-v1"
 LABEL_SCHEMA = "hu-cash-turn-river-continuation-values-v1"
@@ -121,13 +123,36 @@ def validate_dataset(source: dict) -> None:
                 or any(not isinstance(h,str) or re.fullmatch(r"[a-f0-9]{64}",h) is None for h in hashes)
                 or provenance.get("label_input_sha256") != [identity_hash(label["input"]) for label in source["labels"]]):
             raise ValueError("authentic cash public-reach lineage differs from captured label inputs")
+    leaves = source.get("flop_leaf_provenance")
+    if leaves is not None:
+        hashes = [leaves.get(key) for key in ("source_policy_sha256", "root_corpus_sha256", "flop_pair_report_sha256",
+                  "native_binary_sha256", "source_flop_value_network_sha256", "split_reference_sha256", "excluded_roots_sha256")]
+        if (provenance is not None or leaves.get("schema") != "hu-cash-frozen-flop-leaf-lineage-v1"
+                or leaves.get("kind") != "forced-frozen-flop-average-leaves"
+                or leaves.get("rules_sha256") != source["rules_sha256"] or leaves.get("split_seed") != 937
+                or len(leaves.get("rows", [])) != len(source["labels"])
+                or any(not isinstance(h, str) or re.fullmatch(r"[a-f0-9]{64}", h) is None for h in hashes)):
+            raise ValueError("invalid frozen-flop leaf lineage")
+        for row, label in zip(leaves["rows"], source["labels"]):
+            root = row["root"]
+            if (root["root_sha256"] != row["root_sha256"]
+                    or root_fingerprint(leaves["source_policy_sha256"], root) != row["root_sha256"]
+                    or root["solve_input"]["game"] != source["game"]
+                    or row["label_input_sha256"] != identity_hash(label["input"])
+                    or not isinstance(row.get("flop_solution_sha256"), str)
+                    or re.fullmatch(r"[a-f0-9]{64}", row["flop_solution_sha256"]) is None):
+                raise ValueError("frozen-flop leaf identities differ from captured inputs")
+            replayed = leaf_input(root, dict(strategies=row["branch_policy_rows"]), row["public_turn_proposal"],
+                                  row["branch_labels"], label["input"]["iterations"])
+            if replayed != label["input"]:
+                raise ValueError("frozen-flop leaf labels differ from public likelihood replay")
     inputs = [identity_hash(label["input"]) for label in source["labels"]]
     if len(set(inputs)) != len(inputs):
         raise ValueError("duplicate cash inputs are not independent data")
     merged = source.get("source_datasets")
     if merged is not None:
         version = merged.get("schema")
-        if (provenance is not None or version not in ("hu-cash-value-source-prefix-merge-v1","hu-cash-value-source-prefix-merge-v2")
+        if (provenance is not None or leaves is not None or version not in ("hu-cash-value-source-prefix-merge-v1","hu-cash-value-source-prefix-merge-v2")
                 or not isinstance(merged.get("sources"),list)
                 or not 2 <= len(merged["sources"]) <= 4
                 or (version == "hu-cash-value-source-prefix-merge-v1" and len(merged["sources"]) != 2)):
@@ -198,6 +223,7 @@ def extend_training_corpus(reference: dict, addition: dict, split_seed: int, spl
     if not rows: raise ValueError("cash extension supplies no new unheldout training contexts")
     source = copy.deepcopy(reference)
     source.pop("reach_provenance",None)
+    source.pop("flop_leaf_provenance",None)
     source["labels"].extend(copy.deepcopy(addition["labels"][i]) for i in rows)
     source["capture_sha256"].extend(addition["capture_sha256"][i] for i in rows)
     source["label_canonical_sha256"] = [identity_hash(label) for label in source["labels"]]
