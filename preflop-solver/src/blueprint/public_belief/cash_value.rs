@@ -4,12 +4,14 @@ use super::*;
 pub(super) const NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v2";
 pub(super) const POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v3";
 pub(super) const BLOCKER_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v4";
+pub(super) const BASELINE_CONDITIONED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v5";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
 const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-pooled-v1";
+const BASELINE_CONDITIONED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-baseline-conditioned-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
 fn is_cash_schema(schema: &str) -> bool {
-    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA)
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA)
 }
 
 /// Each query conditions on its own two cards, using raw opponent reaches.
@@ -80,7 +82,9 @@ impl PublicValueNetwork {
             || source.cash_rules != self.cash_rules
             || source.effective_stack_bb != self.target_scale_bb
             || self.payoff_contract.as_deref() != Some(PAYOFF)
-            || self.prediction_contract.as_deref() != Some(if self.schema == BLOCKER_POOLED_NETWORK_SCHEMA {
+            || self.prediction_contract.as_deref() != Some(if self.schema == BASELINE_CONDITIONED_NETWORK_SCHEMA {
+                BASELINE_CONDITIONED_CONTRACT
+            } else if self.schema == BLOCKER_POOLED_NETWORK_SCHEMA {
                 BLOCKER_POOLED_CONTRACT
             } else { CONTRACT })
             || !self.uses_exact_ranges
@@ -315,6 +319,40 @@ mod tests {
         assert!(network.validate().is_err(), "old compact schema cannot discard pooling");
         network.schema = "hu-public-belief-combo-value-network-v5".into();
         assert!(network.validate().is_err(), "cash pooling cannot enter the Home reader");
+    }
+
+    #[test]
+    fn cash_baseline_conditioned_head_uses_own_exact_payoff_without_removing_current_features() {
+        let (mut network, mut config) = fixture();
+        network.schema = BASELINE_CONDITIONED_NETWORK_SCHEMA.into();
+        network.prediction_contract = Some(BASELINE_CONDITIONED_CONTRACT.into());
+        assert!(network.validate().is_err(), "new cash input cannot relabel an old head");
+        network.head[0].input_size = 5;
+        network.head[0].weights = vec![0.0, 0.0, 0.0, 0.0, 0.5];
+        network.validate().unwrap();
+        let absent = Combo::new(51,50).key();
+        config.state.ranges[0][absent] = 0.0;
+        let normalized = network.validated_cash_turn(&config).unwrap();
+        let baseline = network.cash_checkdown_baseline(&normalized.board,normalized.actor,normalized.invested_bb,&normalized.ranges);
+        let actual = network.predict_cash_turn(&config).unwrap();
+        for p in 0..2 {
+            for combo in all_combos() {
+                let key = combo.key();
+                if combo.cards().iter().any(|c| normalized.board.contains(c)) {
+                    assert_eq!(actual[p][key],0.0);
+                } else {
+                    let expected = baseline[p][key] + 4.0 * (-0.1 + 0.5 * baseline[p][key] / 20.0);
+                    assert!((actual[p][key]-expected).abs() < 1e-6);
+                }
+            }
+        }
+        assert!(actual[0][absent].abs() > 0.01);
+        network.schema = POOLED_NETWORK_SCHEMA.into();
+        network.prediction_contract = Some(CONTRACT.into());
+        assert!(network.validate().is_err(),"cash input must not be dropped on a silent downgrade");
+        network.schema = "hu-public-belief-combo-value-network-v5".into();
+        network.prediction_contract = Some("native-turn-cfv-full-stack-v1".into());
+        assert!(network.validate().is_err(),"cash own-payoff input cannot enter Home inference");
     }
 
     #[test]

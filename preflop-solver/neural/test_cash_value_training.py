@@ -12,6 +12,24 @@ from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SC
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_baseline_conditioned_head_retains_original_inputs_and_initial_parameters(self):
+        mx.random.seed(7171); old = OwnComboValueNetwork("wide-pooled")
+        mx.random.seed(7171); added = OwnComboValueNetwork("wide-baseline-conditioned")
+        for left,right in ((old.context_tower,added.context_tower),(old.query_tower,added.query_tower)):
+            for a,b in zip(left.layers,right.layers):
+                if hasattr(a,"weight"):
+                    np.testing.assert_array_equal(np.array(a.weight),np.array(b.weight))
+                    np.testing.assert_array_equal(np.array(a.bias),np.array(b.bias))
+        np.testing.assert_array_equal(np.array(old.head.layers[0].weight),np.array(added.head.layers[0].weight)[:,:-1])
+        self.assertTrue((np.array(added.head.layers[0].weight)[:,-1] == 0).all())
+        rules=profile_rules("nl25"); source=dict(game=dict(cash_rules=rules),rules_sha256=rules_digest(rules))
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"network.json"; export_cash_model(added,path,7171,source,"a"*64)
+            payload=json.loads(path.read_text())
+            self.assertEqual(payload["schema"],"hu-cash-public-belief-combo-value-network-v5")
+            self.assertEqual(payload["predictionContract"],"cash-turn-start-cfv-full-stack-baseline-conditioned-v1")
+            self.assertEqual(payload["head"][0]["inputSize"],old.head.layers[0].weight.shape[-1]+1)
+
     def test_exact_runout_features_are_explicit_in_weights_and_reject_unknown_inputs(self):
         rules=profile_rules("nl25"); source=dict(game=dict(cash_rules=rules),rules_sha256=rules_digest(rules))
         with tempfile.TemporaryDirectory() as directory:

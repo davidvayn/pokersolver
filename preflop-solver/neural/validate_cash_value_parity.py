@@ -8,7 +8,8 @@ import numpy as np
 import mlx.core as mx
 from train_cash_value_network import OwnComboValueNetwork, CASH_FEATURE_SCHEMAS
 from train_cash_value_network import feature_arrays
-from cash_value_dataset import NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_CONTRACT
+from cash_value_dataset import (NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_NETWORK_SCHEMA,
+    BLOCKER_POOLED_CONTRACT, BASELINE_CONDITIONED_NETWORK_SCHEMA, BASELINE_CONDITIONED_CONTRACT)
 from cash_range_pooling import numpy_card_removed_opponent_pool
 from train_public_value_network import RANGE_POOL_EPSILON
 from validate_public_value_parity import dense_forward
@@ -20,7 +21,9 @@ def cash_architecture(model):
     if ((model.get("schema") == NETWORK_SCHEMA and architecture in ("compact", "wide"))
             or (model.get("schema") == POOLED_NETWORK_SCHEMA and architecture == "wide-pooled")
             or (model.get("schema") == BLOCKER_POOLED_NETWORK_SCHEMA and architecture == "wide-blocker-pooled"
-                and model.get("predictionContract") == BLOCKER_POOLED_CONTRACT)):
+                and model.get("predictionContract") == BLOCKER_POOLED_CONTRACT)
+            or (model.get("schema") == BASELINE_CONDITIONED_NETWORK_SCHEMA and architecture == "wide-baseline-conditioned"
+                and model.get("predictionContract") == BASELINE_CONDITIONED_CONTRACT)):
         return architecture
     raise ValueError("cash parity requires matching versioned architecture and own-payoff schema")
 
@@ -32,7 +35,7 @@ def python_predictions(source, model):
     embeddings = dense_forward(contexts,model["contextTower"])
     combo_embeddings = dense_forward(queries,model["queryTower"])
     expanded = np.broadcast_to(embeddings[:,:,None,:],combo_embeddings.shape)
-    if architecture in ("wide-pooled","wide-blocker-pooled"):
+    if architecture in ("wide-pooled","wide-blocker-pooled","wide-baseline-conditioned"):
         reach = weights / np.maximum(weights.sum(axis=2,keepdims=True),RANGE_POOL_EPSILON)
         pooled = np.sum(combo_embeddings * reach[:,:,:,None],axis=2)
         own = np.broadcast_to(pooled[:,:,None,:],combo_embeddings.shape)
@@ -41,6 +44,8 @@ def python_predictions(source, model):
         combined = np.concatenate((expanded,own,opponent,combo_embeddings),axis=-1)
     else:
         combined = np.concatenate((expanded,combo_embeddings),axis=-1)
+    if architecture == "wide-baseline-conditioned":
+        combined = np.concatenate((combined,baselines[:,:,:,None]/20.),axis=-1)
     residual = dense_forward(combined,model["head"]).reshape((-1,2,1326))
     return OwnPayoffValueProjection(baselines + residual * scales[:,None,None],legal.astype(bool)).values
 
