@@ -28,8 +28,10 @@ from train_public_value_network import (SharedComboValueNetwork, build_features,
 
 
 class OwnComboValueNetwork(SharedComboValueNetwork):
-    def __init__(self):
-        super().__init__(True, "compact", "pot", FEATURE_SCHEMA_BOARD_RELATIVE)
+    def __init__(self, architecture="compact"):
+        if architecture not in ("compact", "wide", "wide-pooled"):
+            raise ValueError("cash pilot architecture must be compact, wide, or wide-pooled")
+        super().__init__(True, architecture, "pot", FEATURE_SCHEMA_BOARD_RELATIVE)
         # The exact checkdown is already a meaningful reference. Start the
         # learned future-betting correction at zero, not random multi-bb EVs.
         self.head.layers[-1].weight = mx.zeros_like(self.head.layers[-1].weight)
@@ -81,7 +83,8 @@ def feature_arrays(source: dict):
 def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1.):
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
-    payload.update(schema=cash_values.NETWORK_SCHEMA, cashRules=source["game"]["cash_rules"],
+    payload.update(schema=cash_values.POOLED_NETWORK_SCHEMA if model.pools_exact_ranges else cash_values.NETWORK_SCHEMA,
+                   cashRules=source["game"]["cash_rules"],
                    sourceGame=source["game"], baseline="exact-own-payoff-forced-turn-checkdown-44-compatible-rivers",
                    rulesSha256=source["rules_sha256"], payoffContract=PAYOFF_CONTRACT,
                    predictionContract=cash_values.PREDICTION_CONTRACT,
@@ -157,13 +160,15 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1.):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact"):
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
         raise ValueError("cash accounting loss weight must be finite and in 0..100")
     if not np.isfinite(flop_leaf_loss_weight) or not 0 < flop_leaf_loss_weight <= 1:
         raise ValueError("forced flop leaf loss weight must be finite in (0,1]")
+    if architecture not in ("compact", "wide", "wide-pooled"):
+        raise ValueError("cash pilot architecture must be compact, wide, or wide-pooled")
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -176,7 +181,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
     contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source)
-    mx.random.seed(seed); model = OwnComboValueNetwork(); optimizer = optim.Adam(learning_rate=1e-3)
+    mx.random.seed(seed); model = OwnComboValueNetwork(architecture); optimizer = optim.Adam(learning_rate=1e-3)
     tensors = [mx.array(v) for v in (contexts, queries, weights, scales, baselines, legal)]
     target = mx.array(targets); loss_weight = mx.array(loss_weights)
     context_weight = mx.array(context_weights)
@@ -233,7 +238,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     network_path = output / "value-network.json"
     export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
-    report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed,
+    report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
               "steps":steps,"selected_step":best_step,"training_initial_mse_bb":initial_mse,
               "split_seed":split_seed,
@@ -261,8 +266,9 @@ def main():
     parser.add_argument("--split-seed", type=int, help="Pin identical flop-family splits across independent training seeds")
     parser.add_argument("--split-reference",type=Path,help="Keep tuning/holdout families unchanged when adding training contexts")
     parser.add_argument("--flop-leaf-loss-weight",type=float,default=1.,help="Training weight for captured forced-coverage leaf parents; does not change beliefs or targets")
+    parser.add_argument("--architecture",choices=("compact","wide","wide-pooled"),default="compact")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture), indent=2))
 
 
 if __name__ == "__main__": main()

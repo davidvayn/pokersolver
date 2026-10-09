@@ -2,12 +2,17 @@
 use super::*;
 
 pub(super) const NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v2";
+pub(super) const POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v3";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
+fn is_cash_schema(schema: &str) -> bool {
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA)
+}
+
 impl PublicValueNetwork {
     pub(super) fn validate_cash_contract(&self) -> Result<(), String> {
-        if self.schema != NETWORK_SCHEMA {
+        if !is_cash_schema(&self.schema) {
             if self.cash_rules.is_some()
                 || self.rules_sha256.is_some()
                 || self.payoff_contract.is_some()
@@ -53,7 +58,7 @@ impl PublicValueNetwork {
 
     pub(super) fn validate_cash_game(&self, game: &BlueprintConfig) -> Result<(), String> {
         game.validate_cash_rules()?;
-        if self.schema != NETWORK_SCHEMA
+        if !is_cash_schema(&self.schema)
             || game.cash_rules.is_none()
             || self.cash_rules != game.cash_rules
             || self.target_scale_bb != game.effective_stack_bb
@@ -167,8 +172,7 @@ impl PublicValueNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn cash_contract_rejects_legacy_weights_and_preserves_negative_house_share() {
+    fn fixture() -> (PublicValueNetwork, TurnRiverSolveConfig) {
         let mut network = super::super::tests::zero_shared_value_network();
         let mut game = BlueprintConfig::default();
         game.small_blind_bb = 0.4;
@@ -201,6 +205,12 @@ mod tests {
             river_refinement_iterations: 0,
             regret_matching_plus: false,
         };
+        (network, config)
+    }
+
+    #[test]
+    fn cash_contract_rejects_legacy_weights_and_preserves_negative_house_share() {
+        let (network, config) = fixture();
         let values = network.predict_cash_turn(&config).unwrap();
         let mut roundtrip = config.clone();
         roundtrip.state.invested_bb[1] = f64::from_bits(2.0f64.to_bits() - 1);
@@ -237,5 +247,70 @@ mod tests {
             .rake
             .rate_basis_points = 0;
         assert!(network.predict_cash_turn(&wrong).is_err());
+    }
+
+    #[test]
+    fn cash_pooled_schema_requires_its_distinct_head_layout_and_rules_reader() {
+        let (mut network, config) = fixture();
+        network.schema = POOLED_NETWORK_SCHEMA.into();
+        assert!(network.validate().is_err(), "a pooled schema cannot relabel a compact head");
+        network.head[0].input_size = 4;
+        network.head[0].weights = vec![0.0; 4];
+        network.validate().unwrap();
+        network.validate_cash_game(&config.game).unwrap();
+        network.schema = NETWORK_SCHEMA.into();
+        assert!(network.validate().is_err(), "old compact schema cannot discard pooling");
+        network.schema = "hu-public-belief-combo-value-network-v5".into();
+        assert!(network.validate().is_err(), "cash pooling cannot enter the Home reader");
+    }
+
+    #[test]
+    fn cash_pooled_predictions_match_explicit_joint_reach_embeddings_for_zero_own_reach_hands() {
+        let (mut network, mut config) = fixture();
+        network.schema = POOLED_NETWORK_SCHEMA.into();
+        network.query_tower[0].weights[94] = 0.5;
+        network.head[0].input_size = 4;
+        network.head[0].weights = vec![0.0, 0.025, 0.075, 0.05];
+        network.validate().unwrap();
+        let absent = Combo::new(51, 50).key();
+        config.state.ranges[0][absent] = 0.0;
+        for combo in all_combos() {
+            if combo.cards()[0] / 4 >= 10 {
+                config.state.ranges[1][combo.key()] *= 3.0;
+            }
+        }
+        for range in &mut config.state.ranges {
+            let total = range.iter().sum::<f64>();
+            for v in range { *v /= total; }
+        }
+        let state = &config.state;
+        let combos = all_combos();
+        let (_, queries) = shared_combo_features(&state.board, state.actor, state.invested_bb,
+            &state.ranges, &combo_conflicts(), 20.0, network.feature_schema.as_deref().unwrap());
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|p|
+            compatible_masses_from_card_marginals(&combos, &state.ranges[1-p]));
+        let pools: [f64; 2] = std::array::from_fn(|p| {
+            let weights = state.ranges[p].iter().zip(&masses[p]).map(|(r,m)| r*m).collect::<Vec<_>>();
+            weights.iter().zip(&queries[p]).map(|(w,q)| w * (q[94] * 0.5) as f64).sum::<f64>()
+                / weights.iter().sum::<f64>()
+        });
+        let baseline = network.cash_checkdown_baseline(&state.board, state.actor, state.invested_bb, &state.ranges);
+        let actual = network.predict_cash_turn(&config).unwrap();
+        let mut aggregate = 0.0;
+        for p in 0..2 {
+            for combo in &combos {
+                let key = combo.key();
+                if combo.cards().iter().any(|c| state.board.contains(c)) {
+                    assert_eq!(actual[p][key], 0.0);
+                    continue;
+                }
+                let residual = -0.1 + 0.025*pools[p] + 0.075*pools[1-p]
+                    + 0.05*(queries[p][key][94]*0.5) as f64;
+                assert!((actual[p][key] - baseline[p][key] - residual*4.0).abs() < 1e-6);
+                aggregate += state.ranges[p][key]*masses[p][key]*actual[p][key];
+            }
+        }
+        assert!(actual[0][absent].abs() > 0.01, "zero own reach must not censor a query");
+        assert!(aggregate < -0.1, "pooled cash values must not be projected to zero sum");
     }
 }
