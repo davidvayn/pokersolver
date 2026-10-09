@@ -2,6 +2,7 @@
 //! Scalar frozen policies factor their public action likelihoods by seat.
 //! Exact blockers are retained by the compatible joint belief downstream.
 use super::super::public_belief::TurnRiverSolveConfig;
+use super::super::public_belief::cash_flop::CashFlopPilotInput;
 use super::*;
 
 pub struct CashTurnRootSampleConfig {
@@ -14,16 +15,16 @@ pub struct CashTurnRootSampleConfig {
 }
 
 #[derive(Serialize)]
-struct CashTurnRoot {
+struct CashPublicRoot<T> {
     root_sha256: String,
     source_deal_index: u64,
     source_public_actions: Vec<TrajectoryAction>,
     compatible_joint_mass: f64,
-    solve_input: TurnRiverSolveConfig,
+    solve_input: T,
 }
 
 #[derive(Serialize)]
-pub struct CashTurnRootCorpus {
+pub struct CashPublicRootCorpus<T> {
     schema: &'static str,
     root_hash_schema: &'static str,
     validation_status: &'static str,
@@ -31,9 +32,12 @@ pub struct CashTurnRootCorpus {
     policy_sha256: String,
     sampling_seed: u64,
     sampled_deals: u64,
-    roots: Vec<CashTurnRoot>,
+    roots: Vec<CashPublicRoot<T>>,
     limitations: Vec<&'static str>,
 }
+
+pub type CashTurnRootCorpus = CashPublicRootCorpus<TurnRiverSolveConfig>;
+pub type CashFlopRootCorpus = CashPublicRootCorpus<CashFlopPilotInput>;
 
 /// Synthetic hidden cards only make a well-formed Deal for a known acting
 /// combo. The encoder sees only that combo and the board already revealed.
@@ -57,14 +61,18 @@ fn public_reaches(
     board: &[u8],
     trajectory: &[TrajectoryAction],
 ) -> Result<[Vec<f64>; 2], String> {
+    let target_street = match board.len() {
+        3 => Street::Flop,
+        4 => Street::Turn,
+        _ => return Err("public cash reaches require three or four revealed cards".into()),
+    };
     if game.cash_rules.is_none()
-        || board.len() != 4
         || board.iter().any(|c| *c >= 52)
-        || board.iter().collect::<BTreeSet<_>>().len() != 4
+        || board.iter().collect::<BTreeSet<_>>().len() != board.len()
         || trajectory.len() > MAX_TRAJECTORY_ACTIONS
     {
         return Err(
-            "public cash reaches require four distinct revealed cards and pinned rules".into(),
+            "public cash reaches require distinct revealed cards and pinned rules".into(),
         );
     }
     let mut state = GameState::initial(game);
@@ -88,13 +96,13 @@ fn public_reaches(
         line.push((state, actions, selected));
         state = next;
     }
-    if state.street != Street::Turn
+    if state.street != target_street
         || state.terminal.is_some()
         || state.street_invested != [0.; 2]
         || state.checks != 0
         || state.aggressions != 0
     {
-        return Err("cash reach line does not end at a fresh live turn".into());
+        return Err("cash reach line does not end at the captured fresh live street".into());
     }
     let mut ranges = [vec![0.; COMBO_COUNT], vec![0.; COMBO_COUNT]];
     for actor in 0..2 {
@@ -151,21 +159,19 @@ fn compatible_joint_mass(ranges: &[Vec<f64>; 2]) -> f64 {
 fn root_fingerprint(
     policy_sha256: &str,
     actions: &[TrajectoryAction],
-    input: &TurnRiverSolveConfig,
+    input: &impl Serialize,
 ) -> Result<String, Box<dyn Error>> {
-    let range_hashes: Vec<String> = input
-        .state
-        .ranges
-        .iter()
-        .map(|range| {
-            let mut hash = Sha256::new();
-            for weight in range {
-                hash.update(weight.to_le_bytes());
-            }
-            format!("{:x}", hash.finalize())
-        })
-        .collect();
     let mut normalized_input = serde_json::to_value(input)?;
+    let range_hashes: Vec<String> = normalized_input["state"]["ranges"]
+        .as_array().ok_or("cash root lacks ranges")?.iter()
+        .map(|range| -> Result<String, Box<dyn Error>> {
+            let mut hash = Sha256::new();
+            for weight in range.as_array().ok_or("cash root range is not an array")? {
+                hash.update(weight.as_f64().ok_or("cash root weight is not a float")?.to_le_bytes());
+            }
+            Ok(format!("{:x}", hash.finalize()))
+        })
+        .collect::<Result<_, _>>()?;
     normalized_input["state"]["ranges"] = serde_json::json!(range_hashes);
     // Sorted JSON keys plus little-endian f64 range hashes avoid cross-language
     // exponent-formatting ambiguity for small public reach probabilities.
@@ -181,14 +187,26 @@ fn sample_with_policy(
     config: CashTurnRootSampleConfig,
     policy: FrozenPolicy,
 ) -> Result<CashTurnRootCorpus, Box<dyn Error>> {
+    sample_public_roots(config, policy, Street::Turn, "hu-cash-authentic-turn-roots-v1", |game, state, iterations| {
+        TurnRiverSolveConfig { game, state, iterations, averaging_delay: 0,
+            river_refinement_iterations: 0, regret_matching_plus: false }
+    })
+}
+
+fn sample_public_roots<T: Serialize>(
+    config: CashTurnRootSampleConfig, policy: FrozenPolicy, target_street: Street,
+    schema: &'static str,
+    input: impl Fn(BlueprintConfig, PublicBeliefState, u64) -> T,
+) -> Result<CashPublicRootCorpus<T>, Box<dyn Error>> {
     config.game.validate()?;
     if config.game.cash_rules.is_none()
         || config.game.effective_stack_bb != 20.
         || !(1..=64).contains(&config.roots)
         || !(1..=10_000).contains(&config.max_deals)
         || !(2..=128).contains(&config.solve_iterations)
+        || (target_street == Street::Flop && config.solve_iterations > 32)
     {
-        return Err("cash turn preflight requires 20bb, 1..64 roots, <=10000 deals and 2..128 solve updates".into());
+        return Err("cash public-root preflight requires 20bb, 1..64 roots, <=10000 deals and 2..128 turn or 2..32 flop updates".into());
     }
     policy.bundle.validate_game(&config.game)?;
     if !matches!(policy.bundle.strategy_transform, StrategyTransform::Softmax)
@@ -205,7 +223,7 @@ fn sample_with_policy(
         let deal = Deal::sample(&mut rng);
         let mut state = GameState::initial(&config.game);
         for _ in 0..MAX_TRAJECTORY_ACTIONS {
-            if state.terminal.is_some() || state.street == Street::Turn {
+            if state.terminal.is_some() || state.street == target_street {
                 break;
             }
             let actions = state.legal_actions(&config.game);
@@ -213,10 +231,10 @@ fn sample_with_policy(
                 cash_evaluation::checked_strategy(&policy, &state, &deal, &actions, &config.game)?;
             state = state.apply(&actions[sample_index(&mix, &mut rng)], &config.game);
         }
-        if state.terminal.is_some() || state.street != Street::Turn {
+        if state.terminal.is_some() || state.street != target_street {
             continue;
         }
-        let board: [u8; 4] = deal.board[..4].try_into().unwrap();
+        let board = deal.board[..target_street.board_len()].to_vec();
         let ranges = public_reaches(&policy, &config.game, &board, &state.trajectory)?;
         let joint = compatible_joint_mass(&ranges);
         if !joint.is_finite() || joint <= 0. {
@@ -225,39 +243,44 @@ fn sample_with_policy(
         let mut game = config.game.clone();
         game.iterations = 2;
         game.averaging_delay = 0;
-        let input = TurnRiverSolveConfig {
-            game,
-            state: PublicBeliefState::turn_start(board, state.actor, state.invested, ranges),
-            iterations: config.solve_iterations,
-            averaging_delay: 0,
-            river_refinement_iterations: 0,
-            regret_matching_plus: false,
+        let public = if target_street == Street::Turn {
+            PublicBeliefState::turn_start(board.try_into().unwrap(), state.actor, state.invested, ranges)
+        } else {
+            PublicBeliefState::flop_start(board.try_into().unwrap(), state.actor, state.invested, ranges)
         };
-        let root_sha256 = root_fingerprint(&policy.bundle_sha256, &state.trajectory, &input)?;
+        let solve_input = input(game, public, config.solve_iterations);
+        let root_sha256 = root_fingerprint(&policy.bundle_sha256, &state.trajectory, &solve_input)?;
         if !seen.insert(root_sha256.clone()) {
             continue;
         }
-        roots.push(CashTurnRoot {
+        roots.push(CashPublicRoot {
             root_sha256,
             source_deal_index: index,
             source_public_actions: state.trajectory,
             compatible_joint_mass: joint,
-            solve_input: input,
+            solve_input,
         });
         if roots.len() == config.roots {
             break;
         }
     }
     if roots.len() != config.roots {
-        return Err("cash turn sampling exhausted its deal budget; no partial corpus".into());
+        return Err("cash root sampling exhausted its deal budget; no partial corpus".into());
     }
-    Ok(CashTurnRootCorpus { schema: "hu-cash-authentic-turn-roots-v1", root_hash_schema: "hu-cash-public-range-root-v1", validation_status: "research_only",
+    Ok(CashPublicRootCorpus { schema, root_hash_schema: "hu-cash-public-range-root-v1", validation_status: "research_only",
         rules_sha256: config.game.cash_rules.as_ref().unwrap().sha256()?,
         policy_sha256: policy.bundle_sha256, sampling_seed: config.seed, sampled_deals, roots,
-        limitations: vec!["Conditional authentic turn-start distribution under one frozen research policy, not full serving coverage",
+        limitations: vec!["Conditional authentic fresh-street distribution under one frozen research policy, not full serving coverage",
             "Public action likelihoods factor by seat; exact compatible joint card removal remains required",
             "Fresh turn references re-solve the stated subgame; they do not evaluate the earlier frozen continuation or provide a safety guarantee",
             "No website activation, unrestricted exploitability certificate, or accepted continuation oracle"] })
+}
+
+pub fn sample_cash_flop_roots(config: CashTurnRootSampleConfig) -> Result<CashFlopRootCorpus, Box<dyn Error>> {
+    let policy = FrozenPolicy::load(&config.network_path)?;
+    sample_public_roots(config, policy, Street::Flop, "hu-cash-authentic-flop-roots-v1", |game, state, iterations| {
+        CashFlopPilotInput { game, state, iterations, averaging_delay: 0, threads: 2 }
+    })
 }
 
 pub fn sample_cash_turn_roots(
@@ -414,5 +437,31 @@ mod tests {
         insufficient.roots = 64;
         insufficient.max_deals = 1;
         assert!(sample_with_policy(insufficient, policy(&game, false)).is_err());
+    }
+
+    #[test]
+    fn flop_capture_stops_before_future_cards_and_uses_preflop_reach_only() {
+        let game = cash_training_tests::config().game;
+        let board = [8, 13, 22];
+        let line = passive_line(&game)[..2].to_vec();
+        let ranges = public_reaches(&policy(&game, false), &game, &board, &line).unwrap();
+        for p in 0..2 {
+            for combo in all_combos() {
+                let expected = if combo.cards().iter().any(|card| board.contains(card)) { 0.0 } else { 1.0 / 1176.0 };
+                assert!((ranges[p][combo.key()] - expected).abs() < 1e-12);
+            }
+        }
+        assert!(public_reaches(&policy(&game, false), &game, &board, &passive_line(&game)).is_err());
+        let build = |game, state, iterations| CashFlopPilotInput { game, state, iterations, averaging_delay: 0, threads: 2 };
+        let config = || CashTurnRootSampleConfig { game: game.clone(), network_path: "unused".into(),
+            seed: 953, roots: 2, max_deals: 2000, solve_iterations: 2 };
+        let first = sample_public_roots(config(), policy(&game, true), Street::Flop, "hu-cash-authentic-flop-roots-v1", build).unwrap();
+        let second = sample_public_roots(config(), policy(&game, true), Street::Flop, "hu-cash-authentic-flop-roots-v1", build).unwrap();
+        assert_eq!(serde_json::to_vec(&first).unwrap(), serde_json::to_vec(&second).unwrap());
+        for root in first.roots {
+            root.solve_input.validate().unwrap();
+            assert!(root.source_public_actions.iter().all(|a| a.street == Street::Preflop));
+            assert_eq!(root.solve_input.state.board.len(), 3);
+        }
     }
 }

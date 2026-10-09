@@ -15,7 +15,9 @@ from native_value_dataset import compatible_masses, legal_combos
 HASH_SCHEMA = "hu-cash-public-range-root-v1"
 
 
-def validate_public_money(actions: list[dict], investments: list[float]) -> None:
+def validate_public_money(actions: list[dict], investments: list[float], target_street: str = "turn") -> None:
+    if target_street not in ("flop", "turn"):
+        raise ValueError("public capture supports fresh flop or turn only")
     def cents(value):
         if type(value) not in (int,float) or not math.isfinite(value) or value < 0 or abs(value*25-round(value*25)) > 1e-8:
             raise ValueError("public line uses invalid cent money")
@@ -51,8 +53,8 @@ def validate_public_money(actions: list[dict], investments: list[float]) -> None
             if committed[0] != committed[1]: raise ValueError("closed street has unequal commitments")
             street = "flop" if street == "preflop" else "turn"
             actor, bets, checks, aggressions = 1, [0,0], 0, 0
-    if street != "turn" or [cents(v) for v in investments] != committed:
-        raise ValueError("public prior line does not reach the captured turn commitments")
+    if street != target_street or [cents(v) for v in investments] != committed:
+        raise ValueError("public prior line does not reach the captured street commitments")
 
 
 def root_fingerprint(policy_sha256: str, root: dict) -> str:
@@ -64,11 +66,13 @@ def root_fingerprint(policy_sha256: str, root: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
-def validate_roots(source: dict, model: dict, weight_hash: str, profile: str) -> None:
+def validate_roots(source: dict, model: dict, weight_hash: str, profile: str, *, street: str = "turn") -> None:
+    if street not in ("flop", "turn"):
+        raise ValueError("cash roots support flop or turn only")
     rules = profile_rules(profile)
     if (model.get("schema") != CASH_NETWORK_SCHEMA or model.get("strategy_transform") != "softmax"
             or model.get("input_size") != CASH_STATE_FEATURE_COUNT+9 or model.get("cash_depth_bb") != 20
-            or model.get("cash_rules") != rules or source.get("schema") != "hu-cash-authentic-turn-roots-v1"
+            or model.get("cash_rules") != rules or source.get("schema") != f"hu-cash-authentic-{street}-roots-v1"
             or source.get("root_hash_schema") != HASH_SCHEMA or source.get("validation_status") != "research_only"
             or source.get("rules_sha256") != rules_digest(rules) or source.get("policy_sha256") != weight_hash
             or type(source.get("sampled_deals")) is not int or not 1 <= source["sampled_deals"] <= 10_000
@@ -81,17 +85,20 @@ def validate_roots(source: dict, model: dict, weight_hash: str, profile: str) ->
         if (game.get("cash_rules") != rules or game.get("effective_stack_bb") != 20
                 or game.get("small_blind_bb") != .4 or game.get("big_blind_bb") != 1
                 or game.get("action_abstraction") != model["cash_action_abstraction"]
-                or state.get("street") != "turn" or state.get("actor") != 1
+                or state.get("street") != street or state.get("actor") != 1
                 or state.get("street_invested_bb") != [0,0] or state.get("checks") != 0
                 or state.get("aggressions") != 0 or state.get("last_full_raise_bb") != 1
                 or state.get("raise_reopened") is not True or state.get("trajectory", [])
-                or state.get("public_history") != ["public_belief:turn_start"]
-                or config.get("averaging_delay") != 0 or config.get("river_refinement_iterations") != 0
-                or config.get("regret_matching_plus") is not False or type(config.get("iterations")) is not int
-                or not 2 <= config["iterations"] <= 128):
-            raise ValueError("authentic root is not the pinned fresh-turn abstraction")
+                or state.get("public_history") != [f"public_belief:{street}_start"]
+                or config.get("averaging_delay") != 0
+                or (street == "turn" and (config.get("river_refinement_iterations") != 0 or config.get("regret_matching_plus") is not False))
+                or (street == "flop" and (type(config.get("threads")) is not int or not 1 <= config["threads"] <= 4))
+                or type(config.get("iterations")) is not int
+                or not 2 <= config["iterations"] <= (128 if street == "turn" else 32)):
+            raise ValueError("authentic root is not the pinned fresh-street abstraction")
         board = state["board"]; investments = state["invested_bb"]
-        if (len(board) != 4 or len(set(board)) != 4 or any(type(c) is not int or not 0 <= c < 52 for c in board)
+        count = 4 if street == "turn" else 3
+        if (len(board) != count or len(set(board)) != count or any(type(c) is not int or not 0 <= c < 52 for c in board)
                 or len(investments) != 2
                 or any(type(v) not in (int,float) or not math.isfinite(v) or not 0 < v < 20
                        or abs(v*25-round(v*25)) > 1e-8 for v in investments)
@@ -110,10 +117,11 @@ def validate_roots(source: dict, model: dict, weight_hash: str, profile: str) ->
             raise ValueError("authentic root has an invalid compatible joint belief")
         actions = root["source_public_actions"]
         if not 1 <= len(actions) <= 32 or any(set(a) != {"actor","street","kind","amount_bb","amount_to_bb","pot_after_bb"}
-                or type(a["actor"]) is not int or a["actor"] not in (0,1) or a["street"] not in ("preflop","flop")
+                or type(a["actor"]) is not int or a["actor"] not in (0,1)
+                or a["street"] not in (("preflop","flop") if street == "turn" else ("preflop",))
                 or a["kind"] not in ("check","call","bet","raise","all_in") for a in actions):
             raise ValueError("authentic source must contain prior public actions only")
-        validate_public_money(actions, investments)
+        validate_public_money(actions, investments, street)
         index = root["source_deal_index"]
         if (type(index) is not int or not prior_index < index < source["sampled_deals"]
                 or root.get("root_sha256") != root_fingerprint(weight_hash, root) or root["root_sha256"] in seen):

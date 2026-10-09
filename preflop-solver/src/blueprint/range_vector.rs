@@ -7,6 +7,8 @@ use super::*;
 use std::sync::OnceLock;
 mod flop_terminal;
 pub(super) use flop_terminal::ExactFlopTerminal;
+mod cash_flop_terminal;
+pub use cash_flop_terminal::ExactCashFlopTerminal;
 
 pub const EXACT_COMBO_COUNT: usize = 1_326;
 

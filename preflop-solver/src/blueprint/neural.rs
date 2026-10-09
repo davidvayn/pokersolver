@@ -16,7 +16,7 @@ pub use cash_response::{evaluate_cash_causal_response, CashCausalResponseConfig}
 mod cash_query;
 pub use cash_query::{canonical_cash_query_state, CashPolicyEngine, CashPolicyEngineConfig, CashPolicyQuery};
 mod cash_turn_roots;
-pub use cash_turn_roots::{sample_cash_turn_roots, CashTurnRootSampleConfig};
+pub use cash_turn_roots::{sample_cash_turn_roots, sample_cash_flop_roots, CashTurnRootSampleConfig};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};

@@ -51,7 +51,7 @@ impl PublicValueNetwork {
         Ok(network)
     }
 
-    fn validate_cash_game(&self, game: &BlueprintConfig) -> Result<(), String> {
+    pub(super) fn validate_cash_game(&self, game: &BlueprintConfig) -> Result<(), String> {
         game.validate_cash_rules()?;
         if self.schema != NETWORK_SCHEMA
             || game.cash_rules.is_none()
@@ -82,7 +82,10 @@ impl PublicValueNetwork {
             board.try_into().expect("cash turn board"),
             actor,
             invested,
-            ranges.clone(),
+            // Prepare ranks/legality for every board-legal query hand, not
+            // just positive own reach. Regret matching can assign zero own
+            // behavioral mass to a hand whose counterfactual EV is needed.
+            std::array::from_fn(|_| uniform_range(board)),
         );
         let config = TurnRiverSolveConfig {
             game,
@@ -95,11 +98,11 @@ impl PublicValueNetwork {
         let solver = TurnRiverSolver::new(config).expect("validated cash root");
         let mut terminal = solver.config.state.game_state();
         terminal.terminal = Some(Terminal::Showdown);
-        let cfvs = solver.cash_terminal_values(&terminal, &solver.config.state.ranges, None);
+        let cfvs = solver.cash_terminal_values(&terminal, ranges, None);
         std::array::from_fn(|player| {
             let mass = compatible_masses_from_card_marginals(
                 &solver.combos,
-                &solver.config.state.ranges[1 - player],
+                &ranges[1 - player],
             );
             cfvs[player]
                 .iter()
@@ -113,6 +116,24 @@ impl PublicValueNetwork {
         &self,
         config: &TurnRiverSolveConfig,
     ) -> Result<[Vec<f64>; 2], String> {
+        let normalized = self.validated_cash_turn(config)?;
+        let result = self.predict_shared_combo_with_bounds(
+            &normalized.board,
+            normalized.actor,
+            normalized.invested_bb,
+            &normalized.ranges,
+            [self.target_scale_bb; 2],
+        );
+        if result.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("cash prediction is nonfinite; no fallback".into());
+        }
+        Ok(result)
+    }
+
+    pub(super) fn validated_cash_turn(
+        &self,
+        config: &TurnRiverSolveConfig,
+    ) -> Result<PublicBeliefState, String> {
         self.validate_cash_game(&config.game)?;
         let state = &config.state;
         let rules = config
@@ -139,18 +160,7 @@ impl PublicValueNetwork {
                     .into(),
             );
         }
-        let normalized = state.validate_street_and_normalize(&config.game, Street::Turn, 4)?;
-        let result = self.predict_shared_combo_with_bounds(
-            &normalized.board,
-            normalized.actor,
-            normalized.invested_bb,
-            &normalized.ranges,
-            [self.target_scale_bb; 2],
-        );
-        if result.iter().flatten().any(|v| !v.is_finite()) {
-            return Err("cash prediction is nonfinite; no fallback".into());
-        }
-        Ok(result)
+        state.validate_street_and_normalize(&config.game, Street::Turn, 4)
     }
 }
 

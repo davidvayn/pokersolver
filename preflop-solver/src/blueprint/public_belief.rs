@@ -33,6 +33,7 @@ mod card_workers;
 mod cash_river;
 mod cash_turn;
 mod cash_value;
+pub mod cash_flop;
 mod continuation_cache;
 mod value_inference;
 
@@ -281,7 +282,19 @@ impl PublicBeliefState {
         street: Street,
         board_len: usize,
     ) -> Result<Self, String> {
-        if game.cash_rules.is_some() && !matches!(street, Street::River | Street::Turn) {
+        self.validate_street_and_normalize_impl(game, street, board_len, false)
+    }
+
+    fn validate_street_and_normalize_impl(
+        &self,
+        game: &BlueprintConfig,
+        street: Street,
+        board_len: usize,
+        cash_flop_pilot: bool,
+    ) -> Result<Self, String> {
+        if game.cash_rules.is_some() && !matches!(street, Street::River | Street::Turn)
+            && !(cash_flop_pilot && street == Street::Flop && board_len == 3)
+        {
             return Err("raked flop continuations require new own-payoff targets and artifacts".into());
         }
         if let Some(rules) = &game.cash_rules {
@@ -3907,6 +3920,7 @@ struct FlopSolver {
     turn_leaf_evaluations: Cell<u64>,
     exact_all_in_terminal_evaluations: Cell<u64>,
     all_in_equities: OnceLock<Arc<Vec<f32>>>,
+    cash_all_in: OnceLock<Arc<range_vector::ExactCashFlopTerminal>>,
     maximum_leaf_zero_sum_residual: Cell<f64>,
     safe_root: Option<SafeResolveRoot>,
     training_round_offset: u64,
@@ -3967,9 +3981,27 @@ struct ResolverRootLeafCheckpoint {
 }
 
 impl FlopSolver {
-    fn new(mut config: FlopResolveConfig) -> Result<Self, String> {
+    fn new(config: FlopResolveConfig) -> Result<Self, String> {
+        config.game.require_legacy_home()?;
+        if config.value_network.cash_rules.is_some()
+            || config.auxiliary_value_networks.iter().any(|n| n.cash_rules.is_some())
+        {
+            return Err("Home flop resolving cannot use cash continuation weights".into());
+        }
+        Self::new_impl(config, false)
+    }
+
+    fn new_impl(mut config: FlopResolveConfig, cash_flop_pilot: bool) -> Result<Self, String> {
         config.game.validate()?;
         config.value_network.validate()?;
+        if cash_flop_pilot {
+            config.value_network.validate_cash_game(&config.game)?;
+            if !config.auxiliary_value_networks.is_empty()
+                || config.continuation_selection != FlopContinuationSelection::Mean
+            {
+                return Err("cash flop pilot requires one pinned own-payoff value network".into());
+            }
+        }
         for network in &config.auxiliary_value_networks {
             network.validate()?;
             if !config.value_network.has_distinct_training_identity(network) {
@@ -4022,7 +4054,7 @@ impl FlopSolver {
         }
         config.state = config
             .state
-            .validate_street_and_normalize(&config.game, Street::Flop, 3)?;
+            .validate_street_and_normalize_impl(&config.game, Street::Flop, 3, cash_flop_pilot)?;
         let legal = std::array::from_fn(|player| {
             config.state.ranges[player]
                 .iter()
@@ -4044,6 +4076,7 @@ impl FlopSolver {
             turn_leaf_evaluations: Cell::new(0),
             exact_all_in_terminal_evaluations: Cell::new(0),
             all_in_equities: OnceLock::new(),
+            cash_all_in: OnceLock::new(),
             maximum_leaf_zero_sum_residual: Cell::new(0.0),
             safe_root: None,
             training_round_offset: 0,
@@ -5159,6 +5192,9 @@ impl FlopSolver {
     }
 
     fn terminal_values(&self, state: &GameState, reaches: &[Vec<f64>; 2]) -> [Vec<f64>; 2] {
+        if self.config.game.cash_rules.is_some() {
+            return self.cash_flop_terminal_values(state, reaches);
+        }
         match state.terminal.as_ref().expect("terminal") {
             Terminal::Fold { winner } => {
                 let utility_p0 = if *winner == 0 {
@@ -5247,6 +5283,9 @@ impl FlopSolver {
         reaches: &[Vec<f64>; 2],
         traverser: Option<usize>,
     ) -> ([Vec<f64>; 2], f64) {
+        if self.config.game.cash_rules.is_some() {
+            return (self.compute_cash_turn_leaf_values(state, reaches), 0.0);
+        }
         #[cfg(test)]
         self.turn_leaf_computations
             .set(self.turn_leaf_computations.get() + 1);
