@@ -6184,6 +6184,14 @@ fn normalized_turn_ranges(
     reaches: &[Vec<f64>; 2],
     turn: u8,
 ) -> Option<([Vec<f64>; 2], [f64; 2], f64)> {
+    normalized_turn_ranges_above_mass(reaches, turn, EPSILON)
+}
+
+fn normalized_turn_ranges_above_mass(
+    reaches: &[Vec<f64>; 2],
+    turn: u8,
+    minimum_mass: f64,
+) -> Option<([Vec<f64>; 2], [f64; 2], f64)> {
     let mut masked = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
     let mut totals = [0.0; 2];
     for player in 0..2 {
@@ -6196,12 +6204,12 @@ fn normalized_turn_ranges(
             masked[player][combo.key()] = weight;
             totals[player] += weight;
         }
-        if totals[player] <= EPSILON {
+        if totals[player] <= minimum_mass {
             return None;
         }
     }
     let unnormalized_joint_mass = joint_compatibility_mass(&masked);
-    if unnormalized_joint_mass <= EPSILON {
+    if unnormalized_joint_mass <= minimum_mass {
         return None;
     }
     for player in 0..2 {

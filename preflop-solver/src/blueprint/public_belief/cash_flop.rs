@@ -16,7 +16,10 @@ fn turn_prediction_input(
     reaches: &[Vec<f64>; 2],
     turn: u8,
 ) -> Option<(TurnRiverSolveConfig, [f64; 2], f64)> {
-    let (ranges, totals, joint_mass) = normalized_turn_ranges(reaches, turn)?;
+    // Counterfactual values exclude own action reach. Small *positive* own
+    // or joint reach cannot prune a potentially valuable deviation. Preserve
+    // the raw opponent totals for value scaling; do not invent zero beliefs.
+    let (ranges, totals, joint_mass) = normalized_turn_ranges_above_mass(reaches, turn, 0.0)?;
     let mut board = flop.to_vec();
     board.push(turn);
     Some((TurnRiverSolveConfig {
@@ -496,6 +499,81 @@ mod tests {
             threads: 2,
         };
         (input, network)
+    }
+
+    #[test]
+    fn cash_leaf_cfv_does_not_disappear_when_only_own_reach_is_tiny() {
+        let (mut input, network) = fixture();
+        // AcKc has a royal on TcJcQc already. Reducing only its seat's total
+        // action reach must not erase that seat's opponent-weighted CFVs.
+        let board = [32, 36, 40];
+        input.state = PublicBeliefState::flop_start(
+            board, 1, [1.0; 2], std::array::from_fn(|_| uniform_range(&board)),
+        );
+        let (solver, _) = prepare_solver(input.clone(), network).unwrap();
+        let mut state = input.state.game_state();
+        for _ in 0..2 {
+            let check = state.legal_actions(&input.game).into_iter()
+                .find(|action| action.kind == ActionKind::Check).unwrap();
+            state = state.apply(&check, &input.game);
+        }
+        let normal = solver.compute_cash_turn_leaf_values(&state, &input.state.ranges);
+        let royal = Combo::new(48, 44).key();
+        assert!(normal[0][royal] > 0.8);
+        // The third case keeps each own total above EPSILON but drops the
+        // joint mass below it, separately exposing the joint-reach cutoff.
+        for scales in [[1e-14, 1.0], [1.0, 1e-14], [1e-5; 2]] {
+            let mut tiny = input.state.ranges.clone();
+            for player in 0..2 {
+                for value in &mut tiny[player] { *value *= scales[player]; }
+            }
+            let scaled = solver.compute_cash_turn_leaf_values(&state, &tiny);
+            for player in 0..2 {
+                for combo in 0..COMBO_COUNT {
+                    let expected = normal[player][combo] * scales[1 - player];
+                    assert!((scaled[player][combo] - expected).abs() < 1e-9 * scales[1 - player],
+                        "cash CFVs exclude own reach; seat {player}, combo {combo}, scales {scales:?}: expected {expected}, got {}",
+                        scaled[player][combo]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cash_positive_reach_normalization_preserves_ordinary_inputs_exactly() {
+        let (input, _) = fixture();
+        let state = input.state.game_state();
+        for scales in [[1.0; 2], [0.1, 0.5]] {
+            let mut reaches = input.state.ranges.clone();
+            for player in 0..2 {
+                for value in &mut reaches[player] { *value *= scales[player]; }
+            }
+            let (ranges, totals, joint) = normalized_turn_ranges(&reaches, 31).unwrap();
+            let (query, cash_totals, cash_joint) =
+                turn_prediction_input(&input.game, &input.state.board, &state, &reaches, 31).unwrap();
+            assert_eq!(query.state.ranges, ranges);
+            assert_eq!(cash_totals, totals);
+            assert_eq!(cash_joint, joint);
+        }
+    }
+
+    #[test]
+    fn cash_reach_normalization_never_invents_undefined_beliefs() {
+        let (input, _) = fixture();
+        let state = input.state.game_state();
+        for seat in 0..2 {
+            let mut reaches = input.state.ranges.clone();
+            reaches[seat].fill(0.0);
+            assert!(turn_prediction_input(&input.game, &input.state.board, &state, &reaches, 31).is_none());
+        }
+        let mut conflict = [vec![0.0; COMBO_COUNT], vec![0.0; COMBO_COUNT]];
+        conflict[0][Combo::new(48, 44).key()] = 1.0;
+        conflict[1][Combo::new(48, 0).key()] = 1.0;
+        assert!(turn_prediction_input(&input.game, &input.state.board, &state, &conflict, 31).is_none());
+        let mut turn_blocked = input.state.ranges.clone();
+        turn_blocked[0].fill(0.0);
+        turn_blocked[0][Combo::new(31, 48).key()] = 1.0;
+        assert!(turn_prediction_input(&input.game, &input.state.board, &state, &turn_blocked, 31).is_none());
     }
 
     #[test]
