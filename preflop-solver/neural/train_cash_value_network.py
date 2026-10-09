@@ -80,7 +80,7 @@ def feature_arrays(source: dict):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1.):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0.):
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     payload.update(schema=cash_values.POOLED_NETWORK_SCHEMA if model.pools_exact_ranges else cash_values.NETWORK_SCHEMA,
@@ -90,6 +90,7 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    predictionContract=cash_values.PREDICTION_CONTRACT,
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,
+                   profileValueLossWeight=profile_value_loss_weight,
                    flopLeafLossWeight=flop_leaf_loss_weight,
                    projection="independent-full-stack-clip-and-board-mask-no-zero-sum",
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
@@ -118,6 +119,18 @@ def cash_accounting_penalty(prediction, scales, joint_weights, house_target):
     means = mx.sum(own_bb * joint_weights,axis=2) / mx.maximum(mx.sum(joint_weights,axis=2),1e-9)
     residual = mx.sum(means,axis=1) + house_target
     return mx.mean(residual**2)
+
+
+def cash_profile_value_penalty(prediction, scales, joint_weights, own_targets):
+    """Supervise each known own-player mean, not just their sum or a projection.
+
+    Equal-and-opposite mean errors can pass a house-sum diagnostic while
+    allocating the players' values incorrectly. Targets come from the exact
+    paired CFVs under the same compatible joint belief, never half the rake.
+    """
+    own_bb = prediction.reshape((-1,2,1326)) * scales[:,None,None]
+    means = mx.sum(own_bb * joint_weights,axis=2) / mx.maximum(mx.sum(joint_weights,axis=2),1e-9)
+    return mx.mean(mx.sum((means-own_targets)**2,axis=1))
 
 
 def split_cash_families(source: dict, seed: int, reference: dict | None = None):
@@ -160,11 +173,13 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact"):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0.):
     if not 0 < steps <= 10000:
         raise ValueError("cash pilot step budget must be 1..10000")
     if not np.isfinite(accounting_loss_weight) or not 0 <= accounting_loss_weight <= 100:
         raise ValueError("cash accounting loss weight must be finite and in 0..100")
+    if not np.isfinite(profile_value_loss_weight) or not 0 <= profile_value_loss_weight <= 100:
+        raise ValueError("cash profile value loss weight must be finite and in 0..100")
     if not np.isfinite(flop_leaf_loss_weight) or not 0 < flop_leaf_loss_weight <= 1:
         raise ValueError("forced flop leaf loss weight must be finite in (0,1]")
     if architecture not in ("compact", "wide", "wide-pooled"):
@@ -190,6 +205,15 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     # rake as an inference feature, or project a failing prediction to pass.
     house = np.asarray([l["metrics"]["cash"]["expected_house_rake_bb"] for l in source["labels"]])
     house_target = mx.array(house.astype(np.float32))
+    # Own means retain the teacher's actual allocation between the seats.
+    # They are supervision only, never input features or inference repairs.
+    from native_value_dataset import compatible_masses
+    own_targets = []
+    for label in source["labels"]:
+        ranges = np.asarray(label["input"]["state"]["ranges"])
+        joint = ranges * compatible_masses(ranges)
+        own_targets.append(np.sum(joint*np.asarray(label["counterfactual_values_bb"]),axis=1)/joint.sum(axis=1))
+    own_target = mx.array(np.asarray(own_targets,dtype=np.float32))
 
     def loss_components(current, rows, weight_training_contexts=True):
         prediction = current(*(v[rows] for v in tensors))
@@ -198,14 +222,18 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         if weight_training_contexts:
             weighted = weighted * context_weight[rows, None]
         regression = mx.sum(weighted * errors**2) / mx.maximum(mx.sum(weighted), 1e-9)
-        if accounting_loss_weight == 0:
+        if accounting_loss_weight == 0 and profile_value_loss_weight == 0:
             return regression, mx.array(0.)
-        penalty = cash_accounting_penalty(prediction,tensors[3][rows],tensors[2][rows],house_target[rows])
+        penalty = mx.array(0.)
+        if accounting_loss_weight:
+            penalty += accounting_loss_weight * cash_accounting_penalty(prediction,tensors[3][rows],tensors[2][rows],house_target[rows])
+        if profile_value_loss_weight:
+            penalty += profile_value_loss_weight * cash_profile_value_penalty(prediction,tensors[3][rows],tensors[2][rows],own_target[rows])
         return regression, penalty
 
     def loss_fn(current, rows, weight_training_contexts=True):
         regression, penalty = loss_components(current,rows,weight_training_contexts)
-        return regression + accounting_loss_weight * penalty
+        return regression + penalty
 
     loss_grad = nn.value_and_grad(model, loss_fn); train_rows = mx.array(train)
     initial_loss = float(loss_fn(model, train_rows).item())
@@ -224,7 +252,6 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     predicted = reference_predictions(model, tensors, scales, legal)
     native_weights = weights.astype(np.float64)
     # Recompute masses in f64 for the identical compatible joint distribution.
-    from native_value_dataset import compatible_masses
     for row, label in enumerate(source["labels"]):
         ranges = np.asarray(label["input"]["state"]["ranges"])
         native_weights[row] = ranges * compatible_masses(ranges)
@@ -236,7 +263,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight)
+    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
@@ -245,6 +272,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "split_reference_sha256":hashlib.sha256(reference_bytes).hexdigest() if reference_bytes else None,
               "training_initial_objective_bb_squared":initial_loss,
               "accounting_loss_weight":accounting_loss_weight,
+              "profile_value_loss_weight":profile_value_loss_weight,
               "flop_leaf_loss_weight":flop_leaf_loss_weight,
               "heldout_rmse_bb":rmse,"maximum_own_payoff_accounting_bias_bb":float(residuals.max()),
               "exact_checkdown_heldout_rmse_bb":baseline_rmse,"beats_checkdown_on_holdout":rmse < baseline_rmse,
@@ -263,12 +291,13 @@ def main():
     parser.add_argument("--output", required=True, type=Path); parser.add_argument("--seed", type=int, default=7101)
     parser.add_argument("--steps", type=int, default=50); parser.add_argument("--native-binary", type=Path)
     parser.add_argument("--accounting-loss-weight", type=float, default=0.)
+    parser.add_argument("--profile-value-loss-weight", type=float, default=0.,help="Supervise each seat's exact joint-belief profile mean; does not project inference values")
     parser.add_argument("--split-seed", type=int, help="Pin identical flop-family splits across independent training seeds")
     parser.add_argument("--split-reference",type=Path,help="Keep tuning/holdout families unchanged when adding training contexts")
     parser.add_argument("--flop-leaf-loss-weight",type=float,default=1.,help="Training weight for captured forced-coverage leaf parents; does not change beliefs or targets")
     parser.add_argument("--architecture",choices=("compact","wide","wide-pooled"),default="compact")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight), indent=2))
 
 
 if __name__ == "__main__": main()

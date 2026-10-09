@@ -20,6 +20,7 @@ LABEL_SCHEMA = "hu-cash-turn-river-continuation-values-v1"
 NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v2"
 POOLED_NETWORK_SCHEMA = "hu-cash-public-belief-combo-value-network-v3"
 PREDICTION_CONTRACT = "cash-turn-start-cfv-full-stack-v1"
+MAX_FLAT_SOURCES = 5  # One bounded coverage extension; still reject nested merges.
 
 
 def validate_label(label: dict) -> None:
@@ -155,7 +156,7 @@ def validate_dataset(source: dict) -> None:
         version = merged.get("schema")
         if (provenance is not None or leaves is not None or version not in ("hu-cash-value-source-prefix-merge-v1","hu-cash-value-source-prefix-merge-v2")
                 or not isinstance(merged.get("sources"),list)
-                or not 2 <= len(merged["sources"]) <= 4
+                or not 2 <= len(merged["sources"]) <= MAX_FLAT_SOURCES
                 or (version == "hu-cash-value-source-prefix-merge-v1" and len(merged["sources"]) != 2)):
             raise ValueError("invalid cash continuation merge lineage")
         labels, captures = [], []
@@ -209,8 +210,8 @@ def extend_training_corpus(reference: dict, addition: dict, split_seed: int, spl
             or reference["capture_sha256"][:len(pinned["labels"])] != pinned["capture_sha256"]):
         raise ValueError("cash extension changed its pinned original target prefix")
     if merged is not None:
-        if (len(merged["sources"]) >= 4 or merged["sources"][0]["dataset"] != pinned):
-            raise ValueError("cash extension requires the same original parent and at most four flat sources")
+        if (len(merged["sources"]) >= MAX_FLAT_SOURCES or merged["sources"][0]["dataset"] != pinned):
+            raise ValueError("cash extension requires the same original parent and at most five flat sources")
         if merged["schema"] == "hu-cash-value-source-prefix-merge-v2" and merged["split_seed"] != split_seed:
             raise ValueError("cash extension changed its pinned split seed")
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:

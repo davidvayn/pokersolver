@@ -8,22 +8,41 @@ import numpy as np
 import mlx.core as mx
 from train_cash_value_network import OwnComboValueNetwork
 from train_cash_value_network import feature_arrays
+from cash_value_dataset import NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA
+from train_public_value_network import RANGE_POOL_EPSILON
 from validate_public_value_parity import dense_forward
 from serving_value_projection import OwnPayoffValueProjection
 
 
+def cash_architecture(model):
+    architecture = model.get("architecture")
+    if ((model.get("schema") == NETWORK_SCHEMA and architecture in ("compact", "wide"))
+            or (model.get("schema") == POOLED_NETWORK_SCHEMA and architecture == "wide-pooled")):
+        return architecture
+    raise ValueError("cash parity requires matching versioned architecture and own-payoff schema")
+
+
 def python_predictions(source, model):
+    architecture = cash_architecture(model)
     contexts, queries, weights, scales, baselines, legal, _, _ = feature_arrays(source)
     embeddings = dense_forward(contexts,model["contextTower"])
     combo_embeddings = dense_forward(queries,model["queryTower"])
-    combined = np.concatenate((np.broadcast_to(embeddings[:,:,None,:],combo_embeddings.shape),combo_embeddings),axis=-1)
+    expanded = np.broadcast_to(embeddings[:,:,None,:],combo_embeddings.shape)
+    if architecture == "wide-pooled":
+        reach = weights / np.maximum(weights.sum(axis=2,keepdims=True),RANGE_POOL_EPSILON)
+        pooled = np.sum(combo_embeddings * reach[:,:,:,None],axis=2)
+        own = np.broadcast_to(pooled[:,:,None,:],combo_embeddings.shape)
+        opponent = np.broadcast_to(pooled[:,::-1,None,:],combo_embeddings.shape)
+        combined = np.concatenate((expanded,own,opponent,combo_embeddings),axis=-1)
+    else:
+        combined = np.concatenate((expanded,combo_embeddings),axis=-1)
     residual = dense_forward(combined,model["head"]).reshape((-1,2,1326))
     return OwnPayoffValueProjection(baselines + residual * scales[:,None,None],legal.astype(bool)).values
 
 
 def mlx_predictions(source, payload, device):
     with mx.stream(device):
-        model = OwnComboValueNetwork()
+        model = OwnComboValueNetwork(cash_architecture(payload))
         names = {"context_tower":"contextTower", "query_tower":"queryTower", "head":"head"}
         weights = []
         for tower, name in names.items():
