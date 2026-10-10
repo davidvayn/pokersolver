@@ -18,7 +18,7 @@ fn cash_flop_trace_rejects_overrides_invalid_sampling_and_output_collisions() {
     let board=[0,5,10];
     let input=CashFlopTraceInput {solve:CashFlopPilotInput {game,state:PublicBeliefState::flop_start(
         board,1,[2.;2],[uniform_range(&board),uniform_range(&board)]),iterations:2,averaging_delay:0,threads:1},
-        sample_rounds:vec![3],leaves_per_round:2};
+        sample_rounds:vec![3],leaves_per_round:2,reach_sampling_seed:None};
     let directory=std::env::temp_dir().join(format!("cash-trace-cli-{}",std::process::id()));
     fs::create_dir(&directory).unwrap();
     let input_path=directory.join("input.json"); let output_path=directory.join("output.json");
