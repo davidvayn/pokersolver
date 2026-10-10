@@ -5,6 +5,7 @@ import tempfile
 from unittest.mock import patch
 from pathlib import Path
 import mlx.core as mx
+import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 import train_cash_value_network as cash_training
@@ -16,6 +17,64 @@ from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SC
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_invalid_training_output_mode_fails_before_dataset_io(self):
+        for invalid in (None, True, 1, "unbounded", ["raw"]):
+            with self.assertRaisesRegex(ValueError, "training output mode"):
+                run(Path("must-not-read"), Path("must-not-create"), 7101, 2,
+                    training_output_mode=invalid)
+
+    def test_raw_fit_metadata_does_not_change_the_serving_contract(self):
+        rules = profile_rules("nl25")
+        source = dict(game=dict(cash_rules=rules), rules_sha256=rules_digest(rules))
+        with tempfile.TemporaryDirectory() as directory:
+            model = OwnComboValueNetwork("wide-pooled")
+            for mode in ("serving-clipped", "raw"):
+                path = Path(directory) / f"{mode}.json"
+                export_cash_model(model, path, 7101, source, "a" * 64, training_output_mode=mode)
+                payload = json.loads(path.read_text())
+                self.assertEqual(payload["projection"], "independent-full-stack-clip-and-board-mask-no-zero-sum")
+                self.assertEqual(payload["checkpointSelectionCriterion"], "tuning-own-payoff-mse-plus-explicit-auxiliary-penalties")
+                if mode == "raw":
+                    self.assertEqual(payload["trainingOutputMode"], "raw")
+                else:
+                    self.assertNotIn("trainingOutputMode", payload)
+
+    def test_raw_training_retains_corrective_gradient_beyond_serving_bound(self):
+        with mx.stream(mx.cpu):
+            model = OwnComboValueNetwork()
+            model.head.layers[-1].bias = mx.array([22.])
+            context_size = model.context_tower.layers[0].weight.shape[1]
+            query_size = model.query_tower.layers[0].weight.shape[1]
+            legal = np.zeros((1, 1326), np.float32); legal[0, 0] = 1
+            inputs = tuple(mx.array(a) for a in (
+                np.zeros((1, 2, context_size), np.float32),
+                np.zeros((1, 2, 1326, query_size), np.float32),
+                np.ones((1, 2, 1326), np.float32), np.ones(1, np.float32),
+                np.zeros((1, 2, 1326), np.float32), legal,
+                np.ones((1, 2, 1326), np.float32)))
+            target = np.zeros((1, 2652), np.float32); target[0, [0, 1326]] = 17.
+            target = mx.array(target)
+            def objective(current, raw):
+                prediction = cash_training.cash_loss_predictions(current, inputs, raw_output=raw)
+                return mx.sum((prediction - target)**2) / 2
+            clipped_loss, clipped_gradient = nn.value_and_grad(model, lambda current: objective(current, False))(model)
+            raw_loss, raw_gradient = nn.value_and_grad(model, lambda current: objective(current, True))(model)
+            self.assertEqual(float(clipped_loss.item()), 9.)
+            self.assertEqual(float(clipped_gradient["head"]["layers"][-1]["bias"].item()), 0.)
+            self.assertEqual(float(raw_loss.item()), 25.)
+            self.assertAlmostEqual(float(raw_gradient["head"]["layers"][-1]["bias"].item()), 10., places=5)
+            # Inference still respects both the card mask and full-stack limit.
+            serving = np.array(model(*inputs))
+            self.assertEqual(serving[0, 0], 20.)
+            self.assertEqual(serving[0, 1326], 20.)
+            self.assertEqual(np.count_nonzero(serving), 2)
+            model.head.layers[-1].bias = mx.array([-22.])
+            target = -target
+            _, clipped_gradient = nn.value_and_grad(model, lambda current: objective(current, False))(model)
+            _, raw_gradient = nn.value_and_grad(model, lambda current: objective(current, True))(model)
+            self.assertEqual(float(clipped_gradient["head"]["layers"][-1]["bias"].item()), 0.)
+            self.assertAlmostEqual(float(raw_gradient["head"]["layers"][-1]["bias"].item()), -10., places=5)
+
     def test_full_fit_exports_identical_weights_with_warm_features(self):
         # Keep the real initialization, optimizer, checkpoint selection and
         # export path. Only expensive feature construction and corpus split

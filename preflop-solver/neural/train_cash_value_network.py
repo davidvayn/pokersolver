@@ -31,6 +31,7 @@ from train_public_value_network import (SharedComboValueNetwork, build_features,
 
 CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
 CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned")
+CASH_TRAINING_OUTPUT_MODES = ("serving-clipped", "raw")
 _FEATURE_CACHE = CashFeatureCache()
 
 
@@ -120,8 +121,9 @@ def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initialization: dict | None = None):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initialization: dict | None = None, training_output_mode: str = "serving-clipped"):
     validate_cash_regression_options(regression_loss,huber_delta_bb)
+    validate_cash_training_output_mode(training_output_mode)
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
@@ -144,6 +146,10 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    flopLeafLossWeight=flop_leaf_loss_weight,
                    projection="independent-full-stack-clip-and-board-mask-no-zero-sum",
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
+    if training_output_mode != "serving-clipped":
+        # Preserve complete legacy export bytes for the unchanged default.
+        # This records a fit objective, never a different serving projection.
+        payload["trainingOutputMode"] = training_output_mode
     if blocker_pooled:
         payload["rangeAggregation"] = "per-query-card-removed-opponent-and-joint-own-pooling"
     if baseline_conditioned:
@@ -224,6 +230,19 @@ def cash_regression_losses(errors_bb, weights, regression_loss: str = "mse", hub
     return mse,mx.sum(weights*terms)/denominator
 
 
+def cash_loss_predictions(model, inputs, *, raw_output=False):
+    """Prediction seam for fitting; serving always keeps independent clipping."""
+    if raw_output:
+        raw = model.raw_values(*inputs[:5], inputs[6] if len(inputs) > 6 else None)
+        return (raw * inputs[5][:, None, :]).reshape((-1, 2652))
+    return model(*inputs)
+
+
+def validate_cash_training_output_mode(mode):
+    if type(mode) is not str or mode not in CASH_TRAINING_OUTPUT_MODES:
+        raise ValueError("cash training output mode must be serving-clipped or raw")
+
+
 def split_cash_families(source: dict, seed: int, reference: dict | None = None):
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -264,7 +283,7 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped"):
     if ((initial_value_network is None) != (initial_dataset is None)
             or any(value is not None and not isinstance(value,Path)
                    for value in (initial_value_network,initial_dataset))):
@@ -289,6 +308,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
             or not 0 < learning_rate <= .1):
         raise ValueError("cash learning rate must be finite in (0,0.1]")
     validate_cash_regression_options(regression_loss,huber_delta_bb)
+    validate_cash_training_output_mode(training_output_mode)
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -329,7 +349,11 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     own_target = mx.array(np.asarray(own_targets,dtype=np.float32))
 
     def loss_components(current, rows, weight_training_contexts=True):
-        prediction = current(*(v[rows] for v in tensors))
+        # An overshot raw value receives zero corrective gradient through a
+        # hard serving clip. The explicit raw pilot supervises that value;
+        # tuning/checkpoint selection still uses the actual serving output.
+        prediction = cash_loss_predictions(current, tuple(v[rows] for v in tensors),
+            raw_output=training_output_mode == "raw" and weight_training_contexts)
         errors = (prediction - target[rows]) * tensors[3][rows, None]
         weighted = loss_weight[rows]
         if weight_training_contexts:
@@ -386,7 +410,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, dataset_digest, accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization)
+    export_cash_model(model, network_path, seed, source, dataset_digest, accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization,training_output_mode=training_output_mode)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":dataset_digest,
@@ -394,6 +418,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "steps":steps,"selected_step":best_step,"training_initial_mse_bb":initial_mse,
               "adam_bias_correction":adam_bias_correction,"learning_rate":learning_rate,
               "regression_loss":regression_loss,"huber_delta_bb":huber_delta_bb,
+              "training_output_mode":training_output_mode,
               "checkpoint_selection_criterion":"tuning-own-payoff-mse-plus-explicit-auxiliary-penalties",
               "split_seed":split_seed,
               "initial_value_network":initialization,
@@ -429,10 +454,11 @@ def main():
     parser.add_argument("--learning-rate",type=float,default=1e-3,help="Explicit bounded pilot rate; original default remains unchanged")
     parser.add_argument("--regression-loss",choices=("mse","huber"),default="mse",help="Matched cash fit objective; checkpoint selection and reporting retain MSE")
     parser.add_argument("--huber-delta-bb",type=float,default=1.,help="Huber fit threshold in net bb; small-error gradients match original squared loss")
+    parser.add_argument("--training-output-mode",choices=CASH_TRAINING_OUTPUT_MODES,default="serving-clipped",help="Explicit raw-value fit pilot; checkpoint selection and inference retain serving clipping")
     parser.add_argument("--initial-value-network",type=Path,help="Frozen cash weights with sibling report.json; same seed/architecture/rules/split required")
     parser.add_argument("--initial-dataset",type=Path,help="Byte-pinned initial training corpus; must remain an unchanged current prefix")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode), indent=2))
 
 
 if __name__ == "__main__": main()
