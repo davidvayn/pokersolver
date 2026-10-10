@@ -376,12 +376,16 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     initial_loss = float(loss_fn(model, train_rows).item())
     initial_mse = float(loss_components(model,train_rows)[0].item())
     best_parameters, best_tuning, best_step = None, float("inf"), 0
+    checkpoint_history = []
     if initialization is not None:
         # Do not replace a working frozen model if every attempted update
         # worsens the same tuning criterion. No holdout-based selection.
         with mx.stream(mx.cpu):
             mse,_,penalty = loss_components(model,mx.array(tuning),False)
             best_tuning = float((mse+penalty).item())
+        checkpoint_history.append(dict(step=0, pre_update_training_objective_bb_squared=None,
+            tuning_mse_bb_squared=float(mse.item()), tuning_objective_bb_squared=best_tuning,
+            improved_tuning=True))
         best_parameters = [(key,np.array(value)) for key,value in tree_flatten(model.parameters())]
     for step in range(1, steps + 1):
         loss, gradients = loss_grad(model, train_rows); optimizer.update(model, gradients)
@@ -392,6 +396,13 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
                 # original MSE plus any explicitly requested auxiliary terms.
                 tuning_mse,_,tuning_penalty = loss_components(model,mx.array(tuning),False)
                 value = float((tuning_mse+tuning_penalty).item())
+            # Report already-evaluated scores, without extra forwards or a
+            # changed criterion. The training loss is from BEFORE this update;
+            # the tuning score is the serving output AFTER this update.
+            checkpoint_history.append(dict(step=step,
+                pre_update_training_objective_bb_squared=float(loss.item()),
+                tuning_mse_bb_squared=float(tuning_mse.item()),
+                tuning_objective_bb_squared=value, improved_tuning=value < best_tuning))
             if value < best_tuning:
                 best_tuning, best_step = value, step
                 best_parameters = [(key, np.array(value)) for key, value in tree_flatten(model.parameters())]
@@ -420,6 +431,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "regression_loss":regression_loss,"huber_delta_bb":huber_delta_bb,
               "training_output_mode":training_output_mode,
               "checkpoint_selection_criterion":"tuning-own-payoff-mse-plus-explicit-auxiliary-penalties",
+              "checkpoint_history":checkpoint_history,
               "split_seed":split_seed,
               "initial_value_network":initialization,
               "split_reference_sha256":hashlib.sha256(reference_bytes).hexdigest() if reference_bytes else None,

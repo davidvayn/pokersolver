@@ -129,8 +129,8 @@ class CashValueTrainingTests(unittest.TestCase):
             with (patch.object(cash_training, "_FEATURE_CACHE", CashFeatureCache()),
                   patch.object(cash_training, "split_cash_families", return_value=split),
                   patch.object(cash_training, "feature_arrays", return_value=arrays) as prepare):
-                first = run(dataset, root / "cold", 7101, 2, split_seed=937)
-                second = run(dataset, root / "warm", 7101, 2, split_seed=937)
+                first = run(dataset, root / "cold", 7101, 11, split_seed=937)
+                second = run(dataset, root / "warm", 7101, 11, split_seed=937)
                 prepare.assert_called_once_with(source, FEATURE_SCHEMA_BOARD_RELATIVE)
                 self.assertFalse(first["feature_preparation"]["cache_hit"])
                 self.assertTrue(second["feature_preparation"]["cache_hit"])
@@ -139,6 +139,14 @@ class CashValueTrainingTests(unittest.TestCase):
                 for metric in ("heldout_rmse_bb", "training_initial_mse_bb", "selected_step",
                                "maximum_own_payoff_accounting_bias_bb", "network_sha256"):
                     self.assertEqual(first[metric], second[metric])
+                self.assertEqual(first["checkpoint_history"], second["checkpoint_history"])
+                history = first["checkpoint_history"]
+                self.assertEqual([row["step"] for row in history], [1, 10, 11])
+                self.assertAlmostEqual(history[0]["pre_update_training_objective_bb_squared"],
+                    first["training_initial_objective_bb_squared"], places=7)
+                self.assertEqual(min(history, key=lambda row: row["tuning_objective_bb_squared"])["step"],
+                    first["selected_step"])
+                self.assertTrue(all(np.isfinite(row["tuning_mse_bb_squared"]) for row in history))
                 self.assertTrue(all(not array.flags.writeable for array in arrays))
 
     def test_paired_runs_prepare_identical_corpus_features_only_once(self):
