@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from importlib.metadata import version
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 import numpy as np
 
 import cash_value_dataset as cash_values
@@ -121,9 +123,11 @@ def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
     return tuple(np.asarray(v, dtype=np.float32) for v in (contexts, queries, weights, scales, baselines, legal, targets, loss_weights))
 
 
-def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initialization: dict | None = None, training_output_mode: str = "serving-clipped"):
+def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, accounting_loss_weight: float = 0., flop_leaf_loss_weight: float = 1., profile_value_loss_weight: float = 0., adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initialization: dict | None = None, training_output_mode: str = "serving-clipped", gradient_batch_size: int | None = None):
     validate_cash_regression_options(regression_loss,huber_delta_bb)
     validate_cash_training_output_mode(training_output_mode)
+    validate_cash_gradient_batch_size(gradient_batch_size)
+    precision = cash_training_precision()
     export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
@@ -150,6 +154,14 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
         # Preserve complete legacy export bytes for the unchanged default.
         # This records a fit objective, never a different serving projection.
         payload["trainingOutputMode"] = training_output_mode
+    if gradient_batch_size is not None:
+        payload.update(gradientBatchSize=gradient_batch_size,
+                       gradientAccumulation="full-pass-fixed-global-weight-normalization-one-adam-update")
+    if precision["mlx_enable_tf32"] == "0":
+        # This is a launch-time fit request, not a changed serving contract or
+        # a claim that a warm parent's entire history used this precision.
+        payload.update(trainingMatmulPrecisionRequest="full-float32",
+                       trainingMlxVersion=precision["mlx_version"])
     if blocker_pooled:
         payload["rangeAggregation"] = "per-query-card-removed-opponent-and-joint-own-pooling"
     if baseline_conditioned:
@@ -211,7 +223,7 @@ def validate_cash_regression_options(regression_loss: str, huber_delta_bb: float
         raise ValueError("cash Huber threshold must be finite in [0.01,20] net bb")
 
 
-def cash_regression_losses(errors_bb, weights, regression_loss: str = "mse", huber_delta_bb: float = 1.):
+def cash_regression_losses(errors_bb, weights, regression_loss: str = "mse", huber_delta_bb: float = 1., *, normalization_mass: float | None = None):
     """Return unchanged weighted MSE and a separately selected fit objective.
 
     Errors arrive in net bb, not pot-scaled network units. Twice the standard
@@ -220,7 +232,12 @@ def cash_regression_losses(errors_bb, weights, regression_loss: str = "mse", hub
     """
     validate_cash_regression_options(regression_loss,huber_delta_bb)
     squared = errors_bb**2
-    denominator = mx.maximum(mx.sum(weights),1e-9)
+    if normalization_mass is not None and (type(normalization_mass) not in (int,float)
+            or not np.isfinite(normalization_mass) or normalization_mass <= 0):
+        raise ValueError("cash regression normalization mass must be finite and positive")
+    # Accumulated batches use the WHOLE pass's weight mass. Independently
+    # normalizing each batch changes the reach/curriculum-weighted objective.
+    denominator = mx.maximum(mx.sum(weights),1e-9) if normalization_mass is None else normalization_mass
     mse = mx.sum(weights*squared)/denominator
     if regression_loss == "mse":
         return mse,mse
@@ -241,6 +258,46 @@ def cash_loss_predictions(model, inputs, *, raw_output=False):
 def validate_cash_training_output_mode(mode):
     if type(mode) is not str or mode not in CASH_TRAINING_OUTPUT_MODES:
         raise ValueError("cash training output mode must be serving-clipped or raw")
+
+
+def validate_cash_gradient_batch_size(size):
+    if size is not None and (type(size) is not int or not 1 <= size <= 10000):
+        raise ValueError("cash gradient batch size must be an integer in 1..10000 or None")
+
+
+def cash_training_precision():
+    """Record the launch environment, never silently toggle a cached backend.
+
+    MLX may use reduced-precision matrix units even with FP32 array dtypes.
+    Set MLX_ENABLE_TF32=0 BEFORE starting Python for a full-FP32 fit request.
+    CPU/native serving parity remains independently checked in either case.
+    """
+    flag = os.environ.get("MLX_ENABLE_TF32")
+    if flag not in (None,"0","1"):
+        raise ValueError("cash MLX_ENABLE_TF32 must be unset, 0 or 1 at process launch")
+    return dict(mlx_version=version("mlx"), mlx_enable_tf32=flag,
+                matmul_precision_request="full-float32" if flag == "0" else "library-default-or-tf32-enabled",
+                environment_must_be_set_before_import=True)
+
+
+def cash_accumulated_value_and_grad(model, loss_grad, rows, batch_size):
+    """Sum additive globally normalized losses at ONE unchanged parameter set.
+
+    Evaluate every gradient before advancing so activation graphs are released.
+    The caller performs one optimizer update after the whole pass, never one
+    per batch. FP32 reduction order differs from an unbatched gradient.
+    """
+    validate_cash_gradient_batch_size(batch_size)
+    if batch_size is None or len(rows) == 0:
+        raise ValueError("cash accumulation requires a batch size and nonempty rows")
+    total, accumulated = mx.array(0.), None
+    for start in range(0, len(rows), batch_size):
+        loss, gradient = loss_grad(model, rows[start:start+batch_size])
+        total = total + loss
+        accumulated = gradient if accumulated is None else tree_map(
+            lambda left,right: left+right, accumulated, gradient)
+        mx.eval(total, accumulated)
+    return total, accumulated
 
 
 def split_cash_families(source: dict, seed: int, reference: dict | None = None):
@@ -283,7 +340,7 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped"):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped", gradient_batch_size: int | None = None):
     if ((initial_value_network is None) != (initial_dataset is None)
             or any(value is not None and not isinstance(value,Path)
                    for value in (initial_value_network,initial_dataset))):
@@ -309,6 +366,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         raise ValueError("cash learning rate must be finite in (0,0.1]")
     validate_cash_regression_options(regression_loss,huber_delta_bb)
     validate_cash_training_output_mode(training_output_mode)
+    validate_cash_gradient_batch_size(gradient_batch_size)
+    training_precision = cash_training_precision()
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -347,6 +406,18 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         joint = ranges * compatible_masses(ranges)
         own_targets.append(np.sum(joint*np.asarray(label["counterfactual_values_bb"]),axis=1)/joint.sum(axis=1))
     own_target = mx.array(np.asarray(own_targets,dtype=np.float32))
+    train_rows = mx.array(train)
+    normalization_mass = tuning_normalization_mass = None
+    if gradient_batch_size is not None:
+        # Preserve the existing global regression denominator and unweighted
+        # context means for BOTH explicit auxiliary losses. A final short
+        # batch must not acquire the weight of a full batch.
+        normalization_mass = float(mx.sum(loss_weight[train_rows]*context_weight[train_rows,None]).item())
+        tuning_normalization_mass = float(mx.sum(loss_weight[mx.array(tuning)]).item())
+        if not np.isfinite(normalization_mass) or normalization_mass <= 0:
+            raise ValueError("cash accumulated training requires positive finite total loss weight")
+        if not np.isfinite(tuning_normalization_mass) or tuning_normalization_mass <= 0:
+            raise ValueError("cash accumulated tuning requires positive finite total loss weight")
 
     def loss_components(current, rows, weight_training_contexts=True):
         # An overshot raw value receives zero corrective gradient through a
@@ -358,7 +429,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
         weighted = loss_weight[rows]
         if weight_training_contexts:
             weighted = weighted * context_weight[rows, None]
-        mse,regression = cash_regression_losses(errors,weighted,regression_loss,huber_delta_bb)
+        mse,regression = cash_regression_losses(errors,weighted,regression_loss,huber_delta_bb,
+            normalization_mass=normalization_mass if weight_training_contexts else tuning_normalization_mass)
         if accounting_loss_weight == 0 and profile_value_loss_weight == 0:
             return mse,regression,mx.array(0.)
         penalty = mx.array(0.)
@@ -366,35 +438,63 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
             penalty += accounting_loss_weight * cash_accounting_penalty(prediction,tensors[3][rows],tensors[2][rows],house_target[rows])
         if profile_value_loss_weight:
             penalty += profile_value_loss_weight * cash_profile_value_penalty(prediction,tensors[3][rows],tensors[2][rows],own_target[rows])
+        if normalization_mass is not None:
+            penalty *= len(rows)/len(train if weight_training_contexts else tuning)
         return mse,regression,penalty
 
     def loss_fn(current, rows, weight_training_contexts=True):
         _,regression,penalty = loss_components(current,rows,weight_training_contexts)
         return regression + penalty
 
-    loss_grad = nn.value_and_grad(model, loss_fn); train_rows = mx.array(train)
-    initial_loss = float(loss_fn(model, train_rows).item())
-    initial_mse = float(loss_components(model,train_rows)[0].item())
+    def tuning_scores(current):
+        with mx.stream(mx.cpu):
+            if gradient_batch_size is None:
+                mse,_,penalty = loss_components(current,mx.array(tuning),False)
+                return mse,penalty
+            mse,penalty = mx.array(0.),mx.array(0.)
+            rows = mx.array(tuning)
+            for start in range(0,len(tuning),gradient_batch_size):
+                partial_mse,_,partial_penalty = loss_components(current,rows[start:start+gradient_batch_size],False)
+                mse,penalty = mse+partial_mse,penalty+partial_penalty
+                mx.eval(mse,penalty)
+            return mse,penalty
+
+    loss_grad = nn.value_and_grad(model, loss_fn)
+    if gradient_batch_size is None:
+        initial_loss = float(loss_fn(model, train_rows).item())
+        initial_mse = float(loss_components(model,train_rows)[0].item())
+    else:
+        initial_components = [mx.array(0.) for _ in range(3)]
+        for start in range(0, len(train), gradient_batch_size):
+            components = loss_components(model,train_rows[start:start+gradient_batch_size])
+            initial_components = [a+b for a,b in zip(initial_components,components)]
+            mx.eval(initial_components)
+        initial_mse = float(initial_components[0].item())
+        initial_loss = float((initial_components[1]+initial_components[2]).item())
     best_parameters, best_tuning, best_step = None, float("inf"), 0
     checkpoint_history = []
     if initialization is not None:
         # Do not replace a working frozen model if every attempted update
         # worsens the same tuning criterion. No holdout-based selection.
+        mse,penalty = tuning_scores(model)
         with mx.stream(mx.cpu):
-            mse,_,penalty = loss_components(model,mx.array(tuning),False)
             best_tuning = float((mse+penalty).item())
         checkpoint_history.append(dict(step=0, pre_update_training_objective_bb_squared=None,
             tuning_mse_bb_squared=float(mse.item()), tuning_objective_bb_squared=best_tuning,
             improved_tuning=True))
         best_parameters = [(key,np.array(value)) for key,value in tree_flatten(model.parameters())]
     for step in range(1, steps + 1):
-        loss, gradients = loss_grad(model, train_rows); optimizer.update(model, gradients)
+        if gradient_batch_size is None:
+            loss, gradients = loss_grad(model, train_rows)
+        else:
+            loss, gradients = cash_accumulated_value_and_grad(model,loss_grad,train_rows,gradient_batch_size)
+        optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state, loss)
         if step == 1 or step % 10 == 0 or step == steps:
+            # Isolate the fit objective: checkpoint selection retains the
+            # original MSE plus any explicitly requested auxiliary terms.
+            tuning_mse,tuning_penalty = tuning_scores(model)
             with mx.stream(mx.cpu):
-                # Isolate the fit objective: checkpoint selection retains the
-                # original MSE plus any explicitly requested auxiliary terms.
-                tuning_mse,_,tuning_penalty = loss_components(model,mx.array(tuning),False)
                 value = float((tuning_mse+tuning_penalty).item())
             # Report already-evaluated scores, without extra forwards or a
             # changed criterion. The training loss is from BEFORE this update;
@@ -407,7 +507,13 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
                 best_tuning, best_step = value, step
                 best_parameters = [(key, np.array(value)) for key, value in tree_flatten(model.parameters())]
     model.load_weights([(key, mx.array(value)) for key, value in best_parameters])
-    predicted = reference_predictions(model, tensors, scales, legal)
+    if gradient_batch_size is None:
+        predicted = reference_predictions(model, tensors, scales, legal)
+    else:
+        predicted = np.concatenate([reference_predictions(model,
+            [v[start:start+gradient_batch_size] for v in tensors],
+            scales[start:start+gradient_batch_size],legal[start:start+gradient_batch_size])
+            for start in range(0,len(source["labels"]),gradient_batch_size)])
     native_weights = weights.astype(np.float64)
     # Recompute masses in f64 for the identical compatible joint distribution.
     for row, label in enumerate(source["labels"]):
@@ -421,7 +527,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, dataset_digest, accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization,training_output_mode=training_output_mode)
+    export_cash_model(model, network_path, seed, source, dataset_digest, accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization,training_output_mode=training_output_mode,gradient_batch_size=gradient_batch_size)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
               "rules_sha256": source["rules_sha256"], "source_dataset_sha256":dataset_digest,
@@ -445,8 +551,15 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "native_binary_sha256":hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None,
               "network_sha256":hashlib.sha256(network_path.read_bytes()).hexdigest(),
               "evaluation_backend":"mlx-cpu-fp32-native-parity", "training_backend":str(mx.default_device()),
+              "training_precision":training_precision,
               "split_rows":{"train":train.tolist(),"tuning":tuning.tolist(),"holdout":holdout.tolist()},
               "full_game_exploitability":"unmeasured", "active":False}
+    if gradient_batch_size is not None:
+        report["gradient_batching"] = dict(batch_size=gradient_batch_size,
+            microbatches_per_update=(len(train)+gradient_batch_size-1)//gradient_batch_size,
+            contexts_per_optimizer_update=len(train), normalization_mass=normalization_mass,
+            order="frozen-split-row-order", sampling="complete-pass-no-subsampling",
+            optimizer_updates=steps, floating_point_reduction_order_changed=True)
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
@@ -467,10 +580,11 @@ def main():
     parser.add_argument("--regression-loss",choices=("mse","huber"),default="mse",help="Matched cash fit objective; checkpoint selection and reporting retain MSE")
     parser.add_argument("--huber-delta-bb",type=float,default=1.,help="Huber fit threshold in net bb; small-error gradients match original squared loss")
     parser.add_argument("--training-output-mode",choices=CASH_TRAINING_OUTPUT_MODES,default="serving-clipped",help="Explicit raw-value fit pilot; checkpoint selection and inference retain serving clipping")
+    parser.add_argument("--gradient-batch-size",type=int,help="Accumulate the full globally weighted gradient in bounded context batches; one Adam update per complete pass")
     parser.add_argument("--initial-value-network",type=Path,help="Frozen cash weights with sibling report.json; same seed/architecture/rules/split required")
     parser.add_argument("--initial-dataset",type=Path,help="Byte-pinned initial training corpus; must remain an unchanged current prefix")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode,gradient_batch_size=args.gradient_batch_size), indent=2))
 
 
 if __name__ == "__main__": main()
