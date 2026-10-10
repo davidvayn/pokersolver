@@ -395,6 +395,54 @@ The next hypothesis changes **which authentic solver queries receive supervision
 
 The optional observer is implemented with the unchanged default and legacy serialization. Its new-option regression first fails on the unsupported field, then passes after implementation; all eight capture tests pass. Full release suites pass **468 / 60 ignored** in the working checkout and **464 / 59 ignored** in the clean publishing checkout; all **68 cash Python tests** pass. The immutable executable is `native-cash-reach-capture-20261009.bin`, SHA-256 `823a707c1cb43d9a1f01864482d45e4ec108c927228287be8d81576c8698a94c`. The bounded matched pilot is running under `cash-query-sampling-hash-vs-reach-paired-20261009`; no training-quality or activation result is claimed while it runs. No TypeScript, UI, worker, or WASM files changed in this checkpoint.
 
+### Completed broader-iteration sampling comparison
+
+All twenty trace captures and **160 new 64-update references** complete. Each observer's full policy matches its frozen source field for field; observed query counts agree and no duplicate input slots are dropped. The original 167-context prefix and every split index stay fixed. Each arm has 247 contexts and receives two serial 240-step fits with identical hyperparameters.
+
+| Arm / seed | Original holdout RMSE | Fixed current-belief diagnostic | Previous current-7101 own-leaf cohort | Previous current-7102 own-leaf cohort |
+| --- | --- | --- | --- | --- |
+| Hash / 7101 | 0.4065bb | 1.0532bb | 0.7668bb | 0.7630bb |
+| Reach / 7101 | 0.6165bb | 1.3626bb | 1.2518bb | 1.1879bb |
+| Hash / 7102 | 0.5053bb | 1.1415bb | 1.0557bb | 0.9803bb |
+| Reach / 7102 | 0.5364bb | 1.4533bb | 1.2396bb | 1.1102bb |
+
+The reach-weighted variant loses to its matched hash control in both seeds on every cohort, so it is **not selected or extended**. The optional observer stays available for research with the unchanged hash default. Broader hash-selected iteration coverage improves the original holdout and both newer-policy cohorts versus the 207 current pair, but the fixed current-belief diagnostic regresses from 0.8915 / 0.9989bb. These are distinct distributions, not interchangeable metrics. Native/CPU parity stays below 0.000011bb. The recorded wall time is 12,974 seconds, CPU time 4,744 seconds, peak footprint 7.81GB, zero reported swaps; wall time is not an estimate of uninterrupted throughput. Report: `cash-query-sampling-hash-vs-reach-paired-20261009/report.json`, SHA-256 `86b07214d4f62696f87517f4e303858ef1e811cc1147575bf621bab722131e63`. Frozen hash weights: `289b533da149dd7df14c5c97e79c0a4abf36dc0114a883950190d3ab10f44f12` / `d7f0fa5f35dda814fbf30f59bc634bb2cd670745a508d97ed278432737657570`.
+
+Four bounded 32-update action solves on excluded development roots 2 / 3 show that better value fits have **not cleared action stability**:
+
+| Diagnostic root | Broader-hash action MAE | Primary agreement | Maximum aggregate action delta | Previous 207 aggregate delta |
+| --- | --- | --- | --- | --- |
+| 2 | 5.8480pp | 91.7812% | 7.3717pp | 11.2720pp |
+| 3 | 2.9167pp | 93.6224% | 5.2811pp | 2.3548pp |
+
+Primary agreement clears its numerical threshold on these two roots, but root 2 still exceeds the 5pp action-MAE gate and both exceed the 3pp aggregate gate. Root 3 worsens; do not cherry-pick root 2's aggregate improvement or claim full-game qualification. Action EVs still use each model's learned continuation. Report: `cash-broader-hash-action-comparison-20261009/report.json`, SHA-256 `68cf1577aff9fc484f0ab896441b424121967c3e8205bca388bdb900b902dbca`.
+
+A separate sixteen-reference own-leaf check keeps all eight previously selected diagnostic public cells and recomputes the final-average ranges under each new policy. On hash-7101's own cohort, hash-7101 / hash-7102 errors are **0.8352 / 0.9217bb**, versus 1.1347 / 1.1977bb for the 207 current models on those exact inputs. On hash-7102's own cohort, they are **0.9073 / 1.0451bb**, versus 1.2155 / 1.2937bb. Thus the value improvement survives this bounded induced-range test, despite failed action stability. None of these evaluation cells enters training. Report: `cash-broader-hash-policy-own-leaf-probe-20261009/report.json`, SHA-256 `ebd4ca13b900858858e01bda6abd0f0dce19991bc03cb029466c655dedfc91af`.
+
+An exact branch-reach audit explains why context-equal errors must not be reported as full-hand EV loss. The worst prior own-leaf cell has root-conditioned on-policy probability **0.012956% / 0.029188%** under the 207 pair, but larger counterfactual path weights when own action reach is removed. Low authentic reach does not eliminate adversarial importance. Error multiplied by these path weights is neither an exploitability estimate nor a qualification bound. Only sixteen selected public cells are audited. Report: `cash-diagnostic-branch-reach-audit-20261009/report.json`, SHA-256 `66d4cebb340d84f3f4ddb576a6a7a7c50fc3d6a485bae64b5e602d4522bf244f`.
+
+All candidates remain research-only and inactive. These results support broader authentic solver-input coverage, not longer blind iteration runs, paid compute, or an Approximate GTO label. The next diagnostic must distinguish finite flop regret updates from continuation bias before extending either budget.
+
+A zero-update frozen-policy diagnostic then scores all four new flop policies under both hash students, preserving every probability bit. Changing only evaluation weights yields reached-hand **best-action agreement of 87.91% / 82.92% on root 2 and 83.10% / 66.59% on root 3**. Centered action-advantage MAE remains 0.0295–0.0377bb; common payoff offsets do not remove it. Both evaluators are approximate, so neither is a truth oracle. This establishes material continuation-hypothesis disagreement at a fixed policy; it does not prove that finite flop updates are irrelevant or measure true EV loss. Report: `cash-broader-hash-frozen-action-value-diagnosis-20261009/report.json`, SHA-256 `91fb8bb60dd30e309b12f68cd5894d9e6b15ffdefe54a102354a97f883c45498`.
+
+The next bounded data comparison increases **training flop families from ten to fourteen while keeping the same eighty added targets**, original 167 prefix, 247-context total, proposer models, seeds, 240 steps, optimizer, architecture, loss, and split. Source roots are 0 / 1 / 4–15; roots 2 / 3 and every diagnostic cohort remain evaluation-only. Four iteration rounds use the existing `9413 + root_index` rule. A predeclared seed-19513 draw assigns two queries per round to roots **0 / 4 / 6 / 7 / 14 / 15**, and one to the other eight roots. This retains **56 pinned existing hash references** and generates at most **24 new references** from four new-family traces; it does not buy a larger label budget. Preflight finds no new-family collision with original tuning/holdout or diagnostic board families. Compare all original/current/induced-range cohorts in both fits before considering action checks or extension. Wider board coverage is a falsifiable data-generalization hypothesis, not a promised exploitability gain. No paid compute, new serving mode, release waiver, or activation is included.
+
+### Exact single-seat cash terminal optimization
+
+A one-second sample of a live teacher solve identifies redundant two-seat payoff work inside one-traverser training and best-response walks. The minimal regression command, `cargo test --release --lib cash_traverser_terminal_evaluates_only_requested_payoff`, first fails with **two kernels instead of one** on a legal fold. The fix computes only the requested seat's own raked payoff and opponent marginals; turn all-ins mask only the needed opponent range while retaining exact 48-public/44-compatible river accounting. Ordinary joint-profile evaluation still returns both players. No payoff negation, action-grid change, extra sampling, approximation or cache substitution is introduced.
+
+Three new regression tests cover fold/river/all-in kernel counts, both-seat bit parity with the old joint kernel under sparse/zero-own queries, raked and matched rake-off rules, uncalled refunds and odd-cent ties, plus exact regrets, average accumulators, policies and best-response/exported values under DCFR and CFR+. The test-only work counter is thread-safe and absent from release binaries. Home retains its existing route. Full final release suites pass **471 tests / 60 ignored** in the working checkout and **467 / 59 ignored** in the clean publishing checkout; all **68 cash Python tests** pass. No TypeScript, UI, worker or WASM change requires browser regeneration at this milestone.
+
+The immutable executable `native-cash-single-seat-terminals-20261009.bin` has SHA-256 `26b6d967fb1e3a62ef41a11ffb86dbc3ca71c044d29fdf65cba2351ff23a214a`. Two alternating serial cold repetitions on three pinned 64-update teacher inputs preserve each complete serialized label **byte-for-byte**, including every CFV and diagnostic:
+
+| Source root | Prior median | Single-seat median | Speedup |
+| --- | --- | --- | --- |
+| 0 | 7.6293s | 5.6006s | 1.3622x |
+| 1 | 0.8567s | 0.5893s | 1.4538x |
+| 8 | 0.7897s | 0.5625s | 1.4037x |
+
+Peak sampled child RSS stays below 115MB, with no material increase. These are three selected teacher states and two repetitions, not a timing confidence interval, full-game runtime guarantee, or web-serving speed measurement. Report: `cash-single-seat-terminal-exactness-timing-20261009/report.json`, SHA-256 `198d043a7ace4e5e18be05fb157af18fff9bf71c518cf98b51cf537353582cdb`. The next pilot uses the new binary only for fresh labels and native inference checks; retained labels keep their original binary provenance. Production cash activation and full-game exploitability remain unmeasured, not silently passed.
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
