@@ -2,10 +2,13 @@ import unittest
 import copy
 import json
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 import mlx.core as mx
 import mlx.optimizers as optim
 import numpy as np
+import train_cash_value_network as cash_training
+from cash_feature_cache import CashFeatureCache
 from train_cash_value_network import OwnComboValueNetwork,export_cash_model,cash_accounting_penalty,cash_profile_value_penalty,cash_regression_losses,context_loss_multipliers,run,split_cash_families
 from cash_profiles import profile_rules,rules_digest
 from cash_value_dataset import NETWORK_SCHEMA,POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_NETWORK_SCHEMA,BLOCKER_POOLED_CONTRACT
@@ -13,6 +16,77 @@ from train_public_value_network import FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SC
 
 
 class CashValueTrainingTests(unittest.TestCase):
+    def test_full_fit_exports_identical_weights_with_warm_features(self):
+        # Keep the real initialization, optimizer, checkpoint selection and
+        # export path. Only expensive feature construction and corpus split
+        # are replaced by a deterministic three-context fixture.
+        dimensions = OwnComboValueNetwork()
+        context_size = dimensions.context_tower.layers[0].weight.shape[1]
+        query_size = dimensions.query_tower.layers[0].weight.shape[1]
+        contexts = np.zeros((3, 2, context_size), np.float32)
+        queries = np.zeros((3, 2, 1326, query_size), np.float32)
+        queries[:, :, :, 94] = .5
+        arrays = (contexts, queries, np.full((3, 2, 1326), 1 / 1326, np.float32),
+                  np.ones(3, np.float32), np.zeros((3, 2, 1326), np.float32),
+                  np.ones((3, 1326), np.float32), np.full((3, 2652), .1, np.float32),
+                  np.full((3, 2652), 1 / 1326, np.float32))
+        rules = profile_rules("nl25")
+        source = dict(game=dict(cash_rules=rules), rules_sha256=rules_digest(rules),
+            labels=[dict(input=dict(state=dict(ranges=np.full((2, 1326), 1 / 1326).tolist())),
+                         counterfactual_values_bb=np.full((2, 1326), .1).tolist(),
+                         metrics=dict(cash=dict(expected_house_rake_bb=0.))) for _ in range(3)])
+        split = tuple(np.array([index]) for index in range(3))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "dataset.json"
+            dataset.write_text(json.dumps(source))
+            with (patch.object(cash_training, "_FEATURE_CACHE", CashFeatureCache()),
+                  patch.object(cash_training, "split_cash_families", return_value=split),
+                  patch.object(cash_training, "feature_arrays", return_value=arrays) as prepare):
+                first = run(dataset, root / "cold", 7101, 2, split_seed=937)
+                second = run(dataset, root / "warm", 7101, 2, split_seed=937)
+                prepare.assert_called_once_with(source, FEATURE_SCHEMA_BOARD_RELATIVE)
+                self.assertFalse(first["feature_preparation"]["cache_hit"])
+                self.assertTrue(second["feature_preparation"]["cache_hit"])
+                self.assertEqual((root / "cold/value-network.json").read_bytes(),
+                                 (root / "warm/value-network.json").read_bytes())
+                for metric in ("heldout_rmse_bb", "training_initial_mse_bb", "selected_step",
+                               "maximum_own_payoff_accounting_bias_bb", "network_sha256"):
+                    self.assertEqual(first[metric], second[metric])
+                self.assertTrue(all(not array.flags.writeable for array in arrays))
+
+    def test_paired_runs_prepare_identical_corpus_features_only_once(self):
+        # Exercise the actual paired run seam, stopping immediately after
+        # preparation so this regression needs neither a fit nor native code.
+        class StopBeforeFit(Exception):
+            pass
+
+        arrays = tuple(np.ones((1,), dtype=np.float32) for _ in range(8))
+        split = tuple(np.array([0]) for _ in range(3))
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "dataset.json"
+            dataset.write_text(json.dumps({"labels": [{}], "test_identity": directory}))
+            with (patch.object(cash_training, "_FEATURE_CACHE", CashFeatureCache()),
+                  patch.object(cash_training, "split_cash_families", return_value=split),
+                  patch.object(cash_training, "feature_arrays", return_value=arrays) as prepare,
+                  patch.object(cash_training, "OwnComboValueNetwork", side_effect=StopBeforeFit)):
+                for seed in (7101, 7102):
+                    with self.assertRaises(StopBeforeFit):
+                        run(dataset, Path(directory) / str(seed), seed, 1, split_seed=937)
+                self.assertEqual(prepare.call_count, 1,
+                    "paired fits must not rebuild features for identical corpus bytes")
+                with self.assertRaises(StopBeforeFit):
+                    run(dataset, Path(directory) / "schema", 7101, 1, split_seed=937,
+                        feature_schema=FEATURE_SCHEMA_EXACT_RUNOUT)
+                self.assertEqual(prepare.call_count, 2)
+                dataset.write_text(json.dumps({"labels": [{}], "test_identity": directory,
+                                               "changed_rules_or_targets": True}))
+                with self.assertRaises(StopBeforeFit):
+                    run(dataset, Path(directory) / "changed", 7101, 1, split_seed=937,
+                        feature_schema=FEATURE_SCHEMA_EXACT_RUNOUT)
+                self.assertEqual(prepare.call_count, 3,
+                    "new corpus bytes at the same path must invalidate cached features")
+
     def test_huber_uses_net_bb_errors_and_retains_mse_metric_and_local_gradients(self):
         with mx.stream(mx.cpu):
             errors = mx.array([-2.,-.5,0.,.5,2.]); weights = mx.ones((5,))
