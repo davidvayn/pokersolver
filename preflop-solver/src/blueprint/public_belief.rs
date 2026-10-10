@@ -8812,6 +8812,8 @@ struct TurnRiverSolver {
     root_realization_averages: bool,
     #[cfg(test)]
     reference_both_value_players: bool,
+    #[cfg(test)]
+    terminal_value_kernel_evaluations: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8909,6 +8911,8 @@ impl TurnRiverSolver {
             root_realization_averages: false,
             #[cfg(test)]
             reference_both_value_players: false,
+            #[cfg(test)]
+            terminal_value_kernel_evaluations: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -9637,9 +9641,18 @@ impl TurnRiverSolver {
         traverser: usize,
     ) -> [Vec<f64>; 2] {
         if self.config.game.cash_rules.is_some() {
-            let mut values = self.cash_terminal_values(state, reaches, river);
-            values[1 - traverser].fill(0.0);
-            return values;
+            #[cfg(test)]
+            if self.reference_both_value_players {
+                let mut values = self.cash_terminal_values(state, reaches, river);
+                values[1 - traverser].fill(0.0);
+                return values;
+            }
+            let requested = self.cash_player_terminal_values(state, reaches, river, traverser);
+            return if traverser == 0 {
+                [requested, vec![0.0; COMBO_COUNT]]
+            } else {
+                [vec![0.0; COMBO_COUNT], requested]
+            };
         }
         #[cfg(test)]
         if self.reference_both_value_players {
@@ -9722,6 +9735,9 @@ impl TurnRiverSolver {
     }
 
     fn constant_terminal_values(&self, opponent_reach: &[f64], utility: f64) -> Vec<f64> {
+        #[cfg(test)]
+        self.terminal_value_kernel_evaluations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         compatible_masses_from_card_marginals(&self.combos, opponent_reach)
             .into_iter()
             .map(|mass| utility * mass)
@@ -9760,12 +9776,16 @@ impl TurnRiverSolver {
         loss: f64,
         tie: f64,
     ) -> Vec<f64> {
+        #[cfg(test)]
+        self.terminal_value_kernel_evaluations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let data = self.river_data[river as usize]
             .as_ref()
             .expect("known river card");
         let use_compact = data.card_strength_layout.entries() * 2 < 52 * data.strength_group_count;
         #[cfg(test)]
-        let use_compact = use_compact && !self.reference_both_value_players;
+        let use_compact = use_compact
+            && (!self.reference_both_value_players || self.config.game.cash_rules.is_some());
         let mut values = if use_compact {
             data.card_strength_layout.values(
                 &self.combos,

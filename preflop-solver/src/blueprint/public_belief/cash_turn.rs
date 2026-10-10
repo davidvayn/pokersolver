@@ -54,6 +54,98 @@ impl TurnRiverSolver {
         self.cash_showdown_values(rules, state.invested, reaches, river)
     }
 
+    /// Training and best-response walks consume one player's own payoff.
+    /// Do not compute the other player's marginals only to discard them.
+    /// Cash payoffs are not zero sum: settle this seat explicitly, including
+    /// refunds, rake and its distinct odd-unit tie award.
+    pub(super) fn cash_player_terminal_values(
+        &self,
+        state: &GameState,
+        reaches: &[Vec<f64>; 2],
+        river: Option<u8>,
+        player: usize,
+    ) -> Vec<f64> {
+        let rules = self
+            .config
+            .game
+            .cash_rules
+            .as_ref()
+            .expect("cash turn rules");
+        match state.terminal.as_ref().expect("terminal cash state") {
+            Terminal::Fold { winner } => {
+                let payoffs = cash::cash_terminal_payoffs(
+                    rules,
+                    state.invested,
+                    TerminalReason::Fold,
+                    if *winner == 0 {
+                        Outcome::PlayerZero
+                    } else {
+                        Outcome::PlayerOne
+                    },
+                    if river.is_some() { 5 } else { 4 },
+                )
+                .expect("legal cash fold");
+                self.constant_terminal_values(&reaches[1 - player], payoffs[player])
+            }
+            Terminal::Showdown => {
+                let zero = cash::cash_terminal_payoffs(
+                    rules,
+                    state.invested,
+                    TerminalReason::Showdown,
+                    Outcome::PlayerZero,
+                    5,
+                )
+                .expect("cash showdown");
+                let one = cash::cash_terminal_payoffs(
+                    rules,
+                    state.invested,
+                    TerminalReason::Showdown,
+                    Outcome::PlayerOne,
+                    5,
+                )
+                .expect("cash showdown");
+                let tie = cash::cash_terminal_payoffs(
+                    rules,
+                    state.invested,
+                    TerminalReason::Showdown,
+                    Outcome::Split,
+                    5,
+                )
+                .expect("cash tie");
+                let (win, loss) = if player == 0 {
+                    (zero[player], one[player])
+                } else {
+                    (one[player], zero[player])
+                };
+                if let Some(card) = river {
+                    return self.river_player_showdown_values(
+                        &reaches[1 - player],
+                        card,
+                        win,
+                        loss,
+                        tie[player],
+                    );
+                }
+                let mut values = vec![0.0; COMBO_COUNT];
+                for card in &self.river_cards {
+                    let mut masked = reaches[1 - player].clone();
+                    for combo in &self.river_blocked_combos[*card as usize] {
+                        masked[*combo] = 0.0;
+                    }
+                    let child =
+                        self.river_player_showdown_values(&masked, *card, win, loss, tie[player]);
+                    let legal = self.legal_for(Some(*card), player);
+                    for combo in 0..COMBO_COUNT {
+                        if legal[combo] {
+                            values[combo] += child[combo] / 44.0;
+                        }
+                    }
+                }
+                values
+            }
+        }
+    }
+
     /// Geometry is independent of rules and commitments. Always settle with
     /// the caller's current rules, including rake, refunds and odd-unit ties.
     pub(super) fn cash_showdown_values(
@@ -211,6 +303,163 @@ mod tests {
             averaging_delay: 0,
             river_refinement_iterations: 0,
             regret_matching_plus: false,
+        }
+    }
+
+    #[test]
+    fn cash_traverser_terminal_evaluates_only_requested_payoff() {
+        let input = config();
+        let solver = TurnRiverSolver::new(input.clone()).unwrap();
+        let mut state = input.state.game_state();
+        state.terminal = Some(Terminal::Fold { winner: 0 });
+        for player in 0..2 {
+            solver
+                .terminal_value_kernel_evaluations
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            let values = solver.player_terminal_values(&state, &input.state.ranges, None, player);
+            assert!(values[player].iter().any(|value| *value != 0.0));
+            assert!(values[1 - player].iter().all(|value| *value == 0.0));
+            assert_eq!(
+                solver
+                    .terminal_value_kernel_evaluations
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "training and best response need only the requested player's terminal payoff"
+            );
+        }
+        state.terminal = Some(Terminal::Showdown);
+        for river in [None, Some(0)] {
+            for player in 0..2 {
+                solver
+                    .terminal_value_kernel_evaluations
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                let values =
+                    solver.player_terminal_values(&state, &input.state.ranges, river, player);
+                assert!(values[1 - player].iter().all(|value| *value == 0.0));
+                assert_eq!(
+                    solver
+                        .terminal_value_kernel_evaluations
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    if river.is_some() { 1 } else { 48 }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cash_requested_terminal_payoff_is_bit_exact_for_both_seats() {
+        for rake_off in [false, true] {
+            for sparse in [false, true] {
+                let mut input = config();
+                if rake_off {
+                    input.game.cash_rules =
+                        Some(crate::cash_game::study_rules("nl25-rake-off-control").unwrap());
+                }
+                if sparse {
+                    for (player, range) in input.state.ranges.iter_mut().enumerate() {
+                        for (combo, weight) in range.iter_mut().enumerate() {
+                            if combo % (player + 3) == 0 {
+                                *weight = 0.0;
+                            }
+                        }
+                    }
+                }
+                let solver = TurnRiverSolver::new_cash_training(input.clone()).unwrap();
+                let mut state = input.state.game_state();
+                // Different contributions test uncalled refunds; 1.40 per seat
+                // yields an odd net pot after cent rounding and asymmetric ties.
+                for invested in [[1.0, 1.0], [1.4, 1.4], [2.0, 1.0], [1.0, 2.0]] {
+                    state.invested = invested;
+                    for terminal in [
+                        Terminal::Fold { winner: 0 },
+                        Terminal::Fold { winner: 1 },
+                        Terminal::Showdown,
+                    ] {
+                        if let Terminal::Fold { winner } = &terminal {
+                            if invested[*winner] < invested[1 - *winner] {
+                                continue; // A fold winner must own any unmatched wager.
+                            }
+                        }
+                        state.terminal = Some(terminal);
+                        for river in [None, Some(0), Some(49)] {
+                            let mut reaches = solver.config.state.ranges.clone();
+                            if let Some(card) = river {
+                                for range in &mut reaches {
+                                    for combo in &solver.river_blocked_combos[card as usize] {
+                                        range[*combo] = 0.0;
+                                    }
+                                }
+                            }
+                            let reference = solver.cash_terminal_values(&state, &reaches, river);
+                            for player in 0..2 {
+                                let actual =
+                                    solver.player_terminal_values(&state, &reaches, river, player);
+                                assert_eq!(
+                                    actual[player]
+                                        .iter()
+                                        .map(|v| v.to_bits())
+                                        .collect::<Vec<_>>(),
+                                    reference[player]
+                                        .iter()
+                                        .map(|v| v.to_bits())
+                                        .collect::<Vec<_>>()
+                                );
+                                assert!(actual[1 - player].iter().all(|value| *value == 0.0));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cash_traverser_only_work_preserves_training_and_best_response_bits() {
+        for plus in [false, true] {
+            let mut input = config();
+            input.regret_matching_plus = plus;
+            for (player, range) in input.state.ranges.iter_mut().enumerate() {
+                for (combo, weight) in range.iter_mut().enumerate() {
+                    if combo % (player + 3) == 0 {
+                        *weight = 0.0;
+                    } else {
+                        *weight *= (combo % 7 + 1) as f64;
+                    }
+                }
+            }
+            let mut fast = TurnRiverSolver::new_cash_training(input.clone()).unwrap();
+            let mut reference = TurnRiverSolver::new_cash_training(input).unwrap();
+            reference.reference_both_value_players = true;
+            fast.train();
+            reference.train();
+            assert_eq!(fast.nodes.len(), reference.nodes.len());
+            for (key, node) in &fast.nodes {
+                let other = &reference.nodes[key];
+                assert_eq!(node.regrets, other.regrets);
+                assert_eq!(node.strategy_sum, other.strategy_sum);
+                assert_eq!(
+                    node.last_regret_discount_round,
+                    other.last_regret_discount_round
+                );
+                assert_eq!(
+                    node.last_strategy_discount_round,
+                    other.last_strategy_discount_round
+                );
+            }
+            assert_eq!(
+                serde_json::to_vec(&fast.policy_strategies()).unwrap(),
+                serde_json::to_vec(&reference.policy_strategies()).unwrap()
+            );
+            for player in 0..2 {
+                assert_eq!(
+                    fast.exact_best_response_conditional_values(player),
+                    reference.exact_best_response_conditional_values(player)
+                );
+            }
+            assert_eq!(
+                serde_json::to_vec(&fast.finish()).unwrap(),
+                serde_json::to_vec(&reference.finish()).unwrap()
+            );
         }
     }
 
