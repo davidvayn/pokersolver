@@ -119,6 +119,12 @@ class CashValueInitializationTests(unittest.TestCase):
                 report = run(dataset,output,7101,1,split_seed=937,architecture="wide-pooled",
                              initial_value_network=network,initial_dataset=dataset)
             self.assertEqual(report["selected_step"],0)
+            history = report["checkpoint_history"]
+            self.assertEqual([row["step"] for row in history], [0, 1])
+            self.assertIsNone(history[0]["pre_update_training_objective_bb_squared"])
+            self.assertTrue(history[0]["improved_tuning"])
+            self.assertFalse(history[1]["improved_tuning"])
+            self.assertEqual(history[0]["tuning_objective_bb_squared"], 0.)
             self.assertEqual(report["initial_value_network"]["network_sha256"],hashlib.sha256(network.read_bytes()).hexdigest())
             exported = json.loads((output/"value-network.json").read_text())
             self.assertTrue(exported["checkpointSelectionIncludesInitialModel"])
