@@ -75,6 +75,33 @@ class CashValueTrainingTests(unittest.TestCase):
             self.assertEqual(float(clipped_gradient["head"]["layers"][-1]["bias"].item()), 0.)
             self.assertAlmostEqual(float(raw_gradient["head"]["layers"][-1]["bias"].item()), -10., places=5)
 
+    def test_raw_loss_path_carries_exact_ranges_into_blocker_pooling(self):
+        with mx.stream(mx.cpu):
+            model = OwnComboValueNetwork("wide-blocker-pooled")
+            model.head.layers[-1].bias = mx.array([22.])
+            context_size = model.context_tower.layers[0].weight.shape[1]
+            query_size = model.query_tower.layers[0].weight.shape[1]
+            legal = np.zeros((1, 1326), np.float32); legal[0, 0] = 1
+            inputs = tuple(mx.array(a) for a in (
+                np.zeros((1, 2, context_size), np.float32),
+                np.zeros((1, 2, 1326, query_size), np.float32),
+                np.ones((1, 2, 1326), np.float32), np.ones(1, np.float32),
+                np.zeros((1, 2, 1326), np.float32), legal,
+                np.full((1, 2, 1326), 1 / 1326, np.float32)))
+            target = np.zeros((1, 2652), np.float32); target[0, [0, 1326]] = 17.
+            target = mx.array(target)
+            def objective(current, raw):
+                return mx.sum((cash_training.cash_loss_predictions(
+                    current, inputs, raw_output=raw) - target)**2) / 2
+            _, clipped_gradient = nn.value_and_grad(
+                model, lambda current: objective(current, False))(model)
+            _, raw_gradient = nn.value_and_grad(
+                model, lambda current: objective(current, True))(model)
+            self.assertEqual(float(clipped_gradient["head"]["layers"][-1]["bias"].item()), 0.)
+            self.assertAlmostEqual(float(raw_gradient["head"]["layers"][-1]["bias"].item()), 10., places=5)
+            with self.assertRaisesRegex(ValueError, "raw exact ranges"):
+                cash_training.cash_loss_predictions(model, inputs[:6], raw_output=True)
+
     def test_full_fit_exports_identical_weights_with_warm_features(self):
         # Keep the real initialization, optimizer, checkpoint selection and
         # export path. Only expensive feature construction and corpus split
