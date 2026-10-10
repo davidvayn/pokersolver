@@ -443,6 +443,45 @@ The immutable executable `native-cash-single-seat-terminals-20261009.bin` has SH
 
 Peak sampled child RSS stays below 115MB, with no material increase. These are three selected teacher states and two repetitions, not a timing confidence interval, full-game runtime guarantee, or web-serving speed measurement. Report: `cash-single-seat-terminal-exactness-timing-20261009/report.json`, SHA-256 `198d043a7ace4e5e18be05fb157af18fff9bf71c518cf98b51cf537353582cdb`. The next pilot uses the new binary only for fresh labels and native inference checks; retained labels keep their original binary provenance. Production cash activation and full-game exploitability remain unmeasured, not silently passed.
 
+### Wider-family follow-up: value and action improvement, still inactive
+
+The equal-budget fourteen-family pilot completes in **444 seconds**, peak footprint **7.96GB**, no reported swaps. All eighty added states are authentic captured solver inputs: 56 existing pinned labels plus 24 new labels, unchanged original 167 targets and all split indices. Both 240-step fits reduce error on all five current-policy cohorts versus the ten-family hash control, but original holdout error rises:
+
+| Wider-family seed | Original holdout | Fixed current diagnostic | Current-7101 cohort | Current-7102 cohort | Hash-7101 cohort | Hash-7102 cohort |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7101 | 0.4824bb | 0.9589bb | 0.6612bb | 0.6697bb | 0.7735bb | 0.7721bb |
+| 7102 | 0.5366bb | 1.1243bb | 0.6877bb | 0.6672bb | 0.8078bb | 0.8168bb |
+
+Original holdout controls are 0.4065 / 0.5053bb; the trade-off is retained, not hidden behind the improved cohorts. Selected steps remain 240 / 230 from original tuning only. Native/CPU parity remains below 0.000015bb. Report: `cash-wider-flop-family-budget80-paired-20261009/report.json`, SHA-256 `8a14a294b1e77569b99633d2bc5cdf111209370719b61422dc65cb668f3f636c`. Frozen weights: `03c2cf868bfc163e40770f0f689f0e612e20393f6dc1d04db869d663fdcf6a80` / `da4450459624f5c268d32703096abc944b9e4ad8934214a0dadd2b94118ed991`.
+
+Four matched 32-update action solves improve both development roots relative to the ten-family pair:
+
+| Root | Action MAE, ten to fourteen families | Primary agreement, ten to fourteen | Aggregate delta, ten to fourteen | Own learned action-EV disagreement, ten to fourteen |
+| --- | --- | --- | --- | --- |
+| 2 | 5.8480 to 3.1449pp | 91.7812 to 95.9499% | 7.3717 to 5.0898pp | 0.2335 to 0.0419bb |
+| 3 | 2.9167 to 2.2764pp | 93.6224 to 93.6361% | 5.2811 to 2.9134pp | 0.1205 to 0.1062bb |
+
+Both action-MAE and primary-agreement thresholds clear on these roots; root 3 also clears its aggregate threshold, but root 2 still fails the **3pp aggregate gate**. Own learned EV disagreement is not independently measured EV loss or confidence. Two inspected roots cannot establish full-hand coverage, seed stability or exploitability. Report: `cash-wider-family-action-comparison-20261009/report.json`, SHA-256 `e743d7b72cf83691f0aca0ccd5203c6564ec8afde41dc3ad94b1a23c8b1a3610`.
+
+A separate teacher-budget diagnostic selects the highest 64-update conditional NashConv state in each of the four new **training** families, before obtaining stronger references. It changes only solve budget to 256 and freezes both students. Actual-joint target changes are **0.07590 / 0.11200 / 0.13455 / 0.13674bb**; corresponding conditional NashConv falls from **0.00523 / 0.10691 / 0.14084 / 0.12344** to **0.00068 / 0.00587 / 0.01018 / 0.01431bb**. Students' four-state errors against 64 versus 256 targets remain **0.3324 to 0.3476bb** and **0.3846 to 0.3839bb**. Thus stronger teachers do not erase model bias, but target drift is material relative to action advantages. These deliberately selected training cells are not a generalization result, and conditional convergence does not certify full-game equilibrium. The audit takes **53 seconds**, no swaps. Report: `cash-new-family-teacher-budget-diagnosis-20261009/report.json`, SHA-256 `eaed1dc7548315f0595a9f1d19d1881d3fe53aeafd0c98a4eedf883bd91ae207`.
+
+The next matched comparison refreshes **all 24** new-family teachers from 64 to 256 updates, not only the selected four. Reuse those four exact stronger references and compute twenty more. Leave the other **223 targets**, public states, 247-context count, every split, network architecture, two fit seeds, optimizer, loss and 240 steps unchanged. Higher-budget targets remain approximate and provenance-pinned. Diagnostic roots 2 / 3 and all five current-policy cohorts stay evaluation-only. This tests teacher strength separately from adding more boards or neural iterations; it includes no paid compute, serving change, activation or release waiver.
+
+### Stronger-label comparison: reject extension, retain the wider-board candidate
+
+All 24 new-family targets are regenerated at 256 updates (four reused exact references and twenty new solves). The other 223 targets, every public state and split index, architecture, optimizer and two 240-step fit budgets remain unchanged. The paired run takes **514 seconds**, peak footprint **7.91GB**, zero swaps; native/CPU parity stays below 0.000010bb.
+
+| Stronger-label seed | Original holdout | Fixed diagnostic | Current-7101 cohort | Current-7102 cohort | Hash-7101 cohort | Hash-7102 cohort |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7101 | 0.4656bb | 0.8887bb | 0.6485bb | 0.6522bb | 0.7601bb | 0.7525bb |
+| 7102 | 0.5248bb | 1.1508bb | 0.7733bb | 0.7185bb | 0.8218bb | 0.8128bb |
+
+Seed one's improvements do not carry consistently to seed two. A bounded action comparison confirms the stronger labels do **not** improve the limiting aggregate mix: root 2 worsens from **5.0898 to 7.9497pp**, with action MAE 3.9195pp and primary agreement 96.6909%. Root 3 aggregate delta is 2.9260pp, action MAE 2.3069pp, primary agreement 89.1663%; its primary agreement regresses from 93.6361%. Do not select or extend the stronger-label pair on the better seed alone. Fit report SHA-256: `eb34954e5e401f85353fe0c7e0aae1eecbba4dc125ad470b15d7dadc46eac712` (`cash-stronger-new-family-teachers-paired-20261009/report.json`). Action report SHA-256: `3ac1c8c5640efa5377e51cab19397b4acf4574d0cb2ffc39e31b675514f3c612` (`cash-stronger-new-family-action-comparison-20261009/report.json`).
+
+Sixteen fresh 64-update references evaluate the wider-board policies' own newly induced final-average ranges on the same eight excluded development public cells. Own-seed errors are **0.7994 / 0.7929bb**, versus the ten-family hash students' **0.8619 / 0.8460bb on those exact inputs**. Cross-scoring the wider pair gives 0.8698bb for seed two on seed one's cohort (worse than the corresponding hash control's 0.8264bb), and 0.7325bb for seed one on seed two's cohort (better than 0.8103bb). Thus own-seed gains survive this bounded check, but not every cross-seed comparison improves. Stronger-label students score 0.7931 / 0.8327bb on the first cohort and 0.7583 / 0.7847bb on the second, which does not overturn their failed action comparison. All these cells remain evaluation-only and are already inspected, not fresh release holdouts. This probe takes **35 seconds**, zero swaps. Report: `cash-wider-family-policy-own-leaf-probe-20261009/report.json`, SHA-256 `cdd3487fb6b9e2997f7872be14ac8ff1473dcd3a38a1e0afb5efe0298ed20bb5`.
+
+Retain the **fourteen-family, 64-update teacher pair** as the best current action-stability development control, not an accepted model. Root 2's aggregate gap, original-domain trade-offs, limited development coverage and unmeasured full-hand deviation gains still block qualification. The next data test widens authentic training-board coverage at the same eighty added labels; it must keep proposer models and all training knobs fixed, select card-family exclusions before reference values, and use all existing current/induced-range cohorts only for evaluation. No blind long iteration run or paid compute is justified by these mixed results.
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
