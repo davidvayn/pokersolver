@@ -21,6 +21,7 @@ import numpy as np
 import cash_value_dataset as cash_values
 from cash_profiles import PAYOFF_CONTRACT
 from cash_checkdown import exact_cash_checkdown_features
+from cash_feature_cache import CashFeatureCache
 from cash_range_pooling import card_removed_opponent_pool
 from cash_value_initialization import initialize_cash_from_frozen
 from native_value_dataset import family_split, legal_combos, training_weights
@@ -30,6 +31,7 @@ from train_public_value_network import (SharedComboValueNetwork, build_features,
 
 CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
 CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned")
+_FEATURE_CACHE = CashFeatureCache()
 
 
 class OwnComboValueNetwork(SharedComboValueNetwork):
@@ -298,7 +300,10 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     reference = json.loads(reference_bytes) if reference_bytes else None
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
-    contexts, queries, weights, scales, baselines, legal, targets, loss_weights = feature_arrays(source,feature_schema)
+    dataset_digest = hashlib.sha256(data).hexdigest()
+    arrays, feature_preparation = _FEATURE_CACHE.get(dataset_digest, feature_schema,
+                                                    lambda: feature_arrays(source,feature_schema))
+    contexts, queries, weights, scales, baselines, legal, targets, loss_weights = arrays
     mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema)
     initialization = (initialize_cash_from_frozen(model,initial_value_network,initial_dataset,
                       source,(train,tuning,holdout),seed,split_seed)
@@ -381,10 +386,11 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     baseline_rmse = float(np.sqrt(np.sum(held_loss * baseline_errors[holdout]**2) / held_loss.sum()))
     output.mkdir(parents=True, exist_ok=True)
     network_path = output / "value-network.json"
-    export_cash_model(model, network_path, seed, source, hashlib.sha256(data).hexdigest(), accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization)
+    export_cash_model(model, network_path, seed, source, dataset_digest, accounting_loss_weight, flop_leaf_loss_weight,profile_value_loss_weight,adam_bias_correction,learning_rate,regression_loss=regression_loss,huber_delta_bb=huber_delta_bb,initialization=initialization)
     parity = native_parity(binary, network_path, source, predicted, output) if binary else None
     report = {"schema": "hu-cash-value-pilot-report-v1", "status": "research_only", "seed":seed, "architecture":architecture,"feature_schema":feature_schema,
-              "rules_sha256": source["rules_sha256"], "source_dataset_sha256":hashlib.sha256(data).hexdigest(),
+              "rules_sha256": source["rules_sha256"], "source_dataset_sha256":dataset_digest,
+              "feature_preparation":feature_preparation,
               "steps":steps,"selected_step":best_step,"training_initial_mse_bb":initial_mse,
               "adam_bias_correction":adam_bias_correction,"learning_rate":learning_rate,
               "regression_loss":regression_loss,"huber_delta_bb":huber_delta_bb,
