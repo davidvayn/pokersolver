@@ -10,8 +10,9 @@ from train_cash_value_network import OwnComboValueNetwork, CASH_FEATURE_SCHEMAS
 from train_cash_value_network import feature_arrays
 from cash_value_dataset import (NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_POOLED_NETWORK_SCHEMA,
     BLOCKER_POOLED_CONTRACT, BASELINE_CONDITIONED_NETWORK_SCHEMA, BASELINE_CONDITIONED_CONTRACT,
-    POT_EXPERT_NETWORK_SCHEMA, POT_EXPERT_CONTRACT)
+    POT_EXPERT_NETWORK_SCHEMA, POT_EXPERT_CONTRACT, KERNEL_POOLED_NETWORK_SCHEMA, KERNEL_POOLED_CONTRACT)
 from cash_range_pooling import numpy_card_removed_opponent_pool
+from cash_range_attention import numpy_positive_kernel_opponent_pool
 from train_public_value_network import RANGE_POOL_EPSILON
 from validate_public_value_parity import dense_forward
 from serving_value_projection import OwnPayoffValueProjection
@@ -19,6 +20,19 @@ from serving_value_projection import OwnPayoffValueProjection
 
 def cash_architecture(model):
     architecture = model.get("architecture")
+    if model.get("schema") == KERNEL_POOLED_NETWORK_SCHEMA:
+        for name in ("kernelQuery","kernelKey"):
+            layers = model.get(name)
+            if (not isinstance(layers,list) or len(layers)!=1 or not isinstance(layers[0],dict)
+                    or type(layers[0].get("inputSize")) is not int or layers[0]["inputSize"]!=64
+                    or type(layers[0].get("outputSize")) is not int or layers[0]["outputSize"]!=8
+                    or layers[0].get("activation")!="linear" or layers[0].get("normalization") is not None
+                    or layers[0].get("residual",False) is not False
+                    or layers[0].get("normalizationWeights",[]) or layers[0].get("normalizationBiases",[])):
+                raise ValueError("cash kernel parity requires two plain64-to8 linear projections")
+    elif (model.get("kernelQuery",[]) or model.get("kernelKey",[])
+          or model.get("kernelRank") is not None or model.get("kernelFeatureMap") is not None):
+        raise ValueError("cash parity cannot silently ignore a kernel projection")
     if ((model.get("schema") == NETWORK_SCHEMA and architecture in ("compact", "wide"))
             or (model.get("schema") == POOLED_NETWORK_SCHEMA and architecture == "wide-pooled")
             or (model.get("schema") == BLOCKER_POOLED_NETWORK_SCHEMA and architecture == "wide-blocker-pooled"
@@ -28,7 +42,10 @@ def cash_architecture(model):
             or (model.get("schema") == POT_EXPERT_NETWORK_SCHEMA and architecture == "wide-pooled-pot-experts"
                 and model.get("predictionContract") == POT_EXPERT_CONTRACT
                 and model.get("head") == [] and isinstance(model.get("potExpertHeads"),list)
-                and len(model["potExpertHeads"]) == 3 and all(model["potExpertHeads"]))):
+                and len(model["potExpertHeads"]) == 3 and all(model["potExpertHeads"]))
+            or (model.get("schema") == KERNEL_POOLED_NETWORK_SCHEMA and architecture == "wide-kernel-pooled"
+                and model.get("predictionContract") == KERNEL_POOLED_CONTRACT and model.get("kernelRank") == 8
+                and model.get("kernelFeatureMap") == "elu-plus-one-v1")):
         return architecture
     raise ValueError("cash parity requires matching versioned architecture and own-payoff schema")
 
@@ -47,12 +64,19 @@ def python_predictions(source, model):
     embeddings = dense_forward(contexts,model["contextTower"])
     combo_embeddings = dense_forward(queries,model["queryTower"])
     expanded = np.broadcast_to(embeddings[:,:,None,:],combo_embeddings.shape)
-    if architecture in ("wide-pooled","wide-blocker-pooled","wide-baseline-conditioned","wide-pooled-pot-experts"):
+    if architecture in ("wide-pooled","wide-blocker-pooled","wide-baseline-conditioned","wide-pooled-pot-experts","wide-kernel-pooled"):
         reach = weights / np.maximum(weights.sum(axis=2,keepdims=True),RANGE_POOL_EPSILON)
         pooled = np.sum(combo_embeddings * reach[:,:,:,None],axis=2)
         own = np.broadcast_to(pooled[:,:,None,:],combo_embeddings.shape)
-        opponent = (numpy_card_removed_opponent_pool(combo_embeddings,np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32))
-                    if architecture == "wide-blocker-pooled" else np.broadcast_to(pooled[:,::-1,None,:],combo_embeddings.shape))
+        if architecture == "wide-kernel-pooled":
+            def positive(value): return np.where(value>=0,value+1,np.exp(np.minimum(value,0)))
+            opponent = numpy_positive_kernel_opponent_pool(combo_embeddings,
+                np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32),
+                positive(dense_forward(combo_embeddings,model["kernelQuery"])),
+                positive(dense_forward(combo_embeddings,model["kernelKey"])))
+        else:
+            opponent = (numpy_card_removed_opponent_pool(combo_embeddings,np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32))
+                        if architecture == "wide-blocker-pooled" else np.broadcast_to(pooled[:,::-1,None,:],combo_embeddings.shape))
         combined = np.concatenate((expanded,own,opponent,combo_embeddings),axis=-1)
     else:
         combined = np.concatenate((expanded,combo_embeddings),axis=-1)
@@ -80,6 +104,8 @@ def mlx_predictions(source, payload, device):
             towers.extend((f"pot_expert_heads.{index}",head) for index,head in enumerate(payload["potExpertHeads"]))
         else:
             towers.append(("head",payload["head"]))
+        if model.architecture == "wide-kernel-pooled":
+            towers.extend((("kernel_query",payload["kernelQuery"]),("kernel_key",payload["kernelKey"])))
         weights = []
         for tower, layers in towers:
             for index, layer in enumerate(layers):
@@ -88,7 +114,7 @@ def mlx_predictions(source, payload, device):
         model.load_weights(weights)
         contexts, queries, weights, scales, baselines, legal, _, _ = model_features(source,payload)
         arrays = [mx.array(v) for v in (contexts,queries,weights,scales,baselines,legal)]
-        if model.architecture == "wide-blocker-pooled":
+        if model.architecture in ("wide-blocker-pooled","wide-kernel-pooled"):
             arrays.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
         return np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
 

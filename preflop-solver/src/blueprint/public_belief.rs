@@ -723,6 +723,14 @@ pub struct PublicValueNetwork {
     head: Vec<ValueNetworkLayer>,
     #[serde(default)]
     pot_expert_heads: Vec<Vec<ValueNetworkLayer>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kernel_query: Vec<ValueNetworkLayer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kernel_key: Vec<ValueNetworkLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kernel_rank: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kernel_feature_map: Option<String>,
 }
 
 impl PublicValueNetwork {
@@ -749,6 +757,11 @@ impl PublicValueNetwork {
 
     fn validate(&self) -> Result<(), String> {
         self.validate_cash_contract()?;
+        if self.schema != cash_value::KERNEL_POOLED_NETWORK_SCHEMA &&
+            (!self.kernel_query.is_empty() || !self.kernel_key.is_empty() ||
+             self.kernel_rank.is_some() || self.kernel_feature_map.is_some()) {
+            return Err("legacy values cannot silently discard kernel projections".into());
+        }
         if let Some(contract) = self.prediction_contract.as_ref().filter(|_| self.cash_rules.is_none()) {
             if contract != "native-turn-cfv-full-stack-v1"
                 || !matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v4" | "hu-public-belief-combo-value-network-v5")
@@ -799,7 +812,8 @@ impl PublicValueNetwork {
             | cash_value::POOLED_NETWORK_SCHEMA
             | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
             | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
-            | cash_value::POT_EXPERT_NETWORK_SCHEMA => {
+            | cash_value::POT_EXPERT_NETWORK_SCHEMA
+            | cash_value::KERNEL_POOLED_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -841,6 +855,7 @@ impl PublicValueNetwork {
                         | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
                         | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
                         | cash_value::POT_EXPERT_NETWORK_SCHEMA
+                        | cash_value::KERNEL_POOLED_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -854,6 +869,18 @@ impl PublicValueNetwork {
                 let mut query_size = expected_query_size;
                 for layer in &self.query_tower {
                     query_size = layer.validate(query_size)?;
+                }
+                if self.schema == cash_value::KERNEL_POOLED_NETWORK_SCHEMA {
+                    if self.kernel_rank != Some(8) || self.kernel_feature_map.as_deref() != Some("elu-plus-one-v1") {
+                        return Err("cash kernel feature map/rank is incompatible".into());
+                    }
+                    for projection in [&self.kernel_query,&self.kernel_key] {
+                        if projection.len() != 1 || projection[0].activation != "linear" ||
+                            projection[0].normalization.is_some() || projection[0].residual ||
+                            projection[0].validate(query_size)? != 8 {
+                            return Err("cash kernel requires two rank-eight linear projections".into());
+                        }
+                    }
                 }
                 let head_size = context_size
                     + if self.pools_exact_query_ranges() {
@@ -1107,10 +1134,13 @@ impl PublicValueNetwork {
             })
         });
         let selected_head = self.selected_value_head(invested);
-        let conditioned_opponent = (self.schema == cash_value::BLOCKER_POOLED_NETWORK_SCHEMA).then(|| {
-            cash_value::card_removed_opponent_embeddings(&query_embeddings, &legal_combos[0], ranges,
-                                                         &masses, query_embedding_size)
-        });
+        let conditioned_opponent = if self.schema == cash_value::KERNEL_POOLED_NETWORK_SCHEMA {
+            Some(cash_value::card_removed_kernel_opponent_embeddings(&query_embeddings,&legal_combos[0],ranges,
+                &masses,query_embedding_size,&self.kernel_query,&self.kernel_key))
+        } else if self.schema == cash_value::BLOCKER_POOLED_NETWORK_SCHEMA {
+            Some(cash_value::card_removed_opponent_embeddings(&query_embeddings, &legal_combos[0], ranges,
+                &masses, query_embedding_size))
+        } else { None };
         let cash_baseline = self.cash_rules.as_ref().map(|_| self.cash_checkdown_baseline(board, actor, invested, ranges));
         let mut result: [Vec<f64>; 2] = std::array::from_fn(|player| {
             let mut head_context = context_embeddings[player].clone();
@@ -1171,6 +1201,7 @@ impl PublicValueNetwork {
                         | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
                         | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
                         | cash_value::POT_EXPERT_NETWORK_SCHEMA
+                        | cash_value::KERNEL_POOLED_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -1202,7 +1233,7 @@ impl PublicValueNetwork {
         matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v5"
             | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA
             | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
-            | cash_value::POT_EXPERT_NETWORK_SCHEMA)
+            | cash_value::POT_EXPERT_NETWORK_SCHEMA | cash_value::KERNEL_POOLED_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {
@@ -14195,6 +14226,10 @@ mod tests {
             query_tower: Vec::new(),
             head: vec![layer(2, COMBO_COUNT * 2, "tanh")],
             pot_expert_heads: Vec::new(),
+            kernel_query: Vec::new(),
+            kernel_key: Vec::new(),
+            kernel_rank: None,
+            kernel_feature_map: None,
         }
     }
 
@@ -14239,6 +14274,10 @@ mod tests {
             query_tower: vec![layer(SHARED_QUERY_COUNT, 1, "linear")],
             head: vec![layer(2, 1, "tanh")],
             pot_expert_heads: Vec::new(),
+            kernel_query: Vec::new(),
+            kernel_key: Vec::new(),
+            kernel_rank: None,
+            kernel_feature_map: None,
         }
     }
 

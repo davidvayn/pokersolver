@@ -6,10 +6,12 @@ pub(super) const POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-valu
 pub(super) const BLOCKER_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v4";
 pub(super) const BASELINE_CONDITIONED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v5";
 pub(super) const POT_EXPERT_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v6";
+pub(super) const KERNEL_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v7";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
 const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-pooled-v1";
 const BASELINE_CONDITIONED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-baseline-conditioned-v1";
 const POT_EXPERT_CONTRACT: &str = "cash-turn-start-cfv-full-stack-pot-experts-v1";
+const KERNEL_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-kernel-pooled-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
 #[cfg(test)]
@@ -23,7 +25,62 @@ pub(super) fn note_geometry_preparation() {
 }
 
 fn is_cash_schema(schema: &str) -> bool {
-    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA)
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA | KERNEL_POOLED_NETWORK_SCHEMA)
+}
+
+/// Exact finite positive-kernel aggregation, never a quadratic combo table.
+/// Both projections are validated single linear maps of rank eight. Reuse the
+/// card-removed moment adapter on key/value outer products, then contract with
+/// the own query. Normalized belief mass cancels in the kernel ratio.
+pub(super) fn card_removed_kernel_opponent_embeddings(
+    embeddings: &[Vec<f32>; 2], keys: &[usize], ranges: &[Vec<f64>; 2],
+    masses: &[Vec<f64>; 2], width: usize,
+    query_projection: &[ValueNetworkLayer], key_projection: &[ValueNetworkLayer],
+) -> [Vec<f32>; 2] {
+    const RANK: usize = 8;
+    const CUTOFF: f64 = 1e-9; // Same undefined-mass/denominator contract as Python.
+    let positive = |value: f32| if value >= 0.0 { value + 1.0 } else { value.exp() };
+    let projected_queries: [Vec<f32>; 2] = std::array::from_fn(|player|
+        forward_batch_tower(query_projection, &embeddings[player], keys.len())
+            .into_iter().map(positive).collect());
+    let projected_keys: [Vec<f32>; 2] = std::array::from_fn(|player|
+        forward_batch_tower(key_projection, &embeddings[player], keys.len())
+            .into_iter().map(positive).collect());
+    let moment_width = RANK * (width + 1);
+    let products: [Vec<f32>; 2] = std::array::from_fn(|player| {
+        let mut values = vec![0.0; keys.len() * moment_width];
+        for row in 0..keys.len() {
+            for channel in 0..RANK {
+                let feature = projected_keys[player][row * RANK + channel];
+                let offset = row * moment_width + channel * (width + 1);
+                for col in 0..width {
+                    values[offset + col] = feature * embeddings[player][row * width + col];
+                }
+                values[offset + width] = feature;
+            }
+        }
+        values
+    });
+    let moments = card_removed_opponent_embeddings(&products, keys, ranges, masses, moment_width);
+    std::array::from_fn(|player| {
+        let mut result = vec![0.0; keys.len() * width];
+        for (row, key) in keys.iter().copied().enumerate() {
+            if masses[player][key] <= CUTOFF { continue; }
+            let denominator = (0..RANK).map(|channel|
+                projected_queries[player][row * RANK + channel] as f64 *
+                moments[player][row * moment_width + channel * (width + 1) + width] as f64
+            ).sum::<f64>();
+            if denominator <= CUTOFF { continue; }
+            for col in 0..width {
+                let numerator = (0..RANK).map(|channel|
+                    projected_queries[player][row * RANK + channel] as f64 *
+                    moments[player][row * moment_width + channel * (width + 1) + col] as f64
+                ).sum::<f64>();
+                result[row * width + col] = (numerator / denominator) as f32;
+            }
+        }
+        result
+    })
 }
 
 /// Each query conditions on its own two cards, using raw opponent reaches.
@@ -94,7 +151,9 @@ impl PublicValueNetwork {
             || source.cash_rules != self.cash_rules
             || source.effective_stack_bb != self.target_scale_bb
             || self.payoff_contract.as_deref() != Some(PAYOFF)
-            || self.prediction_contract.as_deref() != Some(if self.schema == POT_EXPERT_NETWORK_SCHEMA {
+            || self.prediction_contract.as_deref() != Some(if self.schema == KERNEL_POOLED_NETWORK_SCHEMA {
+                KERNEL_POOLED_CONTRACT
+            } else if self.schema == POT_EXPERT_NETWORK_SCHEMA {
                 POT_EXPERT_CONTRACT
             } else if self.schema == BASELINE_CONDITIONED_NETWORK_SCHEMA {
                 BASELINE_CONDITIONED_CONTRACT
@@ -415,6 +474,95 @@ mod tests {
         assert!(actual[0][absent].abs() > 0.01, "zero own reach must not censor a query");
         assert!(aggregate < -0.1, "pooled cash values must not be projected to zero sum");
         }
+    }
+
+    #[test]
+    fn cash_kernel_network_preserves_baseline_and_rejects_incompatible_maps() {
+        let (mut network, config) = fixture();
+        network.schema = KERNEL_POOLED_NETWORK_SCHEMA.into();
+        network.prediction_contract = Some(KERNEL_POOLED_CONTRACT.into());
+        network.head[0].input_size = 4;
+        network.head[0].weights = vec![0.0; 4];
+        network.head[0].biases[0] = 0.0;
+        let mut projection = network.head[0].clone();
+        projection.input_size = 1;
+        projection.output_size = 8;
+        projection.weights = vec![0.0; 8];
+        projection.biases = vec![0.0; 8];
+        network.kernel_query = vec![projection.clone()];
+        network.kernel_key = vec![projection];
+        network.kernel_rank = Some(8);
+        network.kernel_feature_map = Some("elu-plus-one-v1".into());
+        network.validate().unwrap();
+        let values = network.predict_cash_turn(&config).unwrap();
+        let normalized = network.validated_cash_turn(&config).unwrap();
+        let baseline = network.cash_checkdown_baseline(&normalized.board,normalized.actor,
+            normalized.invested_bb,&normalized.ranges);
+        assert_eq!(values,baseline);
+        let valid = network.clone();
+        network.kernel_query.clear();
+        assert!(network.validate().is_err());
+        network = valid.clone(); network.kernel_rank = Some(4);
+        assert!(network.validate().is_err());
+        network = valid.clone(); network.kernel_feature_map = Some("softmax".into());
+        assert!(network.validate().is_err());
+        network = valid.clone(); network.kernel_key[0].activation = "relu".into();
+        assert!(network.validate().is_err());
+        network = valid.clone(); network.kernel_key[0].biases[0] = f32::NAN;
+        assert!(network.validate().is_err());
+        network = valid;
+        network.schema = POOLED_NETWORK_SCHEMA.into();
+        network.prediction_contract = Some(CONTRACT.into());
+        assert!(network.validate().is_err(),"kernel projections cannot be silently ignored");
+    }
+
+    #[test]
+    fn cash_kernel_card_removal_matches_explicit_positive_pair_weighting() {
+        let (network, _) = fixture();
+        let combos = all_combos();
+        let keys = (0..COMBO_COUNT).collect::<Vec<_>>();
+        let embeddings: [Vec<f32>; 2] = std::array::from_fn(|player| combos.iter().flat_map(|combo| {
+            let cards = combo.cards();
+            [cards[player] as f32 / 52.0, cards[1-player] as f32 / 52.0]
+        }).collect());
+        let mut ranges = [vec![0.0; COMBO_COUNT],vec![0.0; COMBO_COUNT]];
+        ranges[0][Combo::new(50,51).key()] = 1.0;
+        for (cards, weight) in [([50,40],0.25),([51,44],0.25),([32,33],0.5)] {
+            ranges[1][Combo::new(cards[0],cards[1]).key()] = weight;
+        }
+        let masses: [Vec<f64>; 2] = std::array::from_fn(|player|
+            compatible_masses_from_card_marginals(&combos,&ranges[1-player]));
+        let mut projection = network.head[0].clone();
+        projection.input_size = 2; projection.output_size = 8;
+        projection.weights = (0..8).flat_map(|index| [0.1*index as f32,-0.15]).collect();
+        projection.biases = (0..8).map(|index| -0.2+0.03*index as f32).collect();
+        let positive = |value: f32| if value >= 0.0 { value + 1.0 } else { value.exp() };
+        let features: [Vec<Vec<f32>>; 2] = std::array::from_fn(|player|
+            embeddings[player].chunks_exact(2).map(|values|
+                projection.forward(values).into_iter().map(positive).collect()).collect());
+        let actual = card_removed_kernel_opponent_embeddings(&embeddings,&keys,&ranges,&masses,2,
+            std::slice::from_ref(&projection),std::slice::from_ref(&projection));
+        for player in 0..2 {
+            for query in &combos {
+                let index = query.key();
+                let mut numerator = [0.0; 2]; let mut denominator = 0.0;
+                for other in &combos {
+                    if other.cards().iter().any(|card| query.cards().contains(card)) { continue; }
+                    let key = other.key();
+                    let kernel = features[player][index].iter().zip(&features[1-player][key])
+                        .map(|(q,k)| *q as f64 * *k as f64).sum::<f64>();
+                    let weight = ranges[1-player][key]*kernel;
+                    denominator += weight;
+                    for col in 0..2 { numerator[col] += weight*embeddings[1-player][key*2+col] as f64; }
+                }
+                for col in 0..2 {
+                    let expected = if denominator > 1e-9 { numerator[col]/denominator } else { 0.0 };
+                    assert!((actual[player][index*2+col] as f64-expected).abs()<2e-6);
+                }
+            }
+        }
+        assert_eq!(ranges[0][Combo::new(32,33).key()],0.0);
+        assert!(actual[0][Combo::new(32,33).key()*2] > 0.0,"zero own reach cannot censor a compatible opponent");
     }
 
     #[test]

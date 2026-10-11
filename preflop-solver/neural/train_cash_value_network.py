@@ -26,14 +26,15 @@ from cash_profiles import PAYOFF_CONTRACT
 from cash_checkdown import exact_cash_checkdown_features
 from cash_feature_cache import CashFeatureCache
 from cash_range_pooling import card_removed_opponent_pool
+from cash_range_attention import positive_kernel_opponent_pool
 from cash_value_initialization import initialize_cash_from_frozen
 from native_value_dataset import family_split, legal_combos, training_weights
 from serving_value_projection import OwnPayoffValueProjection, own_payoff_conservation_residual
 from train_public_value_network import (SharedComboValueNetwork, build_features,
-    export_model, FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT, value_scale_bb)
+    export_model, tower_payload, FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT, value_scale_bb)
 
 CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
-CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned", "wide-pooled-pot-experts")
+CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned", "wide-pooled-pot-experts", "wide-kernel-pooled")
 CASH_TRAINING_OUTPUT_MODES = ("serving-clipped", "raw")
 CASH_VALUE_NORMALIZATIONS = ("pot", "payoff-exposure")
 _FEATURE_CACHE = CashFeatureCache()
@@ -58,7 +59,7 @@ class OwnComboValueNetwork(SharedComboValueNetwork):
         if feature_schema not in CASH_FEATURE_SCHEMAS:
             raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
         validate_cash_value_normalization(value_normalization)
-        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned","wide-pooled-pot-experts") else architecture, value_normalization, feature_schema)
+        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned","wide-pooled-pot-experts","wide-kernel-pooled") else architecture, value_normalization, feature_schema)
         self.architecture = architecture
         if architecture == "wide-baseline-conditioned":
             weight = self.head.layers[0].weight
@@ -76,17 +77,28 @@ class OwnComboValueNetwork(SharedComboValueNetwork):
             self.pot_expert_heads = [self.head,copy.deepcopy(self.head),copy.deepcopy(self.head)]
             self.head = None
             self.uses_pot_experts = True
+        if architecture == "wide-kernel-pooled":
+            # Added after shared initialization: same control towers/head and
+            # zero cold correction, two distinct learned positive-kernel maps.
+            self.kernel_query = nn.Sequential(nn.Linear(64,8))
+            self.kernel_key = nn.Sequential(nn.Linear(64,8))
 
     def raw_values(self, context, queries, joint_weights, scales, own_baseline, ranges=None):
-        if self.architecture in ("wide-blocker-pooled","wide-baseline-conditioned"):
-            if self.architecture == "wide-blocker-pooled" and ranges is None:
+        if self.architecture in ("wide-blocker-pooled","wide-baseline-conditioned","wide-kernel-pooled"):
+            if self.architecture in ("wide-blocker-pooled","wide-kernel-pooled") and ranges is None:
                 raise ValueError("blocker-conditioned cash pooling requires raw exact ranges")
             context_embedding = self.context_tower(context)
             query_embedding = self.query_tower(queries)
             reach = joint_weights / mx.maximum(mx.sum(joint_weights,axis=2,keepdims=True),1e-9)
             own = mx.sum(query_embedding*reach[:,:,:,None],axis=2)
-            opponent = (card_removed_opponent_pool(query_embedding,ranges) if self.architecture == "wide-blocker-pooled"
-                        else mx.broadcast_to(own[:,::-1,None,:],query_embedding.shape))
+            if self.architecture == "wide-kernel-pooled":
+                def positive(value):
+                    return mx.where(value>=0,value+1,mx.exp(mx.minimum(value,0)))
+                opponent = positive_kernel_opponent_pool(query_embedding,ranges,
+                    positive(self.kernel_query(query_embedding)),positive(self.kernel_key(query_embedding)))
+            else:
+                opponent = (card_removed_opponent_pool(query_embedding,ranges) if self.architecture == "wide-blocker-pooled"
+                            else mx.broadcast_to(own[:,::-1,None,:],query_embedding.shape))
             combined = mx.concatenate((mx.broadcast_to(context_embedding[:,:,None,:],query_embedding.shape),
                         mx.broadcast_to(own[:,:,None,:],query_embedding.shape),
                         opponent,query_embedding),axis=-1)
@@ -156,13 +168,14 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
     blocker_pooled = model.architecture == "wide-blocker-pooled"
     baseline_conditioned = model.architecture == "wide-baseline-conditioned"
     pot_experts = model.architecture == "wide-pooled-pot-experts"
-    payload.update(schema=(cash_values.POT_EXPERT_NETWORK_SCHEMA if pot_experts else cash_values.BASELINE_CONDITIONED_NETWORK_SCHEMA if baseline_conditioned else cash_values.BLOCKER_POOLED_NETWORK_SCHEMA if blocker_pooled else
+    kernel_pooled = model.architecture == "wide-kernel-pooled"
+    payload.update(schema=(cash_values.KERNEL_POOLED_NETWORK_SCHEMA if kernel_pooled else cash_values.POT_EXPERT_NETWORK_SCHEMA if pot_experts else cash_values.BASELINE_CONDITIONED_NETWORK_SCHEMA if baseline_conditioned else cash_values.BLOCKER_POOLED_NETWORK_SCHEMA if blocker_pooled else
                           cash_values.POOLED_NETWORK_SCHEMA if model.pools_exact_ranges else cash_values.NETWORK_SCHEMA),
                    cashRules=source["game"]["cash_rules"],
                    sourceGame=source["game"], baseline="exact-own-payoff-forced-turn-checkdown-44-compatible-rivers",
                    rulesSha256=source["rules_sha256"], payoffContract=PAYOFF_CONTRACT,
                    trainingTargetSemantics=cash_values.TARGET_SEMANTICS,
-                   predictionContract=(cash_values.POT_EXPERT_CONTRACT if pot_experts else cash_values.BASELINE_CONDITIONED_CONTRACT if baseline_conditioned else cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT),
+                   predictionContract=(cash_values.KERNEL_POOLED_CONTRACT if kernel_pooled else cash_values.POT_EXPERT_CONTRACT if pot_experts else cash_values.BASELINE_CONDITIONED_CONTRACT if baseline_conditioned else cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT),
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,
                    profileValueLossWeight=profile_value_loss_weight,
@@ -174,6 +187,10 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
                    flopLeafLossWeight=flop_leaf_loss_weight,
                    projection="independent-full-stack-clip-and-board-mask-no-zero-sum",
                    limitations=["finite-budget conditioned turn reference; not full-game exploitability", "only fresh equal-investment turn roots; not yet serving"])
+    if kernel_pooled:
+        payload.update(kernelRank=8,kernelFeatureMap="elu-plus-one-v1",
+                       kernelQuery=tower_payload(model.kernel_query,"linear","linear"),
+                       kernelKey=tower_payload(model.kernel_key,"linear","linear"))
     if training_output_mode != "serving-clipped":
         # Preserve complete legacy export bytes for the unchanged default.
         # This records a fit objective, never a different serving projection.

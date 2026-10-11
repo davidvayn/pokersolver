@@ -68,8 +68,10 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
               "wide-pooled":datasets.POOLED_NETWORK_SCHEMA,
               "wide-blocker-pooled":datasets.BLOCKER_POOLED_NETWORK_SCHEMA,
               "wide-baseline-conditioned":datasets.BASELINE_CONDITIONED_NETWORK_SCHEMA,
-              "wide-pooled-pot-experts":datasets.POT_EXPERT_NETWORK_SCHEMA}[architecture]
-    contract = (datasets.POT_EXPERT_CONTRACT if architecture == "wide-pooled-pot-experts" else
+              "wide-pooled-pot-experts":datasets.POT_EXPERT_NETWORK_SCHEMA,
+              "wide-kernel-pooled":datasets.KERNEL_POOLED_NETWORK_SCHEMA}[architecture]
+    contract = (datasets.KERNEL_POOLED_CONTRACT if architecture == "wide-kernel-pooled" else
+                datasets.POT_EXPERT_CONTRACT if architecture == "wide-pooled-pot-experts" else
                 datasets.BLOCKER_POOLED_CONTRACT if architecture == "wide-blocker-pooled" else
                 datasets.BASELINE_CONDITIONED_CONTRACT if architecture == "wide-baseline-conditioned" else
                 datasets.PREDICTION_CONTRACT)
@@ -87,6 +89,12 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
             or payload.get("usesExactRanges") is not True or type(payload.get("seed")) is not int
             or report.get("value_normalization","pot") != model.value_normalization):
         raise ValueError("initial cash value contract/architecture/rules do not match")
+    if architecture == "wide-kernel-pooled":
+        if payload.get("kernelRank") != 8 or payload.get("kernelFeatureMap") != "elu-plus-one-v1":
+            raise ValueError("initial cash kernel metadata do not match")
+    elif (payload.get("kernelQuery",[]) or payload.get("kernelKey",[])
+          or payload.get("kernelRank") is not None or payload.get("kernelFeatureMap") is not None):
+        raise ValueError("initial cash weights cannot silently drop a kernel projection")
     staged = []
     towers = [("context_tower",model.context_tower,payload.get("contextTower"),"relu"),
               ("query_tower",model.query_tower,payload.get("queryTower"),"relu")]
@@ -100,6 +108,9 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
         if payload.get("potExpertHeads",[]) != []:
             raise ValueError("initial shared cash weights cannot contain pot experts")
         towers.append(("head",model.head,payload.get("head"),"linear"))
+    if architecture == "wide-kernel-pooled":
+        towers.extend((("kernel_query",model.kernel_query,payload.get("kernelQuery"),"linear"),
+                       ("kernel_key",model.kernel_key,payload.get("kernelKey"),"linear")))
     for name, tower, actual, final_activation in towers:
         expected = tower_payload(tower,"relu",final_activation)
         if not isinstance(actual,list) or len(actual) != len(expected):
@@ -109,6 +120,10 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
                     or any(layer.get(key) != shape[key]
                     for key in ("inputSize", "outputSize", "activation"))):
                 raise ValueError("initial cash tensor layout/activation does not match")
+            if name in ("kernel_query","kernel_key") and (layer.get("normalization") is not None
+                    or layer.get("residual",False) is not False
+                    or layer.get("normalizationWeights",[]) or layer.get("normalizationBiases",[])):
+                raise ValueError("initial cash kernel must be a plain linear projection")
             for field,suffix,dimensions in (("weights","weight",(shape["outputSize"],shape["inputSize"])),
                                             ("biases","bias",(shape["outputSize"],))):
                 values = layer.get(field)
