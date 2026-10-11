@@ -70,6 +70,43 @@ class CashFrozenAdapterTests(unittest.TestCase):
                 clipped = parity.python_predictions(source, payload)
             np.testing.assert_array_equal(clipped[1:, :, 1:], np.full((2, 2, 1325), 20.))
 
+    def test_smooth_tail_operator_has_zero_endpoint_and_cent_aligned_fade(self):
+        with tempfile.TemporaryDirectory() as temp, mx.stream(mx.cpu):
+            model, source, parent, head = self.fixture(Path(temp))
+            amounts = (17.96, 18., 18.04, 18.48, 18.52, 19., 19.04)
+            arrays = kernel_fixtures.CashKernelNetworkTests().arrays(model)
+            arrays = tuple(np.repeat(value, len(amounts), axis=0) if value is not None else None for value in arrays)
+            source['labels'] = [dict(input=dict(state=dict(invested_bb=[amount, amount], ranges=arrays[2][index].tolist())))
+                                for index, amount in enumerate(amounts)]
+            head.head.layers[-1].bias = mx.array([.5])
+            payload = make_frozen_adapter_payload(parent, 'b'*64, 'c'*64, tower_payload(head.head,'relu','linear'))
+            payload.update(schema='hu-cash-public-belief-combo-value-network-v9',
+                architecture='wide-kernel-pooled-smooth-tail-adapter',
+                predictionContract='cash-turn-start-cfv-full-stack-smooth-tail-adapter-v1')
+            payload['frozenTailAdapter']['fadeWidthUnits'] = 25
+            with patch.object(parity, 'feature_arrays', return_value=arrays):
+                original = parity.python_predictions(source,parent)
+                predicted = parity.python_predictions(source,payload)
+                cpu = parity.mlx_predictions(source,payload,mx.cpu)
+                original_cpu = parity.mlx_predictions(source,parent,mx.cpu)
+            np.testing.assert_array_equal(predicted[:2],original[:2])
+            np.testing.assert_array_equal(cpu[:2],original_cpu[:2])
+            coefficients = np.asarray([0.,0.,.004672,.470016,.529984,1.,1.])
+            np.testing.assert_allclose(predicted[:,:,1:]-original[:,:,1:],
+                np.broadcast_to(.5*coefficients[:,None,None],(7,2,1325)),atol=1e-7,rtol=0)
+            np.testing.assert_allclose(cpu,predicted,atol=5e-6,rtol=0)
+            np.testing.assert_array_equal(predicted[:,:,0],np.zeros((7,2)))
+            for width in (None,True,24,26):
+                bad = copy.deepcopy(payload)
+                if width is None: del bad['frozenTailAdapter']['fadeWidthUnits']
+                else: bad['frozenTailAdapter']['fadeWidthUnits'] = width
+                with self.assertRaises(ValueError): parity.cash_architecture(bad)
+            bad = copy.deepcopy(payload)
+            bad.update(schema='hu-cash-public-belief-combo-value-network-v8',
+                architecture='wide-kernel-pooled-frozen-tail-adapter',
+                predictionContract='cash-turn-start-cfv-full-stack-frozen-tail-adapter-v1')
+            with self.assertRaises(ValueError): parity.cash_architecture(bad)
+
     def test_bad_metadata_tensors_and_silent_downgrades_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp, mx.stream(mx.cpu):
             _, _, parent, head = self.fixture(Path(temp))

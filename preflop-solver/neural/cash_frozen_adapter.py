@@ -15,9 +15,10 @@ import numpy as np
 from cash_profiles import equal_cash_investment_units, rules_digest
 from cash_profiles import PAYOFF_CONTRACT
 from cash_value_dataset import (FROZEN_TAIL_NETWORK_SCHEMA, FROZEN_TAIL_CONTRACT,
-    KERNEL_POOLED_NETWORK_SCHEMA)
+    SMOOTH_TAIL_NETWORK_SCHEMA, SMOOTH_TAIL_CONTRACT, KERNEL_POOLED_NETWORK_SCHEMA)
 
 ARCHITECTURE = "wide-kernel-pooled-frozen-tail-adapter"
+SMOOTH_ARCHITECTURE = "wide-kernel-pooled-smooth-tail-adapter"
 
 
 def _digest(value):
@@ -28,7 +29,8 @@ def _digest(value):
 
 def validate_frozen_adapter(payload):
     adapter = payload.get("frozenTailAdapter")
-    if payload.get("schema") != FROZEN_TAIL_NETWORK_SCHEMA:
+    smooth = payload.get("schema") == SMOOTH_TAIL_NETWORK_SCHEMA
+    if payload.get("schema") not in (FROZEN_TAIL_NETWORK_SCHEMA, SMOOTH_TAIL_NETWORK_SCHEMA):
         if adapter is not None:
             raise ValueError("legacy cash values cannot silently discard a frozen adapter")
         return None
@@ -36,8 +38,10 @@ def validate_frozen_adapter(payload):
     if not isinstance(source, dict) or not isinstance(source.get("cash_rules"), dict):
         raise ValueError("frozen cash adapter requires a rules-pinned source game")
     rules = source["cash_rules"]
-    if (payload.get("architecture") != ARCHITECTURE
-            or payload.get("predictionContract") != FROZEN_TAIL_CONTRACT
+    fields = {"parentNetworkSha256", "parentDatasetSha256", "maximumRemainingUnits", "correctionUnit", "head"}
+    if smooth: fields.add("fadeWidthUnits")
+    if (payload.get("architecture") != (SMOOTH_ARCHITECTURE if smooth else ARCHITECTURE)
+            or payload.get("predictionContract") != (SMOOTH_TAIL_CONTRACT if smooth else FROZEN_TAIL_CONTRACT)
             or payload.get("targetScaleBb") != 20.
             or source.get("effective_stack_bb") != 20.
             or rules.get("unitsPerBb") != 25
@@ -51,7 +55,8 @@ def validate_frozen_adapter(payload):
             or payload.get("baseline") != "exact-own-payoff-forced-turn-checkdown-44-compatible-rivers"
             or payload.get("rulesSha256") != rules_digest(rules)
             or not isinstance(adapter, dict)
-            or set(adapter) != {"parentNetworkSha256", "parentDatasetSha256", "maximumRemainingUnits", "correctionUnit", "head"}
+            or set(adapter) != fields
+            or (smooth and (type(adapter.get("fadeWidthUnits")) is not int or adapter["fadeWidthUnits"] != 25))
             or type(adapter.get("maximumRemainingUnits")) is not int
             or adapter.get("maximumRemainingUnits") != 50
             or adapter.get("correctionUnit") != "own-player-net-bb"):
@@ -94,6 +99,18 @@ def frozen_adapter_gate(source):
     return np.asarray(result, dtype=bool)
 
 
+def frozen_adapter_coefficients(source, adapter):
+    active = frozen_adapter_gate(source)
+    if "fadeWidthUnits" not in adapter:
+        return active.astype(np.float32)
+    coefficients = []
+    for label in source["labels"]:
+        invested = equal_cash_investment_units(label["input"]["state"]["invested_bb"], 25)
+        x = min(1., max(0., (50 - (500 - invested)) / 25.))
+        coefficients.append(x*x*(3.-2.*x))
+    return np.asarray(coefficients, dtype=np.float32)
+
+
 def make_frozen_adapter_payload(parent, parent_sha256, dataset_sha256, head):
     # Import at the exporter seam: the decoder imports this metadata module.
     from validate_cash_value_parity import cash_architecture
@@ -111,6 +128,15 @@ def make_frozen_adapter_payload(parent, parent_sha256, dataset_sha256, head):
     payload.update(checkpointSelectionCriterion="immutable-parent-plus-preregistered-final-adapter",
         residualInitialization="frozen-cash-parent-plus-zero-cold-adapter",
         gradientAccumulation="frozen-features-full-pass-adapter-only-one-adam-update")
+    validate_frozen_adapter(payload)
+    return payload
+
+
+def make_smooth_frozen_adapter_payload(parent, parent_sha256, dataset_sha256, head):
+    payload = make_frozen_adapter_payload(parent, parent_sha256, dataset_sha256, head)
+    payload.update(schema=SMOOTH_TAIL_NETWORK_SCHEMA, architecture=SMOOTH_ARCHITECTURE,
+        predictionContract=SMOOTH_TAIL_CONTRACT)
+    payload["frozenTailAdapter"]["fadeWidthUnits"] = 25
     validate_frozen_adapter(payload)
     return payload
 

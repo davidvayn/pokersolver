@@ -14,7 +14,7 @@ from cash_value_dataset import (NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_P
 from cash_range_pooling import numpy_card_removed_opponent_pool
 from cash_range_attention import numpy_positive_kernel_opponent_pool
 from train_public_value_network import RANGE_POOL_EPSILON
-from cash_frozen_adapter import validate_frozen_adapter, frozen_adapter_gate
+from cash_frozen_adapter import validate_frozen_adapter, frozen_adapter_coefficients
 from validate_public_value_parity import dense_forward
 from serving_value_projection import OwnPayoffValueProjection
 
@@ -102,9 +102,10 @@ def python_predictions(source, model):
     raw = baselines + residual * scales[:,None,None]
     adapter = validate_frozen_adapter(model)
     if adapter is not None:
-        active = frozen_adapter_gate(source)
+        coefficients = frozen_adapter_coefficients(source, adapter)
+        active = coefficients > 0
         if active.any():
-            raw[active] += dense_forward(combined[active], adapter["head"]).reshape((-1,2,1326))
+            raw[active] += dense_forward(combined[active], adapter["head"]).reshape((-1,2,1326)) * coefficients[active,None,None]
     return OwnPayoffValueProjection(raw,legal.astype(bool)).values
 
 
@@ -133,7 +134,8 @@ def mlx_predictions(source, payload, device):
         if adapter is None:
             return np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
         parent = np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
-        active = frozen_adapter_gate(source)
+        coefficients = frozen_adapter_coefficients(source, adapter)
+        active = coefficients > 0
         if not active.any():
             return parent
         # Use the same frozen encoder; only the independent extra head is new.
@@ -153,7 +155,7 @@ def mlx_predictions(source, payload, device):
             delta = delta @ weight.T + mx.array(layer["biases"])
             if layer["activation"] == "relu": delta = mx.maximum(delta,0.)
         raw = model.raw_values(*arrays[:5],ranges=arrays[6]) * arrays[3][:,None,None]
-        corrected = mx.clip(raw + delta.reshape((-1,2,1326)),-20.,20.) * arrays[5][:,None,:]
+        corrected = mx.clip(raw + delta.reshape((-1,2,1326))*mx.array(coefficients)[:,None,None],-20.,20.) * arrays[5][:,None,:]
         return np.array(mx.where(mx.array(active)[:,None,None],corrected,mx.array(parent)))
 
 
