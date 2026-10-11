@@ -28,6 +28,7 @@ from cash_feature_cache import CashFeatureCache
 from cash_range_pooling import CARD_POOL_GRADIENT_CONTRACT, card_removed_opponent_pool
 from cash_range_attention import positive_kernel_opponent_pool
 from cash_value_initialization import initialize_cash_from_frozen
+from cash_gradient_projection import combine_cash_domain_gradients
 from native_value_dataset import family_split, legal_combos, training_weights
 from serving_value_projection import OwnPayoffValueProjection, own_payoff_conservation_residual
 from train_public_value_network import (SharedComboValueNetwork, build_features,
@@ -37,6 +38,7 @@ CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNO
 CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned", "wide-pooled-pot-experts", "wide-kernel-pooled")
 CASH_TRAINING_OUTPUT_MODES = ("serving-clipped", "raw")
 CASH_VALUE_NORMALIZATIONS = ("pot", "payoff-exposure")
+CASH_GRADIENT_DOMAIN_MODES = ("joint", "prefix-sum", "prefix-pcgrad")
 _FEATURE_CACHE = CashFeatureCache()
 
 
@@ -344,6 +346,25 @@ def cash_accumulated_value_and_grad(model, loss_grad, rows, batch_size):
     return total, accumulated
 
 
+def cash_prefix_value_and_grad(model, loss_grad, previous_rows, added_rows, batch_size, mode):
+    """Two complete training passes at one parameter set/denominator.
+
+    The sum control uses the same grouping/reduction order as projection.
+    No optimizer update, holdout gradient or changed sampling occurs here.
+    """
+    if mode not in ("prefix-sum", "prefix-pcgrad"):
+        raise ValueError("cash prefix gradients require an explicit supported mode")
+    groups = [np.asarray(rows) for rows in (previous_rows,added_rows)]
+    if (any(rows.ndim != 1 or len(rows) == 0 or rows.dtype.kind not in "iu"
+            or (rows < 0).any() or len(set(rows.tolist())) != len(rows) for rows in groups)
+            or set(groups[0].tolist()).intersection(groups[1].tolist())):
+        raise ValueError("cash prefix gradients require nonempty disjoint training rows")
+    previous_loss, previous = cash_accumulated_value_and_grad(model,loss_grad,previous_rows,batch_size)
+    added_loss, added = cash_accumulated_value_and_grad(model,loss_grad,added_rows,batch_size)
+    combined, diagnostics = combine_cash_domain_gradients(previous,added,project=mode == "prefix-pcgrad")
+    return previous_loss+added_loss, combined, diagnostics
+
+
 def split_cash_families(source: dict, seed: int, reference: dict | None = None):
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("cash split seed must be an integer in 0..2^32-1")
@@ -384,7 +405,13 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped", gradient_batch_size: int | None = None, value_normalization: str = "pot"):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped", gradient_batch_size: int | None = None, value_normalization: str = "pot", gradient_domain_mode: str = "joint"):
+    if type(gradient_domain_mode) is not str or gradient_domain_mode not in CASH_GRADIENT_DOMAIN_MODES:
+        raise ValueError("unsupported cash training-gradient domain mode")
+    if gradient_domain_mode != "joint" and (initial_value_network is None or initial_dataset is None
+            or gradient_batch_size is None or training_output_mode != "raw" or regression_loss != "mse"
+            or accounting_loss_weight != 0 or profile_value_loss_weight != 0):
+        raise ValueError("cash prefix gradient pilots require frozen initialization, raw MSE, batching and no auxiliaries")
     if ((initial_value_network is None) != (initial_dataset is None)
             or any(value is not None and not isinstance(value,Path)
                    for value in (initial_value_network,initial_dataset))):
@@ -423,6 +450,13 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     reference_bytes = split_reference.read_bytes() if split_reference else None
     reference = json.loads(reference_bytes) if reference_bytes else None
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
+    domain_rows, prefix_count = None, None
+    if gradient_domain_mode != "joint":
+        prefix_count = len(json.loads(initial_dataset.read_bytes())["labels"])
+        previous_rows, added_rows = train[train < prefix_count], train[train >= prefix_count]
+        if len(previous_rows) == 0 or len(added_rows) == 0:
+            raise ValueError("cash prefix gradient pilots require original and genuinely added training rows")
+        domain_rows = (mx.array(previous_rows),mx.array(added_rows))
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
     dataset_digest = hashlib.sha256(data).hexdigest()
     cache_key = cash_feature_cache_key(feature_schema,value_normalization)
@@ -535,8 +569,13 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
             tuning_mse_bb_squared=float(mse.item()), tuning_objective_bb_squared=best_tuning,
             improved_tuning=True))
         best_parameters = [(key,np.array(value)) for key,value in tree_flatten(model.parameters())]
+    gradient_domain_history = []
     for step in range(1, steps + 1):
-        if gradient_batch_size is None:
+        if domain_rows is not None:
+            loss, gradients, diagnostics = cash_prefix_value_and_grad(model,loss_grad,*domain_rows,
+                gradient_batch_size,gradient_domain_mode)
+            gradient_domain_history.append(dict(step=step,**diagnostics))
+        elif gradient_batch_size is None:
             loss, gradients = loss_grad(model, train_rows)
         else:
             loss, gradients = cash_accumulated_value_and_grad(model,loss_grad,train_rows,gradient_batch_size)
@@ -614,6 +653,13 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
             optimizer_updates=steps, floating_point_reduction_order_changed=True)
     if architecture in ("wide-blocker-pooled","wide-kernel-pooled"):
         report["card_pool_gradient_contract"] = CARD_POOL_GRADIENT_CONTRACT
+    if domain_rows is not None:
+        report["gradient_domains"] = dict(mode=gradient_domain_mode,
+            contract="symmetric-global-prefix-pcgrad-v1" if gradient_domain_mode == "prefix-pcgrad" else "global-prefix-sum-control-v1",
+            prefix_contexts=prefix_count,previous_training_rows=previous_rows.tolist(),
+            added_training_rows=added_rows.tolist(),normalization="unchanged-global-training-loss-mass",
+            history=gradient_domain_history,projection_before_adam=True,
+            limitation="Local training-gradient interference control, not a policy, EV confidence or equilibrium guarantee")
     if value_normalization != "pot":
         report["value_normalization"] = value_normalization
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -637,11 +683,12 @@ def main():
     parser.add_argument("--huber-delta-bb",type=float,default=1.,help="Huber fit threshold in net bb; small-error gradients match original squared loss")
     parser.add_argument("--training-output-mode",choices=CASH_TRAINING_OUTPUT_MODES,default="serving-clipped",help="Explicit raw-value fit pilot; checkpoint selection and inference retain serving clipping")
     parser.add_argument("--gradient-batch-size",type=int,help="Accumulate the full globally weighted gradient in bounded context batches; one Adam update per complete pass")
+    parser.add_argument("--gradient-domain-mode",choices=CASH_GRADIENT_DOMAIN_MODES,default="joint",help="Optional warm-prefix sum control or two-domain PCGrad; ordinary joint gradient remains unchanged")
     parser.add_argument("--value-normalization",choices=CASH_VALUE_NORMALIZATIONS,default="pot",help="Explicit output-unit comparison; net-bb loss, exact baseline and native serving limits remain unchanged")
     parser.add_argument("--initial-value-network",type=Path,help="Frozen cash weights with sibling report.json; same seed/architecture/rules/split required")
     parser.add_argument("--initial-dataset",type=Path,help="Byte-pinned initial training corpus; must remain an unchanged current prefix")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode,gradient_batch_size=args.gradient_batch_size,value_normalization=args.value_normalization), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode,gradient_batch_size=args.gradient_batch_size,value_normalization=args.value_normalization,gradient_domain_mode=args.gradient_domain_mode), indent=2))
 
 
 if __name__ == "__main__": main()
