@@ -7,6 +7,7 @@ projection. Whole flop families are held out, including suit variants/turns.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 from importlib.metadata import version
 import json
@@ -32,7 +33,7 @@ from train_public_value_network import (SharedComboValueNetwork, build_features,
     export_model, FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT, value_scale_bb)
 
 CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
-CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned")
+CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned", "wide-pooled-pot-experts")
 CASH_TRAINING_OUTPUT_MODES = ("serving-clipped", "raw")
 CASH_VALUE_NORMALIZATIONS = ("pot", "payoff-exposure")
 _FEATURE_CACHE = CashFeatureCache()
@@ -57,7 +58,7 @@ class OwnComboValueNetwork(SharedComboValueNetwork):
         if feature_schema not in CASH_FEATURE_SCHEMAS:
             raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
         validate_cash_value_normalization(value_normalization)
-        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned") else architecture, value_normalization, feature_schema)
+        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned","wide-pooled-pot-experts") else architecture, value_normalization, feature_schema)
         self.architecture = architecture
         if architecture == "wide-baseline-conditioned":
             weight = self.head.layers[0].weight
@@ -69,6 +70,12 @@ class OwnComboValueNetwork(SharedComboValueNetwork):
         # learned future-betting correction at zero, not random multi-bb EVs.
         self.head.layers[-1].weight = mx.zeros_like(self.head.layers[-1].weight)
         self.head.layers[-1].bias = mx.zeros_like(self.head.layers[-1].bias)
+        if architecture == "wide-pooled-pot-experts":
+            # Same shared parameters and cold residual as the ordinary head;
+            # no additional random draws or larger/GELU Home architecture.
+            self.pot_expert_heads = [self.head,copy.deepcopy(self.head),copy.deepcopy(self.head)]
+            self.head = None
+            self.uses_pot_experts = True
 
     def raw_values(self, context, queries, joint_weights, scales, own_baseline, ranges=None):
         if self.architecture in ("wide-blocker-pooled","wide-baseline-conditioned"):
@@ -148,13 +155,14 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
     baseline_conditioned = model.architecture == "wide-baseline-conditioned"
-    payload.update(schema=(cash_values.BASELINE_CONDITIONED_NETWORK_SCHEMA if baseline_conditioned else cash_values.BLOCKER_POOLED_NETWORK_SCHEMA if blocker_pooled else
+    pot_experts = model.architecture == "wide-pooled-pot-experts"
+    payload.update(schema=(cash_values.POT_EXPERT_NETWORK_SCHEMA if pot_experts else cash_values.BASELINE_CONDITIONED_NETWORK_SCHEMA if baseline_conditioned else cash_values.BLOCKER_POOLED_NETWORK_SCHEMA if blocker_pooled else
                           cash_values.POOLED_NETWORK_SCHEMA if model.pools_exact_ranges else cash_values.NETWORK_SCHEMA),
                    cashRules=source["game"]["cash_rules"],
                    sourceGame=source["game"], baseline="exact-own-payoff-forced-turn-checkdown-44-compatible-rivers",
                    rulesSha256=source["rules_sha256"], payoffContract=PAYOFF_CONTRACT,
                    trainingTargetSemantics=cash_values.TARGET_SEMANTICS,
-                   predictionContract=(cash_values.BASELINE_CONDITIONED_CONTRACT if baseline_conditioned else cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT),
+                   predictionContract=(cash_values.POT_EXPERT_CONTRACT if pot_experts else cash_values.BASELINE_CONDITIONED_CONTRACT if baseline_conditioned else cash_values.BLOCKER_POOLED_CONTRACT if blocker_pooled else cash_values.PREDICTION_CONTRACT),
                    residualInitialization="zero-final-linear-layer",
                    accountingLossWeight=accounting_loss_weight,
                    profileValueLossWeight=profile_value_loss_weight,

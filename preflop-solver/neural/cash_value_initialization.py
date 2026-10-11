@@ -67,8 +67,10 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
     schema = {"compact":datasets.NETWORK_SCHEMA, "wide":datasets.NETWORK_SCHEMA,
               "wide-pooled":datasets.POOLED_NETWORK_SCHEMA,
               "wide-blocker-pooled":datasets.BLOCKER_POOLED_NETWORK_SCHEMA,
-              "wide-baseline-conditioned":datasets.BASELINE_CONDITIONED_NETWORK_SCHEMA}[architecture]
-    contract = (datasets.BLOCKER_POOLED_CONTRACT if architecture == "wide-blocker-pooled" else
+              "wide-baseline-conditioned":datasets.BASELINE_CONDITIONED_NETWORK_SCHEMA,
+              "wide-pooled-pot-experts":datasets.POT_EXPERT_NETWORK_SCHEMA}[architecture]
+    contract = (datasets.POT_EXPERT_CONTRACT if architecture == "wide-pooled-pot-experts" else
+                datasets.BLOCKER_POOLED_CONTRACT if architecture == "wide-blocker-pooled" else
                 datasets.BASELINE_CONDITIONED_CONTRACT if architecture == "wide-baseline-conditioned" else
                 datasets.PREDICTION_CONTRACT)
     required = dict(schema=schema,architecture=architecture,featureSchema=model.feature_schema,
@@ -86,11 +88,20 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
             or report.get("value_normalization","pot") != model.value_normalization):
         raise ValueError("initial cash value contract/architecture/rules do not match")
     staged = []
-    for name, exported, final_activation in (("context_tower", "contextTower", "relu"),
-                                             ("query_tower", "queryTower", "relu"),
-                                             ("head", "head", "linear")):
-        expected = tower_payload(getattr(model,name),"relu",final_activation)
-        actual = payload.get(exported)
+    towers = [("context_tower",model.context_tower,payload.get("contextTower"),"relu"),
+              ("query_tower",model.query_tower,payload.get("queryTower"),"relu")]
+    if model.uses_pot_experts:
+        heads = payload.get("potExpertHeads")
+        if payload.get("head") != [] or not isinstance(heads,list) or len(heads) != 3:
+            raise ValueError("initial cash pot experts require exactly three heads and no shared head")
+        towers.extend((f"pot_expert_heads.{index}",head,exported,"linear")
+                      for index,(head,exported) in enumerate(zip(model.pot_expert_heads,heads)))
+    else:
+        if payload.get("potExpertHeads",[]) != []:
+            raise ValueError("initial shared cash weights cannot contain pot experts")
+        towers.append(("head",model.head,payload.get("head"),"linear"))
+    for name, tower, actual, final_activation in towers:
+        expected = tower_payload(tower,"relu",final_activation)
         if not isinstance(actual,list) or len(actual) != len(expected):
             raise ValueError("initial cash tower length does not match")
         for index,(layer,shape) in enumerate(zip(actual,expected)):

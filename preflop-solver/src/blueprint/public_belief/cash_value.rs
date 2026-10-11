@@ -5,9 +5,11 @@ pub(super) const NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-netwo
 pub(super) const POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v3";
 pub(super) const BLOCKER_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v4";
 pub(super) const BASELINE_CONDITIONED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v5";
+pub(super) const POT_EXPERT_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v6";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
 const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-pooled-v1";
 const BASELINE_CONDITIONED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-baseline-conditioned-v1";
+const POT_EXPERT_CONTRACT: &str = "cash-turn-start-cfv-full-stack-pot-experts-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
 #[cfg(test)]
@@ -21,7 +23,7 @@ pub(super) fn note_geometry_preparation() {
 }
 
 fn is_cash_schema(schema: &str) -> bool {
-    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA)
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA)
 }
 
 /// Each query conditions on its own two cards, using raw opponent reaches.
@@ -92,7 +94,9 @@ impl PublicValueNetwork {
             || source.cash_rules != self.cash_rules
             || source.effective_stack_bb != self.target_scale_bb
             || self.payoff_contract.as_deref() != Some(PAYOFF)
-            || self.prediction_contract.as_deref() != Some(if self.schema == BASELINE_CONDITIONED_NETWORK_SCHEMA {
+            || self.prediction_contract.as_deref() != Some(if self.schema == POT_EXPERT_NETWORK_SCHEMA {
+                POT_EXPERT_CONTRACT
+            } else if self.schema == BASELINE_CONDITIONED_NETWORK_SCHEMA {
                 BASELINE_CONDITIONED_CONTRACT
             } else if self.schema == BLOCKER_POOLED_NETWORK_SCHEMA {
                 BLOCKER_POOLED_CONTRACT
@@ -411,6 +415,78 @@ mod tests {
         assert!(actual[0][absent].abs() > 0.01, "zero own reach must not censor a query");
         assert!(aggregate < -0.1, "pooled cash values must not be projected to zero sum");
         }
+    }
+
+    #[test]
+    fn cash_pot_experts_route_cent_neighbors_without_zero_sum_projection() {
+        let (mut network, mut config) = fixture();
+        network.schema = "hu-cash-public-belief-combo-value-network-v6".into();
+        network.prediction_contract = Some("cash-turn-start-cfv-full-stack-pot-experts-v1".into());
+        let mut layer = network.head[0].clone();
+        layer.input_size = 4;
+        layer.weights = vec![0.0; 4];
+        network.head.clear();
+        network.pot_expert_heads = (0..3).map(|index| {
+            let mut head = layer.clone();
+            head.biases = vec![index as f32 * 0.1];
+            vec![head]
+        }).collect();
+        network.validate().unwrap();
+        for (investment, expert) in [(3.48,0), (3.52,1), (7.48,1), (7.52,2)] {
+            config.state.invested_bb = [investment; 2];
+            assert_eq!(network.selected_value_head([investment; 2])[0].biases, [expert as f32 * 0.1]);
+            let actual = network.predict_cash_turn(&config).unwrap();
+            let baseline = network.cash_checkdown_baseline(&config.state.board,config.state.actor,
+                config.state.invested_bb,&config.state.ranges);
+            for player in 0..2 {
+                for combo in all_combos() {
+                    let key = combo.key();
+                    if combo.cards().iter().any(|card| config.state.board.contains(card)) {
+                        assert_eq!(actual[player][key],0.0);
+                    } else {
+                        let residual = (expert as f32 * 0.1) as f64 * 2.0 * investment;
+                        assert!((actual[player][key] - (baseline[player][key] + residual).clamp(-20.0,20.0)).abs() < 1e-6);
+                    }
+                }
+            }
+        }
+        for head in &mut network.pot_expert_heads { head[0].biases[0] = 10.0; }
+        let values = network.predict_cash_turn(&config).unwrap();
+        let key = Combo::new(50,51).key();
+        assert_eq!(values[0][key],20.0);
+        assert_eq!(values[1][key],20.0);
+    }
+
+    #[test]
+    fn cash_pot_experts_reject_missing_heads_layout_or_contract() {
+        let (mut network, _) = fixture();
+        network.schema = "hu-cash-public-belief-combo-value-network-v6".into();
+        network.prediction_contract = Some("cash-turn-start-cfv-full-stack-pot-experts-v1".into());
+        assert!(network.validate().is_err());
+        let mut head = network.head.clone();
+        head[0].input_size = 4;
+        head[0].weights = vec![0.0; 4];
+        network.head.clear();
+        network.pot_expert_heads = vec![head; 3];
+        network.validate().unwrap();
+        let valid = network.clone();
+        network.pot_expert_heads.pop();
+        assert!(network.validate().is_err());
+        network = valid.clone();
+        network.pot_expert_heads.push(network.pot_expert_heads[0].clone());
+        assert!(network.validate().is_err());
+        network = valid.clone();
+        network.head = network.pot_expert_heads[0].clone();
+        assert!(network.validate().is_err());
+        network = valid.clone();
+        network.prediction_contract = Some(CONTRACT.into());
+        assert!(network.validate().is_err());
+        network = valid.clone();
+        network.pot_expert_heads[2][0].input_size = 2;
+        assert!(network.validate().is_err());
+        network = valid;
+        network.pot_expert_heads[2].clear();
+        assert!(network.validate().is_err());
     }
 
     #[test]
