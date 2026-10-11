@@ -77,12 +77,13 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
                     trainingTargetSemantics=datasets.TARGET_SEMANTICS,
                     sourceValidationStatus="research_only",sourceGame=current_source["game"],
                     rulesSha256=current_source["rules_sha256"],cashRules=current_source["game"]["cash_rules"],
-                    usesExactRanges=True,targetScaleBb=20.,valueNormalization="pot",seed=seed,
+                    usesExactRanges=True,targetScaleBb=20.,valueNormalization=model.value_normalization,seed=seed,
                     baseline="exact-own-payoff-forced-turn-checkdown-44-compatible-rivers",
                     residualUnit="normalized_state_value_scale",rangeScale=1326,
                     projection="independent-full-stack-clip-and-board-mask-no-zero-sum")
     if (any(payload.get(key) != value for key,value in required.items())
-            or payload.get("usesExactRanges") is not True or type(payload.get("seed")) is not int):
+            or payload.get("usesExactRanges") is not True or type(payload.get("seed")) is not int
+            or report.get("value_normalization","pot") != model.value_normalization):
         raise ValueError("initial cash value contract/architecture/rules do not match")
     staged = []
     for name, exported, final_activation in (("context_tower", "contextTower", "relu"),
