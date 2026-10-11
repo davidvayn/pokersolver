@@ -3,6 +3,7 @@
 use super::*;
 use crate::cash_game::{Outcome, TerminalReason};
 
+pub mod convergence;
 pub mod trace;
 
 const SCHEMA: &str = "hu-cash-depth-limited-flop-pilot-v1";
@@ -46,12 +47,12 @@ fn default_threads() -> usize {
 
 impl CashFlopPilotInput {
     pub fn validate(&self) -> Result<(), String> {
-        if !(2..=32).contains(&self.iterations)
+        if !(2..=64).contains(&self.iterations)
             || !(1..=4).contains(&self.threads)
             || self.averaging_delay >= self.iterations
         {
             return Err(
-                "cash flop pilot permits 2..32 updates, 1..4 workers, and a valid averaging delay"
+                "cash flop pilot permits 2..64 updates, 1..4 workers, and a valid averaging delay"
                     .into(),
             );
         }
@@ -350,7 +351,7 @@ impl FlopSolver {
         result
     }
 
-    fn finish_cash_flop(self, input_sha256: String) -> Result<CashFlopPilotSolution, String> {
+    fn finish_cash_flop(&self, input_sha256: String) -> Result<CashFlopPilotSolution, String> {
         let reaches = self.config.state.ranges.clone();
         let joint = joint_compatibility_mass(&reaches);
         let values =
@@ -468,6 +469,15 @@ fn prepare_solver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_search_extension_accepts_64_and_rejects_65() {
+        let (mut input, _) = fixture();
+        input.iterations = 64;
+        assert!(input.validate().is_ok());
+        input.iterations = 65;
+        assert!(input.validate().is_err());
+    }
 
     pub(super) fn fixture() -> (CashFlopPilotInput, PublicValueNetwork) {
         let mut game = BlueprintConfig::default();
@@ -798,7 +808,7 @@ mod tests {
         wrong.state.checks = 1;
         assert!(solve(wrong, network.clone()).is_err());
         let mut wrong = input.clone();
-        wrong.iterations = 33;
+        wrong.iterations = 65;
         assert!(solve(wrong, network.clone()).is_err());
         let mut wrong = input.clone();
         wrong.threads = 5;
