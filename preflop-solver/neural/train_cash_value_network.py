@@ -34,16 +34,30 @@ from train_public_value_network import (SharedComboValueNetwork, build_features,
 CASH_FEATURE_SCHEMAS = (FEATURE_SCHEMA_BOARD_RELATIVE, FEATURE_SCHEMA_EXACT_RUNOUT)
 CASH_ARCHITECTURES = ("compact", "wide", "wide-pooled", "wide-blocker-pooled", "wide-baseline-conditioned")
 CASH_TRAINING_OUTPUT_MODES = ("serving-clipped", "raw")
+CASH_VALUE_NORMALIZATIONS = ("pot", "payoff-exposure")
 _FEATURE_CACHE = CashFeatureCache()
 
 
+def validate_cash_value_normalization(value):
+    if type(value) is not str or value not in CASH_VALUE_NORMALIZATIONS:
+        raise ValueError("cash value normalization must be pot or payoff-exposure")
+
+
+def cash_feature_cache_key(feature_schema, value_normalization="pot"):
+    """Scale changes targets as well as outputs; never reuse pot-scaled arrays."""
+    validate_cash_value_normalization(value_normalization)
+    return (feature_schema if value_normalization == "pot" else
+            f"{feature_schema}|value-normalization={value_normalization}")
+
+
 class OwnComboValueNetwork(SharedComboValueNetwork):
-    def __init__(self, architecture="compact", feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
+    def __init__(self, architecture="compact", feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE, *, value_normalization="pot"):
         if architecture not in CASH_ARCHITECTURES:
             raise ValueError("cash pilot architecture must be a supported own-payoff network")
         if feature_schema not in CASH_FEATURE_SCHEMAS:
             raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
-        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned") else architecture, "pot", feature_schema)
+        validate_cash_value_normalization(value_normalization)
+        super().__init__(True, "wide-pooled" if architecture in ("wide-blocker-pooled","wide-baseline-conditioned") else architecture, value_normalization, feature_schema)
         self.architecture = architecture
         if architecture == "wide-baseline-conditioned":
             weight = self.head.layers[0].weight
@@ -97,9 +111,10 @@ def reference_predictions(model, tensors, scales, legal):
     return OwnPayoffValueProjection(raw_bb, legal.astype(bool)).values
 
 
-def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
+def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE, *, value_normalization="pot"):
     if feature_schema not in CASH_FEATURE_SCHEMAS:
         raise ValueError("cash pilot feature schema must be board-relative or exact-turn-runout")
+    validate_cash_value_normalization(value_normalization)
     cash_values.validate_dataset(source)
     contexts, queries, weights, loss_weights, scales, baselines, legal, targets = [], [], [], [], [], [], [], []
     for label in source["labels"]:
@@ -114,7 +129,7 @@ def feature_arrays(source: dict, feature_schema=FEATURE_SCHEMA_BOARD_RELATIVE):
             # baseline's exact 44-river win/tie traversal instead of evaluating
             # every showdown a second time through the generic Home builder.
             query[:,:,94] = equity
-        scale = value_scale_bb(state["invested_bb"], "pot")
+        scale = value_scale_bb(state["invested_bb"], value_normalization)
         contexts.append(context); queries.append(query); weights.append(ranges * masses)
         loss_weights.append(training_weights(board, ranges, masses, .1).reshape(-1))
         scales.append(scale); legal.append(legal_combos(board))
@@ -128,7 +143,8 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
     validate_cash_training_output_mode(training_output_mode)
     validate_cash_gradient_batch_size(gradient_batch_size)
     precision = cash_training_precision()
-    export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, "pot")
+    validate_cash_value_normalization(model.value_normalization)
+    export_model(model, path, seed, digest, cash_values.SCHEMA, "research_only", None, model.value_normalization)
     payload = json.loads(path.read_text())
     blocker_pooled = model.architecture == "wide-blocker-pooled"
     baseline_conditioned = model.architecture == "wide-baseline-conditioned"
@@ -340,7 +356,7 @@ It never alters reaches, native values, or tuning/holdout membership.
     return result
 
 
-def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped", gradient_batch_size: int | None = None):
+def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None = None, accounting_loss_weight: float = 0., split_seed: int | None = None, split_reference: Path | None = None, flop_leaf_loss_weight: float = 1., architecture: str = "compact", profile_value_loss_weight: float = 0., feature_schema: str = FEATURE_SCHEMA_BOARD_RELATIVE, adam_bias_correction: bool = False, learning_rate: float = 1e-3, *, regression_loss: str = "mse", huber_delta_bb: float = 1., initial_value_network: Path | None = None, initial_dataset: Path | None = None, training_output_mode: str = "serving-clipped", gradient_batch_size: int | None = None, value_normalization: str = "pot"):
     if ((initial_value_network is None) != (initial_dataset is None)
             or any(value is not None and not isinstance(value,Path)
                    for value in (initial_value_network,initial_dataset))):
@@ -367,6 +383,7 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     validate_cash_regression_options(regression_loss,huber_delta_bb)
     validate_cash_training_output_mode(training_output_mode)
     validate_cash_gradient_batch_size(gradient_batch_size)
+    validate_cash_value_normalization(value_normalization)
     training_precision = cash_training_precision()
     split_seed = seed if split_seed is None else split_seed
     if type(split_seed) is not int or not 0 <= split_seed < 2**32:
@@ -380,10 +397,17 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
     train, tuning, holdout = split_cash_families(source, split_seed,reference)
     context_weights = context_loss_multipliers(source, flop_leaf_loss_weight)
     dataset_digest = hashlib.sha256(data).hexdigest()
-    arrays, feature_preparation = _FEATURE_CACHE.get(dataset_digest, feature_schema,
-                                                    lambda: feature_arrays(source,feature_schema))
+    cache_key = cash_feature_cache_key(feature_schema,value_normalization)
+    # Retain the existing two-argument preparation call on the default route,
+    # including its original cache identity and generated artifact metadata.
+    prepare = (lambda:feature_arrays(source,feature_schema)) if value_normalization == "pot" else (
+        lambda:feature_arrays(source,feature_schema,value_normalization=value_normalization))
+    arrays, feature_preparation = _FEATURE_CACHE.get(dataset_digest,cache_key,prepare)
+    if value_normalization != "pot":
+        feature_preparation.update(feature_schema=feature_schema,cache_feature_key=cache_key,
+                                   value_normalization=value_normalization)
     contexts, queries, weights, scales, baselines, legal, targets, loss_weights = arrays
-    mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema)
+    mx.random.seed(seed); model = OwnComboValueNetwork(architecture,feature_schema,value_normalization=value_normalization)
     initialization = (initialize_cash_from_frozen(model,initial_value_network,initial_dataset,
                       source,(train,tuning,holdout),seed,split_seed)
                       if initial_value_network is not None else None)
@@ -560,6 +584,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
             contexts_per_optimizer_update=len(train), normalization_mass=normalization_mass,
             order="frozen-split-row-order", sampling="complete-pass-no-subsampling",
             optimizer_updates=steps, floating_point_reduction_order_changed=True)
+    if value_normalization != "pot":
+        report["value_normalization"] = value_normalization
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
@@ -581,10 +607,11 @@ def main():
     parser.add_argument("--huber-delta-bb",type=float,default=1.,help="Huber fit threshold in net bb; small-error gradients match original squared loss")
     parser.add_argument("--training-output-mode",choices=CASH_TRAINING_OUTPUT_MODES,default="serving-clipped",help="Explicit raw-value fit pilot; checkpoint selection and inference retain serving clipping")
     parser.add_argument("--gradient-batch-size",type=int,help="Accumulate the full globally weighted gradient in bounded context batches; one Adam update per complete pass")
+    parser.add_argument("--value-normalization",choices=CASH_VALUE_NORMALIZATIONS,default="pot",help="Explicit output-unit comparison; net-bb loss, exact baseline and native serving limits remain unchanged")
     parser.add_argument("--initial-value-network",type=Path,help="Frozen cash weights with sibling report.json; same seed/architecture/rules/split required")
     parser.add_argument("--initial-dataset",type=Path,help="Byte-pinned initial training corpus; must remain an unchanged current prefix")
     args = parser.parse_args()
-    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode,gradient_batch_size=args.gradient_batch_size), indent=2))
+    print(json.dumps(run(args.dataset, args.output, args.seed, args.steps, args.native_binary, args.accounting_loss_weight, args.split_seed,args.split_reference,args.flop_leaf_loss_weight,args.architecture,args.profile_value_loss_weight,args.feature_schema,args.adam_bias_correction,args.learning_rate,regression_loss=args.regression_loss,huber_delta_bb=args.huber_delta_bb,initial_value_network=args.initial_value_network,initial_dataset=args.initial_dataset,training_output_mode=args.training_output_mode,gradient_batch_size=args.gradient_batch_size,value_normalization=args.value_normalization), indent=2))
 
 
 if __name__ == "__main__": main()
