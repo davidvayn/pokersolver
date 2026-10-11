@@ -1101,6 +1101,15 @@ A passing reference stage permits exactly one **data-only matched131-row fit** p
 Require both breadth seeds5% after-check gain versus parent/replay control on existing diagnosis and two-family review; retain all29 review cohorts, original holdout and diagnosed check/check/after-check within10% of parent/control/prior broad/original FiLM. Keep exact outside-gate and0.001bb decoder,12GiB/zero-swap guards. Only a complete paired review pass permits separately selected untouched validation; subsequent cent/native/action/full-hand checks remain required. [ReBeL's training-domain coverage](https://arxiv.org/html/2007.13544v2) motivates the data contrast, not a cash equilibrium guarantee. Failure closes this configuration without a longer fit or paid run.
 
 
+## October 11 bounded-process checkpoint
+
+Hardened the research process-budget interface before the new breadth pilot. A deterministic reproduction showed that timing-wrapper timeout cleanup could leave its native child alive. The new POSIX helper creates an isolated process group and terminates only that group on timeout, including a termination-resistant child that closes inherited log pipes. Both regressions failed before their fixes and now pass. A real pinned native prediction with a0.02-second deadline also left zero live members of its spawned group. Successful commands retain ordinary captured output, exit status and resource logs; detached daemons are unsupported. This changes deadline enforcement, not solver math or previously completed no-timeout results.
+
+Verified five process-budget tests and all177 cash Python tests in both working and isolated publishing checkouts; the external breadth-generator harness passes four tests, including timeout-log preservation. No browser, TypeScript, Rust or WASM changes were made in this checkpoint, and their older checks are not represented as fresh runs.
+
+The preregistered eight-family breadth generation is running with frozen public selection and the existing two-process/two-thread,6GiB, zero-swap and2,700-monotonic-second limits. Its public flop indices are36,6,63,9,18,58,51,23; each supplies one publicly selected paired turn and three branch targets. These are training families only. Teacher acceptance must finish before the matched131-observation FiLM comparison can begin. No cash model has been activated.
+
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
