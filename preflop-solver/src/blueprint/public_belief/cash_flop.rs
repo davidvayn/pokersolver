@@ -47,12 +47,12 @@ fn default_threads() -> usize {
 
 impl CashFlopPilotInput {
     pub fn validate(&self) -> Result<(), String> {
-        if !(2..=64).contains(&self.iterations)
+        if !(2..=128).contains(&self.iterations)
             || !(1..=4).contains(&self.threads)
             || self.averaging_delay >= self.iterations
         {
             return Err(
-                "cash flop pilot permits 2..64 updates, 1..4 workers, and a valid averaging delay"
+                "cash flop pilot permits 2..128 updates, 1..4 workers, and a valid averaging delay"
                     .into(),
             );
         }
@@ -471,11 +471,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bounded_search_extension_accepts_64_and_rejects_65() {
+    fn bounded_search_extension_accepts_128_and_rejects_129() {
         let (mut input, _) = fixture();
-        input.iterations = 64;
+        input.iterations = 128;
         assert!(input.validate().is_ok());
-        input.iterations = 65;
+        input.iterations = 129;
         assert!(input.validate().is_err());
     }
 
@@ -808,7 +808,7 @@ mod tests {
         wrong.state.checks = 1;
         assert!(solve(wrong, network.clone()).is_err());
         let mut wrong = input.clone();
-        wrong.iterations = 65;
+        wrong.iterations = 129;
         assert!(solve(wrong, network.clone()).is_err());
         let mut wrong = input.clone();
         wrong.threads = 5;

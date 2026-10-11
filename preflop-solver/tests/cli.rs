@@ -98,7 +98,7 @@ fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
     let board = [0, 5, 10];
     let input = CashFlopPilotInput { game, state: PublicBeliefState::flop_start(
         board, 1, [2.0; 2], [uniform_range(&board), uniform_range(&board)]),
-        iterations: 65, averaging_delay: 0, threads: 2,
+        iterations: 129, averaging_delay: 0, threads: 2,
     };
     let path = std::env::temp_dir().join(format!("cash-flop-cli-budget-{}.json", std::process::id()));
     fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
@@ -107,7 +107,7 @@ fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
         .output().unwrap();
     fs::remove_file(path).unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("2..64"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("2..128"));
 }
 
 #[test]
