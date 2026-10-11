@@ -28,8 +28,36 @@ def exact_cash_checkdown_features(board, ranges, investments, rules):
     return tuple(values.copy() for values in _cached(board,ranges.tobytes(),amount,json.dumps(rules,sort_keys=True)))
 
 
+def exact_cash_runout_distribution(board, ranges, investments, rules):
+    """Research-only mean, variance and eight-bin future river-equity histogram.
+
+    Condition each river equity on the query's compatible opponent range. Its
+    chance weight is compatible mass after that river / (44 * original mass),
+    not uniform over the46 rivers remaining after board plus queried hand.
+    Bins are [0,1/8), ... [7/8,1]. Zero compatible support returns all zeros;
+    zero own reach does not remove otherwise legal counterfactual queries.
+    No betting policy, equilibrium value or future/private card is supplied.
+    Legacy callers do not pay for these additional opt-in accumulations.
+    """
+    cards = np.asarray(board)
+    beliefs = np.asarray(ranges)
+    if (cards.shape != (4,) or cards.dtype.kind not in 'iu'
+            or (cards < 0).any() or (cards >= 52).any() or len(np.unique(cards)) != 4):
+        raise ValueError('runout distribution requires four unique exact public cards')
+    if (beliefs.shape != (2,1326) or beliefs.dtype.kind not in 'iuf'
+            or not np.isfinite(beliefs).all() or (beliefs < 0).any()
+            or not (beliefs.sum(axis=1) > 0).all()
+            or (beliefs[:, ~legal_combos(cards)] != 0).any()):
+        raise ValueError('runout distribution requires finite nonnegative legal paired beliefs')
+    beliefs = beliefs.astype(np.float64, copy=False)
+    amount = equal_cash_investment_units(investments, rules['unitsPerBb'])
+    values = _cached(tuple(map(int,cards)), beliefs.tobytes(), amount,
+                     json.dumps(rules,sort_keys=True), include_distribution=True)
+    return tuple(value.copy() for value in values[1:])
+
+
 @lru_cache(maxsize=16)
-def _cached(board, range_bytes, amount, rules_json):
+def _cached(board, range_bytes, amount, rules_json, include_distribution=False):
     rules = json.loads(rules_json); ranges = np.frombuffer(range_bytes,dtype=np.float64).reshape(2,1326)
     gross = 2 * amount; whole, remainder = divmod(gross * rules["rake"]["rateBasisPoints"],10000)
     rake = min(rules["rake"]["capUnits"],whole+int(remainder > 5000 or remainder == 5000 and whole % 2 == 1))
@@ -38,6 +66,10 @@ def _cached(board, range_bytes, amount, rules_json):
     ties = [(net//2-amount)/unit, ((net+1)//2-amount)/unit]
     numerators = np.zeros((2,1326),dtype=np.float64)
     equity_numerators = np.zeros_like(numerators)
+    if include_distribution:
+        second_numerators = np.zeros_like(numerators)
+        histogram_numerators = np.zeros((2,1326,8),dtype=np.float64)
+        keys = np.arange(1326)
     legal = legal_combos(board)
     for river in range(52):
         if river in board: continue
@@ -58,9 +90,25 @@ def _cached(board, range_bytes, amount, rules_json):
             losing_mass = masses[player] - better_mass - tie_mass
             numerators[player] += np.where(river_legal, better_mass*win+losing_mass*lose+tie_mass*ties[player],0)
             equity_numerators[player] += np.where(river_legal, better_mass + .5*tie_mass, 0)
+            if include_distribution:
+                conditional = np.clip(np.divide(better_mass+.5*tie_mass, masses[player],
+                    out=np.zeros(1326), where=masses[player]>0),0.,1.)
+                river_mass = np.where(river_legal, masses[player], 0.)
+                second_numerators[player] += river_mass * conditional ** 2
+                bins = np.minimum(7,(conditional * 8).astype(np.int64))
+                histogram_numerators[player,keys,bins] += river_mass
     denominator = compatible_masses(ranges) * 44
     result = np.divide(numerators,denominator,out=np.zeros_like(numerators),where=denominator>0)
     result[:,~legal] = 0
     equity = np.clip(np.divide(equity_numerators,denominator,out=np.zeros_like(numerators),where=denominator>0),0.,1.)
     equity[:,~legal] = 0
+    if include_distribution:
+        second = np.divide(second_numerators,denominator,
+            out=np.zeros_like(numerators),where=denominator>0)
+        variance = np.clip(second-equity**2,0.,.25)
+        variance[:,~legal] = 0
+        histogram = np.divide(histogram_numerators,denominator[:,:,None],
+            out=np.zeros_like(histogram_numerators),where=denominator[:,:,None]>0)
+        histogram[:,~legal,:] = 0
+        return result, equity, variance, histogram
     return result, equity
