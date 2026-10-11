@@ -1110,6 +1110,24 @@ Verified five process-budget tests and all177 cash Python tests in both working 
 The preregistered eight-family breadth generation is running with frozen public selection and the existing two-process/two-thread,6GiB, zero-swap and2,700-monotonic-second limits. Its public flop indices are36,6,63,9,18,58,51,23; each supplies one publicly selected paired turn and three branch targets. These are training families only. Teacher acceptance must finish before the matched131-observation FiLM comparison can begin. No cash model has been activated.
 
 
+## October 11 eight-family FiLM breadth result
+
+Completed the preregistered public-only teacher stage: eight frozen-parent32-update flop solves,24 independent128-update turn/river references and16 independent256-update refinements. All reference screens pass. Maximum conditional NashConv is0.0597365964bb; maximum actual-joint/training-mixture target drift is0.0873997319/0.0862512216bb. Native reference peak footprint is385,614,448 bytes, with zero swaps. Measured generation time is1,678.8764 monotonic seconds and1,681.29 outer real seconds, below the2,700-second cap. Report `cash-film-board-breadth24-corpora-20261011/report.json` SHA is `1e677903b23fce96f896555f800d939780a8a9c45bd9c14dc8992ea0c1f97059`. The24 labels are training-only, not validation or authentic hand-frequency evidence.
+
+Completed the data-only131-observation,240-update matched pair with unchanged FiLM architecture, cold seeds, optimizer, public gate and fifteen development rows. Replay has107 unique inputs; breadth has131. Added raw weight mass is44.08904 for replay and44.06968 for breadth, against196.39305 existing mass; equal counts do not assert identical distributions.
+
+| Seed | Original diagnosis replay / breadth | Two-family review after-check replay / breadth | Selected breadth step |
+| --- | --- | --- | --- |
+|7101|0.367244 /0.278646bb|0.306246 /0.336181bb|240|
+|7102|0.404329 /0.381785bb|0.323416 /0.321500bb|160|
+
+Both diagnosis gain screens pass, but **both review gain screens fail**. Seed7101 also exceeds the10% review after-check retention tolerance versus prior broad and original FiLM; seed7102 exceeds it for review check/check. Original holdout and diagnosed check/check protections pass. All four fits preserve94 zero-gate contexts exactly, head decoding differs by at most0.0000035763bb, and native-parent decoding by at most0.0000019545bb. Maximum child footprint is4,843,147,464 bytes with zero swaps; the complete pair takes142.2131 monotonic seconds. Report `cash-film-board-breadth131-adapter240-paired-20261011/report.json` SHA is `4d74b655ffa60b1eed61de3316d0c0ca02960e3e818cf13d4fe206cbe992d06c`. **Close this breadth configuration**: no longer fit, new acceptance validation, native export, action solve or activation is authorized by this failed screen.
+
+A subsequent read-only cached-label sensitivity audit uses the16 existing256-update targets, without new solves, weight updates or checkpoint reselection. Refinement directions align with already-reviewed after-check/CC error gradients: cosines0.7487/0.7518 and0.9263/0.9510. However, seed7101's refinement-gradient norm ratio is0.0994132, below the preregistered0.10 support cutoff; seed7102's ratio is0.7842665. The aggregate support criterion fails. This does **not** disprove a teacher-error contribution, and plain-gradient alignment does not guarantee Adam or policy improvement. Do not waive the cutoff or start a cached-refinement fit. Audit `cash-breadth-teacher-direction-diagnosis-20261011/report.json` SHA is `88ad7c661d0f5d1e3da1e3dccd0095609361aa4141e197f76c6fb45defd77f47`; three audit tests pass. The matched-fit harness passes four tests. All177 cash Python tests pass in both checkouts after making the timing-wrapper regression tests portable to Linux; Linux execution itself was not available here.
+
+Next inspect frozen public-feature adaptation versus narrow development selection, using read-only training/review gradient directions before any new fit. Keep parent inference, private-query features and zero-gate behavior frozen. [Low-rank adaptation](https://arxiv.org/abs/2106.09685) and [head-first feature adaptation](https://arxiv.org/abs/2202.10054) motivate a constrained experiment; their non-poker results are not evidence of cash equilibrium or a guaranteed improvement. Full-game exploitability remains unmeasured for these heads. The website remains Home-only.
+
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
