@@ -647,7 +647,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
               "full_game_exploitability":"unmeasured", "active":False}
     if gradient_batch_size is not None:
         report["gradient_batching"] = dict(batch_size=gradient_batch_size,
-            microbatches_per_update=(len(train)+gradient_batch_size-1)//gradient_batch_size,
+            microbatches_per_update=sum((len(rows)+gradient_batch_size-1)//gradient_batch_size
+                for rows in (domain_rows if domain_rows is not None else (train,))),
             contexts_per_optimizer_update=len(train), normalization_mass=normalization_mass,
             order="frozen-split-row-order", sampling="complete-pass-no-subsampling",
             optimizer_updates=steps, floating_point_reduction_order_changed=True)
