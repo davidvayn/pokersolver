@@ -22,7 +22,11 @@ from run_cash_flop_pilot import sha, validate_solution
 
 
 def capture(binary: Path, roots_path: Path, policy: Path, pair_report: Path, output: Path,
-            split_reference: Path, excluded_roots: Path, seed: int = 971):
+            split_reference: Path, excluded_roots: Path, seed: int = 971, *, include_after_check: bool = False):
+    if type(include_after_check) is not bool:
+        raise ValueError("after-check coverage must be an explicit boolean")
+    if include_after_check and any((output / name).exists() for name in ("dataset.json", "report.json")):
+        raise ValueError("after-check coverage requires a new immutable output; cannot replace a completed experiment")
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("invalid public proposal seed")
     roots = json.loads(roots_path.read_text()); pair = json.loads(pair_report.read_text())
@@ -60,7 +64,7 @@ def capture(binary: Path, roots_path: Path, policy: Path, pair_report: Path, out
         validate_solution(solution, root["solve_input"], pair["value_network_sha256s"][0], roots["rules_sha256"])
         deck = [c for c in range(52) if c not in root["solve_input"]["state"]["board"]]
         turns = rng.choice(deck, size=2, replace=False)
-        for branch in selected_branches(solution):
+        for branch in selected_branches(solution, include_after_check=include_after_check):
             history = root["solve_input"]["state"]["public_history"].copy(); branch_rows = []
             for label in branch:
                 row = next(row for row in solution["strategies"] if row["public_history"] == history)
@@ -70,6 +74,8 @@ def capture(binary: Path, roots_path: Path, policy: Path, pair_report: Path, out
                 config = leaf_input(root, solution, int(turn), branch)
                 provenance = dict(root_sha256=root["root_sha256"], flop_solution_sha256=sha(path),
                                   branch_labels=branch, public_turn_proposal=int(turn), sampling_seed=seed)
+                if include_after_check:
+                    provenance["branch_coverage"] = "both-seats-small-bet-v1"
                 replay = dict(root=root, branch_policy_rows=branch_rows, **provenance)
                 tasks.append((config, provenance, replay))
     if not tasks:
@@ -77,7 +83,8 @@ def capture(binary: Path, roots_path: Path, policy: Path, pair_report: Path, out
     with ThreadPoolExecutor(max_workers=2) as pool:
         generated = list(pool.map(lambda task:reference(binary, output, task[0], task[1]), tasks))
     dataset = build_dataset([path for path, _ in generated])
-    dataset["flop_leaf_provenance"] = dict(schema="hu-cash-frozen-flop-leaf-lineage-v1",
+    dataset["flop_leaf_provenance"] = dict(schema=("hu-cash-frozen-flop-leaf-lineage-v2" if include_after_check
+                                                 else "hu-cash-frozen-flop-leaf-lineage-v1"),
         kind="forced-frozen-flop-average-leaves", rules_sha256=roots["rules_sha256"],
         source_policy_sha256=sha(policy), root_corpus_sha256=sha(roots_path),
         flop_pair_report_sha256=sha(pair_report), native_binary_sha256=sha(binary),
@@ -85,6 +92,8 @@ def capture(binary: Path, roots_path: Path, policy: Path, pair_report: Path, out
         split_reference_sha256=sha(split_reference), excluded_roots_sha256=sha(excluded_roots),
         split_seed=937, rows=[dict(task[2], label_input_sha256=identity_hash(label["input"]))
                              for task, (_, label) in zip(tasks, generated)])
+    if include_after_check:
+        dataset["flop_leaf_provenance"]["branch_coverage"] = "both-seats-small-bet-v1"
     validate_dataset(dataset)
     path = output / "dataset.json"
     path.write_text(json.dumps(dataset, separators=(",", ":")) + "\n")
@@ -98,6 +107,10 @@ def capture(binary: Path, roots_path: Path, policy: Path, pair_report: Path, out
                                "Only seed one's frozen flop policy supplies beliefs; no full-game safety guarantee.",
                                "Exact finite-budget fresh subgames, not a pinned full-hand continuation.",
                                "External byte-pinned captures are needed to verify extracted branch rows against complete flop solutions."])
+    if include_after_check:
+        report.update(schema="hu-cash-frozen-flop-leaf-coverage-report-v2",
+                      branch_coverage="both-seats-small-bet-v1")
+        report["limitations"][0] = "Forced up-to-three-branch/two-turn coverage per root, not authentic leaf frequencies."
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
@@ -107,6 +120,9 @@ if __name__ == "__main__":
     for key in ("binary", "roots", "policy", "pair-report", "output", "split-reference", "excluded-roots"):
         parser.add_argument(f"--{key}", required=True, type=Path)
     parser.add_argument("--seed", default=971, type=int)
+    parser.add_argument("--include-after-check", action="store_true",
+                        help="Include BTN small-bet/call after BB checks; distinct v2 coverage lineage")
     args = parser.parse_args()
     print(json.dumps(capture(args.binary, args.roots, args.policy, args.pair_report, args.output,
-                             args.split_reference, args.excluded_roots, args.seed), indent=2))
+                             args.split_reference, args.excluded_roots, args.seed,
+                             include_after_check=args.include_after_check), indent=2))

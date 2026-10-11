@@ -161,9 +161,14 @@ def validate_dataset(source: dict) -> None:
             raise ValueError("authentic cash public-reach lineage differs from captured label inputs")
     leaves = source.get("flop_leaf_provenance")
     if leaves is not None:
+        leaf_schema = leaves.get("schema")
+        coverage = leaves.get("branch_coverage")
         hashes = [leaves.get(key) for key in ("source_policy_sha256", "root_corpus_sha256", "flop_pair_report_sha256",
                   "native_binary_sha256", "source_flop_value_network_sha256", "split_reference_sha256", "excluded_roots_sha256")]
-        if (provenance is not None or leaves.get("schema") != "hu-cash-frozen-flop-leaf-lineage-v1"
+        if (provenance is not None
+                or leaf_schema not in ("hu-cash-frozen-flop-leaf-lineage-v1", "hu-cash-frozen-flop-leaf-lineage-v2")
+                or (leaf_schema == "hu-cash-frozen-flop-leaf-lineage-v1" and "branch_coverage" in leaves)
+                or (leaf_schema == "hu-cash-frozen-flop-leaf-lineage-v2" and coverage != "both-seats-small-bet-v1")
                 or leaves.get("kind") != "forced-frozen-flop-average-leaves"
                 or leaves.get("rules_sha256") != source["rules_sha256"] or leaves.get("split_seed") != 937
                 or len(leaves.get("rows", [])) != len(source["labels"])

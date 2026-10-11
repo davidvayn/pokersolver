@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
-from cash_flop_leaves import leaf_input
+from cash_flop_leaves import leaf_input, selected_branches
 from cash_turn_roots import root_fingerprint
 from cash_value_dataset import build_dataset, validate_dataset
 from probe_cash_flop_leaves import check_check_input, reference, evaluate
@@ -74,6 +74,55 @@ class CashFlopLeafTests(unittest.TestCase):
                        ["bet_to_1.000bb","check"],["bet_to_1.000bb","call","check"]]:
             with self.assertRaises(ValueError): leaf_input(root,solution,31,branch)
 
+    def both_seat_bets(self):
+        root, solution = self.fixture()
+        solution["root"]["action_labels"][1] = "bet_to_1.000bb"
+        after_check = solution["strategies"][1]
+        after_check["action_labels"][1] = "bet_to_2.480bb"
+        for actor, history in [(0, ["Flop:p1:bet_to_1.000bb"]),
+                               (1, ["Flop:p1:check", "Flop:p0:bet_to_2.480bb"])]:
+            response = copy.deepcopy(solution["root"])
+            response.update(actor=actor, public_history=["public_belief:flop_start", *history],
+                            action_labels=["fold", "call"])
+            solution["strategies"].append(response)
+        return root, solution
+
+    def test_both_seat_grid_adds_after_check_bet_call_without_changing_legacy_grid(self):
+        root, solution = self.both_seat_bets()
+        original = copy.deepcopy(solution)
+        legacy = [["check", "check"], ["bet_to_1.000bb", "call"]]
+        self.assertEqual(selected_branches(solution), legacy)
+        self.assertEqual(selected_branches(solution, include_after_check=True),
+                         legacy + [["check", "bet_to_2.480bb", "call"]])
+        self.assertEqual(solution, original)
+        # Replay the real three-action path: the amount is street-local, the
+        # resulting total commitment is 1bb + the exact 62-cent wager.
+        result = leaf_input(root, solution, 31, selected_branches(solution, include_after_check=True)[2])
+        self.assertEqual(result["state"]["invested_bb"], [3.48, 3.48])
+        self.assertEqual(result["state"]["actor"], 1)
+        self.assertEqual(result["state"]["street_invested_bb"], [0, 0])
+
+    def test_after_check_grid_uses_its_own_node_and_never_invents_all_in_continuations(self):
+        _, solution = self.both_seat_bets()
+        solution["strategies"][1]["action_labels"][1] = "bet_all_in_to_19.000bb"
+        self.assertEqual(selected_branches(solution, include_after_check=True), selected_branches(solution))
+        _, solution = self.both_seat_bets()
+        solution["strategies"].reverse()
+        self.assertEqual(selected_branches(solution, include_after_check=True)[-1],
+                         ["check", "bet_to_2.480bb", "call"])
+
+    def test_missing_ambiguous_or_wrong_actor_after_check_rows_fail_closed(self):
+        for mutate in [lambda s: s["strategies"].pop(1),
+                       lambda s: s["strategies"].append(copy.deepcopy(s["strategies"][1])),
+                       lambda s: s["strategies"][1].update(actor=1),
+                       lambda s: s["strategies"][-1].update(action_labels=["fold", "check"]),
+                       lambda s: s["strategies"][-1].update(actor=0)]:
+            _, solution = self.both_seat_bets()
+            mutate(solution)
+            with self.assertRaises(ValueError): selected_branches(solution, include_after_check=True)
+        for invalid in (None, 0, 1, "both", [], {}):
+            with self.assertRaises(ValueError): selected_branches({}, include_after_check=invalid)
+
     def test_raise_call_conditions_three_actions_and_keeps_street_targets_distinct_from_total_commitments(self):
         root,solution=self.fixture()
         solution["root"]["action_labels"][1]="bet_to_1.000bb"
@@ -139,6 +188,15 @@ class CashFlopLeafTests(unittest.TestCase):
                 provenance[key]="a"*64
             source["flop_leaf_provenance"]=provenance
             validate_dataset(source)
+            expanded = copy.deepcopy(source)
+            expanded["flop_leaf_provenance"].update(schema="hu-cash-frozen-flop-leaf-lineage-v2",
+                                                    branch_coverage="both-seats-small-bet-v1")
+            validate_dataset(expanded)
+            for mutate in [lambda s: s["flop_leaf_provenance"].pop("branch_coverage"),
+                           lambda s: s["flop_leaf_provenance"].update(branch_coverage="opening-only"),
+                           lambda s: s["flop_leaf_provenance"].update(schema="hu-cash-frozen-flop-leaf-lineage-v1")]:
+                bad = copy.deepcopy(expanded); mutate(bad)
+                with self.assertRaises(ValueError): validate_dataset(bad)
             for mutate in [lambda s:s["flop_leaf_provenance"]["rows"][0].update(public_turn_proposal=32),
                            lambda s:s["flop_leaf_provenance"].update(source_policy_sha256="b"*64),
                            lambda s:s["flop_leaf_provenance"]["rows"][0].update(branch_labels=["check","call"]),
