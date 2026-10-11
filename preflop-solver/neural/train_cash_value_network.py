@@ -25,7 +25,7 @@ import cash_value_dataset as cash_values
 from cash_profiles import PAYOFF_CONTRACT
 from cash_checkdown import exact_cash_checkdown_features
 from cash_feature_cache import CashFeatureCache
-from cash_range_pooling import card_removed_opponent_pool
+from cash_range_pooling import CARD_POOL_GRADIENT_CONTRACT, card_removed_opponent_pool
 from cash_range_attention import positive_kernel_opponent_pool
 from cash_value_initialization import initialize_cash_from_frozen
 from native_value_dataset import family_split, legal_combos, training_weights
@@ -198,6 +198,9 @@ def export_cash_model(model, path: Path, seed: int, source: dict, digest: str, a
     if gradient_batch_size is not None:
         payload.update(gradientBatchSize=gradient_batch_size,
                        gradientAccumulation="full-pass-fixed-global-weight-normalization-one-adam-update")
+    if model.architecture in ("wide-blocker-pooled","wide-kernel-pooled"):
+        # Training provenance only; native serving forwards are unchanged.
+        payload["cardPoolGradientContract"] = CARD_POOL_GRADIENT_CONTRACT
     if precision["mlx_enable_tf32"] == "0":
         # This is a launch-time fit request, not a changed serving contract or
         # a claim that a warm parent's entire history used this precision.
@@ -609,6 +612,8 @@ def run(dataset: Path, output: Path, seed: int, steps: int, binary: Path | None 
             contexts_per_optimizer_update=len(train), normalization_mass=normalization_mass,
             order="frozen-split-row-order", sampling="complete-pass-no-subsampling",
             optimizer_updates=steps, floating_point_reduction_order_changed=True)
+    if architecture in ("wide-blocker-pooled","wide-kernel-pooled"):
+        report["card_pool_gradient_contract"] = CARD_POOL_GRADIENT_CONTRACT
     if value_normalization != "pot":
         report["value_normalization"] = value_normalization
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
