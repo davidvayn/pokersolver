@@ -101,6 +101,14 @@ class CashFlopCoverageCaptureTests(unittest.TestCase):
             for row in added["flop_leaf_provenance"]["rows"][-2:]:
                 self.assertEqual(row["branch_labels"], ["check", "bet_to_2.480bb", "call"])
                 self.assertEqual([r["actor"] for r in row["branch_policy_rows"]], [1, 0, 1])
+            # A diagnosed family cannot sneak back into coverage through the
+            # new branch. Omit it before any labeling, not after training.
+            forbidden = save("excluded-actual.json", source)
+            with patch("probe_cash_flop_leaves.subprocess.run") as native_call:
+                with self.assertRaisesRegex(ValueError, "no unheldout board families"):
+                    capture(binary, roots, policy, pair, base / "forbidden", split, forbidden,
+                            include_after_check=True)
+                native_call.assert_not_called()
 
 
 if __name__ == "__main__": unittest.main()
