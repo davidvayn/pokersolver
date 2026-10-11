@@ -93,10 +93,39 @@ def leaf_input(root: dict, solution: dict, turn: int, labels: list[str], iterati
                 averaging_delay=0, river_refinement_iterations=0, regret_matching_plus=False)
 
 
-def selected_branches(solution: dict) -> list[list[str]]:
-    """Small forced coverage grid, not a frequency-weighted policy sample."""
+def selected_branches(solution: dict, *, include_after_check: bool = False) -> list[list[str]]:
+    """Small forced coverage grid, not a frequency-weighted policy sample.
+
+    The default preserves the old opening-seat-only experiment. The explicit
+    extension includes the other seat's first regular bet after a check, using
+    that exact public node's labels (which need not match the opening sizes).
+    Missing or ambiguous policy rows fail closed; all-ins are not live leaves.
+    """
+    if type(include_after_check) is not bool:
+        raise ValueError("after-check coverage must be an explicit boolean")
     bets = [label for label in solution["root"]["action_labels"] if label.startswith("bet_to_")]
     branches = [["check", "check"]]
     if bets:
         branches.append([bets[0], "call"])
+    if include_after_check:
+        root = solution["root"]
+        if root["actor"] != 1 or "check" not in root["action_labels"]:
+            raise ValueError("after-check coverage requires a checkable opening BB node")
+
+        def node(history, actor):
+            rows = [row for row in solution["strategies"] if row["public_history"] == history]
+            if len(rows) != 1 or rows[0]["actor"] != actor:
+                raise ValueError("after-check coverage lacks a unique exact public policy node")
+            return rows[0]
+
+        history = root["public_history"] + ["Flop:p1:check"]
+        checked = node(history, 0)
+        checked_bets = [label for label in checked["action_labels"]
+                        if re.fullmatch(r"bet_to_[0-9]+\.[0-9]{3}bb", label)]
+        if checked_bets:
+            bet = checked_bets[0]
+            response = node(history + [f"Flop:p0:{bet}"], 1)
+            if "call" not in response["action_labels"]:
+                raise ValueError("after-check coverage lacks the exact live call action")
+            branches.append(["check", bet, "call"])
     return branches
