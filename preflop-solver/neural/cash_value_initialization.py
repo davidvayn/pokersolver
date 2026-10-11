@@ -38,6 +38,8 @@ def initialize_cash_from_frozen(model, network: Path, dataset: Path,
     report_path = network.parent / "report.json"; report_bytes = report_path.read_bytes()
     payload = json.loads(network_bytes); initial_source = json.loads(dataset_bytes)
     report = json.loads(report_bytes)
+    if payload.get("frozenTailAdapter") is not None:
+        raise ValueError("generic cash initialization cannot silently discard a frozen adapter")
     datasets.validate_dataset(initial_source); datasets.validate_dataset(current_source)
     network_sha = hashlib.sha256(network_bytes).hexdigest()
     dataset_sha = hashlib.sha256(dataset_bytes).hexdigest()

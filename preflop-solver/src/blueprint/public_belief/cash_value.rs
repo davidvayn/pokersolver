@@ -7,11 +7,13 @@ pub(super) const BLOCKER_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-co
 pub(super) const BASELINE_CONDITIONED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v5";
 pub(super) const POT_EXPERT_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v6";
 pub(super) const KERNEL_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v7";
+pub(super) const FROZEN_TAIL_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v8";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
 const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-pooled-v1";
 const BASELINE_CONDITIONED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-baseline-conditioned-v1";
 const POT_EXPERT_CONTRACT: &str = "cash-turn-start-cfv-full-stack-pot-experts-v1";
 const KERNEL_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-kernel-pooled-v1";
+const FROZEN_TAIL_CONTRACT: &str = "cash-turn-start-cfv-full-stack-frozen-tail-adapter-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
 #[cfg(test)]
@@ -25,7 +27,38 @@ pub(super) fn note_geometry_preparation() {
 }
 
 fn is_cash_schema(schema: &str) -> bool {
-    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA | KERNEL_POOLED_NETWORK_SCHEMA)
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA | KERNEL_POOLED_NETWORK_SCHEMA | FROZEN_TAIL_NETWORK_SCHEMA)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct FrozenTailAdapter {
+    parent_network_sha256: String,
+    parent_dataset_sha256: String,
+    maximum_remaining_units: u64,
+    correction_unit: String,
+    pub(super) head: Vec<ValueNetworkLayer>,
+}
+
+impl FrozenTailAdapter {
+    pub(super) fn validate(&self, inputs: usize) -> Result<(), String> {
+        if self.maximum_remaining_units != 50 || self.correction_unit != "own-player-net-bb"
+            || [&self.parent_network_sha256, &self.parent_dataset_sha256].iter().any(|sha|
+                sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))
+            || self.head.len() != 2 {
+            return Err("frozen cash adapter identity or money gate is incompatible".into());
+        }
+        let mut width = inputs;
+        for (layer, (expected, activation)) in self.head.iter().zip([(32, "relu"), (1, "linear")]) {
+            if layer.activation != activation || layer.normalization.is_some() || layer.residual
+                || !layer.normalization_weights.is_empty() || !layer.normalization_biases.is_empty()
+                || layer.validate(width)? != expected {
+                return Err("frozen cash adapter head is incompatible".into());
+            }
+            width = expected;
+        }
+        Ok(())
+    }
 }
 
 /// Exact finite positive-kernel aggregation, never a quadratic combo table.
@@ -126,7 +159,26 @@ pub(super) fn card_removed_opponent_embeddings(
 }
 
 impl PublicValueNetwork {
+    pub(super) fn uses_cash_kernel_pooling(&self) -> bool {
+        matches!(self.schema.as_str(), KERNEL_POOLED_NETWORK_SCHEMA | FROZEN_TAIL_NETWORK_SCHEMA)
+    }
+
+    pub(super) fn active_frozen_tail_adapter(&self, invested: [f64; 2]) -> Option<&FrozenTailAdapter> {
+        self.frozen_tail_adapter.as_ref().filter(|adapter| {
+            let rules = self.cash_rules.as_ref().expect("validated frozen cash rules");
+            let stack = super::super::cash::cash_units(self.target_scale_bb, rules).expect("cent-aligned starting stack");
+            invested.iter().all(|amount| {
+                let units = super::super::cash::cash_units(*amount, rules).expect("cent-aligned cash investment");
+                stack.checked_sub(units).expect("cash investments cannot exceed the starting stack")
+                    <= adapter.maximum_remaining_units
+            })
+        })
+    }
+
     pub(super) fn validate_cash_contract(&self) -> Result<(), String> {
+        if self.schema != FROZEN_TAIL_NETWORK_SCHEMA && self.frozen_tail_adapter.is_some() {
+            return Err("legacy cash values cannot silently discard a frozen adapter".into());
+        }
         if !is_cash_schema(&self.schema) {
             if self.cash_rules.is_some()
                 || self.rules_sha256.is_some()
@@ -151,7 +203,9 @@ impl PublicValueNetwork {
             || source.cash_rules != self.cash_rules
             || source.effective_stack_bb != self.target_scale_bb
             || self.payoff_contract.as_deref() != Some(PAYOFF)
-            || self.prediction_contract.as_deref() != Some(if self.schema == KERNEL_POOLED_NETWORK_SCHEMA {
+            || self.prediction_contract.as_deref() != Some(if self.schema == FROZEN_TAIL_NETWORK_SCHEMA {
+                FROZEN_TAIL_CONTRACT
+            } else if self.schema == KERNEL_POOLED_NETWORK_SCHEMA {
                 KERNEL_POOLED_CONTRACT
             } else if self.schema == POT_EXPERT_NETWORK_SCHEMA {
                 POT_EXPERT_CONTRACT
@@ -167,6 +221,14 @@ impl PublicValueNetwork {
             })
         {
             return Err("cash value network has incompatible identity or payoff provenance".into());
+        }
+        if self.schema == FROZEN_TAIL_NETWORK_SCHEMA && (self.frozen_tail_adapter.is_none()
+            || rules.units_per_bb != 25 || self.target_scale_bb != 20.0
+            || self.value_normalization.as_deref() != Some("pot")
+            || self.feature_schema.as_deref() != Some(SHARED_FEATURE_SCHEMA_V2)
+            || self.source_dataset_sha256.as_ref().is_some_and(|sha|
+                !sha.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))) {
+            return Err("frozen cash adapter is missing or incompatible with its pinned money/features".into());
         }
         Ok(())
     }
@@ -242,6 +304,10 @@ impl PublicValueNetwork {
             super::super::cash::cash_units(state.invested_bb[0], rules)?,
             super::super::cash::cash_units(state.invested_bb[1], rules)?,
         ];
+        if self.schema == FROZEN_TAIL_NETWORK_SCHEMA && invested_units.iter().any(|units|
+            *units >= super::super::cash::cash_units(self.target_scale_bb, rules).expect("validated stack units")) {
+            return Err("all-in cash continuations require exact settlement, not a frozen adapter".into());
+        }
         if state.street != Street::Turn
             || state.street_invested_bb != [0.0; 2]
             || invested_units[0] != invested_units[1]
@@ -474,6 +540,125 @@ mod tests {
         assert!(actual[0][absent].abs() > 0.01, "zero own reach must not censor a query");
         assert!(aggregate < -0.1, "pooled cash values must not be projected to zero sum");
         }
+    }
+
+    fn frozen_tail_fixture() -> (PublicValueNetwork, PublicValueNetwork, TurnRiverSolveConfig) {
+        let (mut parent, config) = fixture();
+        parent.schema = KERNEL_POOLED_NETWORK_SCHEMA.into();
+        parent.prediction_contract = Some(KERNEL_POOLED_CONTRACT.into());
+        parent.feature_schema = Some(SHARED_FEATURE_SCHEMA_V2.into());
+        let (contexts, queries) = shared_feature_sizes(SHARED_FEATURE_SCHEMA_V2).unwrap();
+        parent.context_size = contexts;
+        parent.query_size = queries;
+        parent.context_tower[0].input_size = contexts;
+        parent.context_tower[0].weights = vec![0.0; contexts];
+        parent.query_tower[0].input_size = queries;
+        parent.query_tower[0].weights = vec![0.0; queries];
+        parent.head[0].input_size = 4;
+        parent.head[0].weights = vec![0.0; 4];
+        parent.head[0].biases[0] = 0.0;
+        let mut projection = parent.head[0].clone();
+        projection.input_size = 1;
+        projection.output_size = 8;
+        projection.weights = vec![0.0; 8];
+        projection.biases = vec![0.0; 8];
+        parent.kernel_query = vec![projection.clone()];
+        parent.kernel_key = vec![projection];
+        parent.kernel_rank = Some(8);
+        parent.kernel_feature_map = Some("elu-plus-one-v1".into());
+        parent.validate().unwrap();
+        let mut candidate = parent.clone();
+        candidate.schema = FROZEN_TAIL_NETWORK_SCHEMA.into();
+        candidate.prediction_contract = Some(FROZEN_TAIL_CONTRACT.into());
+        let mut hidden = parent.head[0].clone();
+        hidden.activation = "relu".into();
+        hidden.output_size = 32;
+        hidden.weights = vec![0.0; 4 * 32];
+        hidden.biases = vec![0.0; 32];
+        let mut output = parent.head[0].clone();
+        output.input_size = 32;
+        output.weights = vec![0.0; 32];
+        output.biases[0] = 0.5;
+        candidate.frozen_tail_adapter = Some(FrozenTailAdapter {
+            parent_network_sha256: "a".repeat(64), parent_dataset_sha256: "b".repeat(64),
+            maximum_remaining_units: 50, correction_unit: "own-player-net-bb".into(),
+            head: vec![hidden, output],
+        });
+        candidate.validate().unwrap();
+        (parent, candidate, config)
+    }
+
+    #[test]
+    fn frozen_tail_adapter_preserves_outside_values_and_uses_net_bb_inside_cent_gate() {
+        let (parent, candidate, mut config) = frozen_tail_fixture();
+        let absent = Combo::new(50, 51).key();
+        config.state.ranges[0][absent] = 0.0;
+        for amount in [17.96, 18.0, 18.04] {
+            config.state.invested_bb = [amount; 2];
+            let original = parent.predict_cash_turn(&config).unwrap();
+            let actual = candidate.predict_cash_turn(&config).unwrap();
+            if amount < 18.0 {
+                assert_eq!(actual, original, "outside-gate values must not change");
+            } else {
+                for player in 0..2 {
+                    for combo in all_combos() {
+                        let key = combo.key();
+                        if combo.cards().iter().any(|card| config.state.board.contains(card)) {
+                            assert_eq!(actual[player][key], 0.0);
+                        } else {
+                            assert!((actual[player][key] - original[player][key] - 0.5).abs() < 1e-9,
+                                "adapter must add0.5bb, not a pot-scaled correction");
+                        }
+                    }
+                }
+                assert!((actual[0][absent] - original[0][absent] - 0.5).abs() < 1e-9);
+            }
+        }
+        assert!(candidate.active_frozen_tail_adapter([18.0, 17.96]).is_none());
+        assert!(candidate.active_frozen_tail_adapter([18.0, 18.0]).is_some());
+    }
+
+    #[test]
+    fn frozen_tail_adapter_clips_independently_and_rejects_allin_network_queries() {
+        let (_, mut candidate, mut config) = frozen_tail_fixture();
+        candidate.frozen_tail_adapter.as_mut().unwrap().head[1].biases[0] = 100.0;
+        candidate.validate().unwrap();
+        config.state.invested_bb = [18.0; 2];
+        let actual = candidate.predict_cash_turn(&config).unwrap();
+        for player in 0..2 {
+            for combo in all_combos() {
+                assert_eq!(actual[player][combo.key()], if combo.cards().iter().any(|c| config.state.board.contains(c)) { 0.0 } else { 20.0 });
+            }
+        }
+        config.state.invested_bb = [20.0; 2];
+        assert!(candidate.predict_cash_turn(&config).is_err());
+    }
+
+    #[test]
+    fn frozen_tail_adapter_rejects_missing_metadata_bad_weights_and_silent_downgrades() {
+        let (_, candidate, _) = frozen_tail_fixture();
+        let mut bad = candidate.clone();
+        bad.frozen_tail_adapter = None;
+        assert!(bad.validate().is_err());
+        let mut bad = candidate.clone();
+        bad.frozen_tail_adapter.as_mut().unwrap().maximum_remaining_units = 51;
+        assert!(bad.validate().is_err());
+        let mut bad = candidate.clone();
+        bad.frozen_tail_adapter.as_mut().unwrap().correction_unit = "pot".into();
+        assert!(bad.validate().is_err());
+        let mut bad = candidate.clone();
+        bad.frozen_tail_adapter.as_mut().unwrap().parent_network_sha256 = "A".repeat(64);
+        assert!(bad.validate().is_err());
+        let mut bad = candidate.clone();
+        bad.frozen_tail_adapter.as_mut().unwrap().head[0].weights[0] = f32::NAN;
+        assert!(bad.validate().is_err());
+        let mut bad = candidate.clone();
+        bad.schema = KERNEL_POOLED_NETWORK_SCHEMA.into();
+        bad.prediction_contract = Some(KERNEL_POOLED_CONTRACT.into());
+        assert!(bad.validate().is_err(), "v7 must not silently drop the adapter");
+        let mut value = serde_json::to_value(candidate).unwrap();
+        value["frozenTailAdapter"]["ignoredExtraGate"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<PublicValueNetwork>(value).is_err());
     }
 
     #[test]
