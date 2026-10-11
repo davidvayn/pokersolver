@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "cash-turn-value-predict" => run_cash_turn_value_predict(&args[1..]),
         "cash-flop-pilot" => run_cash_flop_pilot(&args[1..]),
         "cash-flop-trace" => run_cash_flop_trace(&args[1..]),
+        "cash-flop-convergence" => run_cash_flop_convergence(&args[1..]),
         "cash-flop-evaluate" => run_cash_flop_evaluate(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
@@ -1247,6 +1248,31 @@ fn run_cash_flop_trace(args: &[String]) -> Result<(), Box<dyn Error>> {
     // create_new also protects a source artifact from a racing writer.
     let mut output = fs::OpenOptions::new().write(true).create_new(true).open(output_path)?;
     writeln!(output,"{}",serde_json::to_string(&trace)?)?;
+    Ok(())
+}
+
+fn run_cash_flop_convergence(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() % 2 != 0 || args.chunks(2).any(|pair| {
+        !["--input", "--value-network", "--output"].contains(&pair[0].as_str())
+            || pair[1].starts_with("--")
+    }) || args.chunks(2).map(|pair| &pair[0]).collect::<std::collections::BTreeSet<_>>().len() != args.len() / 2 {
+        return Err("cash convergence accepts only immutable --input, --value-network, and --output paths".into());
+    }
+    let input_path = value(args, "--input").ok_or("--input is required")?;
+    let network_path = value(args, "--value-network").ok_or("--value-network is required")?;
+    let output_path = value(args, "--output").ok_or("--output is required")?;
+    match fs::metadata(&output_path) {
+        Ok(_) => return Err("existing cash convergence output cannot be overwritten".into()),
+        Err(cause) if cause.kind() == std::io::ErrorKind::NotFound => (),
+        Err(cause) => return Err(cause.into()),
+    }
+    let input: blueprint::public_belief::cash_flop::convergence::CashFlopConvergenceInput =
+        serde_json::from_slice(&fs::read(input_path)?)?;
+    input.validate()?;
+    let network = blueprint::public_belief::PublicValueNetwork::read_cash(Path::new(&network_path), &input.solve.game)?;
+    let report = blueprint::public_belief::cash_flop::convergence::solve(input, network)?;
+    let mut output = fs::OpenOptions::new().write(true).create_new(true).open(output_path)?;
+    writeln!(output, "{}", serde_json::to_string(&report)?)?;
     Ok(())
 }
 
@@ -3730,6 +3756,7 @@ Usage:
   preflop-solver cash-flop-pilot --input <cash-flop-pilot.json> --value-network <cash-value.json> [--output <research.json>]
   preflop-solver cash-flop-trace --input <bounded-cash-trace.json> --value-network <cash-value.json> --output <new-research.json>
   preflop-solver cash-flop-evaluate --input <original-cash-flop-pilot.json> --solution <frozen-cash-flop.json> --evaluation-value-network <cash-value.json> [--output <research.json>]
+  preflop-solver cash-flop-convergence --input <bounded-checkpoints.json> --value-network <cash-value.json> --output <research.json>
   preflop-solver cash-flop-root-sample --cash-profile nl25 --networks <cash-average.json> --output <roots.json> [--roots 2 --iterations 2]
   preflop-solver flop-pbs-resolve [options]
   preflop-solver flop-pbs-convergence [options]

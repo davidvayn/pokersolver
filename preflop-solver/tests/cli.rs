@@ -3,6 +3,41 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn cash_flop_convergence_rejects_overrides_invalid_checkpoints_and_collisions() {
+    for flags in [vec!["--threads", "8"], vec!["--input", "second"], vec!["--output"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+            .args(["cash-flop-convergence", "--input", "must-not-read", "--value-network", "must-not-read"])
+            .args(flags).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("immutable"));
+    }
+    use preflop_solver::blueprint::{BlueprintConfig, public_belief::{PublicBeliefState, uniform_range,
+        cash_flop::{CashFlopPilotInput, convergence::CashFlopConvergenceInput}}};
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = 20.; game.small_blind_bb = 0.4;
+    game.cash_rules = Some(preflop_solver::cash_game::study_rules("nl25").unwrap());
+    let board = [0, 5, 10];
+    let input = CashFlopConvergenceInput {solve: CashFlopPilotInput {game,
+        state: PublicBeliefState::flop_start(board, 1, [2.; 2], [uniform_range(&board), uniform_range(&board)]),
+        iterations: 64, averaging_delay: 0, threads: 1}, checkpoint_rounds: vec![32]};
+    let directory = std::env::temp_dir().join(format!("cash-convergence-cli-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let input_path = directory.join("input.json"); let output_path = directory.join("output.json");
+    fs::write(&input_path, serde_json::to_vec(&input).unwrap()).unwrap();
+    let check = |path: &std::path::Path| Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+        .args(["cash-flop-convergence", "--input", input_path.to_str().unwrap(), "--value-network", "must-not-read",
+            "--output", path.to_str().unwrap()]).output().unwrap();
+    let invalid = check(&output_path);
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("sorted checkpoints"));
+    assert!(!output_path.exists());
+    let before = fs::read(&input_path).unwrap();
+    let collision = check(&input_path);
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("cannot be overwritten"));
+    assert_eq!(before, fs::read(&input_path).unwrap());
+    fs::remove_file(input_path).unwrap(); fs::remove_dir(directory).unwrap();
+}
+
+#[test]
 fn cash_flop_trace_rejects_overrides_invalid_sampling_and_output_collisions() {
     for flags in [vec!["--threads","8"],vec!["--input","second"],vec!["--output"]] {
         let result = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
@@ -63,7 +98,7 @@ fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
     let board = [0, 5, 10];
     let input = CashFlopPilotInput { game, state: PublicBeliefState::flop_start(
         board, 1, [2.0; 2], [uniform_range(&board), uniform_range(&board)]),
-        iterations: 33, averaging_delay: 0, threads: 2,
+        iterations: 65, averaging_delay: 0, threads: 2,
     };
     let path = std::env::temp_dir().join(format!("cash-flop-cli-budget-{}.json", std::process::id()));
     fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
@@ -72,7 +107,7 @@ fn cash_flop_pilot_rejects_overrides_and_unbounded_budgets_before_weight_io() {
         .output().unwrap();
     fs::remove_file(path).unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("2..32"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("2..64"));
 }
 
 #[test]
