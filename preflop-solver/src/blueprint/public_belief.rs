@@ -816,7 +816,8 @@ impl PublicValueNetwork {
             | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
             | cash_value::POT_EXPERT_NETWORK_SCHEMA
             | cash_value::KERNEL_POOLED_NETWORK_SCHEMA
-            | cash_value::FROZEN_TAIL_NETWORK_SCHEMA => {
+            | cash_value::FROZEN_TAIL_NETWORK_SCHEMA
+            | cash_value::SMOOTH_TAIL_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -860,6 +861,7 @@ impl PublicValueNetwork {
                         | cash_value::POT_EXPERT_NETWORK_SCHEMA
                         | cash_value::KERNEL_POOLED_NETWORK_SCHEMA
                         | cash_value::FROZEN_TAIL_NETWORK_SCHEMA
+                        | cash_value::SMOOTH_TAIL_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -893,7 +895,7 @@ impl PublicValueNetwork {
                         query_size
                     } + usize::from(self.schema == cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA);
                 if let Some(adapter) = &self.frozen_tail_adapter {
-                    adapter.validate(head_size)?;
+                    adapter.validate(head_size, &self.schema)?;
                 }
                 let heads = if self.uses_pot_expert_heads() {
                     if !self.head.is_empty() || self.pot_expert_heads.len() != 3 {
@@ -1180,9 +1182,9 @@ impl PublicValueNetwork {
                 conditioned_queries.as_deref().unwrap_or(&query_embeddings[player]),
                 legal_combos[player].len(),
             );
-            let adapter_output = self.active_frozen_tail_adapter(invested).map(|adapter|
-                forward_batch_head(&adapter.head, &head_context,
-                    conditioned_queries.as_deref().unwrap_or(&query_embeddings[player]), legal_combos[player].len()));
+            let adapter_output = self.active_frozen_tail_adapter(invested).map(|(adapter, weight)|
+                (forward_batch_head(&adapter.head, &head_context,
+                    conditioned_queries.as_deref().unwrap_or(&query_embeddings[player]), legal_combos[player].len()), weight));
             let output_size = selected_head
                 .last()
                 .expect("validated shared head")
@@ -1213,14 +1215,15 @@ impl PublicValueNetwork {
                         | cash_value::POT_EXPERT_NETWORK_SCHEMA
                         | cash_value::KERNEL_POOLED_NETWORK_SCHEMA
                         | cash_value::FROZEN_TAIL_NETWORK_SCHEMA
+                        | cash_value::SMOOTH_TAIL_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
                     baseline + residual * self.residual_scale_bb
                 };
-                if let Some(adapter) = &adapter_output {
+                if let Some((adapter, weight)) = &adapter_output {
                     // Additional correction is in net bb, never scaled by pot.
-                    values[combo] += adapter[row] as f64;
+                    values[combo] += (adapter[row] * weight) as f64;
                 }
             }
             values
@@ -1249,7 +1252,8 @@ impl PublicValueNetwork {
             | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA
             | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
             | cash_value::POT_EXPERT_NETWORK_SCHEMA | cash_value::KERNEL_POOLED_NETWORK_SCHEMA
-            | cash_value::FROZEN_TAIL_NETWORK_SCHEMA)
+            | cash_value::FROZEN_TAIL_NETWORK_SCHEMA
+            | cash_value::SMOOTH_TAIL_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {

@@ -8,12 +8,14 @@ pub(super) const BASELINE_CONDITIONED_NETWORK_SCHEMA: &str = "hu-cash-public-bel
 pub(super) const POT_EXPERT_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v6";
 pub(super) const KERNEL_POOLED_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v7";
 pub(super) const FROZEN_TAIL_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v8";
+pub(super) const SMOOTH_TAIL_NETWORK_SCHEMA: &str = "hu-cash-public-belief-combo-value-network-v9";
 const CONTRACT: &str = "cash-turn-start-cfv-full-stack-v1";
 const BLOCKER_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-blocker-pooled-v1";
 const BASELINE_CONDITIONED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-baseline-conditioned-v1";
 const POT_EXPERT_CONTRACT: &str = "cash-turn-start-cfv-full-stack-pot-experts-v1";
 const KERNEL_POOLED_CONTRACT: &str = "cash-turn-start-cfv-full-stack-kernel-pooled-v1";
 const FROZEN_TAIL_CONTRACT: &str = "cash-turn-start-cfv-full-stack-frozen-tail-adapter-v1";
+const SMOOTH_TAIL_CONTRACT: &str = "cash-turn-start-cfv-full-stack-smooth-tail-adapter-v1";
 const PAYOFF: &str = "own-net-bb-after-refunds-and-house-rake-v1";
 
 #[cfg(test)]
@@ -27,7 +29,7 @@ pub(super) fn note_geometry_preparation() {
 }
 
 fn is_cash_schema(schema: &str) -> bool {
-    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA | KERNEL_POOLED_NETWORK_SCHEMA | FROZEN_TAIL_NETWORK_SCHEMA)
+    matches!(schema, NETWORK_SCHEMA | POOLED_NETWORK_SCHEMA | BLOCKER_POOLED_NETWORK_SCHEMA | BASELINE_CONDITIONED_NETWORK_SCHEMA | POT_EXPERT_NETWORK_SCHEMA | KERNEL_POOLED_NETWORK_SCHEMA | FROZEN_TAIL_NETWORK_SCHEMA | SMOOTH_TAIL_NETWORK_SCHEMA)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -36,13 +38,16 @@ pub(super) struct FrozenTailAdapter {
     parent_network_sha256: String,
     parent_dataset_sha256: String,
     maximum_remaining_units: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fade_width_units: Option<u64>,
     correction_unit: String,
     pub(super) head: Vec<ValueNetworkLayer>,
 }
 
 impl FrozenTailAdapter {
-    pub(super) fn validate(&self, inputs: usize) -> Result<(), String> {
+    pub(super) fn validate(&self, inputs: usize, schema: &str) -> Result<(), String> {
         if self.maximum_remaining_units != 50 || self.correction_unit != "own-player-net-bb"
+            || self.fade_width_units != if schema == SMOOTH_TAIL_NETWORK_SCHEMA { Some(25) } else { None }
             || [&self.parent_network_sha256, &self.parent_dataset_sha256].iter().any(|sha|
                 sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))
             || self.head.len() != 2 {
@@ -160,23 +165,31 @@ pub(super) fn card_removed_opponent_embeddings(
 
 impl PublicValueNetwork {
     pub(super) fn uses_cash_kernel_pooling(&self) -> bool {
-        matches!(self.schema.as_str(), KERNEL_POOLED_NETWORK_SCHEMA | FROZEN_TAIL_NETWORK_SCHEMA)
+        matches!(self.schema.as_str(), KERNEL_POOLED_NETWORK_SCHEMA | FROZEN_TAIL_NETWORK_SCHEMA | SMOOTH_TAIL_NETWORK_SCHEMA)
     }
 
-    pub(super) fn active_frozen_tail_adapter(&self, invested: [f64; 2]) -> Option<&FrozenTailAdapter> {
-        self.frozen_tail_adapter.as_ref().filter(|adapter| {
-            let rules = self.cash_rules.as_ref().expect("validated frozen cash rules");
-            let stack = super::super::cash::cash_units(self.target_scale_bb, rules).expect("cent-aligned starting stack");
-            invested.iter().all(|amount| {
-                let units = super::super::cash::cash_units(*amount, rules).expect("cent-aligned cash investment");
-                stack.checked_sub(units).expect("cash investments cannot exceed the starting stack")
-                    <= adapter.maximum_remaining_units
-            })
-        })
+    fn uses_frozen_tail_adapter(&self) -> bool {
+        matches!(self.schema.as_str(), FROZEN_TAIL_NETWORK_SCHEMA | SMOOTH_TAIL_NETWORK_SCHEMA)
+    }
+
+    pub(super) fn active_frozen_tail_adapter(&self, invested: [f64; 2]) -> Option<(&FrozenTailAdapter, f32)> {
+        let adapter = self.frozen_tail_adapter.as_ref()?;
+        let rules = self.cash_rules.as_ref().expect("validated frozen cash rules");
+        let stack = super::super::cash::cash_units(self.target_scale_bb, rules).expect("cent-aligned starting stack");
+        let remaining = invested.iter().map(|amount| {
+            let units = super::super::cash::cash_units(*amount, rules).expect("cent-aligned cash investment");
+            stack.checked_sub(units).expect("cash investments cannot exceed the starting stack")
+        }).max().expect("two seats");
+        if remaining > adapter.maximum_remaining_units { return None; }
+        let weight = if let Some(width) = adapter.fade_width_units {
+            let x = ((adapter.maximum_remaining_units - remaining) as f64 / width as f64).min(1.0);
+            (x * x * (3.0 - 2.0 * x)) as f32
+        } else { 1.0 };
+        (weight > 0.0).then_some((adapter, weight))
     }
 
     pub(super) fn validate_cash_contract(&self) -> Result<(), String> {
-        if self.schema != FROZEN_TAIL_NETWORK_SCHEMA && self.frozen_tail_adapter.is_some() {
+        if !self.uses_frozen_tail_adapter() && self.frozen_tail_adapter.is_some() {
             return Err("legacy cash values cannot silently discard a frozen adapter".into());
         }
         if !is_cash_schema(&self.schema) {
@@ -203,7 +216,9 @@ impl PublicValueNetwork {
             || source.cash_rules != self.cash_rules
             || source.effective_stack_bb != self.target_scale_bb
             || self.payoff_contract.as_deref() != Some(PAYOFF)
-            || self.prediction_contract.as_deref() != Some(if self.schema == FROZEN_TAIL_NETWORK_SCHEMA {
+            || self.prediction_contract.as_deref() != Some(if self.schema == SMOOTH_TAIL_NETWORK_SCHEMA {
+                SMOOTH_TAIL_CONTRACT
+            } else if self.schema == FROZEN_TAIL_NETWORK_SCHEMA {
                 FROZEN_TAIL_CONTRACT
             } else if self.schema == KERNEL_POOLED_NETWORK_SCHEMA {
                 KERNEL_POOLED_CONTRACT
@@ -222,7 +237,7 @@ impl PublicValueNetwork {
         {
             return Err("cash value network has incompatible identity or payoff provenance".into());
         }
-        if self.schema == FROZEN_TAIL_NETWORK_SCHEMA && (self.frozen_tail_adapter.is_none()
+        if self.uses_frozen_tail_adapter() && (self.frozen_tail_adapter.is_none()
             || rules.units_per_bb != 25 || self.target_scale_bb != 20.0
             || self.value_normalization.as_deref() != Some("pot")
             || self.feature_schema.as_deref() != Some(SHARED_FEATURE_SCHEMA_V2)
@@ -304,7 +319,7 @@ impl PublicValueNetwork {
             super::super::cash::cash_units(state.invested_bb[0], rules)?,
             super::super::cash::cash_units(state.invested_bb[1], rules)?,
         ];
-        if self.schema == FROZEN_TAIL_NETWORK_SCHEMA && invested_units.iter().any(|units|
+        if self.uses_frozen_tail_adapter() && invested_units.iter().any(|units|
             *units >= super::super::cash::cash_units(self.target_scale_bb, rules).expect("validated stack units")) {
             return Err("all-in cash continuations require exact settlement, not a frozen adapter".into());
         }
@@ -581,7 +596,7 @@ mod tests {
         output.biases[0] = 0.5;
         candidate.frozen_tail_adapter = Some(FrozenTailAdapter {
             parent_network_sha256: "a".repeat(64), parent_dataset_sha256: "b".repeat(64),
-            maximum_remaining_units: 50, correction_unit: "own-player-net-bb".into(),
+            maximum_remaining_units: 50, fade_width_units: None, correction_unit: "own-player-net-bb".into(),
             head: vec![hidden, output],
         });
         candidate.validate().unwrap();
@@ -630,6 +645,45 @@ mod tests {
                 assert_eq!(actual[player][combo.key()], if combo.cards().iter().any(|c| config.state.board.contains(c)) { 0.0 } else { 20.0 });
             }
         }
+        config.state.invested_bb = [20.0; 2];
+        assert!(candidate.predict_cash_turn(&config).is_err());
+    }
+
+    #[test]
+    fn smooth_tail_adapter_cent_fade_preserves_endpoint_and_rejects_relabelling() {
+        let (parent, mut candidate, mut config) = frozen_tail_fixture();
+        candidate.schema = SMOOTH_TAIL_NETWORK_SCHEMA.into();
+        candidate.prediction_contract = Some(SMOOTH_TAIL_CONTRACT.into());
+        candidate.frozen_tail_adapter.as_mut().unwrap().fade_width_units = Some(25);
+        candidate.validate().unwrap();
+        for (amount, weight) in [(17.96, 0.0), (18.0, 0.0), (18.04, 0.004672),
+            (18.48, 0.470016), (18.52, 0.529984), (19.0, 1.0), (19.04, 1.0)] {
+            config.state.invested_bb = [amount; 2];
+            let original = parent.predict_cash_turn(&config).unwrap();
+            let actual = candidate.predict_cash_turn(&config).unwrap();
+            if weight == 0.0 { assert_eq!(original, actual, "zero fade must bypass correction exactly"); }
+            for player in 0..2 {
+                for combo in all_combos() {
+                    let key = combo.key();
+                    if combo.cards().iter().any(|c| config.state.board.contains(c)) {
+                        assert_eq!(actual[player][key], 0.0);
+                    } else {
+                        assert!((actual[player][key] - original[player][key] - 0.5 * weight).abs() < 1e-7);
+                    }
+                }
+            }
+        }
+        assert!(candidate.active_frozen_tail_adapter([19.0, 18.0]).is_none());
+        assert!((candidate.active_frozen_tail_adapter([19.0, 18.04]).unwrap().1 as f64 - 0.004672).abs() < 1e-8);
+        for width in [None, Some(24), Some(26)] {
+            let mut bad = candidate.clone();
+            bad.frozen_tail_adapter.as_mut().unwrap().fade_width_units = width;
+            assert!(bad.validate().is_err());
+        }
+        let mut bad = candidate.clone();
+        bad.schema = FROZEN_TAIL_NETWORK_SCHEMA.into();
+        bad.prediction_contract = Some(FROZEN_TAIL_CONTRACT.into());
+        assert!(bad.validate().is_err(), "v9 cannot acquire the abrupt v8 identity");
         config.state.invested_bb = [20.0; 2];
         assert!(candidate.predict_cash_turn(&config).is_err());
     }
