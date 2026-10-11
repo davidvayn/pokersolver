@@ -113,6 +113,27 @@ class CashGradientAccumulationTests(unittest.TestCase):
                 self.assertEqual(batched["gradient_batching"]["microbatches_per_update"], 2)
                 self.assertEqual(batched["gradient_batching"]["contexts_per_optimizer_update"], 3)
                 self.assertFalse(batched["active"])
+                # Three train rows fit in one ordinary batch, but the prefix
+                # and addition passes each execute their own final batch.
+                prefix = root/"prefix.json"
+                prefix.write_text(json.dumps({"labels":source["labels"][:2]}))
+                observed_gradient_batches = []
+                original_accumulation = training.cash_accumulated_value_and_grad
+                def accumulation(model, loss_grad, rows, batch_size):
+                    observed_gradient_batches.append((len(rows)+batch_size-1)//batch_size)
+                    return original_accumulation(model,loss_grad,rows,batch_size)
+                initialization = dict(network_sha256="a"*64,dataset_sha256="b"*64,
+                    training_report_sha256="c"*64,parent_seed=7101,source_training_steps=1,
+                    source_selected_step=0,optimizer_initialization="fresh-adam")
+                with (patch.object(training,"initialize_cash_from_frozen",return_value=initialization),
+                      patch.object(training,"cash_accumulated_value_and_grad",side_effect=accumulation)):
+                    separated = training.run(dataset,root/"separated",7101,1,
+                        training_output_mode="raw",gradient_batch_size=3,
+                        gradient_domain_mode="prefix-sum",initial_dataset=prefix,
+                        initial_value_network=root/"parent/value-network.json")
+                self.assertEqual(sum(observed_gradient_batches),2)
+                self.assertEqual(separated["gradient_batching"]["microbatches_per_update"],
+                                 sum(observed_gradient_batches))
 
     def test_invalid_global_mass_and_empty_accumulation_fail_closed(self):
         for mass in (0, -1, True, float("inf"), float("nan")):
