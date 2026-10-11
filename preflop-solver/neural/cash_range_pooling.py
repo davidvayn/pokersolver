@@ -15,15 +15,44 @@ _incidence[np.arange(1326), COMBOS[:, 1]] = 1.
 INCIDENCE = mx.array(_incidence)
 FIRST = mx.array(COMBOS[:, 0].astype(np.int32))
 SECOND = mx.array(COMBOS[:, 1].astype(np.int32))
+_first_incidence = np.zeros((1326,52),np.float32)
+_second_incidence = np.zeros((1326,52),np.float32)
+_first_incidence[np.arange(1326),COMBOS[:,0]] = 1.
+_second_incidence[np.arange(1326),COMBOS[:,1]] = 1.
+FIRST_INCIDENCE = mx.array(_first_incidence)
+SECOND_INCIDENCE = mx.array(_second_incidence)
+CARD_POOL_GRADIENT_CONTRACT = 'fixed-incidence-card-view-adjoint-v1'
+
+
+@mx.custom_function
+def _card_query_views(cards):
+    """Unchanged indexed forwards; repeated-card gradients use a fixed sum.
+
+    Each query selects its two distinct cards. The exact linear transpose
+    accumulates first/second cotangents via their fixed one-hot incidence.
+    Avoid GPU scatter-add's unordered float accumulation, not any gradient.
+    Captured incidence arrays are constants, never learned parameters.
+    """
+    return cards[:,:,FIRST,:],cards[:,:,SECOND,:]
+
+
+@_card_query_views.vjp
+def _card_query_views_adjoint(primals,cotangents,outputs):
+    first,second = cotangents
+    adjoint = mx.matmul(mx.swapaxes(first,2,3),FIRST_INCIDENCE)
+    adjoint += mx.matmul(mx.swapaxes(second,2,3),SECOND_INCIDENCE)
+    return (mx.swapaxes(adjoint,2,3),)
 
 
 def card_removed_opponent_pool(embeddings, ranges):
     weighted = embeddings * ranges[:, :, :, None]
     total = mx.sum(weighted, axis=2)
     cards = mx.swapaxes(mx.matmul(mx.swapaxes(weighted, 2, 3), INCIDENCE), 2, 3)
-    numerator = total[:, :, None, :] - cards[:, :, FIRST, :] - cards[:, :, SECOND, :] + weighted
+    first,second = _card_query_views(cards)
+    numerator = total[:, :, None, :] - first - second + weighted
     card_mass = mx.matmul(ranges, INCIDENCE)
-    mass = mx.sum(ranges, axis=2)[:, :, None] - card_mass[:, :, FIRST] - card_mass[:, :, SECOND] + ranges
+    first_mass,second_mass = _card_query_views(card_mass[:,:,:,None])
+    mass = mx.sum(ranges, axis=2)[:, :, None] - first_mass[:,:,:,0] - second_mass[:,:,:,0] + ranges
     conditional = numerator / mx.maximum(mass[:, :, :, None], RANGE_POOL_EPSILON)
     conditional = mx.where(mass[:, :, :, None] > RANGE_POOL_EPSILON, conditional, 0.)
     return mx.stack((conditional[:, 1], conditional[:, 0]), axis=1)
