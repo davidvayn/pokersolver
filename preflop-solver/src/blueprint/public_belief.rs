@@ -798,7 +798,8 @@ impl PublicValueNetwork {
             | cash_value::NETWORK_SCHEMA
             | cash_value::POOLED_NETWORK_SCHEMA
             | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
-            | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA => {
+            | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
+            | cash_value::POT_EXPERT_NETWORK_SCHEMA => {
                 let Some((expected_context_size, expected_query_size)) = self
                     .feature_schema
                     .as_deref()
@@ -839,6 +840,7 @@ impl PublicValueNetwork {
                         | cash_value::POOLED_NETWORK_SCHEMA
                         | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
                         | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
+                        | cash_value::POT_EXPERT_NETWORK_SCHEMA
                 ) && !matches!(
                     self.value_normalization.as_deref(),
                     Some("pot" | "payoff-exposure")
@@ -859,7 +861,7 @@ impl PublicValueNetwork {
                     } else {
                         query_size
                     } + usize::from(self.schema == cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA);
-                let heads = if self.schema == "hu-public-belief-combo-value-network-v6" {
+                let heads = if self.uses_pot_expert_heads() {
                     if !self.head.is_empty() || self.pot_expert_heads.len() != 3 {
                         return Err(
                             "pot-expert value network must contain exactly three expert heads"
@@ -1168,6 +1170,7 @@ impl PublicValueNetwork {
                         | cash_value::POOLED_NETWORK_SCHEMA
                         | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA
                         | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
+                        | cash_value::POT_EXPERT_NETWORK_SCHEMA
                 ) {
                     baseline + residual * self.state_value_scale_bb(invested)
                 } else {
@@ -1198,11 +1201,12 @@ impl PublicValueNetwork {
     fn pools_exact_query_ranges(&self) -> bool {
         matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v5"
             | "hu-public-belief-combo-value-network-v6" | cash_value::POOLED_NETWORK_SCHEMA
-            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA)
+            | cash_value::BLOCKER_POOLED_NETWORK_SCHEMA | cash_value::BASELINE_CONDITIONED_NETWORK_SCHEMA
+            | cash_value::POT_EXPERT_NETWORK_SCHEMA)
     }
 
     fn selected_value_head(&self, invested: [f64; 2]) -> &[ValueNetworkLayer] {
-        if self.schema != "hu-public-belief-combo-value-network-v6" {
+        if !self.uses_pot_expert_heads() {
             return &self.head;
         }
         let maximum_invested = invested[0].max(invested[1]);
@@ -1214,6 +1218,11 @@ impl PublicValueNetwork {
             2
         };
         &self.pot_expert_heads[expert]
+    }
+
+    fn uses_pot_expert_heads(&self) -> bool {
+        matches!(self.schema.as_str(), "hu-public-belief-combo-value-network-v6"
+            | cash_value::POT_EXPERT_NETWORK_SCHEMA)
     }
 
     fn state_value_scale_bb(&self, invested: [f64; 2]) -> f64 {
