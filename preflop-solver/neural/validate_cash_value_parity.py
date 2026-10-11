@@ -14,11 +14,18 @@ from cash_value_dataset import (NETWORK_SCHEMA, POOLED_NETWORK_SCHEMA, BLOCKER_P
 from cash_range_pooling import numpy_card_removed_opponent_pool
 from cash_range_attention import numpy_positive_kernel_opponent_pool
 from train_public_value_network import RANGE_POOL_EPSILON
+from cash_frozen_adapter import validate_frozen_adapter, frozen_adapter_gate
 from validate_public_value_parity import dense_forward
 from serving_value_projection import OwnPayoffValueProjection
 
 
 def cash_architecture(model):
+    adapter = validate_frozen_adapter(model)
+    if adapter is not None:
+        parent = dict(model, schema=KERNEL_POOLED_NETWORK_SCHEMA,
+                      architecture="wide-kernel-pooled", predictionContract=KERNEL_POOLED_CONTRACT)
+        del parent["frozenTailAdapter"]
+        return cash_architecture(parent)
     architecture = model.get("architecture")
     if model.get("schema") == KERNEL_POOLED_NETWORK_SCHEMA:
         for name in ("kernelQuery","kernelKey"):
@@ -92,7 +99,13 @@ def python_predictions(source, model):
                 residual[selected] = dense_forward(combined[selected],head).reshape((-1,2,1326))
     else:
         residual = dense_forward(combined,model["head"]).reshape((-1,2,1326))
-    return OwnPayoffValueProjection(baselines + residual * scales[:,None,None],legal.astype(bool)).values
+    raw = baselines + residual * scales[:,None,None]
+    adapter = validate_frozen_adapter(model)
+    if adapter is not None:
+        active = frozen_adapter_gate(source)
+        if active.any():
+            raw[active] += dense_forward(combined[active], adapter["head"]).reshape((-1,2,1326))
+    return OwnPayoffValueProjection(raw,legal.astype(bool)).values
 
 
 def mlx_predictions(source, payload, device):
@@ -116,7 +129,32 @@ def mlx_predictions(source, payload, device):
         arrays = [mx.array(v) for v in (contexts,queries,weights,scales,baselines,legal)]
         if model.architecture in ("wide-blocker-pooled","wide-kernel-pooled"):
             arrays.append(mx.array(np.asarray([label["input"]["state"]["ranges"] for label in source["labels"]],dtype=np.float32)))
-        return np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
+        adapter = validate_frozen_adapter(payload)
+        if adapter is None:
+            return np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
+        parent = np.array(model(*arrays)).reshape((-1,2,1326)) * scales[:,None,None]
+        active = frozen_adapter_gate(source)
+        if not active.any():
+            return parent
+        # Use the same frozen encoder; only the independent extra head is new.
+        context_embedding = model.context_tower(arrays[0])
+        hands = model.query_tower(arrays[1])
+        reach = arrays[2] / mx.maximum(mx.sum(arrays[2],axis=2,keepdims=True),RANGE_POOL_EPSILON)
+        own = mx.sum(hands*reach[:,:,:,None],axis=2)
+        positive = lambda value: mx.where(value>=0,value+1,mx.exp(mx.minimum(value,0)))
+        from cash_range_attention import positive_kernel_opponent_pool
+        opponent = positive_kernel_opponent_pool(hands,arrays[6],
+            positive(model.kernel_query(hands)),positive(model.kernel_key(hands)))
+        combined = mx.concatenate((mx.broadcast_to(context_embedding[:,:,None,:],hands.shape),
+            mx.broadcast_to(own[:,:,None,:],hands.shape),opponent,hands),axis=-1)
+        delta = combined
+        for layer in adapter["head"]:
+            weight = mx.array(np.asarray(layer["weights"],np.float32).reshape(layer["outputSize"],layer["inputSize"]))
+            delta = delta @ weight.T + mx.array(layer["biases"])
+            if layer["activation"] == "relu": delta = mx.maximum(delta,0.)
+        raw = model.raw_values(*arrays[:5],ranges=arrays[6]) * arrays[3][:,None,None]
+        corrected = mx.clip(raw + delta.reshape((-1,2,1326)),-20.,20.) * arrays[5][:,None,:]
+        return np.array(mx.where(mx.array(active)[:,None,None],corrected,mx.array(parent)))
 
 
 def cash_feature_schema(model):
