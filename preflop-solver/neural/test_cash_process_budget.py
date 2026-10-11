@@ -9,6 +9,12 @@ from unittest.mock import Mock,patch
 from cash_process_budget import run_cash_process
 
 
+def timed_command(arguments):
+    # Resource flag -l is macOS-only; the process-group failure pattern also
+    # needs to be covered by GNU time on Linux rather than failing on its CLI.
+    return ['/usr/bin/time']+(['-l'] if sys.platform=='darwin' else [])+arguments
+
+
 @unittest.skipUnless(os.name=='posix','cash research budgets require POSIX sessions')
 class CashProcessBudgetTests(unittest.TestCase):
     def test_success_and_nonzero_completion_keep_normal_captured_interface(self):
@@ -19,11 +25,12 @@ class CashProcessBudgetTests(unittest.TestCase):
         self.assertEqual(result.returncode,7)
         with self.assertRaises(subprocess.CalledProcessError): result.check_returncode()
 
+    @unittest.skipUnless(os.path.isfile('/usr/bin/time'),'timing wrapper unavailable')
     def test_actual_time_wrapper_and_term_ignoring_solver_both_stop_on_timeout(self):
         code='import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(os.getpgrp(),os.getpid(),flush=True); time.sleep(20)'
         started=time.monotonic()
         with self.assertRaises(subprocess.TimeoutExpired) as caught:
-            run_cash_process(['/usr/bin/time','-l',sys.executable,'-u','-c',code],
+            run_cash_process(timed_command([sys.executable,'-u','-c',code]),
                 timeout=.2,termination_grace_seconds=.05)
         error=caught.exception; self.assertIsInstance(error.stdout,str)
         group,child=map(int,error.stdout.splitlines()[0].split())
@@ -36,13 +43,14 @@ class CashProcessBudgetTests(unittest.TestCase):
             self.assertTrue(not stat or stat.startswith('Z'),f'budget left live PID {pid}: {stat}')
 
 
+    @unittest.skipUnless(os.path.isfile('/usr/bin/time'),'timing wrapper unavailable')
     def test_redirected_background_child_cannot_survive_wrapper_cleanup(self):
         child_code='import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print("ready",flush=True); time.sleep(20)'
         code=('import os,subprocess,sys,time; child=subprocess.Popen([sys.executable,"-u","-c",'
             +repr(child_code)+'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL); child.stdout.readline(); '
             'print(os.getpgrp(),child.pid,flush=True); time.sleep(20)')
         with self.assertRaises(subprocess.TimeoutExpired) as caught:
-            run_cash_process(['/usr/bin/time','-l',sys.executable,'-u','-c',code],
+            run_cash_process(timed_command([sys.executable,'-u','-c',code]),
                 timeout=.2,termination_grace_seconds=.05)
         error=caught.exception; group,child=map(int,error.stdout.splitlines()[0].split())
         try:
