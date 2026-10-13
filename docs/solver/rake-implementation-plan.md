@@ -1,6 +1,6 @@
 # Rake aware practice implementation plan
 
-Status on October 11, 2026: cash accounting is connected to the pure hand engine and native own-payoff training, turn/river solving, evaluation, an offline query adapter, and a bounded depth-limited flop pilot. Short NL25 20bb research policies and continuation networks have been trained and tested. **No cash model qualifies for activation.** The production website and existing Home models remain rake-free; an unavailable cash profile cannot fall back to them. Dynamic public-context conditioning now passes the complete two-seed value-quality screen on all26 reviewed cohorts, unlike the rejected fixed public-pot partition. Newly proposed independent validation, cent-boundary checks and native integration are next. Full-game exploitability improvement is not yet measured.
+Status on October 12, 2026: cash accounting is connected to the pure hand engine and native own-payoff training, turn/river solving, evaluation, an offline query adapter, and a bounded depth-limited flop pilot. **No cash model qualifies for activation.** The production website and existing Home models remain rake-free; an unavailable cash profile cannot fall back to them. The repaired, focused140 continuation pilot passes its paired review screen but narrowly fails the separately frozen independent gain screen. A rank-balanced, fixed-budget data-only contrast is in progress; native/action promotion remains blocked. Full-game exploitability improvement is not yet measured. Later sections distinguish completed experiments, rejected configurations and remaining qualification.
 
 ## Current implementation and remaining qualification
 
@@ -1218,6 +1218,26 @@ Next preregister one data-only152-row contrast. Propose two64-root authentic pub
 Generate four32-update frozen flops, twelve128-update branch references and eight256-update opening/after refinements, under2-process×2-thread,6GiB/zero-swap,900/300-second child limits and1,800 monotonic seconds total. Keep conditional NashConv0.50bb and drift0.10bb gates. Failure stops this generation; no added worker/teacher-budget escalation.
 
 If teachers pass, both cold240 arms include the identical original140 observations (all131 plus previous nine rare labels). Candidate adds twelve new labels; replay adds twelve SHA-selected authorized old observations, four per branch. Keep architecture, parents, optimizer,0.01 activation, learning rate, fifteen development rows and checkpoint-selection rule unchanged. Both seeds must improve the just-inspected two-family after-check review by5% versus parent/replay/pinned focused140/repaired leaky; retain all earlier29 cohorts plus three new review branches, original holdout and diagnosed branches within10% of parent/control and applicable original FiLM/prior broad/repaired/focused140 baselines. Preserve0.001bb parity, exact outside-gate behavior,12GiB/zero-swap guards. No newly reviewed family becomes optimizer or selector data. A paired pass still requires independently selected new validation, cent/native/action/full-hand qualification. A failure closes this exact contrast, without a width/rate/epoch/selection sweep.
+
+
+## October 12 rank-balanced result and representation diagnostic
+
+The rank-balanced teacher stage passes: four32-update frozen-parent flop solves, twelve128-update references and eight256-update refinements. Maximum conditional NashConv0.0375437326bb; actual-joint/training-mixture drift0.0419796009/0.0413843629bb; reference footprint385,368,688 bytes, zero swaps. Generation793.7628 monotonic/795.53 outer real seconds. Teacher report SHA `c482c16fa8e9e3eb8c39c0a1a5e62ce82115d3a038912403ba02bd435b2a111c`. Public proposal SHA `a1132e23e77a12ee99f875481651404a56b1008cb25e0a56727e6540fc410c33`; two64-root captures retain separate sampling provenance, rather than claiming one128-root native capture.
+
+**Both rank-balanced152 paired review screens fail.** Both arms retain exactly the140 prior observations and identical15-row development. Replay has140 unique inputs, candidate152. Previous mass257.00839; candidate total279.05333. Both arms use the same cold240 optimizer budget and architecture.
+
+| Seed | New two-family after-check replay / balanced / prior focused140 | Balanced selected step |
+| --- | --- | --- |
+|7101|0.298141 /0.289374 /0.285174bb|240|
+|7102|0.280390 /0.272011 /0.274098bb|240|
+
+Replay gains are approximately2.94%/2.99%, not5%. Seed one also fails10% retention versus focused140 on `new-development-check-check`:0.128595 versus0.114084bb (12.72% regression). All comparisons versus parent/original-FiLM/prior-broad/repaired-leaky pass; seed two retains focused140. Original holdout0.445019/0.454882bb remains protected. Maximum decoder/native-parent difference0.000004471/0.000002145bb; maximum child footprint5,349,544,688 bytes, zero swaps; pair145.4745 monotonic/145.71 outer real seconds. Fit report SHA `ee3af2e1e79526ed3eb4c112ed2466e159f095240d0fde121af5ecfa635879e8`. Eight proposal/teacher/fit harness tests and thirteen activation/cent-gate/process-budget regressions pass.
+
+This exact data-only contrast is closed. Retain focused140 as the comparison reference, not an accepted serving model. No more reference generation, native promotion, or longer training follows this failed contrast automatically. Its four inspected training families join the exclusion set (284 total).
+
+Next perform one no-update diagnostic at the pinned focused140 heads, using the already authorized152-row corpus and reviewed cohorts. Compare plain training-gradient alignment for (a) the existing encoded64-dimensional public conditioner and (b) a hypothetical zero-initialized417-dimensional raw-public conditioner correction. Both share the same frozen private-query basis and net-bb output; no new tensor is trained or exported. Also compare all152 training rows against the seven latest rare/rank-balanced after-check rows to distinguish objective conflict from missing public information. Compute analytic gradients and verify them against finite differences on a small algebra fixture before reading reviewed gradients.
+
+Support a raw-public conditioning pilot only if both seeds have raw-public training/review-after cosine at least0.20 and nonnegative reviewed check/check cosine, and the existing encoded conditioner has a nonpositive reviewed direction in at least one branch for each seed. Support a weighting/curriculum hypothesis only if both seeds show a nonpositive all-row after-check direction but positive after-only direction. These are first-order diagnostics, not convergence or policy-strength proof. Failure authorizes neither architecture fitting nor a weight/rate/epoch sweep; research must identify a different supported mechanism. No native/action/full-game qualification is passed.
 
 
 ## Scope and selected rules
