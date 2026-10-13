@@ -1196,6 +1196,30 @@ Next freeze all four focused/replay heads and their parent/source hashes before 
 Score frozen heads without fitting or reselection. Both focused seeds must improve independent after-check RMSE by5% versus parent/replay/repaired leaky controls, while retaining independent opening/CC within10% versus parent/replay/repaired leaky/prior broad/original FiLM. Preserve0.001bb decoder/native-parent and resource guards. These families are validation-only; they cannot become optimizer or selector data. Failure stops native/action promotion and reclassifies the inspected families as review-only for any later experiment. A passing value stage still needs cent robustness, a strict native activation/schema adapter, matched action evaluation and complete routed-hand qualification. No cash model is active.
 
 
+## October 12 untouched-family result and next data-only contrast
+
+The independent teacher stage passes: two32-update frozen-parent flop solves, six128-update references and four256-update refinements. Maximum conditional NashConv0.0362344319bb; maximum actual-joint/training-mixture drift0.0259393615/0.0257420904bb; reference footprint385,401,456 bytes, zero swaps. Generation340.7835 monotonic/342.50 outer real seconds. Teacher report SHA `b30b412dbd6ff156c5a1287e3d7285b1482eeb37c7af692e6b1afa55ca34f065` in `cash-focused140-independent-validation-corpora-20261012`. All twelve comparison heads and both parents were frozen before targets, excluding278 canonical flop families.
+
+**The frozen focused140 independent value screen fails, without a retention failure.**
+
+| Seed | After-check parent / repaired leaky / replay / focused | Focused opening / check-check |
+| --- | --- | --- |
+|7101|0.391487 /0.297713 /0.298066 /0.285174bb|0.255454 /0.162654bb|
+|7102|0.381365 /0.284733 /0.294052 /0.274098bb|0.228366 /0.143034bb|
+
+After-check gains versus repaired leaky are4.21%/3.74%, below the frozen5% requirement. Replay gains are4.33%/6.79%; all independent opening/check-check10% retention comparisons pass. No fitting or checkpoint reselection occurred. Maximum decoder/native-parent differences0.000003994/0.000002771bb; scoring2.6764 monotonic seconds, footprint185,828,072 bytes, zero swaps. Score report SHA `a9850fb028b924dcda4e5e637069f46cf2ce34551d740d5fbc47fdb8f103eabb`; six teacher/scorer harness tests pass. The two just-inspected families are now review-only, bringing exclusions to280. Native/action promotion remains blocked; no full-game exploitability improvement is measured.
+
+A no-update diagnostic reuses only existing labels and refinements. Fresh-training after-check RMSE improves from repaired leaky0.411032/0.362614 to focused0.279045/0.316010bb, versus much smaller independent gains. On the new ace-high board, seed two slightly regresses versus repaired leaky. Cached256-update targets preserve the failed conclusion: independent after-check repaired/focused0.303897/0.291358 and0.291157/0.281675bb. This supports uneven public-family coverage over simply insufficient reference iterations; it does not prove optimization complete or eliminate every teacher bias. Diagnostic report SHA `ca5a548a7586eb6f107554974a0dfbc1cb0fa265f0534d5d635cac071777e988`;2.6141 monotonic seconds, footprint279,134,952 bytes, zero swaps.
+
+Research check: the DEVN paper separates opponent reach from conditional payoff prediction; this repository already stores both conditional targets and raw opponent-scaled values, so merely renaming existing targets is not a new implementation. Unabstracted card encoding can improve value accuracy, but does not replace distribution coverage or establish equilibrium. [DEVN](https://ojs.aaai.org/index.php/AAAI/article/view/25661), [value-network encoding study](https://arxiv.org/abs/1807.00900)
+
+Next preregister one data-only152-row contrast. Propose two64-root authentic public captures with fixed seeds20261041/20261042, same original preflop weights, compact cent grid and old continuation proposer. Exclude all280 inspected/training families. Public SHA seed20261043 chooses four fresh eligible two-tone, equal1bb flop families: two with maximum flop rank at least Q and two below Q. Use the unique off-suit-rank paired third-flush turn. Never select by a private hand, target, predicted error or validation score.
+
+Generate four32-update frozen flops, twelve128-update branch references and eight256-update opening/after refinements, under2-process×2-thread,6GiB/zero-swap,900/300-second child limits and1,800 monotonic seconds total. Keep conditional NashConv0.50bb and drift0.10bb gates. Failure stops this generation; no added worker/teacher-budget escalation.
+
+If teachers pass, both cold240 arms include the identical original140 observations (all131 plus previous nine rare labels). Candidate adds twelve new labels; replay adds twelve SHA-selected authorized old observations, four per branch. Keep architecture, parents, optimizer,0.01 activation, learning rate, fifteen development rows and checkpoint-selection rule unchanged. Both seeds must improve the just-inspected two-family after-check review by5% versus parent/replay/pinned focused140/repaired leaky; retain all earlier29 cohorts plus three new review branches, original holdout and diagnosed branches within10% of parent/control and applicable original FiLM/prior broad/repaired/focused140 baselines. Preserve0.001bb parity, exact outside-gate behavior,12GiB/zero-swap guards. No newly reviewed family becomes optimizer or selector data. A paired pass still requires independently selected new validation, cent/native/action/full-hand qualification. A failure closes this exact contrast, without a width/rate/epoch/selection sweep.
+
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
