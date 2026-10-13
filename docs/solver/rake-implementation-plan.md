@@ -1178,6 +1178,24 @@ Only a passing teacher stage permits one matched **140-observation, cold240-upda
 Require both seeds5% reviewed after-check gain against parent/replay control;10% all29 cohorts, holdout and diagnosed branch retention against controls/prior broad/original FiLM/repaired baseline; exact outside gate,0.001bb decoder and existing12GiB/zero-swap guards. Failure closes this focused configuration. A complete paired pass permits separately selected untouched-family validation, followed by cent/native/action/full-hand checks. No active cash model, certified exploitability or website integration is implied by this targeted teacher stage.
 
 
+## October 12 focused three-flush coverage milestone
+
+The focused teacher stage passes: three32-update frozen-parent flop solves, nine128-update references and six256-update refinements on the publicly selected new families. Maximum conditional NashConv0.0398716826bb; maximum actual-joint/training-mixture drift0.0347423458/0.0353629986bb; maximum reference footprint385,368,688 bytes and zero swaps. Generation takes512.2730 monotonic/514.10 outer real seconds. Report `cash-three-flush-training9-corpora-20261012/report.json` SHA `bf912343cb805f62732e1112231f56727cf698e953e9a8fb5ca4f495afc4921b`. Two public-selector/turn-rule tests pass; preflight fixture checks caught stale-path/task-count mistakes before any generation and those were repaired before protocol freezing.
+
+**Both focused140 paired review screens pass.** Architecture, cold initialization,0.01 leaky slope,240-update budget, optimizer, parents, original fifteen development rows, cent gate and all131 prior observations remain unchanged. Control adds nine SHA-selected replay observations; candidate adds nine new pattern observations. Added training mass16.54440/16.54566 is nearly matched against240.46273 prior mass; no equality of distributions is asserted.
+
+| Seed | After-check review replay / focused | Diagnosis replay / focused | Focused selected step |
+| --- | --- | --- | --- |
+|7101|0.331858 /0.278502bb|0.274805 /0.271201bb|240|
+|7102|0.330553 /0.287850bb|0.349324 /0.351817bb|240|
+
+Review gains are approximately16.1%/12.9% versus matched replay, and both seeds clear5% gain versus parent/control. Every29-cohort, original-holdout and diagnosed branch10% protection also passes, including explicit retention versus the repaired leaky baseline. Both controls have131 unique inputs over140 observations; candidates have140. Maximum child footprint5,237,625,440 bytes and zero swaps; pair time118.9352 monotonic/119.18 outer real seconds. Report `cash-three-flush140-adapter240-paired-20261012/report.json` SHA `81d4d60c1dd9978b1c7cc8a75d77a6033e0e45431886e7e1e9ee4db11af5bd68`; two explicit-digest/replay/no-review-training harness tests pass. These are reviewed value-model gains, **not measured full-game exploitability gains or a release qualification**.
+
+Next freeze all four focused/replay heads and their parent/source hashes before creating labels on the two still-unused proposal families (root10 and root30), excluding all278 reviewed/training families. Use their unique public paired third-suit turns, frozen old proposer and existing exact accounting/abstraction. Generate two32-update flops, six128-update branch references and four256-update opening/after refinements, with unchanged2-process×2-thread,6GiB/zero-swap,900/300-second child limits and1,800 monotonic seconds total. Teacher conditional-deviation/drift gates remain0.50/0.10bb.
+
+Score frozen heads without fitting or reselection. Both focused seeds must improve independent after-check RMSE by5% versus parent/replay/repaired leaky controls, while retaining independent opening/CC within10% versus parent/replay/repaired leaky/prior broad/original FiLM. Preserve0.001bb decoder/native-parent and resource guards. These families are validation-only; they cannot become optimizer or selector data. Failure stops native/action promotion and reclassifies the inspected families as review-only for any later experiment. A passing value stage still needs cent robustness, a strict native activation/schema adapter, matched action evaluation and complete routed-hand qualification. No cash model is active.
+
+
 ## Scope and selected rules
 
 Keep the current rake-free practice game as **Home game**. Add **PokerStars NL25** as the first online study profile, using the published standard USD regular NLHE schedule for two players dealt into the hand. Additional rooms or stakes require separately verified profiles, not interpolated defaults.
