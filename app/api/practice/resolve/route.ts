@@ -69,13 +69,15 @@ export async function POST(request: Request) {
     depthBb?: unknown;
     stateHash?: unknown;
     state?: unknown;
+    includeRangeStrategy?: unknown;
   };
   if (
     typeof input.modelVersion !== 'string' ||
     typeof input.depthBb !== 'number' ||
     typeof input.stateHash !== 'string' ||
     !/^[a-f0-9]{64}$/.test(input.stateHash) ||
-    !isQueryState(input.state)
+    !isQueryState(input.state) ||
+    (input.includeRangeStrategy !== undefined && typeof input.includeRangeStrategy !== 'boolean')
   ) {
     return NextResponse.json({ error: 'Invalid resolver request' }, { status: 400 });
   }
@@ -97,12 +99,12 @@ export async function POST(request: Request) {
   try {
     const identity = practiceResolverIdentity(manifest, input.depthBb);
     const result = await practiceSolverProcess(manifest, input.depthBb).query(
-      resolverQueryPayload(
+      { ...resolverQueryPayload(
         state,
         input.stateHash,
         input.modelVersion,
         input.depthBb
-      ),
+      ), ...(input.includeRangeStrategy === true ? { includeRangeStrategy: true } : {}) },
       resolverAffinityKey(state)
     );
     const resolved = result as {
@@ -116,6 +118,7 @@ export async function POST(request: Request) {
       preflopActionValuesSha256?: unknown;
       actions?: unknown;
       maximumProbabilitySumError?: unknown;
+      rangeStrategy?: { schema?: unknown };
     };
     if (
       resolved.schema !== 'hu-practice-continual-resolver-query-v1' ||
@@ -134,6 +137,7 @@ export async function POST(request: Request) {
       !Number.isFinite(resolved.maximumProbabilitySumError) ||
       resolved.maximumProbabilitySumError < 0 ||
       resolved.maximumProbabilitySumError > 1e-6
+      || (input.includeRangeStrategy === true && resolved.rangeStrategy?.schema !== 'hu-public-range-strategy-v1')
     ) {
       throw new Error('The resolver response does not match its pinned manifest');
     }

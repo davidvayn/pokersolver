@@ -18,6 +18,7 @@ export interface ComboInspectorProps {
   colors: Record<string, string>;
   showMetrics?: boolean;
   className?: string;
+  deselected?: boolean;
 }
 
 function formatPercent(fraction: number): string {
@@ -61,6 +62,7 @@ export function ComboInspector({
   colors,
   showMetrics = false,
   className = '',
+  deselected = false,
 }: ComboInspectorProps) {
   const breakdown = useMemo(
     () => buildHandClassBreakdown(label, row, board),
@@ -70,30 +72,32 @@ export function ComboInspector({
   const [sortBy, setSortBy] = useState<'default' | 'ev' | 'weight'>('default');
   const filteredCombos = useMemo(() => {
     let list = breakdown.combos;
-    if (suitFilter !== 'all') {
+    if (!deselected && suitFilter !== 'all') {
       list = list.filter(
         (c) => c.card0Suit === suitFilter || c.card1Suit === suitFilter
       );
     }
-    if (sortBy !== 'default') {
+    if (!deselected && sortBy !== 'default') {
       list = [...list].sort((a, b) => {
         if (a.isBlocked !== b.isBlocked) return a.isBlocked ? 1 : -1;
-        return sortBy === 'ev' ? b.ev - a.ev : b.weight - a.weight;
+        return sortBy === 'ev' ? (b.ev ?? -Infinity) - (a.ev ?? -Infinity) : b.weight - a.weight;
       });
     }
     return list;
-  }, [breakdown.combos, suitFilter, sortBy]);
+  }, [breakdown.combos, suitFilter, sortBy, deselected]);
 
   return (
     <aside
       aria-label={`Combination details for ${breakdown.friendlyName}`}
       className={`min-w-0 text-fg ${className}`}
       data-solver-combo-inspector
+      data-deselected={deselected}
     >
       <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border pb-2">
         <h2 className="flex items-baseline gap-2 text-sm">
           <strong className="font-mono text-lg">{breakdown.label}</strong>
           <span className="text-muted">{breakdown.friendlyName}</span>
+          {deselected && <span className="text-xs font-normal text-muted">Last viewed</span>}
         </h2>
         <span className="text-xs text-muted">
           {breakdown.activeCombos.toFixed(1)} / {breakdown.totalCombos} combos
@@ -114,9 +118,10 @@ export function ComboInspector({
               aria-label={
                 suit === 'all' ? 'All suits' : `Filter by ${SUIT_NAMES[suit]}`
               }
-              aria-pressed={suitFilter === suit}
+              aria-pressed={!deselected && suitFilter === suit}
+              disabled={deselected}
               onClick={() => setSuitFilter(suit)}
-              className={`min-h-11 min-w-9 border-b-2 px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${suitFilter === suit ? 'border-accent text-fg' : 'border-transparent text-muted hover:text-fg'}`}
+              className={`min-h-11 min-w-9 border-b-2 px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${!deselected && suitFilter === suit ? 'border-accent text-fg' : 'border-transparent text-muted hover:text-fg'}`}
             >
               {suit === 'all' ? 'All' : SUIT_SYMBOLS[suit]}
             </button>
@@ -124,7 +129,8 @@ export function ComboInspector({
         </div>
         <select
           aria-label="Sort combinations"
-          value={sortBy}
+          value={deselected ? 'default' : sortBy}
+          disabled={deselected}
           onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
           className="min-h-11 max-w-full bg-transparent text-xs text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
@@ -171,11 +177,11 @@ function ComboSquare({
     : combo.weight <= 0.001
       ? 'Not in range'
       : null;
-  const ev = `${combo.ev >= 0 ? '+' : ''}${combo.ev.toFixed(2)}bb`;
+  const ev = combo.ev === null ? 'unavailable' : `${combo.ev >= 0 ? '+' : ''}${combo.ev.toFixed(2)}bb`;
   // The fallback is a class average, not a suit-specific solve. Do not present
   // its placeholder equity as a measured combo result.
   const metrics = combo.hasData
-    ? `EV ${ev}, equity ${formatPercent(combo.equity)}, weight ${formatPercent(combo.weight)}`
+    ? `EV ${ev}, equity ${combo.equity === null ? 'unavailable' : formatPercent(combo.equity)}, relative weight ${formatPercent(combo.weight)}`
     : 'Class average';
   const description = `${combo.card0Rank} of ${SUIT_NAMES[combo.card0Suit]}, ${combo.card1Rank} of ${SUIT_NAMES[combo.card1Suit]}: ${status ?? `${combo.actions.map((a) => `${a.action} ${formatPercent(a.freq)}`).join(', ')}; ${metrics}`}`;
 
@@ -238,7 +244,7 @@ function ComboSquare({
                   <>
                     <span className="block">EV {ev}</span>
                     <span>
-                      EQ {formatPercent(combo.equity).replace('%', '')} · Wt{' '}
+                      EQ {combo.equity === null ? '—' : formatPercent(combo.equity).replace('%', '')} · Wt{' '}
                       {formatPercent(combo.weight).replace('%', '')}
                     </span>
                   </>

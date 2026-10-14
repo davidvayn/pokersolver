@@ -108,17 +108,15 @@ fn run_practice_artifacts_compile(args: &[String]) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let mut game = BlueprintConfig::default();
-    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+fn apply_action_abstraction_input(args: &[String], game: &mut BlueprintConfig) -> Result<(), Box<dyn Error>> {
     if args.iter().any(|a| a == "--action-abstraction-json") {
         if args.iter().any(|a| a == "--compact-serving-grid") {
-            return Err("choose only one practice action abstraction input".into());
+            return Err("choose only one action abstraction input".into());
         }
         let input = value(args, "--action-abstraction-json")
             .ok_or("--action-abstraction-json requires a JSON value")?;
         if input.len() > 16_384 {
-            return Err("practice action abstraction exceeds its input budget".into());
+            return Err("action abstraction exceeds its input budget".into());
         }
         game.action_abstraction = serde_json::from_str(&input)?;
         game.validate()?;
@@ -129,6 +127,43 @@ fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
     }
+    Ok(())
+}
+
+#[cfg(test)]
+mod action_abstraction_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_sampling_grid_matches_serving_and_rejects_mixed_inputs() {
+        let grid = blueprint::ActionAbstraction {
+            open_sizes_bb: vec![2.0, 3.5, 5.0],
+            limp_raise_sizes_bb: vec![3.0, 5.0, 7.0],
+            three_bet_sizes_bb: vec![8.0, 12.0, 16.0],
+            four_bet_sizes_bb: vec![20.0, 30.0, 45.0],
+            deeper_raise_pot_fractions: vec![0.5, 1.0, 2.0],
+            ..Default::default()
+        };
+        for depth in [20.0, 50.0, 100.0] {
+            let mut game = BlueprintConfig { effective_stack_bb: depth, ..Default::default() };
+            let args = vec!["--action-abstraction-json".to_owned(), serde_json::to_string(&grid).unwrap()];
+            apply_action_abstraction_input(&args, &mut game).unwrap();
+            assert_eq!(game.action_abstraction, grid);
+            let mut conflict = args.clone();
+            conflict.push("--compact-serving-grid".to_owned());
+            assert!(apply_action_abstraction_input(&conflict, &mut game).is_err());
+        }
+        let mut game = BlueprintConfig::default();
+        apply_action_abstraction_input(&[], &mut game).unwrap();
+        assert_eq!(game.action_abstraction, Default::default());
+        assert!(apply_action_abstraction_input(&["--action-abstraction-json".to_owned(), "{}".to_owned()], &mut game).is_err());
+    }
+}
+
+fn run_practice_policy_server(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
+    apply_action_abstraction_input(args, &mut game)?;
     apply_dcfr_args(&mut game, args)?;
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
@@ -3209,12 +3244,7 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     {
         game.showdown_evaluation.exact_turn_rivers = false;
     }
-    if args
-        .iter()
-        .any(|argument| argument == "--compact-serving-grid")
-    {
-        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
-    }
+    apply_action_abstraction_input(args, &mut game)?;
     let output = value(args, "--output")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("neural-samples.jsonl.gz"));
@@ -3847,6 +3877,8 @@ Neural sample options:
   --flop-runout-samples <int>     Default: 128
   --sample-turn-rivers            Sample instead of enumerating turn rivers
   --compact-serving-grid          Opt-in reduced open grid
+  --action-abstraction-json <json> Pin an explicit grid for neural samples;
+                                  also supported by practice-policy-server
   --output <path>                 Default: neural-samples.jsonl.gz
 
 Range-policy self-play sample options:

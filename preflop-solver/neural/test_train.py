@@ -3,6 +3,8 @@ import json
 import random
 import tempfile
 import unittest
+from dataclasses import replace
+from unittest.mock import patch
 from pathlib import Path
 
 import mlx.core as mx
@@ -21,6 +23,7 @@ from train import (
     ReplayReservoir,
     RunConfig,
     run_config_payload,
+    generate_shard,
     bootstrap_dcfr_plus_targets,
     backfill_street_file,
     backfill_legacy_replay_streets,
@@ -63,6 +66,29 @@ def initial_state():
 
 
 class NeuralTrainerTests(unittest.TestCase):
+    def test_explicit_pilot_grid_is_pinned_and_passed_to_native_sampling(self):
+        config = RunConfig(schema='test', depth_bb=50, seed=1, reservoir_capacity=100,
+            hidden_sizes=(8,4), batch_size=4, learning_rate=.001, learning_rate_final=None,
+            learning_rate_decay_start_round=None, learning_rate_decay_end_round=None,
+            traversals_per_round=2, steps_per_round=1, advantage_alpha=2,
+            variance_baseline_scale=.5, replay_street_proposal=None, value_rollouts_per_action=1,
+            artifact_every=1, preflop_runout_samples=4, flop_runout_samples=4,
+            exact_turn_rivers=False, compact_serving_grid=False)
+        self.assertNotIn('action_abstraction_json', run_config_payload(config))
+        self.assertNotIn('sampler_sha256', run_config_payload(config))
+        grid = '{"open_sizes_bb":[2,3.5,5]}'
+        configured = replace(config, action_abstraction_json=grid)
+        self.assertEqual(run_config_payload(configured)['action_abstraction_json'], grid)
+        self.assertNotEqual(run_config_payload(config), run_config_payload(configured))
+        pinned = replace(configured,sampler_sha256='a'*64)
+        self.assertEqual(run_config_payload(pinned)['sampler_sha256'],'a'*64)
+        self.assertNotEqual(run_config_payload(pinned),run_config_payload(configured))
+        with tempfile.TemporaryDirectory() as directory, patch('train.subprocess.run') as run:
+            generate_shard(Path('/native'),Path(directory),configured,1,0,None)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[argv.index('--action-abstraction-json')+1],grid)
+            self.assertEqual(argv[argv.index('--effective-stack-bb')+1],'50')
+
     def test_cash_grouped_replay_and_compiled_losses_use_the_full_recall_vector(self):
         with tempfile.TemporaryDirectory() as directory:
             state = np.zeros(820,dtype=np.float32); state[716+31] = 1.

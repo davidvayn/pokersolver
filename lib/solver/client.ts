@@ -21,26 +21,49 @@ export interface SolverInput {
 export interface ActionStrategy {
   action: string;
   freq: number;
-  ev: number;
+  ev: number | null;
 }
 export interface ComboStrategy {
   card0: number;
   card1: number;
   weight: number;
   actions: ActionStrategy[];
-  ev: number;
-  equity: number;
+  ev: number | null;
+  equity: number | null;
 }
 export interface ClassRow {
   class: string;
   combos: number;
   actions: ActionStrategy[];
   combos_data?: ComboStrategy[];
+  ev?: number | null;
 }
 export interface NodeStrategy {
   title: string;
   actions: string[];
   rows: ClassRow[];
+}
+export type SolverPlayer = 'oop' | 'ip';
+
+export interface SolverTreeNode {
+  id: number;
+  kind: 'decision' | 'terminal';
+  player: SolverPlayer | null;
+  pot: number;
+  stacks: [number, number];
+  committed: [number, number];
+  to_call: number;
+  reach_probability: number;
+  children: number[];
+  strategy: NodeStrategy | null;
+  reason: 'fold' | 'showdown' | null;
+  winner: SolverPlayer | null;
+}
+
+export interface SolverActionTree {
+  root: number;
+  max_raises: number;
+  nodes: SolverTreeNode[];
 }
 export interface SolverResult {
   algorithm: SolverAlgorithm;
@@ -54,6 +77,7 @@ export interface SolverResult {
   truncated: boolean;
   oop: NodeStrategy;
   ip: NodeStrategy;
+  action_tree?: SolverActionTree;
   exploitability_history: number[];
   error?: string;
 }

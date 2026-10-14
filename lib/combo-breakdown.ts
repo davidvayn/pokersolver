@@ -87,8 +87,8 @@ export interface FormattedCombo {
   blockedCards: Card[];
   weight: number;
   actions: ActionStrategy[];
-  ev: number;
-  equity: number;
+  ev: number | null;
+  equity: number | null;
   hasData: boolean;
 }
 
@@ -100,7 +100,7 @@ export interface HandClassBreakdown {
   totalCombos: number;
   activeCombos: number;
   blockedCombos: number;
-  classEv?: number;
+  classEv?: number | null;
   classActions: ActionStrategy[];
   combos: FormattedCombo[];
 }
@@ -175,20 +175,19 @@ export function buildHandClassBreakdown(
 
     let weight = 0;
     let actions: ActionStrategy[] = [];
-    let ev = 0;
-    let equity = 0;
+    let ev: number | null = null;
+    let equity: number | null = null;
 
     if (matched) {
       weight = matched.weight;
       actions = matched.actions;
       ev = matched.ev;
       equity = matched.equity;
-    } else if (!isBlocked && row?.actions) {
+    } else if (!isBlocked && row?.actions && row.combos_data === undefined) {
       // Fallback when solver data is at class level only
       weight = 1;
       actions = row.actions;
-      ev = row.actions[0]?.ev ?? 0;
-      equity = 0.5;
+      ev = row.ev === undefined ? row.actions[0]?.ev ?? null : row.ev;
     }
 
     if (isBlocked) {
@@ -226,7 +225,7 @@ export function buildHandClassBreakdown(
     totalCombos: possibleCombos.length,
     activeCombos: activeCombosCount,
     blockedCombos: blockedCombosCount,
-    classEv: row?.actions[0]?.ev,
+    classEv: row?.ev === undefined ? row?.actions[0]?.ev : row.ev,
     classActions: row?.actions ?? [],
     combos,
   };

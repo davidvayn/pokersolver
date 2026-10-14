@@ -659,6 +659,7 @@ mod tests {
             last_full_raise_bb: 1.0,
             raise_reopened: true,
             actions,
+            include_range_strategy: false,
         };
         let state = replay_practice_query(&query, &engine.config.game).unwrap();
         query.actor = state.actor;

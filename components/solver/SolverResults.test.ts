@@ -8,6 +8,35 @@ import {
 import type { NodeStrategy, SolverResult } from '@/lib/solver/client';
 
 describe('StrategyView hand inspection', () => {
+  it('retains a neutral combo pane for a completed negligible-reach line without invented values', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(StrategyView, {
+      node: { title: 'IP', actions: ['Fold', 'Call'], rows: [] }, completed: true,
+    }));
+    expect(html).toContain('data-solver-combo-inspector');
+    expect(html).toContain('No supported combo values');
+    expect(html).not.toContain('aria-pressed="true"');
+  });
+
+  it('keeps the matrix and combo cards visible, with all selections cleared, at line completion', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const node: NodeStrategy = {
+      title: 'IP — facing a bet', actions: ['Fold', 'Call'],
+      rows: [{ class: 'AKs', combos: 4, actions: [
+        { action: 'Fold', freq: 0.2, ev: 2.1 },
+        { action: 'Call', freq: 0.8, ev: 2.1 },
+      ] }],
+    };
+    const html = renderToStaticMarkup(React.createElement(StrategyView, { node, completed: true }));
+    expect(html).toContain('title="AKs');
+    expect(html).toContain('Last decision · IP — facing a bet');
+    expect(html).toContain('data-solver-combo-inspector');
+    expect(html).toContain('data-deselected="true"');
+    expect(html).toContain('Last viewed');
+    expect(html).not.toContain('aria-pressed="true"');
+    expect(html).toContain('Select a hand to inspect its mix');
+  });
+
   it('keeps the matrix and settings while hiding stale results during a solve', () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const node: NodeStrategy = {

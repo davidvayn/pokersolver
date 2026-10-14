@@ -230,22 +230,35 @@ function collectStreetBets(state: HandState): HandState {
   };
 }
 
-function dealNextStreet(state: HandState): HandState {
+/** Practice draws authentic cards; range study can supply the exact next board. */
+export function advanceHandStreet(state: HandState, selectedBoard?: Card[]): HandState {
   const deck = [...state.deck];
-  draw(deck); // burn
   const board = [...state.board];
   let street: PracticeStreet;
   if (state.street === 'preflop') {
     street = 'flop';
-    board.push(draw(deck), draw(deck), draw(deck));
   } else if (state.street === 'flop') {
     street = 'turn';
-    board.push(draw(deck));
   } else if (state.street === 'turn') {
     street = 'river';
-    board.push(draw(deck));
   } else {
     throw new Error('Cannot advance past the river');
+  }
+  const count = street === 'flop' ? 3 : street === 'turn' ? 4 : 5;
+  if (selectedBoard) {
+    if (selectedBoard.length !== count || new Set(selectedBoard).size !== count ||
+        selectedBoard.some((card) => !Number.isInteger(card) || card < 0 || card >= 52) ||
+        board.some((card, index) => selectedBoard[index] !== card)) {
+      throw new Error('The next board must retain its prefix and contain unique exact cards');
+    }
+    const added = selectedBoard.slice(board.length);
+    if (added.some((card) => !deck.includes(card))) throw new Error('The selected board card is unavailable');
+    // Public range study has no observed burn cards; never invent a hidden
+    // burn that would incorrectly exclude an otherwise legal selected card.
+    for (const card of added) { deck.splice(deck.indexOf(card), 1); board.push(card); }
+  } else {
+    draw(deck); // burn in a dealt hand
+    while (board.length < count) board.push(draw(deck));
   }
   const first = otherSeat(state.button);
   return {
@@ -304,7 +317,7 @@ function awardPot(
 
 function runBoardToRiver(state: HandState): HandState {
   let next = state;
-  while (next.street !== 'river') next = dealNextStreet(next);
+  while (next.street !== 'river') next = advanceHandStreet(next);
   return next;
 }
 
@@ -337,8 +350,14 @@ function settleShowdown(state: HandState): HandState {
   };
 }
 
-function finishBettingRound(state: HandState): HandState {
+export interface HandEngineOptions {
+  /** Range study waits for public cards/review; Practice uses dealt settlement. */
+  onRoundComplete?: (collected: HandState) => HandState;
+}
+
+function finishBettingRound(state: HandState, options: HandEngineOptions): HandState {
   const collected = collectStreetBets(state);
+  if (options.onRoundComplete) return options.onRoundComplete(collected);
   if (
     collected.stacksBb['button-small-blind'] <= EPSILON ||
     collected.stacksBb['big-blind'] <= EPSILON
@@ -346,10 +365,10 @@ function finishBettingRound(state: HandState): HandState {
     return settleShowdown(collected);
   }
   if (collected.street === 'river') return settleShowdown(collected);
-  return dealNextStreet(collected);
+  return advanceHandStreet(collected);
 }
 
-export function applyAction(state: HandState, action: LegalAction): HandState {
+export function applyAction(state: HandState, action: LegalAction, options: HandEngineOptions = {}): HandState {
   if (state.cash) assertCashConservation(state);
   assertActionLegal(state, action);
   const actor = state.toAct as Seat;
@@ -426,7 +445,7 @@ export function applyAction(state: HandState, action: LegalAction): HandState {
   };
   next.actionHistory.push(publicAction);
 
-  if (next.pendingActors.length === 0) return finishBettingRound(next);
+  if (next.pendingActors.length === 0) return finishBettingRound(next, options);
   next.toAct = next.pendingActors[0];
   return next;
 }

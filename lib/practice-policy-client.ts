@@ -10,6 +10,7 @@ import {
 } from '@/lib/practice-models';
 import { HOME_GAME_RULES } from '@/lib/cash-game-rules';
 import { HOME_GAME_IDENTITY } from '@/lib/practice-game-identity';
+import { publicRangeNode } from '@/lib/solver/public-range';
 import type { NeuralPolicyResult } from '@/lib/neural-policy';
 import { neuralLegalActions } from '@/lib/neural-policy';
 import { NeuralPolicyWorkerClient } from '@/lib/neural-policy-worker-client';
@@ -200,6 +201,7 @@ export class PracticePolicyClient {
     state: HandState;
     profile: OpponentModelSnapshot;
     usage: 'grading' | 'opponent';
+    includeRangeStrategy?: boolean;
   }): Promise<NeuralPolicyResult> {
     if (input.state.cash || !isLegacyHomeManifest(input.pinned.manifest)) {
       throw new PolicyUnavailableError('Explicit cash hands require a matching rules-pinned runtime; legacy Home policies cannot grade them');
@@ -231,6 +233,7 @@ export class PracticePolicyClient {
         depthBb: input.pinned.depthBb,
         stateHash,
         state: input.state,
+        ...(input.includeRangeStrategy ? { includeRangeStrategy: true } : {}),
       });
       const sendQuery = () =>
         this.fetcher(runtime.endpoint, {
@@ -279,6 +282,7 @@ export class PracticePolicyClient {
         valueNetworkSha256?: unknown;
         preflopActionValuesSha256?: unknown;
         actions?: unknown;
+        rangeStrategy?: unknown;
       };
       if (
         body.stateHash !== stateHash ||
@@ -364,6 +368,7 @@ export class PracticePolicyClient {
         null
       );
       return {
+        ...(input.includeRangeStrategy ? { rangeStrategy: publicRangeNode(body.rangeStrategy, input.state, legal) } : {}),
         node: {
           stateHash,
           actions,

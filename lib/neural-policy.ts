@@ -7,6 +7,7 @@ import {
 } from '@/lib/practice-engine';
 import { OPPONENT_PROFILE_FEATURE_COUNT } from '@/lib/opponent-model';
 import { assertCashConservation, quantizeCashSizingBb } from '@/lib/practice-cash';
+import type { NodeStrategy } from '@/lib/solver/client';
 import type {
   ActionAbstraction,
   ActionKind,
@@ -117,6 +118,7 @@ export interface NeuralPolicyArtifact {
 export interface NeuralPolicyResult {
   node: PolicyNode;
   trace: OpponentPolicyTrace | null;
+  rangeStrategy?: NodeStrategy;
 }
 
 function roundMoney(value: number): number {

@@ -60,6 +60,19 @@ describe('practice continual-resolver POST route', () => {
     expect(maxDuration).toBe(60);
   });
 
+  it('uses the same pinned process for optional study ranges and fails closed if the range is missing', async () => {
+    const state = createHand({ modelVersion: 'resolver-v1', depthBb: 20,
+      button: 'button-small-blind', hero: 'button-small-blind' });
+    const request = () => new Request('http://localhost/api/practice/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelVersion: 'resolver-v1', depthBb: 20, stateHash, state, includeRangeStrategy: true }),
+    });
+    expect((await POST(request())).status).toBe(503);
+    mocks.query.mockResolvedValue({ ...resolverResponse(), rangeStrategy: { schema: 'hu-public-range-strategy-v1', combos: [] } });
+    expect((await POST(request())).status).toBe(200);
+    expect(mocks.query.mock.calls.at(-1)![0].includeRangeStrategy).toBe(true);
+  });
+
   it('rejects a cash ledger before invoking the Home resolver even with a Home version', async () => {
     const state = createHand({ modelVersion: 'resolver-v1', depthBb: 20,
       button: 'button-small-blind', hero: 'button-small-blind', cashRules: NL25_STUDY_RULES });

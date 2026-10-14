@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   HandMatrix,
@@ -19,7 +19,7 @@ import type {
 const BET_RAMP = ['#f59e0b', '#f97316', '#dc2626'];
 const RAISE_RAMP = ['#a855f7', '#7c3aed'];
 
-function colorForActions(labels: string[]): Record<string, string> {
+export function colorForActions(labels: string[]): Record<string, string> {
   const map: Record<string, string> = {};
   let betI = 0;
   let raiseI = 0;
@@ -27,6 +27,7 @@ function colorForActions(labels: string[]): Record<string, string> {
     if (l.startsWith('Fold')) map[l] = 'rgb(var(--fold))';
     else if (l.startsWith('Check')) map[l] = 'rgb(var(--check))';
     else if (l.startsWith('Call')) map[l] = 'rgb(var(--call))';
+    else if (l.startsWith('All-in')) map[l] = 'rgb(var(--allin))';
     else if (l.startsWith('Raise'))
       map[l] = RAISE_RAMP[Math.min(raiseI++, RAISE_RAMP.length - 1)];
     else if (l.startsWith('Bet'))
@@ -74,20 +75,22 @@ function handDescription(row: ClassRow): string {
   const actions = row.actions
     .map((action) => `${action.action} ${formatProbability(action.freq)}`)
     .join(', ');
-  const ev = row.actions[0]?.ev;
-  return `${actions}${ev === undefined ? '' : `, hand-class EV ${ev.toFixed(2)}bb`}`;
+  const ev = row.ev === undefined ? row.actions[0]?.ev : row.ev;
+  return `${actions}${ev == null ? '' : `, hand-class EV ${ev.toFixed(2)}bb`}`;
 }
 
 function HandMixReadout({
   label,
   actions,
   colors,
+  policyEv,
 }: {
   label: string | null;
   actions: ActionStrategy[];
   colors: Record<string, string>;
+  policyEv?: number | null;
 }) {
-  const ev = actions[0]?.ev;
+  const ev = policyEv === undefined ? actions[0]?.ev : policyEv;
 
   return (
     <div
@@ -118,7 +121,7 @@ function HandMixReadout({
               </span>
             </span>
           ))}
-          {ev !== undefined && (
+          {ev != null && (
             <span className="whitespace-nowrap text-muted">
               EV{' '}
               <strong className="font-mono font-semibold tabular-nums text-fg">
@@ -142,6 +145,7 @@ export function StrategyView({
   matrixClassName = '',
   settings,
   pending = false,
+  completed = false,
 }: {
   node: NodeStrategy;
   board?: Card[];
@@ -150,9 +154,16 @@ export function StrategyView({
   matrixClassName?: string;
   settings?: ReactNode;
   pending?: boolean;
+  completed?: boolean;
 }) {
-  const [selectedHand, setSelectedHand] = useState<string | null>(null);
-  const [previewHand, setPreviewHand] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{
+    completed: boolean;
+    hand: string | null;
+    preview: string | null;
+  }>({ completed, hand: null, preview: null });
+  const selectedHand = selection.completed === completed ? selection.hand : null;
+  const previewHand = selection.completed === completed ? selection.preview : null;
+  const lastInspectedHand = useRef<string | undefined>(undefined);
   const [showMetrics, setShowMetrics] = useState(false);
   const colors = useMemo(() => colorForActions(node.actions), [node.actions]);
   const strategy = useMemo(() => toStrategy(node, colors), [node, colors]);
@@ -171,28 +182,39 @@ export function StrategyView({
   }, [rowsByClass]);
   const activeHand = pending
     ? undefined
-    : (selectedHand ?? previewHand ?? firstHand);
+    : (selectedHand ?? previewHand ?? (completed ? undefined : firstHand));
+  const rememberedHand = lastInspectedHand.current;
+  const inspectedHand = activeHand ?? (!pending && completed
+    ? rememberedHand && rowsByClass.has(rememberedHand) ? rememberedHand : firstHand
+    : undefined);
   const selectedRow = activeHand ? rowsByClass.get(activeHand) : undefined;
+  const metricsActive = showMetrics && (!completed || Boolean(activeHand));
   const annotation = useMemo(() => {
     const evByClass: Record<string, number> = {};
-    for (const r of node.rows) evByClass[r.class] = r.actions[0]?.ev ?? 0;
+    for (const r of node.rows) {
+      const ev = r.ev === undefined ? r.actions[0]?.ev : r.ev;
+      if (ev != null) evByClass[r.class] = ev;
+    }
     return (label: string) =>
       evByClass[label] !== undefined ? evByClass[label].toFixed(1) : undefined;
   }, [node.rows]);
 
   useEffect(() => {
-    setSelectedHand((current) =>
-      current && rowsByClass.has(current) ? current : null
-    );
-    setPreviewHand((current) =>
-      current && rowsByClass.has(current) ? current : null
-    );
-  }, [rowsByClass]);
+    setSelection((current) => ({
+      completed,
+      hand: current.completed === completed && current.hand && rowsByClass.has(current.hand) ? current.hand : null,
+      preview: current.completed === completed && current.preview && rowsByClass.has(current.preview) ? current.preview : null,
+    }));
+  }, [rowsByClass, completed]);
+
+  useEffect(() => {
+    if (activeHand) lastInspectedHand.current = activeHand;
+  }, [activeHand]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setSelectedHand(null);
+        setSelection((current) => ({ ...current, hand: null, preview: null }));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -202,6 +224,7 @@ export function StrategyView({
   return (
     <div
       aria-busy={pending}
+      data-solver-line-completed={completed}
       className={
         framed
           ? `rounded-lg border border-border bg-surface ${compact ? 'p-3' : 'p-4'}`
@@ -217,12 +240,12 @@ export function StrategyView({
             data-solver-strategy-heading
             className={`${compact ? 'mb-2' : 'mb-3'} flex items-center justify-between gap-3`}
           >
-            <div className="shrink-0 text-xs text-muted">{node.title}</div>
+            <div className="shrink-0 text-xs text-muted">{completed ? `Last decision · ${node.title}` : node.title}</div>
             <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs">
               <button
                 type="button"
-                disabled={pending}
-                aria-pressed={showMetrics}
+                disabled={pending || (completed && !activeHand)}
+                aria-pressed={metricsActive}
                 onClick={() => setShowMetrics((shown) => !shown)}
                 className="min-h-9 text-muted underline-offset-4 hover:text-fg aria-pressed:text-accent aria-pressed:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
@@ -243,7 +266,7 @@ export function StrategyView({
           <HandMatrix
             mode="display"
             strategy={pending ? {} : strategy}
-            annotation={!pending && showMetrics ? annotation : undefined}
+            annotation={!pending && metricsActive ? annotation : undefined}
             selectedLabel={activeHand}
             squareCells
             cellDescription={
@@ -254,15 +277,19 @@ export function StrategyView({
                     return row ? handDescription(row) : 'Not in solved range';
                   }
             }
-            onCellPreview={pending ? undefined : setPreviewHand}
+            onCellPreview={pending ? undefined : (label) => setSelection((current) => ({
+              completed,
+              hand: current.completed === completed ? current.hand : null,
+              preview: label,
+            }))}
             onCellClick={
               pending
                 ? undefined
                 : (label) => {
-                    setPreviewHand(label);
-                    setSelectedHand((current) =>
-                      current === label ? null : label
-                    );
+                    setSelection((current) => ({
+                      completed, preview: label,
+                      hand: current.completed === completed && current.hand === label ? null : label,
+                    }));
                   }
             }
           />
@@ -272,21 +299,29 @@ export function StrategyView({
                 label={selectedRow?.class ?? activeHand ?? null}
                 actions={selectedRow?.actions ?? []}
                 colors={colors}
+                policyEv={selectedRow?.ev}
               />
             )}
           </div>
         </div>
-        {activeHand && (
+        {inspectedHand ? (
           <ComboInspector
-            key={activeHand}
-            label={activeHand}
-            row={selectedRow}
+            key={inspectedHand}
+            label={inspectedHand}
+            row={rowsByClass.get(inspectedHand)}
             board={board}
             colors={colors}
-            showMetrics={showMetrics}
+            showMetrics={metricsActive}
+            deselected={completed && !activeHand}
             className="solver-strategy-combos"
           />
-        )}
+        ) : completed && !pending ? (
+          <aside data-solver-combo-inspector data-deselected="true"
+            aria-label="Combination details" className="solver-strategy-combos min-h-64 text-sm text-muted">
+            <p className="border-b border-border pb-2 font-semibold">Combination details</p>
+            <p className="py-4 text-xs">No supported combo values for this last decision.</p>
+          </aside>
+        ) : null}
       </div>
       {!compact && (
         <p className="mt-2 text-[11px] text-muted">

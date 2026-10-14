@@ -57,6 +57,58 @@ main:has([data-solver-workspace]) {
   grid-area: combos;
 }
 
+.solver-decision-rail {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 2px 2px 8px;
+  scroll-padding-inline: 8px;
+}
+
+.solver-decision-card {
+  flex: 0 0 180px;
+  overflow: hidden;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 6px;
+  background: rgb(var(--surface));
+}
+
+.solver-decision-option {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  border-left: 3px solid var(--solver-action-color);
+  border-radius: 3px;
+  padding: 4px 6px;
+  color: rgb(var(--fg));
+  font-size: 12px;
+  text-align: left;
+  transition: background-color 150ms ease;
+}
+
+.solver-decision-option:hover:not(:disabled) {
+  background: rgb(var(--surface-2));
+}
+
+.solver-decision-option[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--solver-action-color) 18%, rgb(var(--surface)));
+  font-weight: 700;
+}
+
+.solver-decision-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+@media (max-width: 767px) {
+  .solver-decision-option {
+    min-height: 44px;
+  }
+}
+
 .solver-board > .relative {
   position: static;
 }
@@ -93,6 +145,10 @@ main:has([data-solver-workspace]) {
   .solver-workspace-matrix {
     width: 100%;
     max-width: 100%;
+  }
+
+  .solver-workspace:has(.solver-decision-rail) .solver-strategy-layout {
+    grid-template-columns: minmax(0, min(56%, max(380px, calc(100dvh - 440px)))) minmax(0, 1fr);
   }
 
   .solver-settings [aria-label='Pick a card'] {

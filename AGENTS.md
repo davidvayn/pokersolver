@@ -7,9 +7,10 @@ This repository is a local Texas Hold'em study application built with Next.js
 user-facing areas:
 
 - `app/preflop/`: bundled heads-up, 6-max, and 9-max preflop charts.
-- `app/practice/`: configurable preflop decision drills.
+- `app/practice/`: heads-up cash hands and configurable decision drills.
 - `app/stats/`: local practice-history analysis and weakness reporting.
-- `app/solver/`: single-street postflop CFR+ solver run in a browser worker.
+- `app/solver/`: public-range study using the same multi-street engine and
+  pinned native policy runtime as Practice.
 - `app/settings/` and `app/api/ai/analyze/`: client-side AI settings and the
   edge route that proxies streaming requests to Anthropic or OpenAI.
 
@@ -31,14 +32,18 @@ Use the `@/` TypeScript path alias for repository-root imports.
   practice questions. Keep format metadata and action ranges valid and
   disjoint. Practice history and opponent evidence are client-only IndexedDB
   data managed through `lib/practice-history.ts`.
-- Browser work must stay off the main thread. `lib/equity/client.ts` /
-  `worker.ts` and `lib/solver/client.ts` / `worker.ts` are paired transport
-  layers. Serialize `Map`s as entry arrays across worker messages; do not pass
-  browser-only APIs into server components.
-- The solver accepts serialized combo triples in `lib/solver/client.ts` and
-  JSON in `wasm/src/lib.rs`. Coordinate schema changes on both sides. The
-  current model is a one-street all-in-equity simplification, not a full
-  multi-street poker engine.
+- Poker computation stays off the browser main thread. Equity uses
+  `lib/equity/client.ts` / `worker.ts`; live Solver and Practice use
+  `lib/practice-policy-client.ts` and the server-side Rust resolver.
+- Shared hand rules live in `lib/practice-engine.ts`; modeled actions come
+  from the pinned manifest via `neuralLegalActions`. Solver's public-range
+  controller is `lib/solver/study-engine.ts`. Coordinate resolver payload
+  changes across the client, API route, and `preflop-solver/src/blueprint/neural.rs`.
+- The legacy `lib/solver/client.ts` / `worker.ts` and `wasm/src/lib.rs` still
+  implement a one-street all-in-equity abstraction. They are not the live
+  Solver route. Their combo-triple/JSON interface remains covered by tests.
+- New action grids require matching training and validation. Preserve frozen
+  policy identities; unavailable depths and missing policy values fail closed.
 - The AI API route is Edge Runtime. API keys originate in browser `localStorage`
   and are forwarded only for the request. Do not persist, log, or expose them.
 - `next.config.js` sets COOP/COEP headers needed by the WASM/worker setup.

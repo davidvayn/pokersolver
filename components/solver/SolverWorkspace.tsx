@@ -6,6 +6,7 @@ import { AiPanel } from '@/components/ai/AiPanel';
 import { GeminiMark } from '@/components/ai/GeminiMark';
 import { CardSlots } from '@/components/board/CardPicker';
 import { RangeEditor } from '@/components/range/RangeEditor';
+import { SolverLineNavigator } from '@/components/solver/SolverLineNavigator';
 import {
   SolverNerdStats,
   StrategyView,
@@ -18,6 +19,7 @@ import {
 } from '@/lib/cards';
 import type { SpotContext } from '@/lib/ai/prompt';
 import type { NodeStrategy, SolverResult } from '@/lib/solver/client';
+import { reconcileSolverNavigation, selectSolverLine, strategyNodeForLine, type SolverNavigation } from '@/lib/solver/tree';
 
 type Player = 'oop' | 'ip';
 
@@ -124,7 +126,7 @@ function CompactField({
       htmlFor={id}
       className="flex min-h-11 min-w-0 flex-col justify-center gap-1 border-b border-border focus-within:border-accent"
     >
-      <span className="shrink-0 whitespace-nowrap text-xs font-medium text-muted">
+      <span className="text-xs font-medium text-muted">
         {label}
       </span>
       <span className="flex min-w-0 items-baseline gap-1">
@@ -164,14 +166,14 @@ function BoardControls({ context }: { context: WorkspaceContext }) {
         </div>
         <div className="grid min-w-0 flex-1 basis-[340px] grid-cols-4 gap-x-3">
           <CompactField
-            label="Pot"
+            label="Starting pot"
             unit="bb"
             value={context.pot}
             number
             onChange={(value) => context.onPotChange(parseFloat(value) || 0)}
           />
           <CompactField
-            label="Stack"
+            label="Starting stack"
             unit="bb"
             value={context.stack}
             number
@@ -286,6 +288,7 @@ const EMPTY_NODES: Record<Player, NodeStrategy> = {
 };
 
 function StrategySurface({ context }: { context: WorkspaceContext }) {
+  const [navigation, setNavigation] = useState<SolverNavigation>({ tree: null, path: [] });
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const analysisTrigger = useRef<HTMLButtonElement>(null);
   const analysisPanel = useRef<HTMLElement>(null);
@@ -302,32 +305,81 @@ function StrategySurface({ context }: { context: WorkspaceContext }) {
     setAnalysisOpen(false);
     analysisTrigger.current?.focus();
   }
-  const node =
-    context.result && !context.result.error
+  const resultTree = context.result && !context.result.error
+    ? context.result.action_tree ?? null : null;
+  const { tree, path } = reconcileSolverNavigation(navigation, resultTree);
+  const unavailableLine = Boolean(context.result && !context.result.error && tree && tree !== resultTree);
+  useEffect(() => {
+    setNavigation((current) => reconcileSolverNavigation(current, resultTree));
+  }, [resultTree]);
+  const selected = tree ? selectSolverLine(tree, path) : null;
+  const completed = selected?.node.kind === 'terminal';
+  const displayNode = tree && selected ? strategyNodeForLine(tree, selected) : null;
+  const node = tree
+    ? displayNode?.strategy ?? EMPTY_NODES[displayNode?.player ?? 'oop']
+    : context.result && !context.result.error
       ? context.strategyTab === 'oop'
         ? context.result.oop
         : context.result.ip
       : EMPTY_NODES[context.strategyTab];
   const pending =
-    context.running || !context.result || Boolean(context.result.error);
+    context.running || !context.result || Boolean(context.result.error) || unavailableLine;
   const solving = !context.missing && !context.solverError && !context.result?.error &&
     (context.running || !context.result);
+  const settings = <BoardControls context={context} />;
+
+  function getAnalysisSpot(): SpotContext | null {
+    if (pending) return null;
+    const original = context.getAnalysisSpot();
+    if (!original || !selected) return original;
+    const current = selected.node;
+    return {
+      ...original,
+      description: `${original.description} Input ranges are the original street ranges; the displayed strategy is conditioned on the selected betting line${completed ? ' immediately before its final action; the line is now complete' : ''}. EV is net value from the original spot.`,
+      hero: current.player?.toUpperCase() ?? 'OOP',
+      villain: current.player === 'ip' ? 'OOP' : 'IP',
+      potBB: current.pot,
+      stackBB: Math.min(...current.stacks),
+      solver: {
+        truncated: Boolean(context.result?.truncated),
+        nodes: displayNode?.strategy ? [displayNode.strategy] : [],
+      },
+      extra: {
+        ...original.extra,
+        'Selected betting line': selected.steps.map((step) => `${step.player.toUpperCase()} ${step.label}`).join(' → ') || 'Start',
+        'OOP remaining stack': `${current.stacks[0]}bb`,
+        'IP remaining stack': `${current.stacks[1]}bb`,
+        'Node status': current.kind === 'decision' ? 'decision' : `${current.reason} leaf`,
+      },
+    };
+  }
 
   return (
     <section
       aria-label="Solved strategy"
       className="flex min-w-0 flex-col gap-3"
     >
+      {tree && <SolverLineNavigator tree={tree} path={path} pending={pending && !unavailableLine}
+        onPathChange={(next) => setNavigation(reconcileSolverNavigation({
+          tree: !next.length && context.result && !context.result.error ? resultTree : tree,
+          path: next,
+        }, resultTree))} />}
+      {unavailableLine && <p role="alert" className="text-xs text-muted">
+        This saved line is not modeled with the current settings. Your actions are preserved;
+        change an earlier action or use Start to reset the betting line. Strategy values are hidden.
+      </p>}
       <div className="relative flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1">
         <div className="min-w-0">
-          <PlayerTabs
+          {tree ? <p className="py-3 text-xs font-semibold uppercase text-muted">
+            {completed ? `Last decision · ${displayNode?.player?.toUpperCase() ?? ''}` : `${selected?.node.player?.toUpperCase() ?? 'OOP'} strategy`}
+          </p> : <PlayerTabs
             value={context.strategyTab}
             onChange={(player) => {
               context.setStrategyTab(player);
               context.setRangeOpen(false);
             }}
             suffix=" strategy"
-          />
+          />}
         </div>
         <div className="order-3 basis-full sm:order-none sm:ml-auto sm:basis-auto">
           <RangeSummaries context={context} />
@@ -367,21 +419,22 @@ function StrategySurface({ context }: { context: WorkspaceContext }) {
         }}
       >
         <AiPanel
-          getSpot={context.getAnalysisSpot}
+          getSpot={getAnalysisSpot}
           embedded
           onClose={closeAnalysis}
         />
       </aside>
       <div className="flex min-w-0 flex-col">
         <StrategyView
-          key={context.strategyTab}
+          key={tree ? 'betting-tree' : context.strategyTab}
           node={node}
           board={context.board}
           framed={false}
           compact
           matrixClassName="solver-workspace-matrix"
-          settings={<BoardControls context={context} />}
+          settings={settings}
           pending={pending}
+          completed={completed}
         />
         {!pending && context.result?.truncated && (
           <span className="mt-1 text-center text-[10px] font-medium uppercase text-muted">
@@ -460,6 +513,7 @@ function RangeSummaries({ context }: { context: WorkspaceContext }) {
 }
 
 export function SolverWorkspace(props: SolverWorkspaceProps) {
+  const [resetRevision, setResetRevision] = useState(0);
   const [rangeOpen, setRangeOpen] = useState(
     () =>
       !Object.values(props.oop).some(Boolean) ||
@@ -469,6 +523,10 @@ export function SolverWorkspace(props: SolverWorkspaceProps) {
   const [strategyTab, setStrategyTab] = useState<Player>('oop');
   const context: WorkspaceContext = {
     ...props,
+    onClear: () => {
+      setResetRevision((revision) => revision + 1);
+      props.onClear();
+    },
     rangeOpen,
     setRangeOpen,
     rangeTab,
@@ -480,10 +538,10 @@ export function SolverWorkspace(props: SolverWorkspaceProps) {
   return (
     <section data-solver-workspace className="solver-workspace min-w-0 text-fg">
       <h1 className="sr-only">Postflop solver</h1>
-      <p className="text-xs leading-5 text-muted" data-solver-rules>
+      <p className="sr-only" data-solver-rules>
         Home game · Rake-free, single-street all-in-equity model. Online practice settings do not change this solver.
       </p>
-      <StrategySurface context={context} />
+      <StrategySurface key={resetRevision} context={context} />
     </section>
   );
 }

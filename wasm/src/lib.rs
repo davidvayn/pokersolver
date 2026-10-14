@@ -76,6 +76,37 @@ struct NodeStrategy {
     actions: Vec<String>,
     rows: Vec<ClassRow>,
 }
+
+#[derive(Serialize)]
+struct ActionTree {
+    root: usize,
+    max_raises: u32,
+    nodes: Vec<ActionTreeNode>,
+}
+
+#[derive(Serialize)]
+struct ActionTreeNode {
+    id: usize,
+    kind: &'static str,
+    player: Option<&'static str>,
+    pot: f64,
+    stacks: [f64; 2],
+    committed: [f64; 2],
+    to_call: f64,
+    reach_probability: f64,
+    children: Vec<usize>,
+    strategy: Option<NodeStrategy>,
+    reason: Option<&'static str>,
+    winner: Option<&'static str>,
+}
+
+fn player_label(player: usize) -> &'static str {
+    if player == 0 {
+        "oop"
+    } else {
+        "ip"
+    }
+}
 #[derive(Serialize)]
 struct CfrComparison {
     cfr_iterations: u32,
@@ -95,6 +126,7 @@ struct Output {
     truncated: bool,
     oop: NodeStrategy,
     ip: NodeStrategy,
+    action_tree: ActionTree,
     exploitability_history: Vec<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cfr_comparison: Option<CfrComparison>,
@@ -123,6 +155,7 @@ enum Node {
         player: usize,
         labels: Vec<String>,
         children: Vec<usize>,
+        state: BState,
     },
     Terminal(Terminal),
 }
@@ -273,6 +306,7 @@ impl Tree {
             player: s.to_act,
             labels,
             children,
+            state: s,
         });
         id
     }
@@ -824,16 +858,16 @@ impl Solver {
         vals.iter().zip(own_prob).map(|(v, p)| v * p).sum::<f64>() / self.joint_mass
     }
 
-    fn opponent_compatible_mass(&self, player: usize, hand: usize) -> f64 {
+    fn opponent_compatible_mass(&self, player: usize, hand: usize, reach: &[f64]) -> f64 {
         if player == 0 {
             (0..self.n_ip)
                 .filter(|opponent| self.compat[hand * self.n_ip + opponent])
-                .map(|opponent| self.ip_prob[opponent])
+                .map(|opponent| reach[opponent])
                 .sum()
         } else {
             (0..self.n_oop)
                 .filter(|opponent| self.compat[opponent * self.n_ip + hand])
-                .map(|opponent| self.oop_prob[opponent])
+                .map(|opponent| reach[opponent])
                 .sum()
         }
     }
@@ -1234,6 +1268,7 @@ fn run(input: Input) -> Result<Output, String> {
         truncated: trunc_o || trunc_i,
         oop: oop_strat,
         ip: ip_strat,
+        action_tree: export_action_tree(&solver, &final_profile, root),
         exploitability_history: history,
         cfr_comparison,
     })
@@ -1266,10 +1301,34 @@ fn node_strategy_root(
     player: usize,
     title: &str,
 ) -> NodeStrategy {
+    node_strategy(
+        solver,
+        profile,
+        node,
+        root,
+        player,
+        title,
+        &solver.oop_prob,
+        &solver.ip_prob,
+    )
+}
+
+/// Conditional strategy and range at an actual public betting history. Reaches
+/// include both players' preceding actions, with exact private-card removal.
+fn node_strategy(
+    solver: &Solver,
+    profile: &[Vec<f64>],
+    node: usize,
+    ev_node: usize,
+    player: usize,
+    title: &str,
+    oop_reach: &[f64],
+    ip_reach: &[f64],
+) -> NodeStrategy {
     let (cards, probs, n) = if player == 0 {
-        (&solver.oop_cards, &solver.oop_prob, solver.n_oop)
+        (&solver.oop_cards, oop_reach, solver.n_oop)
     } else {
-        (&solver.ip_cards, &solver.ip_prob, solver.n_ip)
+        (&solver.ip_cards, ip_reach, solver.n_ip)
     };
     let (labels, na) = match &solver.tree.nodes[node] {
         Node::Decision {
@@ -1277,34 +1336,41 @@ fn node_strategy_root(
         } => (labels.clone(), children.len()),
         _ => (vec![], 0),
     };
-    if na == 0 {
+    let joint_mass: f64 = oop_reach
+        .iter()
+        .enumerate()
+        .map(|(i, reach)| reach * solver.opponent_compatible_mass(0, i, ip_reach))
+        .sum();
+    if na == 0 || joint_mass <= 1e-15 {
         return NodeStrategy {
             title: title.into(),
-            actions: vec![],
+            actions: labels,
             rows: vec![],
         };
     }
     let avg = Solver::profile_strategy(profile, node, n, na);
-    let opp = if player == 0 {
-        &solver.ip_prob
-    } else {
-        &solver.oop_prob
-    };
-    let ev_vec = solver.evaluate_profile_value(root, player, opp, n, profile, false);
+    let opp = if player == 0 { ip_reach } else { oop_reach };
+    let ev_vec = solver.evaluate_profile_value(ev_node, player, opp, n, profile, false);
 
     use std::collections::BTreeMap;
     let mut classes: BTreeMap<String, (f64, Vec<f64>, f64, Vec<ComboStrategy>)> = BTreeMap::new();
-    let total_combos = if player == 0 { solver.oop_combos } else { solver.ip_combos };
+    let total_combos = if player == 0 {
+        solver.oop_combos
+    } else {
+        solver.ip_combos
+    };
     for i in 0..n {
         let cls = hand_class(cards[i].0, cards[i].1);
-        let entry = classes.entry(cls).or_insert((0.0, vec![0.0; na], 0.0, Vec::new()));
-        let opponent_mass = solver.opponent_compatible_mass(player, i);
-        if opponent_mass <= 1e-15 {
+        let entry = classes
+            .entry(cls)
+            .or_insert((0.0, vec![0.0; na], 0.0, Vec::new()));
+        let opponent_mass = solver.opponent_compatible_mass(player, i, opp);
+        if opponent_mass <= 1e-15 || probs[i] <= 0.0 {
             continue;
         }
         // Weight private hands by their true marginal probability after card
         // removal, rather than by the independent input range alone.
-        let w = probs[i] * opponent_mass / solver.joint_mass;
+        let w = probs[i] * opponent_mass / joint_mass;
         entry.0 += w;
         for a in 0..na {
             entry.1[a] += w * avg[i * na + a];
@@ -1318,21 +1384,25 @@ fn node_strategy_root(
         if player == 0 {
             let base = i * solver.n_ip;
             for j in 0..solver.n_ip {
-                if solver.compat[base + j] && solver.ip_prob[j] > 0.0 {
-                    eq_sum += (solver.ip_prob[j] as f64) * (solver.eq[base + j] as f64);
-                    opp_mass += solver.ip_prob[j] as f64;
+                if solver.compat[base + j] && opp[j] > 0.0 {
+                    eq_sum += opp[j] * (solver.eq[base + j] as f64);
+                    opp_mass += opp[j];
                 }
             }
         } else {
             for j in 0..solver.n_oop {
                 let idx = j * solver.n_ip + i;
-                if solver.compat[idx] && solver.oop_prob[j] > 0.0 {
-                    eq_sum += (solver.oop_prob[j] as f64) * (1.0 - solver.eq[idx] as f64);
-                    opp_mass += solver.oop_prob[j] as f64;
+                if solver.compat[idx] && opp[j] > 0.0 {
+                    eq_sum += opp[j] * (1.0 - solver.eq[idx] as f64);
+                    opp_mass += opp[j];
                 }
             }
         }
-        let equity = if opp_mass > 1e-12 { eq_sum / opp_mass } else { 0.0 };
+        let equity = if opp_mass > 1e-12 {
+            eq_sum / opp_mass
+        } else {
+            0.0
+        };
 
         let combo_actions: Vec<ActionStrategy> = (0..na)
             .map(|a| ActionStrategy {
@@ -1346,7 +1416,7 @@ fn node_strategy_root(
         entry.3.push(ComboStrategy {
             card0: cards[i].0,
             card1: cards[i].1,
-            weight: round2(input_weight),
+            weight: input_weight,
             actions: combo_actions,
             ev: round2(combo_ev),
             equity: (equity * 10000.0).round() / 10000.0,
@@ -1379,12 +1449,262 @@ fn node_strategy_root(
     }
 }
 
+/// Export the existing solved tree, not a new game or independently re-solved
+/// branches. Zero-reach histories retain legal actions but have no fabricated
+/// conditional range. IDs and child order are the solver's original IDs/order.
+fn export_action_tree(solver: &Solver, profile: &[Vec<f64>], root: usize) -> ActionTree {
+    fn visit(
+        solver: &Solver,
+        profile: &[Vec<f64>],
+        node: usize,
+        oop_reach: &[f64],
+        ip_reach: &[f64],
+        output: &mut [Option<ActionTreeNode>],
+    ) {
+        let joint_mass: f64 = oop_reach
+            .iter()
+            .enumerate()
+            .map(|(i, reach)| reach * solver.opponent_compatible_mass(0, i, ip_reach))
+            .sum();
+        let reach_probability = joint_mass / solver.joint_mass;
+        output[node] = Some(match &solver.tree.nodes[node] {
+            Node::Decision {
+                player,
+                labels,
+                children,
+                state,
+            } => {
+                let title = format!(
+                    "{} — {}",
+                    player_label(*player).to_uppercase(),
+                    if state.facing {
+                        "facing a bet"
+                    } else {
+                        "to act"
+                    }
+                );
+                let strategy = node_strategy(
+                    solver, profile, node, node, *player, &title, oop_reach, ip_reach,
+                );
+                let own = if *player == 0 { oop_reach } else { ip_reach };
+                let avg = Solver::profile_strategy(profile, node, own.len(), labels.len());
+                for (action, child) in children.iter().enumerate() {
+                    let child_reach: Vec<f64> = own
+                        .iter()
+                        .enumerate()
+                        .map(|(hand, reach)| reach * avg[hand * labels.len() + action])
+                        .collect();
+                    if *player == 0 {
+                        visit(solver, profile, *child, &child_reach, ip_reach, output);
+                    } else {
+                        visit(solver, profile, *child, oop_reach, &child_reach, output);
+                    }
+                }
+                let paid = [state.oop_paid, state.ip_paid];
+                ActionTreeNode {
+                    id: node,
+                    kind: "decision",
+                    player: Some(player_label(*player)),
+                    pot: state.dead_pot + state.oop_paid + state.ip_paid,
+                    stacks: paid.map(|value| (solver.tree.stack - value).max(0.0)),
+                    committed: paid,
+                    to_call: (paid[1 - player] - paid[*player]).max(0.0),
+                    reach_probability,
+                    children: children.clone(),
+                    strategy: Some(strategy),
+                    reason: None,
+                    winner: None,
+                }
+            }
+            Node::Terminal(terminal) => {
+                let (reason, winner) = match terminal.kind {
+                    TermKind::Showdown => ("showdown", None),
+                    TermKind::Fold(player) => ("fold", Some(player_label(1 - player))),
+                };
+                let paid = [terminal.oop_paid, terminal.ip_paid];
+                ActionTreeNode {
+                    id: node,
+                    kind: "terminal",
+                    player: None,
+                    pot: terminal.dead_pot + terminal.oop_paid + terminal.ip_paid,
+                    stacks: paid.map(|value| (solver.tree.stack - value).max(0.0)),
+                    committed: paid,
+                    to_call: 0.0,
+                    reach_probability,
+                    children: Vec::new(),
+                    strategy: None,
+                    reason: Some(reason),
+                    winner,
+                }
+            }
+        });
+    }
+    let mut nodes: Vec<Option<ActionTreeNode>> =
+        (0..solver.tree.nodes.len()).map(|_| None).collect();
+    visit(
+        solver,
+        profile,
+        root,
+        &solver.oop_prob,
+        &solver.ip_prob,
+        &mut nodes,
+    );
+    ActionTree {
+        root,
+        max_raises: MAX_RAISES,
+        nodes: nodes
+            .into_iter()
+            .map(|node| node.expect("reachable tree node"))
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn card(r: u8, s: u8) -> u8 {
         r * 4 + s
+    }
+
+    fn export_fixture() -> (Solver, usize, Vec<Vec<f64>>) {
+        let mut tree = Tree {
+            nodes: Vec::new(),
+            bet_sizes: vec![0.5],
+            raise_sizes: vec![0.1],
+            stack: 100.0,
+        };
+        let root = tree.build(BState {
+            to_act: 0,
+            dead_pot: 6.0,
+            oop_paid: 0.0,
+            ip_paid: 0.0,
+            facing: false,
+            raises: 0,
+            prev_check: false,
+        });
+        let strategy: Vec<Vec<f64>> = tree
+            .nodes
+            .iter()
+            .map(|node| match node {
+                Node::Decision { children, .. } => vec![1.0; 2 * children.len()],
+                _ => Vec::new(),
+            })
+            .collect();
+        let solver = Solver {
+            tree,
+            n_oop: 2,
+            n_ip: 2,
+            oop_cards: vec![(48, 49), (44, 45)],
+            ip_cards: vec![(48, 40), (36, 37)],
+            oop_prob: vec![0.5, 0.5],
+            ip_prob: vec![0.5, 0.5],
+            oop_combos: 2.0,
+            ip_combos: 2.0,
+            eq: vec![0.0, 0.8, 0.7, 0.6],
+            compat: vec![false, true, true, true],
+            joint_mass: 0.75,
+            regret: strategy
+                .iter()
+                .map(|values| vec![0.0; values.len()])
+                .collect(),
+            strat_sum: strategy,
+        };
+        let mut profile = solver.average_profile();
+        // AA checks, KK bets. Later nodes have a uniform average policy.
+        profile[root] = vec![1.0, 0.0, 0.0, 1.0];
+        (solver, root, profile)
+    }
+
+    #[test]
+    fn exports_every_action_with_accounting_and_parent_child_reach() {
+        let (solver, root, profile) = export_fixture();
+        let export = export_action_tree(&solver, &profile, root);
+        assert_eq!(export.nodes.len(), solver.tree.nodes.len());
+        assert!((export.nodes[root].reach_probability - 1.0).abs() < 1e-12);
+        for (id, node) in export.nodes.iter().enumerate() {
+            assert_eq!(node.id, id);
+            assert!((node.pot + node.stacks.iter().sum::<f64>() - 206.0).abs() < 1e-9);
+            for player in 0..2 {
+                assert!((node.stacks[player] + node.committed[player] - 100.0).abs() < 1e-9);
+            }
+            if let Some(strategy) = &node.strategy {
+                assert_eq!(node.children.len(), strategy.actions.len());
+                let child_mass: f64 = node
+                    .children
+                    .iter()
+                    .map(|child| export.nodes[*child].reach_probability)
+                    .sum();
+                assert!((child_mass - node.reach_probability).abs() < 1e-12);
+                for row in &strategy.rows {
+                    assert!(
+                        (row.actions.iter().map(|action| action.freq).sum::<f64>() - 1.0).abs()
+                            < 1e-9
+                    );
+                    assert!(row.actions.iter().all(|action| action.ev.is_finite()));
+                }
+            } else {
+                assert!(node.children.is_empty());
+                assert!(node.reason.is_some());
+            }
+        }
+        // Follow the modeled bet plus all three raises. No fourth raise is
+        // manufactured by the exporter, and every final response is retained.
+        let mut id = export.nodes[root].children[1];
+        for _ in 0..MAX_RAISES {
+            let node = &export.nodes[id];
+            assert_eq!(
+                node.strategy.as_ref().unwrap().actions,
+                vec!["Fold", "Call", "Raise 10%"]
+            );
+            id = node.children[2];
+        }
+        assert_eq!(
+            export.nodes[id].strategy.as_ref().unwrap().actions,
+            vec!["Fold", "Call"]
+        );
+    }
+
+    #[test]
+    fn exported_ranges_and_values_condition_on_actions_and_card_removal() {
+        let (solver, root, profile) = export_fixture();
+        let export = export_action_tree(&solver, &profile, root);
+        let after_check = &export.nodes[export.nodes[root].children[0]];
+        let rows = &after_check.strategy.as_ref().unwrap().rows;
+        // OOP checked only AA. IP's AsQc collides, so only JJ can reach.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].class, "JJ");
+        assert!((rows[0].combos - 1.0).abs() < 1e-12);
+        assert!((rows[0].combos_data[0].equity - 0.2).abs() < 1e-4);
+        assert!((after_check.reach_probability - 1.0 / 3.0).abs() < 1e-12);
+        let values =
+            solver.evaluate_profile_value(after_check.id, 1, &[0.5, 0.0], 2, &profile, false);
+        assert!((rows[0].actions[0].ev - values[1] / 0.5).abs() < 1e-9);
+        let after_bet = &export.nodes[export.nodes[root].children[1]];
+        assert!((after_bet.pot - 9.0).abs() < 1e-9);
+        assert!((after_bet.to_call - 3.0).abs() < 1e-9);
+        assert!((after_bet.reach_probability - 2.0 / 3.0).abs() < 1e-12);
+        let raise = &export.nodes[after_bet.children[2]];
+        let raised_rows = &raise.strategy.as_ref().unwrap().rows;
+        assert_eq!(raised_rows.len(), 1);
+        assert_eq!(raised_rows[0].class, "KK");
+    }
+
+    #[test]
+    fn zero_reach_nodes_keep_modeled_actions_without_inventing_ranges() {
+        let (solver, root, mut profile) = export_fixture();
+        profile[root] = vec![1.0, 0.0, 1.0, 0.0];
+        let export = export_action_tree(&solver, &profile, root);
+        let bet = &export.nodes[export.nodes[root].children[1]];
+        assert_eq!(bet.reach_probability, 0.0);
+        let strategy = bet.strategy.as_ref().unwrap();
+        assert!(strategy.rows.is_empty());
+        assert_eq!(strategy.actions, vec!["Fold", "Call", "Raise 10%"]);
+        assert_eq!(bet.children.len(), 3);
+        assert!(bet
+            .children
+            .iter()
+            .all(|id| export.nodes[*id].reach_probability == 0.0));
     }
 
     #[test]

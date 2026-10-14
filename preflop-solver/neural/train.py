@@ -98,10 +98,16 @@ class RunConfig:
     exact_turn_rivers: bool
     compact_serving_grid: bool
     cash_profile: str | None = None
+    action_abstraction_json: str | None = None
+    sampler_sha256: str | None = None
 
 
 def run_config_payload(config: RunConfig) -> dict:
     payload = asdict(config)
+    if config.action_abstraction_json is None:
+        payload.pop("action_abstraction_json")  # Preserve existing run identities.
+    if config.sampler_sha256 is None:
+        payload.pop("sampler_sha256")
     if config.cash_profile is None:
         payload.pop("cash_profile")  # Preserve legacy Home hashes and resumes.
     else:
@@ -1581,6 +1587,10 @@ def migrate_legacy_resume_state(
     legacy_config.setdefault("value_rollouts_per_action", 1)
     if legacy_config.get("cash_profile") is None:
         legacy_config.pop("cash_profile", None)
+    if legacy_config.get("action_abstraction_json") is None:
+        legacy_config.pop("action_abstraction_json", None)
+    if legacy_config.get("sampler_sha256") is None:
+        legacy_config.pop("sampler_sha256", None)
     expected_config = json.loads(json.dumps(run_config_payload(config)))
     if legacy_config != expected_config:
         raise RuntimeError("resume configuration differs from the existing neural run")
@@ -1838,6 +1848,8 @@ def generate_shard(
         command.append("--sample-turn-rivers")
     if config.compact_serving_grid:
         command.append("--compact-serving-grid")
+    if config.action_abstraction_json is not None:
+        command.extend(("--action-abstraction-json", config.action_abstraction_json))
     if config.cash_profile: command.extend(("--cash-profile", config.cash_profile))
     if traversal_networks is not None:
         command.extend(("--networks", str(traversal_networks)))
@@ -1923,6 +1935,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--sample-turn-rivers", action="store_true")
     parser.add_argument("--compact-serving-grid", action="store_true")
+    parser.add_argument("--action-abstraction-json", help="pin an explicit Rust action grid for every sampled round")
+    parser.add_argument("--sampler-binary", type=Path, help="use a frozen prebuilt sampler instead of rebuilding")
+    parser.add_argument("--sampler-sha256", help="required SHA-256 for --sampler-binary; pinned in the run identity")
     parser.add_argument("--cash-profile", choices=("nl25", "nl25-rake-off-control"),
         help="inactive own-payoff weights; requires --variance-baseline-scale 0")
     parser.add_argument("--keep-shards", action="store_true")
@@ -1935,6 +1950,19 @@ def main() -> None:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
     args = parse_args()
+    if (args.sampler_binary is None) != (args.sampler_sha256 is None):
+        raise ValueError("a frozen sampler requires both its binary and SHA-256")
+    if args.sampler_binary is not None:
+        args.sampler_binary = args.sampler_binary.resolve()
+        if not os.access(args.sampler_binary, os.X_OK) or hashlib.sha256(args.sampler_binary.read_bytes()).hexdigest() != args.sampler_sha256:
+            raise ValueError("frozen sampler identity or executable permissions differ")
+    if args.action_abstraction_json is not None:
+        if args.compact_serving_grid:
+            raise ValueError("choose only one action abstraction input")
+        abstraction = json.loads(args.action_abstraction_json)
+        if not isinstance(abstraction, dict):
+            raise ValueError("action abstraction must be a JSON object")
+        args.action_abstraction_json = json.dumps(abstraction, sort_keys=True, separators=(",", ":"), allow_nan=False)
     street_proposal = (
         None
         if args.replay_street_proposal == "authentic"
@@ -2008,6 +2036,8 @@ def main() -> None:
         exact_turn_rivers=not args.sample_turn_rivers,
         compact_serving_grid=args.compact_serving_grid,
         cash_profile=args.cash_profile,
+        action_abstraction_json=args.action_abstraction_json,
+        sampler_sha256=args.sampler_sha256,
     )
     validate_training_profile(config.cash_profile, config.depth_bb, config.variance_baseline_scale)
     root = Path(__file__).resolve().parents[2]
@@ -2085,7 +2115,7 @@ def main() -> None:
     if state.get("numpy_rng_state") is not None:
         np_rng.bit_generator.state = state["numpy_rng_state"]
 
-    binary = build_rust(root)
+    binary = args.sampler_binary if args.sampler_binary is not None else build_rust(root)
     traversal_networks = (
         run_dir / state["checkpoint"] / "traversal-networks.json"
         if state.get("checkpoint")
@@ -2127,6 +2157,8 @@ def main() -> None:
         if metadata["sampling_mode"] != "external_sampling":
             raise RuntimeError("training requires external-sampling traversal shards")
         action_abstraction = metadata["action_abstraction"]
+        if config.action_abstraction_json is not None and action_abstraction != json.loads(config.action_abstraction_json):
+            raise RuntimeError("sample shard action grid differs from the pinned training run")
         for name in ("advantage_p0", "advantage_p1"):
             reservoir = reservoirs[name]
             if not isinstance(reservoir, DecisionReservoir):

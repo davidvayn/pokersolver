@@ -243,6 +243,8 @@ pub struct PracticePolicyQuery {
     pub last_full_raise_bb: f64,
     pub raise_reopened: bool,
     pub actions: Vec<PracticeObservedAction>,
+    #[serde(default)]
+    pub include_range_strategy: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -282,6 +284,36 @@ pub struct PracticePolicyQueryResult {
     pub preflop_action_values_sha256: Option<String>,
     pub actions: Vec<PracticePolicyAction>,
     pub maximum_probability_sum_error: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range_strategy: Option<PracticeRangeStrategy>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeRangeAction {
+    pub kind: PracticePolicyActionKind,
+    pub amount_to_bb: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeRangeCombo {
+    pub cards: [u8; 2],
+    pub weight: f64,
+    pub probabilities: Vec<f64>,
+    pub action_values_bb: Option<Vec<f64>>,
+    pub standard_errors_bb: Option<Vec<f64>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeRangeStrategy {
+    pub schema: &'static str,
+    pub actor: usize,
+    pub street: Street,
+    pub board: Vec<u8>,
+    pub actions: Vec<PracticeRangeAction>,
+    pub combos: Vec<PracticeRangeCombo>,
 }
 
 /// Long-lived, inference-only policy engine used by the website process.
@@ -2753,6 +2785,11 @@ impl PracticePolicyEngine {
                 }
             })
             .collect();
+        let range_strategy = if query.include_range_strategy {
+            Some(self.public_range_strategy(&state, &deal, &legal)?)
+        } else {
+            None
+        };
         Ok(PracticePolicyQueryResult {
             schema: "hu-practice-continual-resolver-query-v1",
             request_id: query.request_id,
@@ -2768,6 +2805,51 @@ impl PracticePolicyEngine {
                 .map(|values| values.sha256.clone()),
             actions,
             maximum_probability_sum_error: probability_error,
+            range_strategy,
+        })
+    }
+
+    fn public_range_strategy(
+        &self,
+        state: &GameState,
+        deal: &Deal,
+        legal: &[LegalAction],
+    ) -> Result<PracticeRangeStrategy, String> {
+        // Reuse the exact same frozen/resolved public node as private Practice
+        // queries. No second solve, class-average guesses, or strategy scaling.
+        let node = self.policy.policy_node(state, deal, legal, &self.game)?;
+        let board = deal.board[..state.street.board_len()].to_vec();
+        let mut combos = Vec::new();
+        for combo in all_combos() {
+            let cards = combo.cards();
+            let weight = node.ranges[state.actor][combo.key()];
+            if weight <= 0.0 || cards.iter().any(|card| board.contains(card)) {
+                continue;
+            }
+            let offset = combo.key() * legal.len();
+            let probabilities = node.probabilities[offset..offset + legal.len()].to_vec();
+            if probabilities.iter().any(|p| !p.is_finite() || *p < 0.0)
+                || (probabilities.iter().sum::<f64>() - 1.0).abs() > 1e-6 {
+                return Err("public range contains an invalid policy row".into());
+            }
+            let (action_values_bb, standard_errors_bb) = if state.street == Street::Preflop {
+                let synthetic = deal_for_policy_combo(combo, state.actor);
+                let values = self.preflop_action_values.as_ref()
+                    .map(|values| values.values(state, &synthetic, legal)).transpose()?;
+                match values { Some((evs, errors)) => (Some(evs), errors), None => (None, None) }
+            } else {
+                (node.action_values_bb.as_ref().map(|values| values[offset..offset + legal.len()].to_vec()), None)
+            };
+            combos.push(PracticeRangeCombo { cards, weight, probabilities, action_values_bb, standard_errors_bb });
+        }
+        if combos.is_empty() { return Err("public range has no supported combinations".into()); }
+        Ok(PracticeRangeStrategy {
+            schema: "hu-public-range-strategy-v1", actor: state.actor,
+            street: state.street, board,
+            actions: legal.iter().map(|action| {
+                let (kind, amount_to_bb) = practice_legal_action_identity(state, action, &self.game);
+                PracticeRangeAction { kind, amount_to_bb }
+            }).collect(), combos,
         })
     }
 
@@ -8188,6 +8270,47 @@ pub fn certify_causal_sample_game_exploitability_upper_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn practice_public_range_export_matches_the_private_policy_without_changing_legacy_queries() {
+        let scorer = DenseScorer { layers: vec![DenseLayer {
+            input_size: MODEL_INPUT_COUNT, output_size: 1, activation: DenseActivation::Linear,
+            weights: vec![0.0; MODEL_INPUT_COUNT], biases: vec![0.0],
+        }] };
+        let bundle = TrainingNetworkBundle {
+            schema: TRAINING_NETWORK_SCHEMA.into(), input_size: MODEL_INPUT_COUNT,
+            strategy_transform: StrategyTransform::Softmax, networks: vec![scorer.clone(), scorer],
+            postflop_networks: None, sampling_baseline: None, sampling_baseline_scale: None,
+            cash_rules: None, cash_depth_bb: None, cash_action_abstraction: None,
+        };
+        let game = BlueprintConfig::default();
+        let engine = PracticePolicyEngine { game: game.clone(), model_version: "test".into(),
+            policy: FrozenPolicy::from_bundle(bundle, "a".repeat(64)).unwrap(),
+            range_policy_sha256: "b".repeat(64), value_network_sha256: None, preflop_action_values: None };
+        let state = GameState::initial(&game);
+        let legal = state.legal_actions(&game);
+        let deal = Deal::from_sampled_cards([[48, 49], [44, 45]], [0, 5, 10, 15, 20]);
+        let public = engine.public_range_strategy(&state, &deal, &legal).unwrap();
+        assert_eq!(public.combos.len(), COMBO_COUNT);
+        assert!((public.combos.iter().map(|c| c.weight).sum::<f64>() - 1.0).abs() < 1e-9);
+        let (private, values) = engine.policy.strategy_with_action_values(&state, &deal, &legal, &game).unwrap();
+        let exported = public.combos.iter().find(|c| Combo::new(c.cards[0], c.cards[1]).key() == Combo::new(48, 49).key()).unwrap();
+        assert_eq!(exported.probabilities, private);
+        assert_eq!(exported.action_values_bb, values);
+        let request = serde_json::json!({ "requestId": "test", "stateHash": "c".repeat(64),
+            "modelVersion": "test", "depthBb": game.effective_stack_bb, "privateCards": [48,49],
+            "board": [], "street": "preflop", "actor": 0, "totalPotBb": state.pot(),
+            "stacksBb": [state.remaining(0,&game),state.remaining(1,&game)],
+            "streetBetsBb": state.street_invested, "totalCommittedBb": state.invested,
+            "lastFullRaiseBb": 1.0, "raiseReopened": true, "actions": [] });
+        let legacy = engine.query(serde_json::from_value(request.clone()).unwrap()).unwrap();
+        assert!(legacy.range_strategy.is_none());
+        let mut requested = request; requested["includeRangeStrategy"] = true.into();
+        let matrix = engine.query(serde_json::from_value(requested).unwrap()).unwrap();
+        assert_eq!(matrix.range_strategy.unwrap().combos.len(), COMBO_COUNT);
+        assert_eq!(matrix.actions.len(), legacy.actions.len());
+        assert!(serde_json::to_value(legacy).unwrap().get("rangeStrategy").is_none());
+    }
 
     #[test]
     fn resolver_actor_scope_is_exact_and_seat_stable() {
