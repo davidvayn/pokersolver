@@ -2715,12 +2715,8 @@ fn run_preflop_compact(args: &[String]) -> Result<(), Box<dyn Error>> {
 fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
     game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 20.0)?;
-    if args
-        .iter()
-        .any(|argument| argument == "--compact-serving-grid")
-    {
-        game.action_abstraction = blueprint::ActionAbstraction::compact_serving_candidate();
-    }
+    apply_action_abstraction_input(args, &mut game)?;
+    let action_abstraction = game.action_abstraction.clone();
     apply_dcfr_args(&mut game, args)?;
     let network_path = value(args, "--networks")
         .map(PathBuf::from)
@@ -2974,7 +2970,13 @@ fn run_neural_certificate(args: &[String]) -> Result<(), Box<dyn Error>> {
             )
         }
     };
-    let output = serde_json::to_string_pretty(&certificate)?;
+    let output = if args.iter().any(|arg| arg == "--action-abstraction-json") {
+        let mut certificate_json = serde_json::to_value(&certificate)?;
+        certificate_json["action_abstraction"] = serde_json::to_value(action_abstraction)?;
+        serde_json::to_string_pretty(&certificate_json)?
+    } else {
+        serde_json::to_string_pretty(&certificate)?
+    };
     if let Some(path) = value(args, "--output").map(PathBuf::from) {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {

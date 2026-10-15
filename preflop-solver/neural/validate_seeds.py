@@ -54,13 +54,13 @@ def select_exploitability_certificate(
     )
 
 
-def load_artifact_model(source_path: Path) -> ActionScorer:
+def load_artifact_model(source_path: Path, network_name: str = 'baselinePolicy') -> ActionScorer:
     source = json.loads(source_path.read_text(encoding="utf-8"))
-    descriptors = source["metadata"]["networks"]["baselinePolicy"]["layers"]
+    descriptors = source["metadata"]["networks"][network_name]["layers"]
     if len(descriptors) != 3 or int(descriptors[0]["inputSize"]) != INPUT_FEATURE_COUNT:
         raise RuntimeError("browser artifact has an incompatible baseline network")
     hidden = (int(descriptors[0]["outputSize"]), int(descriptors[1]["outputSize"]))
-    model = ActionScorer(INPUT_FEATURE_COUNT, hidden)
+    model = ActionScorer(INPUT_FEATURE_COUNT, hidden,output_size=int(descriptors[-1]['outputSize']))
     parameters = np.asarray(source["parameters"], dtype=np.float32)
     for layer, descriptor in zip(linear_layers(model), descriptors):
         input_size = int(descriptor["inputSize"])
@@ -106,7 +106,7 @@ def immutable_game_config(state: dict[str, Any]) -> dict[str, Any]:
 def routing_compatible_config(state: dict[str, Any]) -> dict[str, Any]:
     """Fields that must agree before composing independently trained streets."""
     config = state["config"]
-    return {
+    compatible = {
         key: config[key]
         for key in (
             "depth_bb",
@@ -116,6 +116,31 @@ def routing_compatible_config(state: dict[str, Any]) -> dict[str, Any]:
             "compact_serving_grid",
         )
     }
+    compatible['action_abstraction'] = (
+        json.loads(config['action_abstraction_json']) if config.get('action_abstraction_json') else None)
+    return compatible
+
+
+def evaluation_binary(root: Path, pinned: Path | None) -> Path:
+    if pinned is not None:
+        return pinned.resolve()
+    subprocess.run(["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
+                   cwd=root, check=True, capture_output=True)
+    return root / "preflop-solver/target/release/preflop-solver"
+
+
+def abstraction_arguments(compact: bool, explicit: dict[str, Any] | None) -> list[str]:
+    if explicit is not None:
+        if compact: raise ValueError('choose only one evaluation action grid')
+        return ['--action-abstraction-json',json.dumps(explicit,sort_keys=True,separators=(',',':'),allow_nan=False)]
+    return ['--compact-serving-grid'] if compact else []
+
+
+def verify_evaluation_game(metadata: dict[str, Any], depth: int, explicit: dict[str, Any] | None) -> None:
+    if metadata.get('depth_bb') != depth:
+        raise RuntimeError('independent evaluation returned a different stack depth')
+    if explicit is not None and metadata.get('action_abstraction') != explicit:
+        raise RuntimeError('independent evaluation did not use the exact trained action grid')
 
 
 class StreetRoutedModel:
@@ -203,14 +228,10 @@ def evaluation_records(
     policy_model: ActionScorer | None = None,
     postflop_policy_model: ActionScorer | None = None,
     action_value_rollouts_per_action: int = 0,
+    action_abstraction: dict[str, Any] | None = None,
+    binary_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    subprocess.run(
-        ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-    )
-    binary = root / "preflop-solver/target/release/preflop-solver"
+    binary = evaluation_binary(root,binary_path)
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / "evaluation.jsonl.gz"
         network_path = Path(directory) / "policy-networks.json"
@@ -235,8 +256,7 @@ def evaluation_records(
         ]
         if sample_turn_rivers:
             command.append("--sample-turn-rivers")
-        if compact_grid:
-            command.append("--compact-serving-grid")
+        command.extend(abstraction_arguments(compact_grid,action_abstraction))
         if action_value_rollouts_per_action > 0:
             if action_value_rollouts_per_action < 2:
                 raise ValueError(
@@ -271,6 +291,7 @@ def evaluation_records(
             command.extend(("--networks", str(network_path)))
         subprocess.run(command, cwd=root, check=True, capture_output=True)
         metadata, records = load_jsonl_gzip(output)
+    verify_evaluation_game(metadata,depth_bb,action_abstraction)
     if metadata["truncated"]:
         raise RuntimeError("independent evaluation trajectory set was truncated")
     if metadata["sampling_mode"] != "trajectory":
@@ -297,14 +318,10 @@ def exploitability_certificate(
     opponent_samples_per_deal: int = 0,
     opponent_samples_per_runout: int = 0,
     public_branches_per_street: int = 0,
+    action_abstraction: dict[str, Any] | None = None,
+    binary_path: Path | None = None,
 ) -> dict[str, Any]:
-    subprocess.run(
-        ["cargo", "build", "--release", "--manifest-path", "preflop-solver/Cargo.toml"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-    )
-    binary = root / "preflop-solver/target/release/preflop-solver"
+    binary = evaluation_binary(root,binary_path)
     with tempfile.TemporaryDirectory() as directory:
         network_path = Path(directory) / "certificate-networks.json"
         network = scorer_json(policy_model)
@@ -337,8 +354,7 @@ def exploitability_certificate(
             "--threads",
             str(threads),
         ]
-        if compact_grid:
-            command.append("--compact-serving-grid")
+        command.extend(abstraction_arguments(compact_grid,action_abstraction))
         if opponent_samples_per_deal > 0:
             command.extend(
                 (
@@ -364,6 +380,7 @@ def exploitability_certificate(
             command, cwd=root, check=True, capture_output=True, text=True
         )
     certificate = json.loads(result.stdout)
+    verify_evaluation_game(certificate,depth_bb,action_abstraction)
     expected_schema = (
         "hu-neural-causal-sample-game-upper-bound-v1"
         if public_branches_per_street > 0
@@ -451,6 +468,29 @@ def policy(model: Any, features: np.ndarray) -> np.ndarray:
     ):
         raise RuntimeError("neural average policy produced invalid probabilities")
     return probabilities
+
+
+def served_action_value_audit(policy_model: Any, value_model: Any,
+                              datasets: list[list[dict[str, Any]]], depth: int,
+                              floor: float = .005, threshold: float = .02) -> dict[str, Any]:
+    """Audit the exported value head, not just a reference rollout's precision."""
+    precise=0.; decisions=0; maximum=0.; finite=True
+    for records in datasets:
+        if not records: raise RuntimeError('served action-value audit reached no decisions')
+        weight=1./(len(datasets)*len(records))
+        for record in records:
+            features=np.stack([expand_state_action(record['state'],a,depth) for a in record['actions']])
+            outputs=np.asarray(value_model(mx.array(features)))
+            if outputs.shape!=(len(record['actions']),2) or not np.all(np.isfinite(outputs)):
+                raise RuntimeError('exported action-value head returned invalid values')
+            errors=floor+np.logaddexp(0.,outputs[:,1].astype(np.float64))
+            probabilities=policy(policy_model,features)
+            precise+=weight*float(np.sum(probabilities*(errors<=threshold)))
+            maximum=max(maximum,float(np.max(errors))); decisions+=1
+    return {'decisions':decisions,'finite_values':finite,'threshold_bb':threshold,
+        'policy_action_weighted_predicted_precision_coverage':precise,
+        'maximum_predicted_standard_error_bb':maximum,
+        'interpretation':'Predicted Monte Carlo target sampling error only; excludes neural approximation bias and is not an exploitability certificate.'}
 
 
 def compare(
@@ -603,11 +643,19 @@ def parse_args() -> argparse.Namespace:
         default=0,
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument('--evaluation-binary',type=Path)
+    parser.add_argument('--evaluation-binary-sha256')
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if (args.evaluation_binary is None) != (args.evaluation_binary_sha256 is None):
+        raise ValueError('an evaluation binary requires its SHA-256')
+    if args.evaluation_binary is not None:
+        args.evaluation_binary=args.evaluation_binary.resolve()
+        if hashlib.sha256(args.evaluation_binary.read_bytes()).hexdigest()!=args.evaluation_binary_sha256:
+            raise ValueError('evaluation binary hash does not match')
     if args.traversals <= 0:
         raise ValueError("evaluation traversals must be positive")
     if args.round_number is not None and args.round_number <= 0:
@@ -671,6 +719,8 @@ def main() -> None:
             "cross-seed runs do not share an identical training configuration"
         )
     config = first_state["config"]
+    explicit_grid = json.loads(config['action_abstraction_json']) if config.get('action_abstraction_json') else None
+    evaluation_options = {'action_abstraction':explicit_grid,'binary_path':args.evaluation_binary}
     if first_state["config"]["seed"] == second_state["config"]["seed"]:
         raise RuntimeError("cross-seed validation requires independent training seeds")
     preflop_weight_overrides = apply_weight_overrides(
@@ -739,14 +789,16 @@ def main() -> None:
         policy_model=first_model,
         postflop_policy_model=postflop_models[0] if postflop_models else None,
         action_value_rollouts_per_action=args.action_value_rollouts_per_action,
+        **evaluation_options,
     )
     second_reach_records = evaluation_records(
         *evaluation_arguments,
         policy_model=second_model,
         postflop_policy_model=postflop_models[1] if postflop_models else None,
         action_value_rollouts_per_action=args.action_value_rollouts_per_action,
+        **evaluation_options,
     )
-    forced_records = evaluation_records(*evaluation_arguments)
+    forced_records = evaluation_records(*evaluation_arguments,**evaluation_options)
     cross_seed = compare(
         comparison_models[0],
         comparison_models[1],
@@ -766,6 +818,10 @@ def main() -> None:
     action_ev_uncertainty = action_ev_standard_error_summary(
         [first_reach_records, second_reach_records]
     )
+    served_value_audits = [served_action_value_audit(model,
+        load_artifact_model(Path(latest_artifact(state,args.round_number)['source']),'baselineActionValue'),
+        [first_reach_records,second_reach_records],int(config['depth_bb']))
+        for state,model in ((first_state,first_model),(second_state,second_model))] if postflop_models is None else []
     # Seed selection happens after observing both bounds. Split the 1% error
     # budget across the two candidates so the selected minimum remains a
     # family-wise one-sided 99% upper bound.
@@ -790,6 +846,7 @@ def main() -> None:
                 opponent_samples_per_deal=args.exploitability_certificate_opponent_samples_per_deal,
                 opponent_samples_per_runout=args.exploitability_certificate_opponent_samples_per_runout,
                 public_branches_per_street=args.exploitability_certificate_public_branches_per_street,
+                **evaluation_options,
             )
             for index, model in enumerate((first_model, second_model))
         ]
@@ -832,7 +889,8 @@ def main() -> None:
         "action_ev_standard_error_coverage_at_least_0_95": action_ev_uncertainty[
             "available"
         ]
-        and action_ev_uncertainty["decision_coverage"] >= 0.95,
+        and action_ev_uncertainty["decision_coverage"] >= 0.95
+        and all(a['policy_action_weighted_predicted_precision_coverage'] >= .95 for a in served_value_audits),
     }
     research_pilot_gates = {
         "action_frequency_mae_at_most_0_06": cross_seed["action_frequency_mae"] <= 0.06,
@@ -848,6 +906,8 @@ def main() -> None:
     report = {
         "schema": "hu-neural-cross-seed-validation-v11",
         "depth_bb": config["depth_bb"],
+        'action_abstraction':explicit_grid,
+        'evaluation_binary':{'path':str(args.evaluation_binary),'sha256':args.evaluation_binary_sha256} if args.evaluation_binary else None,
         "seeds": [first_state["config"]["seed"], second_state["config"]["seed"]],
         "completed_traversals": [
             args.round_number * int(config["traversals_per_round"])
@@ -860,6 +920,9 @@ def main() -> None:
         "cross_seed": cross_seed,
         "forced_deviation": forced_deviation,
         "action_ev_uncertainty": action_ev_uncertainty,
+        'served_action_values':served_value_audits,
+        'unmeasured_gates':(['estimated_exploitability_at_most_0_50','exploitability_upper_99_at_most_0_50'] if not exploitability_certificates else [])
+            + (['action_ev_standard_error_coverage_at_least_0_95'] if not action_ev_uncertainty['available'] else []),
         "exploitability_certificates": exploitability_certificates,
         "selected_sample_mean_exploitability_bb": selected_exploitability_mean,
         "selected_exploitability_upper_bound_bb": selected_exploitability_upper,
@@ -892,12 +955,18 @@ def main() -> None:
         "status": "rejected_not_activated",
         "reasons": [
             "Cross-seed stability is a reproducibility check, not equilibrium proof.",
+            "Full-game exploitability was not measured in this validation pass."
+            if selected_exploitability_certificate is None else
             "The selected full-game exploitability mean has not reached 0.50bb/hand."
             if not gates["estimated_exploitability_at_most_0_50"]
             else "The selected full-game exploitability mean passed.",
+            "The full-game 99% exploitability bound was not measured."
+            if selected_exploitability_certificate is None else
             "The conservative 99% full-game exploitability upper bound has not reached 0.50bb/hand."
             if not gates["exploitability_upper_99_at_most_0_50"]
             else "The conservative 99% full-game exploitability upper bound passed.",
+            "Independent reference action-EV precision was not measured."
+            if not action_ev_uncertainty['available'] else
             "Independent action-EV standard-error coverage has not reached the release gate."
             if not gates["action_ev_standard_error_coverage_at_least_0_95"]
             else "Independent action-EV standard-error coverage passed; this does not establish exploitability.",
@@ -929,6 +998,11 @@ def main() -> None:
         artifact["descriptor_matches"] and artifact["magic_valid"]
         for artifact in report["artifacts"]
     )
+    report['failed_measured_gates'] = [name for name,passed in gates.items()
+        if not passed and name not in report['unmeasured_gates']]
+    report['release_eligible'] = report['integrity_valid'] and all(gates.values())
+    if report['release_eligible']:
+        report['status'] = 'eligible_for_release_review_not_activated'
     output = json.dumps(report, indent=2, sort_keys=True)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

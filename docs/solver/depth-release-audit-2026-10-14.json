@@ -1,0 +1,191 @@
+{
+  "schema": "hu-depth-release-decision-v1",
+  "date": "2026-10-14",
+  "decision": "rejected_not_activated",
+  "release_eligible": false,
+  "activated_depths_bb": [],
+  "selected_seed": null,
+  "active_20bb_manifest_changed": false,
+  "thresholds_changed_or_waived": false,
+  "experiment_root": "/Users/davidvayntrub/pokersolver-training/shared-depth-full-2026-10-13",
+  "thresholds": {
+    "maximum_action_frequency_mae": 0.05,
+    "minimum_primary_action_agreement": 0.85,
+    "maximum_aggregate_action_delta": 0.03,
+    "minimum_observed_lookup_coverage": 0.9999,
+    "maximum_action_ev_standard_error_bb": 0.02,
+    "minimum_action_ev_precision_coverage": 0.95,
+    "maximum_estimated_exploitability_bb_per_hand": 0.5,
+    "maximum_one_sided_99_exploitability_upper_bound_bb_per_hand": 0.5
+  },
+  "evaluation": {
+    "sampler": "bin/preflop-solver",
+    "sampler_sha256": "8d469072ebff432ad8b12a2664c740f1405e6a62fc6b244c6e1a962b424f09a1",
+    "action_abstraction": {
+      "open_sizes_bb": [2, 3.5, 5],
+      "limp_raise_sizes_bb": [3, 5, 7],
+      "three_bet_sizes_bb": [8, 12, 16],
+      "four_bet_sizes_bb": [20, 30, 45],
+      "deeper_raise_pot_fractions": [0.5, 1, 2],
+      "flop_bet_pot_fractions": [0.3333333333333333, 0.75, 1.25],
+      "turn_river_bet_pot_fractions": [0.5, 1],
+      "postflop_raise_pot_fractions": [1],
+      "preflop_raise_cap": 4,
+      "postflop_raise_cap": 1,
+      "include_all_in": true
+    },
+    "cross_seed": {
+      "seed": 2471602,
+      "traversals_per_dataset": 2048,
+      "authentic_distribution": "equal mixture of both frozen policies over exact-card trajectories",
+      "forced_deviation_distribution": "uniform-policy exact-card trajectories"
+    },
+    "action_ev": {
+      "seed": 2471603,
+      "traversals_per_dataset": 128,
+      "independent_rollouts_per_action": 64,
+      "reference_precision_definition": "Reach-weighted fraction of decisions whose every action has reference Monte Carlo SE <= 0.02bb.",
+      "served_precision_definition": "Policy-action-weighted fraction with exported value-head predicted sampling SE <= 0.02bb; not a calibrated neural error bound."
+    }
+  },
+  "depths": [
+    {
+      "depth_bb": 50,
+      "decision": "rejected_not_activated",
+      "artifacts": [
+        {
+          "seed": 50121,
+          "training_status": "completed_training_budget",
+          "rounds": 465,
+          "traversals": 186000,
+          "binary": "50bb-seed50121/artifacts/round-000465/model.bin",
+          "bytes": 2646345,
+          "sha256": "3291c082d5f26aeb55c972b007d3b77b93f5203f1a165fddef50b6005b490115"
+        },
+        {
+          "seed": 50122,
+          "training_status": "completed_training_budget",
+          "rounds": 462,
+          "traversals": 184800,
+          "binary": "50bb-seed50122/artifacts/round-000462/model.bin",
+          "bytes": 2646345,
+          "sha256": "139fb848161d5bf443bdd63ce351b19420bacbb4c5ec5949747bdce564a8fa28"
+        }
+      ],
+      "authentic": {
+        "decisions": 17207,
+        "action_frequency_mae": 0.07887924193204336,
+        "primary_action_agreement": 0.7348861237184108,
+        "maximum_aggregate_action_delta": 0.022797958988795913,
+        "observed_lookup_coverage": 1,
+        "probability_sums_valid": true,
+        "preflop_primary_action_agreement": 0.6633184896335034
+      },
+      "forced_deviation": {
+        "decisions": 6743,
+        "action_frequency_mae": 0.09268546959598006,
+        "primary_action_agreement": 0.7105146077414257,
+        "observed_lookup_coverage": 1,
+        "probability_sums_valid": true
+      },
+      "action_ev": {
+        "decisions": 1126,
+        "actions": 5315,
+        "reference_decision_precision_coverage": 0.050621669626998225,
+        "reference_maximum_standard_error_bb": 5.4703794,
+        "served_predicted_precision_coverage_in_seed_order": [0.36129998095809, 0.30072605745969244],
+        "served_maximum_predicted_standard_error_bb_in_seed_order": [19.003170858274185, 23.216523056113328],
+        "served_values_finite": true
+      },
+      "reports": [
+        {
+          "path": "50bb-validation-full.json",
+          "sha256": "82dcc0b308fed949ed1fcebc26ab7bbc302fba7539c34c5d003e7e96f9389fc6"
+        },
+        {
+          "path": "50bb-validation-ev.json",
+          "sha256": "6df8e4ae357dd688c71e11fad87368a34d960341f5974462232035017893b8f3"
+        }
+      ]
+    },
+    {
+      "depth_bb": 100,
+      "decision": "rejected_not_activated",
+      "artifacts": [
+        {
+          "seed": 100121,
+          "training_status": "completed_training_budget",
+          "rounds": 366,
+          "traversals": 146400,
+          "binary": "100bb-seed100121/artifacts/round-000366/model.bin",
+          "bytes": 2646348,
+          "sha256": "6e9dd36e2c80983970bcc73d41e94f0b337db70d2e6748a8aa619e163a155451"
+        },
+        {
+          "seed": 100122,
+          "training_status": "completed_training_budget",
+          "rounds": 370,
+          "traversals": 148000,
+          "binary": "100bb-seed100122/artifacts/round-000370/model.bin",
+          "bytes": 2646348,
+          "sha256": "2200cd0333753eed7d6005a5c79cec4deba4e912e0f808f66697b000931fc805"
+        }
+      ],
+      "authentic": {
+        "decisions": 16126,
+        "action_frequency_mae": 0.07415890206214612,
+        "primary_action_agreement": 0.7599520670247836,
+        "maximum_aggregate_action_delta": 0.021302559023094136,
+        "observed_lookup_coverage": 1,
+        "probability_sums_valid": true,
+        "preflop_primary_action_agreement": 0.6936768330543346
+      },
+      "forced_deviation": {
+        "decisions": 6944,
+        "action_frequency_mae": 0.07658904388948015,
+        "primary_action_agreement": 0.7363191244239445,
+        "observed_lookup_coverage": 1,
+        "probability_sums_valid": true
+      },
+      "action_ev": {
+        "decisions": 1026,
+        "actions": 4933,
+        "reference_decision_precision_coverage": 0.025341130604288498,
+        "reference_maximum_standard_error_bb": 6.919067,
+        "served_predicted_precision_coverage_in_seed_order": [0.3473280000153232, 0.3372452156918234],
+        "served_maximum_predicted_standard_error_bb_in_seed_order": [40.59002197265625, 23.83765686039619],
+        "served_values_finite": true
+      },
+      "reports": [
+        {
+          "path": "100bb-validation-full.json",
+          "sha256": "bd77fdc7a39cf4e25d046581d79184c1b7471f6b6dbf93beffdcf3c4a292cbf2"
+        },
+        {
+          "path": "100bb-validation-ev.json",
+          "sha256": "bb8c1fc39edd0d02dc6327be7460ea5ebd6664d9a9a8278388f5e4eafa6a6e5b"
+        }
+      ]
+    }
+  ],
+  "failed_measured_gates_for_both_depths": [
+    "action_frequency_mae_at_most_0_05",
+    "primary_action_agreement_at_least_0_85",
+    "action_ev_standard_error_coverage_at_least_0_95"
+  ],
+  "full_game_exploitability": {
+    "status": "not_measured",
+    "estimate_bb_per_hand": null,
+    "one_sided_99_upper_bound_bb_per_hand": null,
+    "reason": "Existing measured gates already decisively reject both depths; no additional expensive certificate was run."
+  },
+  "limitations": [
+    "Cross-seed stability is not equilibrium proof.",
+    "Observed neural inference coverage is not exhaustive serving coverage or proof of strategic accuracy.",
+    "Independent reference Monte Carlo precision does not establish learned action-EV accuracy.",
+    "The exported value heads predict target sampling noise and exclude neural approximation bias.",
+    "The four final binaries total 10585386 bytes; total future sample/oracle hosted storage was not audited.",
+    "Original reports are hash-pinned snapshots. Missing exploitability certificates mean not measured, not a measured numeric failure.",
+    "No model activation, threshold waiver, automatic retraining, or new Approximate GTO claim is authorized by this decision."
+  ]
+}

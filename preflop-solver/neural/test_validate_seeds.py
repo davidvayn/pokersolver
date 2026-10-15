@@ -1,10 +1,15 @@
 import unittest
+import json
+import os
+import subprocess
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
 
-from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT
+from train import INPUT_FEATURE_COUNT, STATE_FEATURE_COUNT, NETWORK_SCHEMA
 from validate_seeds import (
     MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND,
     MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
@@ -13,7 +18,13 @@ from validate_seeds import (
     apply_weight_overrides,
     compare,
     select_exploitability_certificate,
+    abstraction_arguments,
+    verify_evaluation_game,
+    evaluation_records,
+    routing_compatible_config,
+    served_action_value_audit,
 )
+from run_depth_pilots import PILOT_GRID
 
 
 def state(private_cards):
@@ -62,6 +73,61 @@ class RankMarkerModel:
 
 
 class ReachAwareValidationTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('POKER_CERTIFICATE_TEST_BINARY'),'explicit native certificate binary required')
+    def test_native_certificate_entry_point_preserves_custom_grid_identity(self):
+        # Structural transport test, not an evaluation of trained poker strength.
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/'uniform.json'
+            network={'layers':[{'input_size':INPUT_FEATURE_COUNT,'output_size':1,'activation':'linear',
+                'weights':[0.]*INPUT_FEATURE_COUNT,'biases':[0.]}]}
+            source.write_text(json.dumps({'schema':NETWORK_SCHEMA,'input_size':INPUT_FEATURE_COUNT,
+                'strategy_transform':'softmax','networks':[network,network]}))
+            grid={**PILOT_GRID,'preflop_raise_cap':1}
+            completed=subprocess.run([os.environ['POKER_CERTIFICATE_TEST_BINARY'],'neural-certificate',
+                '--effective-stack-bb','50','--deals','2','--seed','73499','--threads','2',
+                '--networks',str(source),'--action-abstraction-json',json.dumps(grid)],
+                capture_output=True,text=True,check=True,timeout=30)
+            certificate=json.loads(completed.stdout)
+            verify_evaluation_game(certificate,50,grid)
+            self.assertEqual(certificate['deals'],2)
+            self.assertEqual(certificate['schema'],'hu-neural-clairvoyant-upper-bound-v1')
+
+    def test_served_ev_head_precision_is_not_confused_with_reference_rollout_precision(self):
+        class Value:
+            def __init__(self,raw): self.raw=raw
+            def __call__(self,features): return mx.tile(mx.array([[0.,self.raw]]),(features.shape[0],1))
+        records=[[record([48,49]),record([44,45])]]
+        good=served_action_value_audit(UniformModel(),Value(-10.),records,20)
+        noisy=served_action_value_audit(UniformModel(),Value(0.),records,20)
+        self.assertEqual(good['policy_action_weighted_predicted_precision_coverage'],1.)
+        self.assertEqual(noisy['policy_action_weighted_predicted_precision_coverage'],0.)
+        self.assertGreater(noisy['maximum_predicted_standard_error_bb'],.02)
+        with self.assertRaises(RuntimeError):served_action_value_audit(UniformModel(),Value(float('nan')),records,20)
+
+    def test_explicit_trained_grid_is_not_replaced_by_a_default_or_compact_tree(self):
+        args=abstraction_arguments(False,PILOT_GRID)
+        self.assertEqual(args[0],'--action-abstraction-json')
+        self.assertEqual(json.loads(args[1]),PILOT_GRID)
+        with self.assertRaises(ValueError): abstraction_arguments(True,PILOT_GRID)
+        verify_evaluation_game({'depth_bb':50,'action_abstraction':PILOT_GRID},50,PILOT_GRID)
+        for metadata in [{'depth_bb':20,'action_abstraction':PILOT_GRID}, {'depth_bb':50},
+                         {'depth_bb':50,'action_abstraction':{**PILOT_GRID,'open_sizes_bb':[2,2.5,3]}}]:
+            with self.assertRaises(RuntimeError): verify_evaluation_game(metadata,50,PILOT_GRID)
+
+    def test_actual_trajectory_command_and_metadata_share_the_pinned_grid(self):
+        metadata={'depth_bb':100,'action_abstraction':PILOT_GRID,'sampling_mode':'trajectory','truncated':False}
+        with patch('validate_seeds.subprocess.run') as run, patch('validate_seeds.load_jsonl_gzip',return_value=(metadata,[record([48,49])])):
+            records=evaluation_records(Path('/root'),100,64,123,256,128,True,False,
+                action_abstraction=PILOT_GRID,binary_path=Path('/frozen/sampler'))
+            argv=run.call_args.args[0]
+            self.assertEqual(argv[0],'/frozen/sampler')
+            self.assertEqual(json.loads(argv[argv.index('--action-abstraction-json')+1]),PILOT_GRID)
+            self.assertEqual(len(records),1)
+        config={'depth_bb':50,'preflop_runout_samples':256,'flop_runout_samples':128,
+            'exact_turn_rivers':False,'compact_serving_grid':False,'action_abstraction_json':json.dumps(PILOT_GRID)}
+        other={**config,'action_abstraction_json':json.dumps({**PILOT_GRID,'open_sizes_bb':[2,2.5,3]})}
+        self.assertNotEqual(routing_compatible_config({'config':config}),routing_compatible_config({'config':other}))
+
     def test_total_exploitability_gate_is_half_a_blind_with_consistent_selection(self):
         self.assertEqual(MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND, 0.50)
         self.assertEqual(

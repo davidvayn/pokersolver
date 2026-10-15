@@ -134,10 +134,61 @@ completed initial full-profile updates/checkpoints with finite metrics and
 untruncated records. This verifies that training actually runs; early cold-start
 errors are not evidence of equilibrium strength.
 
-After training: audit binary/grid/depth identities and compare independent
-seeds, then run held-out full-hand response and serving/EV-confidence checks
-with this exact grid. Existing default-grid certificate commands must not be
-used as though they evaluate this custom abstraction; extend their explicit
-grid support before claiming a comparison. Off-grid responses remain necessary
-to assess abstraction error. Full training completion alone does not enable
-50bb/100bb or establish Approximate GTO.
+## Release audit — 2026-10-14: rejected, not activated
+
+All four seeds completed their eight-hour training budgets normally. The 50bb
+seeds finished 465/462 rounds (186,000/184,800 traversals); 100bb finished
+366/370 rounds (146,400/148,000 traversals). Training completion did not satisfy
+the existing release criteria. Neither depth is enabled, no winning seed was
+selected, and the active experimental 20bb manifest/weights are unchanged.
+
+The held-out authentic evaluation used an equal mixture of both frozen policies
+over exact-card trajectories, with separate uniform-policy forced deviations.
+Every evaluation uses the exact trained stack depth and spread-out action grid;
+the validator now checks returned game metadata and can pin the sampler binary
+by SHA-256. The native certificate entry point also accepts the explicit grid.
+This fixes evaluation identity, not poker strategy or measured exploitability.
+
+| Measured criterion | Existing gate | 50bb | 100bb |
+| --- | --- | --- | --- |
+| Cross-seed action-frequency MAE | at most 5 percentage points | 7.89 — fail | 7.42 — fail |
+| Primary-action agreement | at least 85% | 73.49% — fail | 76.00% — fail |
+| Maximum aggregate action delta | at most 3 percentage points | 2.28 — pass | 2.13 — pass |
+| Authentic decisions evaluated | sample size, not a gate | 17,207 | 16,126 |
+| Forced-deviation decisions | sample size, not a gate | 6,743 | 6,944 |
+
+Observed inference coverage and normalized probabilities passed on both sampled
+distributions. This is not exhaustive coverage or equilibrium proof. Preflop
+primary-action agreement was especially weak (66.33%/69.37%). All four final
+binary artifacts have finite parameters, correct grids/depths, and identical
+bytes after source re-encoding; together they occupy 10,585,386 bytes. This is
+not a total hosted-storage audit of a future sample/oracle serving corpus.
+
+A separate independent EV reference pass used 128 traversals per reach dataset
+and 64 rollouts per action. Only 5.06%/2.53% of evaluated decisions met the
+0.02bb all-action reference-SE threshold, versus the existing 95% requirement.
+The exported value heads' own policy-action-weighted predicted precision
+coverage was also only 36.13%/30.07% (50bb seeds) and 34.73%/33.72% (100bb).
+Those predictions describe Monte Carlo target noise, not calibrated neural
+approximation error. More reference samples alone would not resolve the
+cross-seed failures or validate learned action-EV accuracy.
+
+Full-game exploitability and its 99% upper bound were **not measured** in this
+audit: decisive normal-gate failures already reject both candidates. No numeric
+exploitability improvement, regression, or pass is claimed. The existing
+0.50bb/hand release thresholds were not changed or waived. Off-grid responses
+and full-hand evaluation remain necessary for any future accepted candidate.
+
+The machine-readable [rejection decision](depth-release-audit-2026-10-14.json)
+records measured results, artifact/report hashes, evaluation budgets, and
+unmeasured gates. The original reports and weights remain in the full-run
+output directory, outside Git. Older reports' false exploitability booleans
+must not be read as a measured failure: their certificates are absent/null.
+The validator now distinguishes unmeasured gates from measured failures and
+reports release eligibility without activating models.
+
+Final verification: 47 Python tests passed (including a tiny native certificate
+transport test, not a strength certificate); nine Rust CLI release tests
+passed; 290 TypeScript tests passed with four unrelated optional native tests
+skipped, including four real-artifact full-hand compatibility tests; production
+build passed. No browser-facing implementation changed in this audit.
