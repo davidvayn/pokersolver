@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "push-fold-action-values" => run_push_fold_action_values(&args[1..]),
         "blueprint" => run_blueprint(&args[1..]),
         "neural-samples" => run_neural_samples(&args[1..]),
+        "neural-frozen-values" => run_neural_frozen_values(&args[1..]),
         "cash-full-hand-evaluate" => run_cash_full_hand_evaluate(&args[1..]),
         "cash-causal-response" => run_cash_causal_response(&args[1..]),
         "cash-policy-query" => run_cash_policy_query(&args[1..]),
@@ -3222,6 +3223,27 @@ fn run_cash_full_hand_evaluate(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_neural_frozen_values(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut game = BlueprintConfig::default();
+    game.effective_stack_bb = parse_or(args, "--effective-stack-bb", 50.0)?;
+    apply_action_abstraction_input(args, &mut game)?;
+    let report = blueprint::neural::qualify_frozen_values(blueprint::neural::FrozenValueConfig {
+        game,
+        networks: PathBuf::from(value(args, "--networks").ok_or("--networks is required")?),
+        snapshots: value(args, "--snapshots").map(PathBuf::from),
+        input: PathBuf::from(value(args, "--input").ok_or("--input is required")?),
+        seed: parse_or(args, "--seed", 2471701u64)?,
+        hidden_blocks: parse_or(args, "--hidden-blocks", 32usize)?,
+        rollouts_per_block: parse_or(args, "--rollouts-per-block", 2usize)?,
+        policy_only: args.iter().any(|arg| arg == "--policy-only"),
+    })?;
+    let output = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = value(args, "--output") {
+        fs::write(path, output)?;
+    } else { println!("{output}"); }
+    Ok(())
+}
+
 fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut game = BlueprintConfig::default();
     apply_cash_profile(args, &mut game)?;
@@ -3260,7 +3282,7 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
         .iter()
         .any(|argument| argument == "--evaluate-action-values");
     let value_rollouts_per_action = parse_or(args, "--value-rollouts-per-action", 1u32)?;
-    blueprint::neural::generate_samples(blueprint::neural::SampleGenerationConfig {
+    let config = blueprint::neural::SampleGenerationConfig {
         game,
         traversals,
         start_iteration,
@@ -3274,7 +3296,10 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
         enumerate_turn_river_chance: args
             .iter()
             .any(|argument| argument == "--enumerate-turn-river-chance"),
-    })?;
+    };
+    blueprint::neural::generate_samples_with_estimators(config,
+        args.iter().any(|arg| arg == "--average-regret-rollouts"),
+        args.iter().any(|arg| arg == "--integrate-closed-opponent-actions"))?;
     eprintln!("wrote compact neural traversal batch {}", output.display());
     Ok(())
 }
@@ -3751,6 +3776,7 @@ Usage:
   preflop-solver push-fold-action-values --artifact <json> --output <json>
   preflop-solver blueprint [options]
   preflop-solver neural-samples [options]
+  preflop-solver neural-frozen-values --networks <path> --input <decisions.json> [options]
   preflop-solver cash-full-hand-evaluate --cash-profile <nl25|nl25-rake-off-control> --networks <average-policy.json> [--comparison-networks <json>] [--deals 256] [--threads 2]
   preflop-solver cash-causal-response --cash-profile <nl25|nl25-rake-off-control> --networks <average-policy.json> [--deals 2] [--public-branches 1] [--opponent-samples 2] [--node-limit-per-seat 250000]
   preflop-solver cash-turn-root-sample --cash-profile <nl25|nl25-rake-off-control> --networks <average-policy.json> --output <roots.json> [--roots 6] [--max-deals 2000] [--iterations 8]
@@ -3875,6 +3901,8 @@ Neural sample options:
   --sample-trajectories           Sample both players; evaluation only
   --evaluate-action-values       Evaluate every reached trajectory action; requires 2+ rollouts
   --value-rollouts-per-action <N> Independent external samples per value target; default: 1
+  --average-regret-rollouts       Opt in to using those averaged values in regret targets
+  --integrate-closed-opponent-actions  Integrate responses only when every child is terminal
   --preflop-runout-samples <int>  Default: 256
   --flop-runout-samples <int>     Default: 128
   --sample-turn-rivers            Sample instead of enumerating turn rivers
@@ -3882,6 +3910,18 @@ Neural sample options:
   --action-abstraction-json <json> Pin an explicit grid for neural samples;
                                   also supported by practice-policy-server
   --output <path>                 Default: neural-samples.jsonl.gz
+
+Frozen information-set EV options (offline Home research only):
+  --effective-stack-bb <number>   Must match qualification_game in frozen network JSON
+  --action-abstraction-json <json> Exact pinned grid; never substitutes defaults
+  --input <path>                  JSON array of sampled public decision records
+  --networks <path>               Policy-only frozen networks, with game identity
+  --snapshots <path>              Optional hash-pinned, own-reach-weighted history
+  --hidden-blocks <N>             Default: 32 independent opponent/runout blocks
+  --rollouts-per-block <N>        Default: 2 conditional continuation samples
+  --policy-only                  Query snapshot distributions without EV sampling
+  --seed <integer>                Deterministic independent evaluation seed
+  --output <path>                 Optional report JSON; default: stdout
 
 Range-policy self-play sample options:
   --effective-stack-bb <number>   Default: 20

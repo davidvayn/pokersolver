@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Any
 
 import mlx.core as mx
 import numpy as np
+from frozen_ev_gate import frozen_ev_gate
 
 from train import (
     ACTIONS,
@@ -645,6 +647,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path)
     parser.add_argument('--evaluation-binary',type=Path)
     parser.add_argument('--evaluation-binary-sha256')
+    parser.add_argument('--frozen-ev-qualification', type=Path,
+                        help='artifact-bound full information-set precision/calibration receipt; conditional rollout SE alone cannot qualify release')
     return parser.parse_args()
 
 
@@ -866,6 +870,17 @@ def main() -> None:
         if selected_exploitability_certificate is None
         else float(selected_exploitability_certificate["sample_mean_exploitability_bb"])
     )
+    frozen_receipt = json.loads(args.frozen_ev_qualification.read_text()) if args.frozen_ev_qualification else None
+    if frozen_receipt is not None and (postflop_states is not None or any((args.weights_a, args.weights_b, args.postflop_weights_a, args.postflop_weights_b))):
+        raise ValueError('frozen EV qualification requires a single exported policy identity, not unexported routing/weight overrides')
+    artifact_checks = [verify_artifact(latest_artifact(state, args.round_number)) for state in (first_state,second_state)]
+    receipt_grid = explicit_grid
+    if receipt_grid is None and frozen_receipt is not None:
+        metadata = json.loads(Path(latest_artifact(first_state,args.round_number)['source']).read_text())['metadata']
+        receipt_grid = {re.sub(r'(?<!^)(?=[A-Z])','_',key).lower():value
+                        for key,value in metadata['actionAbstraction'].items()}
+    frozen_ev = frozen_ev_gate(frozen_receipt, int(config['depth_bb']), receipt_grid,
+                              [artifact['sha256'] for artifact in artifact_checks])
     gates = {
         "action_frequency_mae_at_most_0_05": cross_seed["action_frequency_mae"] <= 0.05,
         "primary_action_agreement_at_least_0_85": cross_seed["primary_action_agreement"]
@@ -886,11 +901,7 @@ def main() -> None:
         is not None
         and selected_exploitability_upper
         <= MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
-        "action_ev_standard_error_coverage_at_least_0_95": action_ev_uncertainty[
-            "available"
-        ]
-        and action_ev_uncertainty["decision_coverage"] >= 0.95
-        and all(a['policy_action_weighted_predicted_precision_coverage'] >= .95 for a in served_value_audits),
+        "action_ev_standard_error_coverage_at_least_0_95": frozen_ev['qualified'],
     }
     research_pilot_gates = {
         "action_frequency_mae_at_most_0_06": cross_seed["action_frequency_mae"] <= 0.06,
@@ -904,7 +915,7 @@ def main() -> None:
         "probabilities_valid": cross_seed["probability_sums_valid"],
     }
     report = {
-        "schema": "hu-neural-cross-seed-validation-v11",
+        "schema": "hu-neural-cross-seed-validation-v12",
         "depth_bb": config["depth_bb"],
         'action_abstraction':explicit_grid,
         'evaluation_binary':{'path':str(args.evaluation_binary),'sha256':args.evaluation_binary_sha256} if args.evaluation_binary else None,
@@ -921,8 +932,10 @@ def main() -> None:
         "forced_deviation": forced_deviation,
         "action_ev_uncertainty": action_ev_uncertainty,
         'served_action_values':served_value_audits,
+        'frozen_action_ev_qualification':frozen_ev,
+        'frozen_action_ev_receipt_sha256':hashlib.sha256(args.frozen_ev_qualification.read_bytes()).hexdigest() if args.frozen_ev_qualification else None,
         'unmeasured_gates':(['estimated_exploitability_at_most_0_50','exploitability_upper_99_at_most_0_50'] if not exploitability_certificates else [])
-            + (['action_ev_standard_error_coverage_at_least_0_95'] if not action_ev_uncertainty['available'] else []),
+            + (['action_ev_standard_error_coverage_at_least_0_95'] if not frozen_ev['available'] else []),
         "exploitability_certificates": exploitability_certificates,
         "selected_sample_mean_exploitability_bb": selected_exploitability_mean,
         "selected_exploitability_upper_bound_bb": selected_exploitability_upper,
@@ -936,10 +949,7 @@ def main() -> None:
             "maximum_estimated_bb_per_hand": MAXIMUM_ESTIMATED_EXPLOITABILITY_BB_PER_HAND,
             "maximum_one_sided_99_upper_bound_bb_per_hand": MAXIMUM_ONE_SIDED_99_EXPLOITABILITY_UPPER_BOUND_BB_PER_HAND,
         },
-        "artifacts": [
-            verify_artifact(latest_artifact(first_state, args.round_number)),
-            verify_artifact(latest_artifact(second_state, args.round_number)),
-        ],
+        "artifacts": artifact_checks,
         "frozen_weight_overrides": {
             "preflop": preflop_weight_overrides,
             "postflop": postflop_weight_overrides,
@@ -965,9 +975,9 @@ def main() -> None:
             "The conservative 99% full-game exploitability upper bound has not reached 0.50bb/hand."
             if not gates["exploitability_upper_99_at_most_0_50"]
             else "The conservative 99% full-game exploitability upper bound passed.",
-            "Independent reference action-EV precision was not measured."
-            if not action_ev_uncertainty['available'] else
-            "Independent action-EV standard-error coverage has not reached the release gate."
+            "Full information-set EV qualification was not measured; conditional rollout SE is diagnostic only."
+            if not frozen_ev['available'] else
+            "Frozen information-set EV precision/calibration has not reached the release gate."
             if not gates["action_ev_standard_error_coverage_at_least_0_95"]
             else "Independent action-EV standard-error coverage passed; this does not establish exploitability.",
         ],

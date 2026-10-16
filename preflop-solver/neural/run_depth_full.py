@@ -37,7 +37,8 @@ def remaining_seconds(run: Path, hours: float) -> float:
     return max(0., hours * 3600 - training_seconds(run))
 
 def trainer_command(python: str, run: Path, depth: int, seed: int,
-                    seconds: float, sampler: Path, digest: str) -> list[str]:
+                    seconds: float, sampler: Path, digest: str,
+                    average_regret_rollouts: bool = False) -> list[str]:
     argv = [python, str(ROOT/'preflop-solver/neural/train.py'), '--run-dir', str(run),
             '--depth-bb', str(depth), '--seed', str(seed), '--max-minutes', str(seconds/60),
             '--sampler-binary', str(sampler), '--sampler-sha256', digest,
@@ -45,6 +46,8 @@ def trainer_command(python: str, run: Path, depth: int, seed: int,
             json.dumps(PILOT_GRID,sort_keys=True,separators=(',',':'))]
     for name,value in PROFILE.items():
         argv.extend(('--'+name.replace('_','-'),str(value)))
+    if average_regret_rollouts:
+        argv.append('--average-regret-rollouts')
     return argv
 
 def finite_metrics(value: object) -> bool:
@@ -104,7 +107,8 @@ def run_job(args: argparse.Namespace, plan: dict, depth: int, seed: int,
         if remaining<=0:
             info.update(status='budget_completed',**progress(run)); return info
         sampler = args.output_root/'bin/preflop-solver'
-        argv = trainer_command(args.python,run,depth,seed,remaining,sampler,plan['samplerSha256'])
+        argv = trainer_command(args.python,run,depth,seed,remaining,sampler,plan['samplerSha256'],
+                               getattr(args,'average_regret_rollouts',False))
         info['command'] = argv
         with (run/'train.log').open('a') as log:
             process = subprocess.Popen(argv,cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,
@@ -153,6 +157,8 @@ def main() -> None:
     parser.add_argument('--only-seed',type=int,choices=tuple(s for _,s in JOBS))
     parser.add_argument('--detach',action='store_true')
     parser.add_argument('--keep-awake',action='store_true')
+    parser.add_argument('--average-regret-rollouts',action='store_true',
+                        help='opt-in candidate estimator; does not waive validation or authorize promotion')
     args=parser.parse_args(); args.output_root=args.output_root.resolve()
     if not 8<=args.hours<=12 or not 0<args.max_rss_gb<=4 or args.min_free_gb<20 or args.stall_minutes<5:
         parser.error('full training requires 8–12h, <=4GiB per worker, >=20GiB disk floor and >=5min stall limit')
@@ -175,7 +181,9 @@ def main() -> None:
         source=ROOT/'preflop-solver/target/release/preflop-solver'
         sampler.parent.mkdir(exist_ok=True)
         if not sampler.exists(): shutil.copy2(source,sampler); sampler.chmod(0o555)
-        subprocess.run([str(sampler),'--help'],check=True,stdout=subprocess.DEVNULL,timeout=15)
+        help_result=subprocess.run([str(sampler),'--help'],check=True,capture_output=True,text=True,timeout=15)
+        if args.average_regret_rollouts and '--average-regret-rollouts' not in help_result.stdout:
+            raise RuntimeError('frozen sampler lacks the requested regret estimator; use a fresh output directory')
         paths=[ROOT/'preflop-solver/neural/train.py',ROOT/'preflop-solver/neural/cash_profiles.py',
                ROOT/'scripts/policy/export-neural-artifact.mjs',sampler,Path(__file__).resolve()]
         plan={'schema':'hu-depth-full-run-v1','hoursPerSeed':args.hours,'workers':args.workers,
@@ -183,6 +191,8 @@ def main() -> None:
             'samplerSha256':sha256(sampler),'pinnedInputs':{str(p):sha256(p) for p in paths},
             'maxCpuRssGb':args.max_rss_gb,'minimumFreeDiskGb':args.min_free_gb,
             'validationStatus':'research_not_activated'}
+        if args.average_regret_rollouts:
+            plan['regretTargetEstimator']='averaged_action_values_v1'
         plan_path=args.output_root/'plan.json'
         if plan_path.exists() and json.loads(plan_path.read_text())!=json.loads(json.dumps(plan)):
             raise RuntimeError('full-run plan or source changed; use a new output directory')

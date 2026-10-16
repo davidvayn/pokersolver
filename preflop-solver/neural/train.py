@@ -100,10 +100,22 @@ class RunConfig:
     cash_profile: str | None = None
     action_abstraction_json: str | None = None
     sampler_sha256: str | None = None
+    average_regret_rollouts: bool = False
+    regret_training: str = "bootstrapped_dcfr"
+    retain_policy_snapshots: bool = False
+    integrate_closed_opponent_actions: bool = False
 
 
 def run_config_payload(config: RunConfig) -> dict:
     payload = asdict(config)
+    if not config.average_regret_rollouts:
+        payload.pop("average_regret_rollouts")
+    if config.regret_training == "bootstrapped_dcfr":
+        payload.pop("regret_training")
+    if not config.retain_policy_snapshots:
+        payload.pop("retain_policy_snapshots")
+    if not config.integrate_closed_opponent_actions:
+        payload.pop("integrate_closed_opponent_actions")
     if config.action_abstraction_json is None:
         payload.pop("action_abstraction_json")  # Preserve existing run identities.
     if config.sampler_sha256 is None:
@@ -795,6 +807,7 @@ def ingest_records(
     advantage_alpha: float,
     reservoir_rng: random.Random,
     cash_profile: str | None = None,
+    regret_training: str = "bootstrapped_dcfr",
 ) -> dict[str, list[tuple[np.ndarray, np.ndarray, float]]]:
     heldout: dict[str, list[tuple[np.ndarray, np.ndarray, float]]] = {
         "advantage_p0": [],
@@ -835,7 +848,16 @@ def ingest_records(
         if feature_hashes != record.get("feature_sha256"):
             raise ValueError("Rust and MLX feature encoders disagree")
         group_targets = np.asarray(targets, dtype=np.float32)
-        if kind in ("advantage_p0", "advantage_p1"):
+        record_weight = float(record["weight"])
+        if regret_training == "retained_instantaneous":
+            # Linear CFR: the reservoir supplies counterfactual reach through
+            # visitation frequency. Weight iterations, not sampled reach again.
+            record_weight = float(round_number)
+            if kind in ("advantage_p0", "advantage_p1"):
+                group_targets = group_targets / depth_bb
+        elif regret_training != "bootstrapped_dcfr":
+            raise ValueError("unknown regret-training rule")
+        elif kind in ("advantage_p0", "advantage_p1"):
             if cash_profile is not None:
                 # Native traversals use frozen FP32 CPU predictions. On the
                 # pilot host GPU inference differed by .0536bb on identical
@@ -860,7 +882,7 @@ def ingest_records(
             )
         holdout_group = record_index % 10 == 0
         if holdout_group:
-            heldout[kind].append((group_features, group_targets, float(record["weight"])))
+            heldout[kind].append((group_features, group_targets, record_weight))
         else:
             grouped_reservoir = reservoirs[kind]
             if not isinstance(grouped_reservoir, DecisionReservoir):
@@ -869,7 +891,7 @@ def ingest_records(
                 state_features,
                 action_features,
                 group_targets,
-                float(record["weight"]),
+                record_weight,
                 street,
                 reservoir_rng,
             )
@@ -1405,7 +1427,7 @@ def export_teacher_snapshot(
             "purpose": "offline_direct_average_policy_comparison_only",
             "round": round_number,
             "completedTraversals": completed_traversals,
-            "strategyWeight": float(completed_traversals**2),
+            "strategyWeight": float(round_number if config.regret_training == "retained_instantaneous" else completed_traversals**2),
             "strategyTransform": "regret_matching",
             "networkSchema": CASH_NETWORK_SCHEMA if config.cash_profile else NETWORK_SCHEMA,
             **({"cashRules": profile_rules(config.cash_profile),
@@ -1415,6 +1437,41 @@ def export_teacher_snapshot(
         },
     )
     return manifest_path
+
+
+def retain_sampling_policy(run_dir: Path, config: RunConfig, round_number: int,
+                           start_iteration: int, source: Path | None) -> None:
+    """Retain the policy actually sampled BEFORE the update, including round 1.
+
+    Full reference distributions require own-reach weighting, not an arithmetic
+    ensemble of post-update checkpoints. This bounded pilot history is separate
+    from serving artifacts and does not alter the sampling RNG.
+    """
+    if round_number > 128:
+        raise RuntimeError("exact snapshot pilot is bounded to 128 rounds")
+    if source is None:
+        network = {"layers": [{"input_size": input_feature_count(config.cash_profile),
+            "output_size": 1, "activation": "linear", "weights": [0.] * input_feature_count(config.cash_profile), "biases": [0.]}]}
+        policy = {"schema": NETWORK_SCHEMA, "input_size": INPUT_FEATURE_COUNT,
+                  "strategy_transform": "regret_matching", "networks": [network, network]}
+    else:
+        policy = json.loads(source.read_text())
+        policy.pop("sampling_baseline", None)
+        policy.pop("sampling_baseline_scale", None)
+    policy['qualification_game'] = {'depth_bb': config.depth_bb,
+        'action_abstraction': json.loads(config.action_abstraction_json) if config.action_abstraction_json else None}
+    path = run_dir / "policy-history" / f"round-{round_number:06d}.json"
+    atomic_json(path, policy)
+    weights = [sum(float(np.float32(round_number if config.regret_training == "retained_instantaneous" else (iteration + 1) ** 2))
+                   for iteration in range(start_iteration, start_iteration + config.traversals_per_round)
+                   if iteration % 2 != player) for player in (0, 1)]
+    manifest = run_dir / "policy-history" / "manifest.json"
+    entries = json.loads(manifest.read_text()) if manifest.exists() else []
+    entries = [entry for entry in entries if entry["round"] != round_number]
+    entries.append({"round": round_number, "path": str(path.resolve()),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "weight": 1., "weights_by_player": weights})
+    atomic_json(manifest, entries)
 
 
 def export_browser_artifact(
@@ -1473,7 +1530,7 @@ def export_browser_artifact(
         "opponentProfileSchema": "local-opponent-profile-v1",
         "opponentProfileFeatureCount": PROFILE_FEATURE_COUNT,
         "parameterCount": len(parameters),
-        "trainingAlgorithm": ADVANTAGE_UPDATE,
+        "trainingAlgorithm": "retained_instantaneous_linear_deep_cfr_v1" if config.regret_training == "retained_instantaneous" else ADVANTAGE_UPDATE,
         "advantageAlpha": config.advantage_alpha,
         "samplingVarianceReduction": {
             "kind": "action_dependent_control_variate",
@@ -1591,6 +1648,14 @@ def migrate_legacy_resume_state(
         legacy_config.pop("action_abstraction_json", None)
     if legacy_config.get("sampler_sha256") is None:
         legacy_config.pop("sampler_sha256", None)
+    if not legacy_config.get("average_regret_rollouts", False):
+        legacy_config.pop("average_regret_rollouts", None)
+    if legacy_config.get("regret_training", "bootstrapped_dcfr") == "bootstrapped_dcfr":
+        legacy_config.pop("regret_training", None)
+    if not legacy_config.get("retain_policy_snapshots", False):
+        legacy_config.pop("retain_policy_snapshots", None)
+    if not legacy_config.get("integrate_closed_opponent_actions", False):
+        legacy_config.pop("integrate_closed_opponent_actions", None)
     expected_config = json.loads(json.dumps(run_config_payload(config)))
     if legacy_config != expected_config:
         raise RuntimeError("resume configuration differs from the existing neural run")
@@ -1850,6 +1915,10 @@ def generate_shard(
         command.append("--compact-serving-grid")
     if config.action_abstraction_json is not None:
         command.extend(("--action-abstraction-json", config.action_abstraction_json))
+    if config.average_regret_rollouts:
+        command.append("--average-regret-rollouts")
+    if config.integrate_closed_opponent_actions:
+        command.append("--integrate-closed-opponent-actions")
     if config.cash_profile: command.extend(("--cash-profile", config.cash_profile))
     if traversal_networks is not None:
         command.extend(("--networks", str(traversal_networks)))
@@ -1934,6 +2003,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="independent external samples averaged into each action-value target",
     )
     parser.add_argument("--sample-turn-rivers", action="store_true")
+    parser.add_argument("--average-regret-rollouts", action="store_true",
+                        help="reuse independent action-value samples in actual regret targets")
+    parser.add_argument("--regret-training", choices=("bootstrapped_dcfr", "retained_instantaneous"),
+                        default="bootstrapped_dcfr", help="opt-in retained raw regrets with per-round refitting")
+    parser.add_argument("--retain-policy-snapshots", action="store_true",
+                        help="retain exact pre-update policies for a bounded 128-round averaging audit")
+    parser.add_argument("--integrate-closed-opponent-actions", action="store_true",
+                        help="exact expectation over terminal opponent responses; never skip open subtrees")
     parser.add_argument("--compact-serving-grid", action="store_true")
     parser.add_argument("--action-abstraction-json", help="pin an explicit Rust action grid for every sampled round")
     parser.add_argument("--sampler-binary", type=Path, help="use a frozen prebuilt sampler instead of rebuilding")
@@ -1950,6 +2027,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
     args = parse_args()
+    if args.average_regret_rollouts and args.value_rollouts_per_action < 2:
+        raise ValueError("averaged regret targets require at least two rollouts")
+    if args.cash_profile and (args.average_regret_rollouts or args.retain_policy_snapshots or args.integrate_closed_opponent_actions or args.regret_training != 'bootstrapped_dcfr'):
+        raise ValueError("depth-repair experiments are rake-free Home only")
     if (args.sampler_binary is None) != (args.sampler_sha256 is None):
         raise ValueError("a frozen sampler requires both its binary and SHA-256")
     if args.sampler_binary is not None:
@@ -2038,6 +2119,10 @@ def main() -> None:
         cash_profile=args.cash_profile,
         action_abstraction_json=args.action_abstraction_json,
         sampler_sha256=args.sampler_sha256,
+        average_regret_rollouts=args.average_regret_rollouts,
+        regret_training=args.regret_training,
+        retain_policy_snapshots=args.retain_policy_snapshots,
+        integrate_closed_opponent_actions=args.integrate_closed_opponent_actions,
     )
     validate_training_profile(config.cash_profile, config.depth_bb, config.variance_baseline_scale)
     root = Path(__file__).resolve().parents[2]
@@ -2140,6 +2225,8 @@ def main() -> None:
         round_started = time.monotonic()
         round_learning_rate = scheduled_learning_rate(config, round_number)
         set_optimizer_learning_rate(optimizers, round_learning_rate)
+        if config.retain_policy_snapshots:
+            retain_sampling_policy(run_dir, config, round_number, int(state["completed_traversals"]), traversal_networks)
         shard = generate_shard(
             binary,
             run_dir,
@@ -2156,6 +2243,10 @@ def main() -> None:
             raise RuntimeError("sample shard depth changed during a pinned run")
         if metadata["sampling_mode"] != "external_sampling":
             raise RuntimeError("training requires external-sampling traversal shards")
+        if config.average_regret_rollouts and metadata.get("regret_target_estimator") != "averaged_action_values_v1":
+            raise RuntimeError("sampler did not apply the pinned averaged-regret estimator")
+        if config.integrate_closed_opponent_actions and not metadata.get('integrates_closed_opponent_actions'):
+            raise RuntimeError('sampler did not apply the pinned terminal-response estimator')
         action_abstraction = metadata["action_abstraction"]
         if config.action_abstraction_json is not None and action_abstraction != json.loads(config.action_abstraction_json):
             raise RuntimeError("sample shard action grid differs from the pinned training run")
@@ -2163,7 +2254,8 @@ def main() -> None:
             reservoir = reservoirs[name]
             if not isinstance(reservoir, DecisionReservoir):
                 raise TypeError("advantage samples require grouped reservoirs")
-            reservoir.clear()
+            if config.regret_training == "bootstrapped_dcfr":
+                reservoir.clear()
         heldout = ingest_records(
             records,
             config.depth_bb,
@@ -2173,7 +2265,18 @@ def main() -> None:
             config.advantage_alpha,
             reservoir_rng,
             config.cash_profile,
+            config.regret_training,
         )
+        if config.regret_training == "retained_instantaneous":
+            # Targets are raw instantaneous regrets across iterations. Refit
+            # from scratch, rather than recursively adding a predicted prior.
+            fresh, fresh_optimizers = initialize_models(
+                RunConfig(**{**asdict(config), "seed": config.seed + round_number * 1000003}))
+            for name in ("advantage_p0", "advantage_p1"):
+                models[name] = fresh[name]
+                optimizers[name] = fresh_optimizers[name]
+                optimizers[name].learning_rate = round_learning_rate
+                compiled_steps[name] = make_compiled_group_regression_step(models[name], optimizers[name])
         losses: dict[str, float | None] = {}
         for name, reservoir in reservoirs.items():
             if isinstance(reservoir, ReplayReservoir):
@@ -2228,6 +2331,8 @@ def main() -> None:
             "round": round_number,
             "traversals": config.traversals_per_round,
             "advantage_update": ADVANTAGE_UPDATE,
+            "regret_training": config.regret_training,
+            "average_regret_rollouts": config.average_regret_rollouts,
             "advantage_alpha": config.advantage_alpha,
             "variance_baseline_scale": config.variance_baseline_scale,
             "replay_street_proposal": config.replay_street_proposal,

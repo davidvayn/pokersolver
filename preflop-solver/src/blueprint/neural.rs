@@ -17,6 +17,8 @@ mod cash_query;
 pub use cash_query::{canonical_cash_query_state, CashPolicyEngine, CashPolicyEngineConfig, CashPolicyQuery};
 mod cash_turn_roots;
 pub use cash_turn_roots::{sample_cash_turn_roots, sample_cash_flop_roots, CashTurnRootSampleConfig};
+mod qualification;
+pub use qualification::{qualify_frozen_values, FrozenValueConfig};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
@@ -3756,6 +3758,8 @@ struct SampleGenerator {
     range_records: Vec<Vec<u8>>,
     attempted_range_records: usize,
     range_self_play_only: bool,
+    average_regret_rollouts: bool,
+    integrate_home_closed_actions: bool,
 }
 
 impl SampleGenerator {
@@ -3799,6 +3803,8 @@ impl SampleGenerator {
             range_records: Vec::with_capacity(config.max_records.min(65_536)),
             attempted_range_records: 0,
             range_self_play_only: false,
+            average_regret_rollouts: false,
+            integrate_home_closed_actions: false,
             config,
             networks,
         })
@@ -3813,6 +3819,8 @@ impl SampleGenerator {
             attempted_range_records: 0,
             range_self_play_only: false,
             config: self.config.clone(),
+            average_regret_rollouts: self.average_regret_rollouts,
+            integrate_home_closed_actions: self.integrate_home_closed_actions,
             networks: self
                 .networks
                 .as_ref()
@@ -3973,7 +3981,7 @@ impl SampleGenerator {
         strategy: &[f64],
         traverser: usize,
     ) -> Option<f64> {
-        if self.config.game.cash_rules.is_none()
+        if (self.config.game.cash_rules.is_none() && !self.integrate_home_closed_actions)
             || (state.street != Street::River
                 && state.remaining(1 - state.actor, &self.config.game) > EPSILON)
         {
@@ -4017,6 +4025,11 @@ impl SampleGenerator {
             if let Some(value) =
                 self.cash_closed_terminal_expectation(&state, deal, &actions, &strategy, traverser)
             {
+                if self.integrate_home_closed_actions && self.config.game.cash_rules.is_none() {
+                    // Preserve the legacy random stream while replacing only
+                    // the terminal response estimate with its expectation.
+                    let _ = sample_index(&strategy, rng);
+                }
                 return value;
             }
             let selected = sample_index(&strategy, rng);
@@ -4240,7 +4253,9 @@ impl SampleGenerator {
                     &state,
                     deal,
                     &actions,
-                    values.iter().map(|value| value - node_value).collect(),
+                    instantaneous_regrets(&strategy, if self.average_regret_rollouts {
+                        &action_value_targets
+                    } else { &values }),
                     Some(action_value_targets),
                     action_value_standard_errors,
                     &self.config.game,
@@ -4269,6 +4284,9 @@ impl SampleGenerator {
             if let Some(value) =
                 self.cash_closed_terminal_expectation(&state, deal, &actions, &strategy, traverser)
             {
+                if self.integrate_home_closed_actions && self.config.game.cash_rules.is_none() {
+                    let _ = sample_index(&strategy, &mut self.rng);
+                }
                 return value;
             }
             let selected = sample_index(&strategy, &mut self.rng);
@@ -4355,6 +4373,11 @@ fn baseline_corrected_sample(
         .map(|(probability, baseline)| probability * baseline)
         .sum::<f64>();
     baseline_node_value + sampled_value - baseline_values[selected]
+}
+
+fn instantaneous_regrets(strategy: &[f64], values: &[f64]) -> Vec<f64> {
+    let node = strategy.iter().zip(values).map(|(p, v)| p * v).sum::<f64>();
+    values.iter().map(|value| value - node).collect()
 }
 
 fn value_rollout_seed(
@@ -4923,7 +4946,19 @@ fn trajectory_kind_index(kind: TrajectoryActionKind) -> usize {
 }
 
 pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Error>> {
-    let (config, records, attempted_records, _, _) = SampleGenerator::new(config)?.run()?;
+    generate_samples_with_estimators(config, false, false)
+}
+
+/// Opt-in estimator experiment: reuse already-computed independent action-value
+/// samples for regret targets, rather than spending them only on the EV head.
+pub fn generate_samples_with_estimators(config: SampleGenerationConfig, average_regrets: bool, integrate_closed_actions: bool) -> Result<(), Box<dyn Error>> {
+    if average_regrets && (config.value_rollouts_per_action < 2 || config.trajectory_sampling) {
+        return Err("averaged regrets require external sampling and at least two value rollouts".into());
+    }
+    let mut generator = SampleGenerator::new(config)?;
+    generator.average_regret_rollouts = average_regrets;
+    generator.integrate_home_closed_actions = integrate_closed_actions;
+    let (config, records, attempted_records, _, _) = generator.run()?;
     if let Some(parent) = config.output.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
@@ -4960,7 +4995,14 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
         payoff_contract: config.game.cash_rules.as_ref().map(|_| "own-net-bb-after-refunds-and-house-rake-v1"),
         cash_terminal_action_integration: config.game.cash_rules.as_ref().map(|_| true),
     };
-    serde_json::to_writer(&mut writer, &metadata)?;
+    if average_regrets || integrate_closed_actions {
+        let mut metadata = serde_json::to_value(&metadata)?;
+        if average_regrets { metadata["regret_target_estimator"] = serde_json::json!("averaged_action_values_v1"); }
+        if integrate_closed_actions { metadata["integrates_closed_opponent_actions"] = serde_json::json!(true); }
+        serde_json::to_writer(&mut writer, &metadata)?;
+    } else {
+        serde_json::to_writer(&mut writer, &metadata)?;
+    }
     writer.write_all(b"\n")?;
     for record in &records {
         serde_json::to_writer(&mut writer, record)?;

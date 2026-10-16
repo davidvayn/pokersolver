@@ -192,3 +192,147 @@ transport test, not a strength certificate); nine Rust CLI release tests
 passed; 290 TypeScript tests passed with four unrelated optional native tests
 skipped, including four real-artifact full-hand compatibility tests; production
 build passed. No browser-facing implementation changed in this audit.
+
+## Depth repair — 2026-10-15
+
+The user authorized the following implementation and short matched comparisons,
+not another unconditional eight-hour run or activation of rejected exports.
+
+1. **Frozen-policy EV qualification.** `neural-frozen-values` accepts sampled
+   public decision records and exact depth/grid-bound policy weights. It replays
+   the complete legal history, computes opponent-card posterior weights from
+   observed action likelihoods, removes known cards, and samples independent
+   opponent/future-board blocks. Within each block it uses shared continuation
+   random streams across actions. SE is computed across outer block means, not
+   just repeated actions with a fixed hidden deal. Complete runouts settle
+   exactly. This is an offline evaluator, not a change to the live resolver.
+2. **Actual regret variance.** `--average-regret-rollouts` reuses the existing
+   independent action-value samples in the instantaneous regret targets. The
+   default sampler remains unchanged; extra samples previously only improved
+   EV-head labels. The primary traversal return and visitation accounting stay
+   unchanged. Compare the existing control-variate baseline against scale zero
+   rather than assuming that an inaccurate baseline must reduce variance.
+3. **Matched training-rule comparison.** `--regret-training
+   retained_instantaneous` retains bounded raw-regret reservoirs, uses linear
+   iteration-weighted losses, and refits the regret networks from deterministic
+   fresh initialization each round. It does not recursively bootstrap previous
+   predicted cumulative regrets. This opt-in is a different training algorithm,
+   with a different pinned identity; old checkpoints cannot silently resume in
+   it. No claim that the alternative is superior is justified without pilots.
+4. **Correct averaging reference.** `--retain-policy-snapshots` saves the policy
+   actually used before each sampling round, including the initial uniform
+   policy. It records separate player weights for alternating traversals.
+   Snapshot queries multiply these weights by each policy's own action reach
+   along the observed history. Arithmetic probability/logit ensembles and
+   post-update-only checkpoints are not equivalent. This exact pilot history is
+   bounded to 128 rounds and stays outside serving manifests.
+5. **Small independent response checks.** A local deviating action is selected
+   using the first half of independent hidden blocks, then measured on the
+   other half. Negative held-out gains are retained, not clipped into artificial
+   improvement. These street-stratified local deviations are not bb/hand
+   exploitability, best-response certificates, or evidence of full-game safety.
+
+`preflop-solver/neural/depth_repair.py` performs these probes using a copied,
+SHA-256-pinned native binary. Four profiles each use two independent seeds:
+control, averaged regrets, retained raw regrets plus averaging, and averaged
+regrets with the baseline disabled. The action grid stays fixed. Paired
+comparisons use the same held-out control-policy reach and forced-deviation
+corpora. Configurations match rounds/traversals/optimizer steps; actual wall
+time is reported separately. At most two training processes run concurrently,
+with per-seed time/RSS/disk guards and rejection of truncated/nonfinite data.
+
+Frozen EV refits are separate from policy training. Train/calibration/test
+trajectory families are disjoint. The stored residual interval includes
+reference noise and is explicitly not called sampling SE or a conditional
+error guarantee. Tiny pilot fits do not qualify a depth for release.
+
+The initial native integration test exposed JSON `50` versus `50.0` identity
+comparison. Typed numeric/grid normalization fixed it; wrong depth/grid and
+invalid betting snapshots still fail closed. No strategy run started during
+that failed preflight. Its output was retained under
+`/Users/davidvayntrub/pokersolver-training/depth-repair-2026-10-15`.
+The corrected matched experiment is under the sibling directory
+`depth-repair-2026-10-15-v2`.
+
+Research basis: [Deep CFR](https://proceedings.mlr.press/v97/brown19b/brown19b.pdf)
+studies retained sampled regrets and regret-network refitting;
+[SD-CFR](https://arxiv.org/abs/1901.07621) derives own-reach-weighted snapshot
+averaging; [low-variance baselines](https://proceedings.mlr.press/v119/davis20a.html)
+explain unbiased control-variate variance reduction. These papers motivate
+controlled experiments; their results do not establish strength of our variant.
+
+### Completed pilot decisions
+
+The four-profile screen completed eight independent 12-round runs (64
+traversals and 80 optimizer steps per round), with 1,597 common held-out
+authentic decisions. These cold-start results are not a comparison against the
+eight-hour checkpoints:
+
+| Profile | Cross-seed frequency MAE | Primary-action agreement |
+| --- | --- | --- |
+| Existing control | 14.62 percentage points | 42.17% |
+| Averaged regret targets | 12.93 | 55.89% |
+| Retained raw regrets + averaging | 14.19 | 50.58% |
+| Averaging, baseline disabled | 13.50 | 47.45% |
+
+Averaging is the best directional stability result, not a release candidate.
+The original 5-point/85% gates remain unmet. The initial local response probes
+were too noisy to justify a longer run.
+
+The isolated compression follow-up used 1,597 decisions, whole-trajectory
+train/tuning/test splits, and 100/400-step fits selected only on tuning data.
+For the averaged-regret pair, held-out student/reference MAE improved from
+8.70 to 7.11 points and 7.80 to 6.55 points. However, polished students did not
+improve cross-seed consistency (12.97-point MAE, 53.41% primary agreement).
+Do not mistake better teacher fitting for improved poker strength or promote
+these students.
+
+The final terminal-response integration ablation reran the averaged control
+and added an integrated pair, on one new pinned binary. Both control seeds
+reproduced all 660,868 parameter values exactly; binary identities intentionally
+changed because the sampler SHA is part of the model version. A deterministic
+regression also checks that integration preserves primary chance draws,
+visited states, and average-policy records while changing estimates only.
+The sampler integrates only nodes whose every response is terminal; it retains
+the configured all-in runout evaluation and never closes an open betting tree.
+
+This follow-up used 1,428 common decisions and 256 independent hidden blocks
+per local response root, eight times the first screen's budget. Integration
+worsened MAE (14.07 vs 12.73 points), primary agreement (48.39% vs 58.51%),
+and held-out local response gains (2.02/4.68bb vs 1.55/1.19bb, with respective
+SEs 0.37/0.40 and 0.45/0.39bb). Those gains are per stratified sampled decision,
+not bb/hand exploitability. Reject this option as a default at this budget;
+local estimator variance reduction did not translate into better learned play.
+
+All four old frozen exports also received full-hidden-scenario probes and
+separate EV-head refits. Nominal 95% interval coverage was only 61.1%/70.6%
+(50bb) and 66.7%/43.2% (100bb). The tiny frozen refits still require wide empirical
+intervals (12.4–22.6bb half-widths), not precise grading claims. These small,
+noisy, stratified probes reject qualification; they do not estimate global
+prediction accuracy or qualify authentic reach-weighted release coverage.
+
+`validate_seeds.py` now emits schema v12. Its unchanged 0.02bb/95% EV threshold
+requires an artifact-bound frozen information-set precision/calibration receipt
+through `--frozen-ev-qualification`. Old conditional-rollout SE is retained as
+a diagnostic, not release evidence. Wrong hashes/depth/grid fail closed;
+stratified pilot receipts are explicitly ineligible. An actual CLI replay
+confirmed both old 50bb exports remain rejected and exploitability remains
+unmeasured. The existing experimental 20bb manifest is not recertified or
+changed by this tooling.
+
+See the [machine-readable audit](depth-repair-audit-2026-10-15.json) for exact
+results and report hashes. Carry averaged regret targets forward only for a
+subsequent matched policy-quality experiment. Do not enable the other options
+or start another eight-hour run on these results. No new depth was released.
+
+The guarded full-run supervisor now accepts `--average-regret-rollouts` as an
+explicit opt-in, pins that estimator in its plan, and checks sampler support
+before launching. Legacy defaults/resume identities are preserved where the
+new flags are omitted; changed source hashes still require a fresh run directory.
+This is preparation only, not authorization or evidence for another long run.
+
+Final checks: 65 Python tests passed with real native transport/estimator probes;
+463 Rust library release tests and nine CLI tests passed, with 59 guarded
+research tests ignored; 290 TypeScript tests passed, with four optional native
+tests skipped; `npm run build` passed and reverified all active 20bb artifact
+hashes. No browser-facing code or active model manifest changed.

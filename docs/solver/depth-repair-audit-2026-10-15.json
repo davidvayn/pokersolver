@@ -1,0 +1,103 @@
+{
+  "schema": "hu-depth-repair-audit-v1",
+  "date": "2026-10-15",
+  "status": "implementation_and_pilots_completed_not_activated",
+  "active_models_changed": false,
+  "release_eligible": false,
+  "long_training_started": false,
+  "full_game_exploitability_measured": false,
+  "thresholds_changed_or_waived": false,
+  "verification": {
+    "typescript_tests_passed": 290,
+    "optional_native_typescript_tests_skipped": 4,
+    "python_tests_passed": 65,
+    "rust_library_release_tests_passed": 463,
+    "rust_research_tests_ignored": 59,
+    "rust_cli_release_tests_passed": 9,
+    "production_build_passed": true,
+    "native_release_validator_receipt_replay_passed": true,
+    "browser_facing_implementation_changed": false
+  },
+  "work_completed": [
+    "Frozen-policy information-set EV evaluation with opponent posteriors and independent future-board blocks",
+    "Separate immutable-policy EV refits with trajectory-family train/calibration/test splits",
+    "Independent averaged action values used in actual instantaneous regret targets",
+    "Bounded retained instantaneous-regret and fresh-refitting alternative",
+    "Pre-update policy retention and own-reach-weighted snapshot reference",
+    "Held-out average-policy compression fitting probe",
+    "Terminal opponent-response integration with primary sampling stream preservation",
+    "Disjoint selection/evaluation hidden blocks for local response probes",
+    "Artifact-bound full-information-set EV qualification in the release validator"
+  ],
+  "first_matched_screen": {
+    "depth_bb": 50,
+    "seeds": [51701, 51702],
+    "rounds_per_seed": 12,
+    "traversals_per_round": 64,
+    "optimizer_steps_per_round": 80,
+    "authentic_decisions": 1597,
+    "evaluation_distribution": "fixed common control-policy reach; not each candidate's own reach",
+    "profiles": {
+      "control": {"frequency_mae": 0.14619463325131193, "primary_agreement": 0.42167969671705674},
+      "averaged": {"frequency_mae": 0.12927956922664907, "primary_agreement": 0.5588877003665151},
+      "retained": {"frequency_mae": 0.14187643306155856, "primary_agreement": 0.5058123987352721},
+      "no_baseline": {"frequency_mae": 0.13501146134660438, "primary_agreement": 0.4744545468845858}
+    },
+    "decision": "Carry averaged regrets forward for investigation only; none meets release stability gates."
+  },
+  "compression_probe": {
+    "selection": "100/400 fitting steps chosen on tuning families; disjoint test families",
+    "averaged_seed_51701": {"test_mae_before": 0.08702584827057137, "test_mae_after": 0.0710885850312635},
+    "averaged_seed_51702": {"test_mae_before": 0.07801086900768904, "test_mae_after": 0.06545243139009678},
+    "averaged_student_cross_seed_mae": 0.12966326907294387,
+    "averaged_student_primary_agreement": 0.5341083198313673,
+    "decision": "Compression error is reducible, but fitting the snapshot reference did not improve cross-seed consistency; do not promote the polished students."
+  },
+  "closed_response_followup": {
+    "depth_bb": 50,
+    "seeds": [51701, 51702],
+    "rounds_per_seed": 12,
+    "traversals_per_round": 64,
+    "optimizer_steps_per_round": 80,
+    "authentic_decisions": 1428,
+    "evaluation_distribution": "fixed common averaged-control-policy reach",
+    "response_hidden_blocks": 256,
+    "response_inner_rollouts": 2,
+    "averaged_control": {
+      "frequency_mae": 0.12729767089215743,
+      "primary_agreement": 0.5850998680987272,
+      "heldout_local_gain_bb_in_seed_order": [1.5527321885073047, 1.194280851757597],
+      "heldout_local_gain_se_bb_in_seed_order": [0.44810270728933166, 0.3855275104261453]
+    },
+    "integrated": {
+      "frequency_mae": 0.14071086325459567,
+      "primary_agreement": 0.4839363105332512,
+      "heldout_local_gain_bb_in_seed_order": [2.0226882771821035, 4.676847729813101],
+      "heldout_local_gain_se_bb_in_seed_order": [0.3749949635103651, 0.40464387080092734]
+    },
+    "control_parameter_replay_identical_for_both_seeds": true,
+    "control_binary_bytes_identical": false,
+    "binary_difference_reason": "Different frozen sampler SHA-256 changes the pinned model identity; all 660868 exported parameters match exactly.",
+    "decision": "Reject terminal integration as a default at this budget: worse stability and larger held-out local response gains. Retain the tested opt-in for research."
+  },
+  "ev_findings": {
+    "existing_50bb_nominal_95_interval_coverage_in_seed_order": [0.6111111111111112, 0.7058823529411765],
+    "existing_100bb_nominal_95_interval_coverage_in_seed_order": [0.6666666666666666, 0.43243243243243246],
+    "frozen_refit_empirical_interval_half_widths_bb": [14.682572502858726, 12.362951434595555, 18.1530024966835, 22.59143864346195],
+    "decision": "No EV qualification passed. References remain noisy and small stratified pilots are not authentic reach-weighted release evidence. Sampling SE alone cannot qualify learned EV accuracy."
+  },
+  "provenance": [
+    {"path": "/Users/davidvayntrub/pokersolver-training/depth-repair-2026-10-15-v2/summary.json", "sha256": "11a2d09d532bd00bd78d617fbf18e9d36160acc5d58d9b8029f848a69b898f34"},
+    {"path": "/Users/davidvayntrub/pokersolver-training/depth-repair-2026-10-15-v2/compression-probe/summary.json", "sha256": "7faf584789d5b0dff463fff34408de78b781df9a90a3c264ea1dad391af26825"},
+    {"path": "/Users/davidvayntrub/pokersolver-training/depth-repair-2026-10-15-closed/summary.json", "sha256": "93b0648605de7ddbc600181ff3171f2e89c8aa71d7029f3270e32a32f281c943"},
+    {"path": "/Users/davidvayntrub/pokersolver-training/depth-repair-2026-10-15-v2/50bb-frozen-ev-qualification.json", "sha256": "9728cbf17aaf8e1bb73dabe3c4d02634e6c5c160eecb778bd3e0bf75d221f86b"},
+    {"path": "/Users/davidvayntrub/pokersolver-training/depth-repair-2026-10-15-v2/100bb-frozen-ev-qualification.json", "sha256": "5acc9e51faea0b36518f43b0042c25b3d07e641f5e9b6fe5b41e306f4f781439"}
+  ],
+  "limitations": [
+    "These are cheap cold-start matched pilots, not comparisons against the completed eight-hour checkpoints.",
+    "Cross-seed stability and fitting the average-policy reference do not prove equilibrium strength.",
+    "Local response gains are measured per sampled decision, not bb per complete hand or full-game exploitability.",
+    "Reference sampling SE excludes neural approximation error; residual interval widths are not relabeled as SE.",
+    "No 50bb/100bb activation, trained-weight replacement, paid compute, or unconditional long-run extension."
+  ]
+}

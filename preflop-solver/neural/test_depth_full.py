@@ -11,6 +11,12 @@ import threading
 from run_depth_pilots import JOBS, PILOT_GRID
 
 class DepthFullTests(unittest.TestCase):
+    def test_future_supervised_run_can_pin_averaging_without_changing_legacy_default(self):
+        baseline=trainer_command('python',Path('/run'),50,50121,28800,Path('/frozen/sampler'),'a'*64)
+        candidate=trainer_command('python',Path('/run'),50,50121,28800,Path('/frozen/sampler'),'a'*64,True)
+        self.assertNotIn('--average-regret-rollouts',baseline)
+        self.assertEqual(candidate,baseline+['--average-regret-rollouts'])
+
     def test_full_run_is_not_the_three_round_smoke_or_a_mislabeled_20bb_model(self):
         for depth,seed in JOBS:
             argv=trainer_command('python',Path('/run'),depth,seed,8*3600,Path('/frozen/sampler'),'a'*64)
