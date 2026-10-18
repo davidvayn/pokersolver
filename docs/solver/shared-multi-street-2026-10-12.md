@@ -444,3 +444,46 @@ model architecture are unchanged. No paid compute or serving promotion is
 involved. The final 50bb reports/weights remain outside Git; their hashes and
 the decision are recorded in
 [the 50bb audit](depth-repair-longer-50bb-2026-10-17.json).
+
+### Authentic frozen-EV follow-up — measured rejection
+
+While 100bb training continues, `qualify_depth_repair_values.py` completed the
+remaining 50bb EV check on 128 IID draws from an equal mixture of the two
+frozen policies' empirical decision distributions. Duplicate draws are kept;
+the 119 whole-hand families are namespaced across corpora. There are no forced
+street quotas: the sample contains 88 preflop, 31 flop, eight turn, and one river
+decision. This is not a separate qualification of river/postflop-only modes.
+
+Each seed received 2,048 independent posterior-opponent/future-board blocks
+per decision, with two inner continuations/block. Native batches preserve the
+global root-index RNG schedule exactly; a real regression confirms identical
+block values, means, and probabilities versus an unchunked call. The audit
+keeps source snapshots, native chunk hashes, policy hashes, and raw references.
+
+Both seeds failed: **0/128 decisions** meet the all-action 0.02bb reference-SE
+criterion, versus the unchanged 95% requirement. Median decision-max SE is
+0.590/0.653bb; its 95th percentile is 1.061/1.061bb. IID square-root scaling
+projects roughly 5.76 million blocks/decision to resolve that sampled 95th
+percentile. This is an optimistic variance-only projection, not a compute-cost
+estimate or a fix for learned prediction bias; no such extension was started.
+
+Exported-head nominal 95% interval coverage is only 35.8%/50.8%, and its
+policy-action-weighted predicted precision coverage is 38.1%/43.7%.
+Separate 400-step mean refits use disjoint train/calibration/test trajectory
+families. They still have 2.49/2.66bb held-out RMSE and wide empirical residual
+bands (8.93/6.55bb half-widths). These test subsets differ from the all-decision
+exported-head audit, so those RMSEs are not a matched before/after comparison.
+The refits remain research-only and their residual bands are not sampling SE.
+
+The artifact-bound authentic receipt was replayed through the ordinary
+validator. EV qualification is now a **measured failure**, alongside frequency
+MAE and primary agreement; only the two full-game exploitability gates remain
+unmeasured. The independent validation seed gives 7.80-point MAE and 73.74%
+primary agreement, with aggregate delta, sampled coverage, and probabilities
+still passing. It uses a different evaluation seed from the earlier 7.86/72.75%
+report; neither report is replaced or reinterpreted as a training improvement.
+
+The [authentic-EV audit](depth-repair-50bb-ev-2026-10-17.json) records exact
+metrics and report/receipt hashes. No serving weights, thresholds, or active
+manifests changed. More policy-training iterations alone cannot establish EV
+precision or calibration; these remain separate release blockers.

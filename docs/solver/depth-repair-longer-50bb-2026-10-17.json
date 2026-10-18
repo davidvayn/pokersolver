@@ -72,6 +72,12 @@
     "optional_typescript_tests_skipped": 8,
     "browser_or_rust_implementation_changed": false
   },
+  "authentic_ev_followup": {
+    "audit": "depth-repair-50bb-ev-2026-10-17.json",
+    "qualification_measured": true,
+    "qualified": false,
+    "interpretation": "The original ordinary validation above had no receipt. The subsequent authentic audit measured and rejected EV qualification; full-game exploitability remains unmeasured."
+  },
   "provenance": {
     "output_root": "/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-50bb",
     "summary_sha256": "2c8f0eaf01e2fdc257d666eb68d96c362192ba9c481405652d8e2ff14e4ae7f1",
