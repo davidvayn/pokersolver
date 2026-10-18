@@ -1505,7 +1505,8 @@ def export_browser_artifact(
         json.dumps(run_config_payload(config), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:12]
     model_version = (
-        f"deep-dcfr-plus-v12-{config.depth_bb}bb-cfg{config_fingerprint}"
+        # A new value-target contract must not reuse immutable v12 artifact URLs.
+        f"deep-dcfr-plus-v13-{config.depth_bb}bb-cfg{config_fingerprint}"
         f"-seed{config.seed}"
         f"-r{round_number:06d}-experimental"
     )

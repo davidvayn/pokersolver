@@ -1,7 +1,7 @@
 {
   "schema": "hu-depth-target-repair-checkpoint-v1",
   "date": "2026-10-18",
-  "status": "ev_contract_and_stability_isolation_completed_policy_pilot_running",
+  "status": "completed_not_activated",
   "active_models_changed": false,
   "release_eligible": false,
   "full_game_exploitability_measured": false,
@@ -199,7 +199,7 @@
         "estimators": {
           "integrated": {
             "action_precision_coverage": 0.05333333333333334,
-            "decision_precision_coverage": 0.0,
+            "decision_precision_coverage": 0,
             "mean_action_sampling_variance_bb2": 0.6929261120956589,
             "median_decision_max_se_bb": 1.0196552719475083,
             "optimistic_outer_blocks_for_95_percent_decisions": 2358762,
@@ -210,7 +210,7 @@
           },
           "sampled": {
             "action_precision_coverage": 0.05333333333333334,
-            "decision_precision_coverage": 0.0,
+            "decision_precision_coverage": 0,
             "mean_action_sampling_variance_bb2": 0.7959609338811617,
             "median_decision_max_se_bb": 1.1265313318443364,
             "optimistic_outer_blocks_for_95_percent_decisions": 2551554,
@@ -228,7 +228,7 @@
         "estimators": {
           "integrated": {
             "action_precision_coverage": 0.05333333333333334,
-            "decision_precision_coverage": 0.0,
+            "decision_precision_coverage": 0,
             "mean_action_sampling_variance_bb2": 0.679004834356089,
             "median_decision_max_se_bb": 1.0509235127918213,
             "optimistic_outer_blocks_for_95_percent_decisions": 2268448,
@@ -239,7 +239,7 @@
           },
           "sampled": {
             "action_precision_coverage": 0.05333333333333334,
-            "decision_precision_coverage": 0.0,
+            "decision_precision_coverage": 0,
             "mean_action_sampling_variance_bb2": 0.7786272049312148,
             "median_decision_max_se_bb": 1.140867071468696,
             "optimistic_outer_blocks_for_95_percent_decisions": 2556312,
@@ -273,10 +273,21 @@
         "Two cash process cleanup OS permission failures in unchanged code.",
         "Two missing ignored legacy v26 policy fixture failures in unchanged code."
       ]
-    }
+    },
+    "real_website_resolver_integration_passed": 4,
+    "practice_release_tools_passed": 11,
+    "native_policy_audit_tools_passed": 1,
+    "policy_tools_passed": 9,
+    "pinned_production_trace_verified": true
   },
   "policy_pilot": {
-    "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb",
+    "schema": "hu-upstream-regret-learning-pilot-v1",
+    "status": "completed_not_activated",
+    "receipt": {
+      "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/summary.json",
+      "sha256": "a17799a2397a63d59880e9ad1b90a52a86e06d63a04e369692712f743ceb196f"
+    },
+    "depth_bb": 50,
     "rounds": 24,
     "traversals_per_round": 128,
     "steps_per_round": 240,
@@ -288,6 +299,104 @@
       51701,
       51702
     ],
-    "status": "running_not_activated"
-  }
+    "batches": [
+      {
+        "averaged": {
+          "decisions": 2976,
+          "action_frequency_mae": 0.10795943031464414,
+          "primary_action_agreement": 0.5984176252138119,
+          "maximum_aggregate_action_delta": 0.01832085317413487
+        },
+        "retained": {
+          "decisions": 2976,
+          "action_frequency_mae": 0.12686257538662996,
+          "primary_action_agreement": 0.598341730111258,
+          "maximum_aggregate_action_delta": 0.07074983152815884
+        }
+      },
+      {
+        "averaged": {
+          "decisions": 3144,
+          "action_frequency_mae": 0.10354959015855464,
+          "primary_action_agreement": 0.5684673065520224,
+          "maximum_aggregate_action_delta": 0.019826520962629712
+        },
+        "retained": {
+          "decisions": 3144,
+          "action_frequency_mae": 0.12251157179609917,
+          "primary_action_agreement": 0.6083121756481779,
+          "maximum_aggregate_action_delta": 0.06402543226521981
+        }
+      }
+    ],
+    "local_response_means": {
+      "averaged-51701": 1.5183107146877861,
+      "averaged-51702": 1.1061182600550807,
+      "retained-51701": 1.5949224336448202,
+      "retained-51702": 1.385097857483985
+    },
+    "paired_response": {
+      "bootstrapped_mean_gain_bb": 1.3122144873714334,
+      "retained_mean_gain_bb": 1.4900101455644026,
+      "mean_delta_bb": 0.1777956581929691,
+      "seed_mean_deltas_bb": [
+        0.07661171895703406,
+        0.2789795974289042
+      ],
+      "one_sided_95_bootstrap_upper_delta_bb": 0.6692582598634979,
+      "independent_roots": 32,
+      "interpretation": "Retained minus bootstrapped local response gain; negative favors retained. Not full-game exploitability."
+    },
+    "decision": {
+      "improvements_hold": false,
+      "interpretation": "Screening criterion only, not release validation or proof of equilibrium strength.",
+      "local_response_reduction_credible_in_this_screen": false,
+      "release_eligible": false,
+      "stability_better_on_both_evaluation_batches": false
+    },
+    "source_sha256s": {
+      "depth_repair.py": "312c81130df3bc197c3515478f2849b274c0bee21fb782d1ec59adeb53a4e2a3",
+      "run_regret_learning_pilot.py": "63cba188959dfd035ae22a7794fce96c810cc67057c284400008a1c4f7219baf",
+      "train.py": "dba318d5706e317192a91fb9bc5fac0c50865fe4f052225c80cb9c183b0b6ffd",
+      "validate_seeds.py": "a3f283b4e71c1c7b8ae92226a9a085823cb47ca1bbc3c304b3eafac54ae9128c"
+    },
+    "sampler_sha256": "d667908af924d08192d877487b85e645cb1402dd6534208048bd6f5424508aec",
+    "artifacts": {
+      "averaged-51701": {
+        "bytes": 2646611,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/averaged-51701/artifacts/round-000024/model.bin",
+        "sha256": "1ea83f5671a06d07aa1d898492b7e9f3bc65e9a4de7d1c4fedbd689b2c649a40"
+      },
+      "averaged-51702": {
+        "bytes": 2646611,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/averaged-51702/artifacts/round-000024/model.bin",
+        "sha256": "4786fe27ab55033075ff124bc064529f9c1361a27d01482930842a9806ce11b5"
+      },
+      "retained-51701": {
+        "bytes": 2646604,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/retained-51701/artifacts/round-000024/model.bin",
+        "sha256": "abc472d01a09462d2b5d6a0e4176c84a7c2d0bfaaed44234ee22f923354d78ec"
+      },
+      "retained-51702": {
+        "bytes": 2646604,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/retained-51702/artifacts/round-000024/model.bin",
+        "sha256": "1be4ae44c0730a23a46a3fce5c72a197c90b3958e72a1ff7130d401570f77515"
+      }
+    },
+    "adopted": false,
+    "interpretation": "Retained variant rejected at this matched budget; bootstrap with averaged regret targets stays the baseline. Point estimates are not a statistically proven regression or full-game exploitability."
+  },
+  "implementation_checkpoint_commit": "ad84a59",
+  "long_run_started": false,
+  "paid_compute_used": false,
+  "jobs_running": false,
+  "future_export_namespace": "deep-dcfr-plus-v13; naming-only follow-up after all pilot training finished; pilot sources remain frozen at ad84a59"
 }

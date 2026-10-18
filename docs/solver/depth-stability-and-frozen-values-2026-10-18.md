@@ -140,9 +140,70 @@ hidden-card/runout noise. It stays opt-in and is not silently enabled in trainin
   require an absent ignored `runs/20bb-v26-routed-seed5101.json` legacy fixture.
   Those modules were not edited. Do not report the entire Python suite green.
 
-The short matched policy pilot remains running at this implementation checkpoint.
+The additional CI-equivalent checks also pass: 11 practice release-tool tests,
+one independent native policy-audit test, nine policy-tool tests, the pinned
+production trace verifier and all four real website resolver integration cases
+(preflop, captured flop, multi-street replay and production route). No browser
+component or user-facing flow changed, so no visual browser QA is claimed.
+
+## Completed matched policy pilot — alternative rejected
+
+All four runs finished exactly 24 rounds/3,072 traversals. Training source and
+binary identities are frozen at implementation checkpoint `ad84a59`. Training
+times were 556–707 seconds/run under host contention; they are not isolated
+throughput measurements. Both common evaluation batches contain all four
+policies, with 2,976 and 3,144 decisions respectively.
+
+| Batch | Bootstrap MAE | Retained MAE | Bootstrap primary agreement | Retained agreement |
+| --- | --- | --- | --- | --- |
+| 1 | 10.80 points | 12.69 points | 59.84% | 59.83% |
+| 2 | 10.35 points | 12.25 points | 56.85% | 60.83% |
+
+Retained regrets also worsen the aggregate action delta: 7.07/6.40 points,
+versus 1.83/1.98 for bootstrap. The improvement in primary agreement in the
+second batch alone is not a positive result across the predeclared criteria.
+
+Independent local deviations use 32 street-stratified roots, 512 hidden blocks,
+and disjoint action-selection/measurement halves. Bootstrap seed gains are
+1.518/1.106bb per decision; retained gains are 1.595/1.385. The pooled retained
+minus bootstrap difference is +0.1778bb, and its one-sided 95% paired-root
+bootstrap upper delta is +0.6693bb. Both seed point estimates are worse; this
+fails the improvement screen but does NOT establish a statistically significant
+regression or measure full-game exploitability.
+
+Do not adopt the retained variant, launch a 100bb replication of this negative
+50bb comparison, or extend it automatically. Bootstrapping with averaged regret
+targets remains the baseline. The cold-start 24-round results use different
+boards and a smaller training budget than the older 64-round candidates; do not
+interpret their larger errors as degradation of those unchanged checkpoints.
+
+The direct-average check establishes that compression alone cannot explain
+the measured instability. This pilot shows that replacing recursive predicted
+regrets with this retained/refitted alternative does not fix it at the tested
+budget. It does not isolate all remaining contributions from chance noise,
+regression/generalization error, and strategically equivalent mixed policies.
+At 50bb the largest sampled direct-average street disagreement is on turn
+(13.6 points, 22 draws); preflop remains 7.3 points over 169 draws. At 100bb,
+preflop remains 8.1 points over 161 draws. This is not exclusively a flop issue;
+the small turn/river subsamples are not independent street qualifications.
+
+Future training exports use the `deep-dcfr-plus-v13` namespace so the explicit
+EV-target contract cannot change bytes at an existing immutable v12 artifact
+URL. This naming-only follow-up was made after the pilot training finished;
+no training math, frozen artifact or active model changed. The export regression
+first failed on the reused namespace, then passed; all 69 targeted Python/native
+checks were rerun successfully after the change.
+
+All planned short comparisons are complete. No training/evaluation process,
+long-run extension, paid compute or activation remains running. Corrected value
+target provenance and roughly 13% reference-variance reduction are real
+engineering improvements, not a claim that EV accuracy, policy stability or
+full-game exploitability now pass. A larger frozen-policy value dataset and
+better hidden-chance estimation remain necessary candidates to test; blindly
+adding policy iterations or more distillation is not justified by this result.
+
 Machine-readable metrics and external report hashes are in
-[the checkpoint audit](depth-target-repair-audit-2026-10-18.json).
+[the completed audit](depth-target-repair-audit-2026-10-18.json).
 
 ## Research basis
 

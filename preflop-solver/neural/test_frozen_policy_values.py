@@ -29,6 +29,7 @@ class FrozenPolicyValueTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source, _ = self.fixture(directory)
             metadata = json.loads(source.read_text())['metadata']
+            self.assertTrue(metadata['modelVersion'].startswith('deep-dcfr-plus-v13-'))
             self.assertEqual(metadata['valueTargetPolicy']['kind'], 'historical_training_policies')
             self.assertFalse(metadata['valueTargetPolicy']['servingPolicyMatched'])
             self.assertFalse(metadata['valueTargetPolicy']['releaseEligible'])

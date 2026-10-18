@@ -580,3 +580,12 @@ responses before activation. Thresholds have not been lowered. Checkpoint
 recovery verification covers clean pauses, not unverified abrupt-crash replay
 repair. Browser-facing implementation did not change; the new test exercises
 the web runtime/engine directly without activating rejected models.
+
+### 2026-10-18: targeted EV repair and stability isolation
+
+The [follow-up report](depth-stability-and-frozen-values-2026-10-18.md) and
+[machine-readable audit](depth-target-repair-audit-2026-10-18.json) record the
+completed sequence: policy-pinned value fitting with separate residual-error
+semantics, direct own-reach-average stability decomposition, an approximately
+13% reduction in offline reference sampling variance, and a rejected short
+paired retained-regret comparison. No deeper model or longer run was promoted.
