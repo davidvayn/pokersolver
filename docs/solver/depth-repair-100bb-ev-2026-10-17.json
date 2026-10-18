@@ -1,0 +1,126 @@
+{
+  "schema": "hu-authentic-depth-ev-audit-summary-v1",
+  "date": "2026-10-17",
+  "depth_bb": 100,
+  "status": "measured_qualification_rejected_not_activated",
+  "profile": "averaged",
+  "active_models_changed": false,
+  "release_eligible": false,
+  "full_game_exploitability_measured": false,
+  "evaluation": {
+    "distribution": "heldout_authentic_reach_mixture",
+    "seeds": [
+      51701,
+      51702
+    ],
+    "decisions": 128,
+    "trajectory_families": 118,
+    "street_counts": {
+      "flop": 18,
+      "preflop": 91,
+      "river": 2,
+      "turn": 17
+    },
+    "outer_hidden_blocks_per_decision": 2048,
+    "inner_rollouts_per_block": 2,
+    "action_values_per_seed": 648,
+    "opponent_posterior_and_future_boards_included": true,
+    "independent_selection_and_hidden_scenario_seeds": true,
+    "sampling_scheme": "IID draws from the validator's equal-policy decision mixture; duplicate draws retained; no street balancing."
+  },
+  "reference_precision": {
+    "threshold_bb": 0.02,
+    "required_decision_coverage": 0.95,
+    "observed_decision_coverage_in_seed_order": [
+      0,
+      0
+    ],
+    "observed_action_coverage_in_seed_order": [
+      0.1388888888888889,
+      0.1388888888888889
+    ],
+    "median_decision_max_se_bb": [
+      1.030350355593905,
+      1.1142035593151638
+    ],
+    "p95_decision_max_se_bb": [
+      1.998402400258266,
+      1.9530988639980997
+    ],
+    "optimistic_outer_blocks_for_95_percent_decisions": [
+      20453574,
+      19530982
+    ],
+    "projection_limitation": "Empirical IID square-root SE scaling only, not a guarantee, runtime estimate, or a remedy for neural prediction bias."
+  },
+  "exported_head_calibration": {
+    "nominal_95_interval_coverage": [
+      0.4243827160493827,
+      0.49537037037037035
+    ],
+    "policy_action_weighted_predicted_precision_coverage": [
+      0.37113227813420324,
+      0.3954211161328014
+    ],
+    "rmse_against_reference_bb": [
+      9.967608418113278,
+      8.40584296764171
+    ],
+    "qualified": false
+  },
+  "separate_mean_refits": {
+    "steps": 400,
+    "trajectory_family_train_calibration_test_disjoint": true,
+    "heldout_rmse_bb": [
+      10.097895622253418,
+      10.930193901062012
+    ],
+    "empirical_95_interval_half_width_bb": [
+      13.622207378180018,
+      14.825479165876922
+    ],
+    "heldout_interval_coverage": [
+      0.9555555555555556,
+      0.95
+    ],
+    "activated": false,
+    "limitation": "Held-out subset differs from the all-decision exported-head audit; do not subtract these RMSEs to claim a matched improvement. Empirical residual widths are not sampling SE or conditional guarantees."
+  },
+  "latest_release_validation": {
+    "frequency_mae": 0.07863182917195956,
+    "primary_agreement": 0.6955458209268005,
+    "maximum_aggregate_action_delta": 0.025175994426202497,
+    "observed_lookup_coverage": 1,
+    "failed_measured_gates": [
+      "action_frequency_mae_at_most_0_05",
+      "primary_action_agreement_at_least_0_85",
+      "action_ev_standard_error_coverage_at_least_0_95"
+    ],
+    "unmeasured_gates": [
+      "estimated_exploitability_at_most_0_50",
+      "exploitability_upper_99_at_most_0_50"
+    ]
+  },
+  "provenance": {
+    "output_root": "/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-100bb-ev",
+    "summary_sha256": "26b631dddc329163743f52844124d4038680b95c313a1e3f044e404bfbd16356",
+    "qualification_receipt_sha256": "e0c94e2c809b649822085d66bdbda807c4e77071254023278be673b245a4cb01",
+    "release_validation_sha256": "4f11f557efd0023497ba6fedef9401dda90091f7bc559a522a6fafc896420275",
+    "source_experiment_sha256": "d1ae981f98468811cf464b7362e1edab9ac41315b2e704522dd0d7568321b46a",
+    "source_driver_sha256": "370a7bf9335fe7c7b86d6ae5d02dd9650b5a59ba01899d371009014b40fc9ba4",
+    "reference_report_sha256s": [
+      "ef33231c8d74184ee4072a2c7a32b7b4e4b1e44549b9da133623052f090bd0bf",
+      "ab9fceb2a1e89f81a8ed507e873be581d715668ffd55627ec3c9a5240f71c412"
+    ],
+    "artifact_sha256s": [
+      "a4f9f9aa47f6d9bd49c0d23893fe399923dbaf6d372698eda8c0c1d039261ae6",
+      "cd94db211f5f8e6188c44dc25658c515eb88e5723f6f4465da28558cc1881b38"
+    ]
+  },
+  "limitations": [
+    "Finite 128-draw audit; not exhaustive state coverage or a global conditional accuracy guarantee.",
+    "Only two sampled river decisions; not a stand-alone river/postflop-only qualification.",
+    "Reference SE excludes neural approximation error; exported-head calibration and sampling precision fail separately.",
+    "No new policy, serving value head, threshold waiver, paid compute, or Approximate GTO promotion."
+  ]
+}

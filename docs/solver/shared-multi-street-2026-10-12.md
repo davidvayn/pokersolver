@@ -487,3 +487,96 @@ The [authentic-EV audit](depth-repair-50bb-ev-2026-10-17.json) records exact
 metrics and report/receipt hashes. No serving weights, thresholds, or active
 manifests changed. More policy-training iterations alone cannot establish EV
 precision or calibration; these remain separate release blockers.
+
+### Completed 100bb replication — mixed strength result
+
+All four 100bb runs completed 64 rounds/16,384 traversals with the same frozen
+learner and grid used at 50bb. No checkpoint recovery was needed at 100bb.
+The stability benefit repeated on both independent held-out batches:
+
+| Batch | Control frequency MAE | Averaged MAE | Control primary agreement | Averaged agreement |
+| --- | --- | --- | --- | --- |
+| 1 (3,442 decisions) | 8.46 points | 7.78 points | 59.01% | 70.36% |
+| 2 (3,193 decisions) | 8.21 points | 7.71 points | 57.99% | 70.37% |
+
+Pooled local response gain decreased from 1.453 to 0.961bb/decision
+(-0.492bb; one-sided 95% paired-root bootstrap upper delta -0.075bb).
+However, the seed estimates moved differently: 1.983 to 0.874bb for seed 51701,
+but 0.923 to 1.048bb for seed 51702. That +0.125bb point estimate fails the
+predeclared requirement that **both** seed pairs improve. We do not change
+the criterion after seeing the favorable pooled mean, claim a statistically
+established regression from that point estimate, or claim strength reliably
+improved across all seeds. These are conditional local deviations, not
+full-game exploitability or an evaluation of the old eight-hour checkpoints.
+
+Ordinary independent validation still rejects the averaged 100bb pair:
+7.98-point frequency MAE and 70.08% primary agreement. Aggregate delta
+(2.23 points), sampled authentic/forced coverage, probabilities and artifact
+integrity pass. The [100bb audit](depth-repair-longer-100bb-2026-10-17.json)
+preserves all hashes, positive pooled evidence, and the negative screen
+decision. No longer policy run or activation follows automatically.
+
+Serving compatibility was checked against all eight actual new exports, not
+only synthetic networks. The opt-in
+`lib/neural-policy.matched-depths.integration.test.ts` verifies SHA-bound binary
+round trips, modeled action lists, probability normalization, finite EV/error
+outputs, three-regular-sizing limits, complete passive/raised/all-in hands in
+both seats, model-version pinning and chip conservation. Its 48 complete
+simulated hands test interoperability, not EV accuracy or playing strength.
+With both actual artifact roots enabled, `npm test` passed 298 tests and skipped
+four unrelated optional server-process cases. The 77 Python/native checks and
+`npm run build` passed. The build reverified the existing 20bb serving artifacts;
+no app component, runtime behavior, active manifest, or production weight changed.
+
+### Completed authentic 100bb EV audit and final release decision
+
+The same artifact-bound audit was completed at 100bb: 128 IID decisions from
+118 trajectory families, 2,048 independent posterior-opponent/future-board
+blocks/decision, and two inner continuations/block. The natural draw contains
+91 preflop, 18 flop, 17 turn and two river decisions. This is not a stand-alone
+postflop-only or exhaustive coverage certificate.
+
+Again, 0/128 decisions in **both** seeds meet the all-action 0.02bb reference-SE
+criterion. Median decision-max SE is 1.030/1.114bb and its 95th percentile is
+1.998/1.953bb. The naive IID variance-only projection is 20.45/19.53 million
+blocks/decision; it is not a runtime/cost estimate or a cure for approximation
+bias. No such extension was started. Exported-head nominal 95% interval
+coverage is 42.4%/49.5%, and predicted policy-action-weighted precision coverage
+is 37.1%/39.5%. Separate mean refits remain coarse: 10.10/10.93bb held-out RMSE,
+with 13.62/14.83bb empirical residual half-widths, not sampling SE. As at 50bb,
+the refit test subset differs from the all-decision exported-head audit; there
+is no matched before/after RMSE claim or promotion of those research weights.
+
+The [100bb authentic-EV audit](depth-repair-100bb-ev-2026-10-17.json) records
+exact metrics and hashes. Its receipt replay makes EV qualification a measured
+failure at 100bb too. A different independent validation seed gives the table
+below on the same frozen weights; differences from earlier tables are sampling
+distribution differences, not intervening policy updates.
+
+| Latest release check | Gate | 50bb | 100bb |
+| --- | --- | --- | --- |
+| Frequency MAE | <=5 points | 7.80 — fail | 7.86 — fail |
+| Primary-action agreement | >=85% | 73.74% — fail | 69.55% — fail |
+| Aggregate action delta | <=3 points | 1.04 — pass | 2.52 — pass |
+| Observed inference coverage | >=99.99% | 100% sampled | 100% sampled |
+| Sampled decisions meeting all-action reference SE <=0.02bb | >=95% | 0/128 — fail | 0/128 — fail |
+| Nominal 95% interval coverage, seed order | >=95% | 35.8%/50.8% — fail | 42.4%/49.5% — fail |
+| Probability sums, artifact round trips and engine interoperability | valid | pass | pass |
+| Full-game exploitability mean and one-sided 99% upper bound | each <=0.50bb/hand | unmeasured | unmeasured |
+
+Neither depth is released. Sampled inference coverage is not exhaustive trained
+coverage; local response reductions and cross-seed stability are not equilibrium
+proof. An expensive full-game certificate was not issued for candidates already
+rejected by measured policy and EV gates. All planned paired runs and bounded
+EV/serving checks have completed; no training/evaluation job, automatic longer
+run, or paid compute is left running. The active experimental 20bb policy is
+unchanged and is not recertified by these deeper-stack audits.
+
+The remaining prerequisites are concrete: improve policy consistency and
+independent response robustness; improve the frozen-policy value estimator
+and calibration rather than treating conditional rollout noise as total error;
+then qualify a viable candidate on complete-hand, information-set-consistent
+responses before activation. Thresholds have not been lowered. Checkpoint
+recovery verification covers clean pauses, not unverified abrupt-crash replay
+repair. Browser-facing implementation did not change; the new test exercises
+the web runtime/engine directly without activating rejected models.

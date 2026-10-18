@@ -78,6 +78,12 @@
     "qualified": false,
     "interpretation": "The original ordinary validation above had no receipt. The subsequent authentic audit measured and rejected EV qualification; full-game exploitability remains unmeasured."
   },
+  "subsequent_100bb_replication": {
+    "audit": "depth-repair-longer-100bb-2026-10-17.json",
+    "stability_improved": true,
+    "both_seed_response_condition_passed": false,
+    "interpretation": "Pooled local response gain improved, but the second seed's estimate increased; no robust two-seed strength confirmation or automatic longer run."
+  },
   "provenance": {
     "output_root": "/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-50bb",
     "summary_sha256": "2c8f0eaf01e2fdc257d666eb68d96c362192ba9c481405652d8e2ff14e4ae7f1",

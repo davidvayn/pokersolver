@@ -1,0 +1,157 @@
+{
+  "schema": "hu-longer-depth-repair-audit-v1",
+  "date": "2026-10-17",
+  "depth_bb": 100,
+  "status": "stability_improved_but_seed_response_consistency_not_confirmed",
+  "active_models_changed": false,
+  "release_eligible": false,
+  "full_game_exploitability_measured": false,
+  "training": {
+    "profiles": [
+      "control",
+      "averaged"
+    ],
+    "seeds": [
+      51701,
+      51702
+    ],
+    "rounds_per_seed": 64,
+    "traversals_per_round": 256,
+    "traversals_per_seed": 16384,
+    "optimizer_steps_per_round": 160,
+    "only_training_difference": "average_regret_rollouts",
+    "checkpoint_recovery_needed": false
+  },
+  "common_heldout_batches": [
+    {
+      "decisions": 3442,
+      "control": {
+        "frequency_mae": 0.08460484001802053,
+        "primary_agreement": 0.5901283297863987,
+        "maximum_aggregate_action_delta": 0.02775939167597291
+      },
+      "averaged": {
+        "frequency_mae": 0.0778314699622526,
+        "primary_agreement": 0.7036448331842504,
+        "maximum_aggregate_action_delta": 0.02478166186396344
+      }
+    },
+    {
+      "decisions": 3193,
+      "control": {
+        "frequency_mae": 0.08209814265852546,
+        "primary_agreement": 0.5799332301426561,
+        "maximum_aggregate_action_delta": 0.024153514245305263
+      },
+      "averaged": {
+        "frequency_mae": 0.07713839845703113,
+        "primary_agreement": 0.7037353253925824,
+        "maximum_aggregate_action_delta": 0.02343696497015757
+      }
+    }
+  ],
+  "local_response": {
+    "averaged_mean_gain_bb": 0.9609804787787954,
+    "bootstrap_replicates": 10000,
+    "control_mean_gain_bb": 1.4529344268900646,
+    "independent_roots": 32,
+    "hidden_blocks_per_root": 512,
+    "inner_rollouts_per_block": 2,
+    "interpretation": "Per sampled decision, conditional on two training seeds; negative favors averaging. Not bb/hand exploitability.",
+    "mean_delta_bb": -0.49195394811126913,
+    "one_sided_95_paired_root_bootstrap_upper_delta_bb": -0.07523759301374947,
+    "seed_mean_deltas_bb": [
+      -1.1093449120248615,
+      0.12543701580232325
+    ],
+    "control_seed_gains_bb": [
+      1.9829049115695012,
+      0.922963942210628
+    ],
+    "averaged_seed_gains_bb": [
+      0.8735599995446399,
+      1.0484009580129512
+    ],
+    "pooled_bootstrap_upper_delta_negative": true,
+    "both_seed_point_estimates_improve": false,
+    "predeclared_screen_passed": false
+  },
+  "ordinary_averaged_pair_validation": {
+    "authentic_decisions": 3283,
+    "forced_decisions": 1646,
+    "frequency_mae": 0.07979126033172243,
+    "primary_agreement": 0.7008423003770605,
+    "maximum_aggregate_action_delta": 0.02234453198743891,
+    "observed_authentic_and_forced_lookup_coverage": 1,
+    "probabilities_valid": true,
+    "artifact_integrity_valid": true,
+    "failed_measured_gates": [
+      "action_frequency_mae_at_most_0_05",
+      "primary_action_agreement_at_least_0_85"
+    ],
+    "unmeasured_gates": [
+      "estimated_exploitability_at_most_0_50",
+      "exploitability_upper_99_at_most_0_50",
+      "action_ev_standard_error_coverage_at_least_0_95"
+    ]
+  },
+  "stratified_ev_diagnostics": [
+    {
+      "seed": 51701,
+      "actions": 134,
+      "empirical_error_at_most_0_02_fraction": 0,
+      "interpretation": "Finite-sample diagnostics, not a conditional error guarantee or exploitability certificate.",
+      "nominal_95_interval_coverage": 0.35074626865671643,
+      "predicted_precision_coverage": 0.3283582089552239,
+      "qualified": false,
+      "reference_precision_coverage": 0.05970149253731343,
+      "rmse_against_reference_bb": 18.578551876084383
+    },
+    {
+      "seed": 51702,
+      "actions": 134,
+      "empirical_error_at_most_0_02_fraction": 0.007462686567164179,
+      "interpretation": "Finite-sample diagnostics, not a conditional error guarantee or exploitability certificate.",
+      "nominal_95_interval_coverage": 0.34328358208955223,
+      "predicted_precision_coverage": 0.4253731343283582,
+      "qualified": false,
+      "reference_precision_coverage": 0.05970149253731343,
+      "rmse_against_reference_bb": 22.005442485082668
+    }
+  ],
+  "authentic_ev_followup": {
+    "audit": "depth-repair-100bb-ev-2026-10-17.json",
+    "qualification_measured": true,
+    "qualified": false,
+    "interpretation": "The original ordinary validation above had no receipt. The subsequent authentic audit measured and rejected EV qualification; full-game exploitability remains unmeasured."
+  },
+  "verification": {
+    "python_tests_passed": 77,
+    "typescript_tests_passed": 298,
+    "optional_server_integration_tests_skipped": 4,
+    "new_exports_tested": 8,
+    "passive_raised_and_all_in_hands_in_both_seats": true,
+    "production_build_passed": true,
+    "active_20bb_artifacts_verified_unchanged": true
+  },
+  "provenance": {
+    "output_root": "/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-100bb",
+    "summary_sha256": "d1ae981f98468811cf464b7362e1edab9ac41315b2e704522dd0d7568321b46a",
+    "prerequisite_50bb_summary_sha256": "2c8f0eaf01e2fdc257d666eb68d96c362192ba9c481405652d8e2ff14e4ae7f1",
+    "sampler_sha256": "d667908af924d08192d877487b85e645cb1402dd6534208048bd6f5424508aec",
+    "control_validation_sha256": "c860a09baa6f27270cc7f8bb37e0f59063acd41dfa249d91737aa5a6fe58ea6f",
+    "averaged_validation_sha256": "be5362f6961c0b4a02de926edeb3f2acb46a61a17bd9b829c48227765da22402",
+    "artifact_sha256s": {
+      "averaged-51701": "a4f9f9aa47f6d9bd49c0d23893fe399923dbaf6d372698eda8c0c1d039261ae6",
+      "averaged-51702": "cd94db211f5f8e6188c44dc25658c515eb88e5723f6f4465da28558cc1881b38",
+      "control-51701": "d0c039d3a15bcead64989235afca2bd57a7cd459c60407e65010f412363919c9",
+      "control-51702": "ed5935c4dee4daec43feea19d84a076228f435a0bbb4262f90379f437f7d279b"
+    }
+  },
+  "limitations": [
+    "Improved pooled local gain is not consistent improvement across both independent seeds; the predeclared decision remains negative.",
+    "Local response gains are per sampled decision, not bb/complete hand or full-game exploitability.",
+    "Cold-start 64-round comparisons are not strength comparisons against completed eight-hour checkpoints.",
+    "No threshold waiver, automatic longer run, paid compute, serving promotion, or Approximate GTO claim."
+  ]
+}
