@@ -76,6 +76,26 @@ def add_family_namespace(records: list[dict], namespace: int) -> list[dict]:
     return [{**row, 'iteration': namespace * 1_000_000 + row['iteration']} for row in records]
 
 
+def recovery_identity(previous: dict, *, depth: int, rounds: int, traversals: int,
+                      steps: int, digest: str, sources: dict) -> dict:
+    expected = {'schema': 'hu-longer-matched-depth-repair-v1', 'status': 'failed_not_activated',
+                'depth_bb': depth, 'rounds': rounds, 'traversals_per_round': traversals,
+                'optimizer_steps_per_round': steps, 'sampler_sha256': digest}
+    if any(previous.get(key) != value for key, value in expected.items()):
+        raise ValueError('recovery requires a stopped attempt with the identical iteration/game budget')
+    old_sources = previous['source_sha256s']
+    drivers = {'depth_repair.py', 'run_matched_depth_repair.py'}
+    if set(old_sources) != set(sources) or any(old_sources[name] != sha for name, sha in sources.items() if name not in drivers):
+        raise ValueError('recovery cannot change the frozen learning/evaluation implementation')
+    count = previous.get('recovery_attempt_count', 0) + 1
+    if count > 2:
+        raise ValueError('recovery exceeded its two-attempt bound')
+    return {'training_configuration_unchanged': True, 'recovery_attempt_count': count,
+            'prior_source_sha256s': old_sources,
+            'changed_driver_only': [name for name in sorted(drivers) if old_sources.get(name) != sources.get(name)],
+            'reason': 'Clean checkpoint recovery after external CPU/GPU contention; not a new training configuration.'}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
@@ -88,6 +108,8 @@ def main() -> None:
     parser.add_argument('--max-minutes-per-run', type=float, default=35)
     parser.add_argument('--evaluation-traversals', type=int, default=256)
     parser.add_argument('--response-blocks', type=int, default=512)
+    parser.add_argument('--resume-existing', action='store_true',
+                        help='recover a stopped attempt, preserving checkpoints, logs and prior provenance')
     args = parser.parse_args()
     if (not 2 <= args.rounds <= 128 or args.traversals < 2 or args.traversals % 2
             or args.steps < 1 or not 0 < args.max_minutes_per_run <= 60
@@ -103,9 +125,17 @@ def main() -> None:
                 or prerequisite.get('status') != 'completed_not_activated'
                 or not prerequisite['decision']['improvements_hold']):
             raise ValueError('50bb did not establish the conditional follow-up criterion')
-    args.output.mkdir(parents=True, exist_ok=False)
+        if any(prerequisite.get(key) != value for key, value in
+               (('rounds', args.rounds), ('traversals_per_round', args.traversals),
+                ('optimizer_steps_per_round', args.steps))):
+            raise ValueError('100bb replication must preserve the accepted 50bb iteration budget')
+    previous = json.loads((args.output / 'summary.json').read_text()) if args.resume_existing else None
+    args.output.mkdir(parents=True, exist_ok=args.resume_existing)
     binary = args.output / 'sampler'
-    shutil.copy2(args.binary, binary)
+    if not args.resume_existing:
+        shutil.copy2(args.binary, binary)
+    elif hashlib.sha256(args.binary.read_bytes()).digest() != hashlib.sha256(binary.read_bytes()).digest():
+        raise ValueError('recovery cannot replace its frozen sampler')
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     names = ('run_matched_depth_repair.py', 'depth_repair.py', 'train.py', 'validate_seeds.py',
              'frozen_ev_gate.py', 'run_depth_pilots.py', 'run_depth_full.py', 'cash_profiles.py')
@@ -117,12 +147,25 @@ def main() -> None:
         'profiles': PROFILES, 'seeds': SEEDS, 'rounds': args.rounds,
         'traversals_per_round': args.traversals, 'optimizer_steps_per_round': args.steps,
         'evaluation_seeds': EVALUATION_SEEDS, 'response_blocks': args.response_blocks,
+        'evaluation_traversals_per_policy_per_batch': args.evaluation_traversals,
+        'max_minutes_per_invocation': args.max_minutes_per_run,
         'criteria': 'Both batches: lower MAE and higher primary agreement; both seeds: lower held-out local gain; paired-root bootstrap one-sided 95% upper delta <0.',
         'release_eligible': False, 'full_game_exploitability_measured': False,
         'training': [], 'batches': [], 'frozen_audits': {}, 'validation': {}}
     if args.prerequisite_50bb:
         report['prerequisite_sha256'] = hashlib.sha256(args.prerequisite_50bb.read_bytes()).hexdigest()
     summary_path = args.output / 'summary.json'
+    if previous is not None:
+        identity = recovery_identity(previous, depth=args.depth, rounds=args.rounds,
+            traversals=args.traversals, steps=args.steps, digest=digest, sources=sources)
+        if (previous['evaluation_seeds'] != list(EVALUATION_SEEDS) or previous['response_blocks'] != args.response_blocks
+                or previous.get('evaluation_traversals_per_policy_per_batch', 256) != args.evaluation_traversals):
+            raise ValueError('recovery cannot change the predeclared evaluation budget')
+        old_sha = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+        snapshot = args.output / f'attempt-{old_sha[:12]}-summary.json'
+        shutil.copy2(summary_path, snapshot)
+        report.update(recovery={**identity, 'prior_summary_sha256': old_sha, 'prior_summary_path': str(snapshot)},
+                      recovery_attempt_count=identity['recovery_attempt_count'])
 
     def save(stage: str, **values) -> None:
         atomic_json(summary_path, report)
@@ -138,7 +181,7 @@ def main() -> None:
         profile, seed = spec
         return run_training(binary, args.output / f'{profile}-{seed}', profile, seed,
                             args.rounds, args.traversals, args.steps, depth=args.depth,
-                            max_minutes=args.max_minutes_per_run)
+                            max_minutes=args.max_minutes_per_run, resume=args.resume_existing)
 
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:

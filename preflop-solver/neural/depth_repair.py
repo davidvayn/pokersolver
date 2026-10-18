@@ -232,30 +232,50 @@ def training_command(binary: Path, output: Path, profile: str, seed: int, rounds
 
 
 def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: int, traversals: int,
-                 steps: int, *, depth: int = 50, max_minutes: float = 10) -> dict:
+                 steps: int, *, depth: int = 50, max_minutes: float = 10, resume: bool = False) -> dict:
     argv = training_command(binary, output, profile, seed, rounds, traversals, steps,
                             depth=depth, max_minutes=max_minutes)
-    output.mkdir(parents=True, exist_ok=False)
+    if resume and not (output / 'state.json').is_file():
+        raise ValueError('explicit recovery requires an existing atomic run state')
+    output.mkdir(parents=True, exist_ok=resume)
+    previous = json.loads((output / 'state.json').read_text()) if resume else None
+    starting_round = previous['completed_rounds'] if previous else 0
+    if previous:
+        expected = {'depth_bb': depth, 'seed': seed, 'traversals_per_round': traversals,
+                    'steps_per_round': steps, 'sampler_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    'hidden_sizes': [256, 128], 'reservoir_capacity': 40000, 'batch_size': 512,
+                    'retain_policy_snapshots': True,
+                    'action_abstraction_json': json.dumps(PILOT_GRID, sort_keys=True, separators=(',', ':'))}
+        if (starting_round > rounds or any(previous['config'].get(key) != value for key, value in expected.items())
+                or previous['config'].get('average_regret_rollouts', False) != (profile != 'control')
+                or previous['config'].get('integrate_closed_opponent_actions', False) != (profile == 'integrated')
+                or previous['config'].get('regret_training', 'bootstrapped_dcfr') != ('retained_instantaneous' if profile == 'retained' else 'bootstrapped_dcfr')
+                or previous['config'].get('variance_baseline_scale') != (0. if profile == 'no-baseline' else .5)):
+            raise ValueError('recovery run does not match the requested frozen configuration')
     started = time.monotonic()
-    with (output / 'train.log').open('w') as log:
-        process = subprocess.Popen(argv, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            while process.poll() is None:
-                if time.monotonic() - started > max_minutes * 60 + 120 or sum(process_family(process.pid).values()) > 3.5 * 1024**3 or shutil.disk_usage(output).free < 20 * 1024**3:
-                    raise RuntimeError('repair pilot exceeded its time, memory or disk guard')
-                time.sleep(2)
-            if process.returncode:
-                raise RuntimeError(f'repair training failed: {output}/train.log')
-        finally:
-            if process.poll() is None:
-                stop_family(process)
+    if starting_round < rounds:
+        with (output / 'train.log').open('a' if resume else 'w') as log:
+            process = subprocess.Popen(argv, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                while process.poll() is None:
+                    if time.monotonic() - started > max_minutes * 60 + 120 or sum(process_family(process.pid).values()) > 3.5 * 1024**3 or shutil.disk_usage(output).free < 20 * 1024**3:
+                        raise RuntimeError('repair pilot exceeded its time, memory or disk guard')
+                    time.sleep(2)
+                if process.returncode:
+                    detail = (output / 'train.log').read_text(errors='replace')[-2000:]
+                    raise RuntimeError(f'repair training failed: {output}/train.log\n{detail}')
+            finally:
+                if process.poll() is None:
+                    stop_family(process)
     state, _ = load_run(output)
-    if state['completed_rounds'] != rounds:
+    if state['completed_rounds'] != rounds or state['completed_traversals'] != rounds * traversals:
         raise RuntimeError('pilot did not finish its matched iteration budget')
     if any(metric.get('records_truncated') or not finite_metrics(metric) for metric in state['metrics']):
         raise RuntimeError('repair pilot contains truncated or nonfinite training data')
     return {'profile': profile, 'seed': seed, 'depth_bb': depth, 'seconds': time.monotonic() - started,
-            'output': str(output), 'rounds': rounds, 'traversals': state['completed_traversals']}
+            'output': str(output), 'rounds': rounds, 'traversals': state['completed_traversals'],
+            'starting_round': starting_round,
+            'total_update_seconds': sum(metric['elapsed_seconds'] for metric in state['metrics'])}
 
 
 def main() -> None:

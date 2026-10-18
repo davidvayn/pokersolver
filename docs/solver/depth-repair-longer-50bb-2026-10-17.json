@@ -1,0 +1,90 @@
+{
+  "schema": "hu-longer-depth-repair-audit-v1",
+  "date": "2026-10-17",
+  "depth_bb": 50,
+  "status": "screen_passed_release_rejected_100bb_replication_started",
+  "active_models_changed": false,
+  "release_eligible": false,
+  "full_game_exploitability_measured": false,
+  "training": {
+    "profiles": ["control", "averaged"],
+    "seeds": [51701, 51702],
+    "rounds_per_seed": 64,
+    "traversals_per_round": 256,
+    "traversals_per_seed": 16384,
+    "optimizer_steps_per_round": 160,
+    "only_training_difference": "average_regret_rollouts",
+    "clean_recovery_start_rounds": {"control-51701": 64, "control-51702": 64, "averaged-51701": 60, "averaged-51702": 57},
+    "recovery_changed_learning_implementation": false,
+    "wall_time_comparison_valid": false
+  },
+  "common_heldout_batches": [
+    {
+      "decisions": 3115,
+      "control": {"frequency_mae": 0.08629498891480246, "primary_agreement": 0.6413947918453892},
+      "averaged": {"frequency_mae": 0.08188705466484793, "primary_agreement": 0.7224145426048434}
+    },
+    {
+      "decisions": 3119,
+      "control": {"frequency_mae": 0.08885875125619545, "primary_agreement": 0.6298700910780411},
+      "averaged": {"frequency_mae": 0.07931227254310336, "primary_agreement": 0.7286857880837063}
+    }
+  ],
+  "local_response": {
+    "independent_roots": 32,
+    "hidden_blocks_per_root": 512,
+    "inner_rollouts_per_block": 2,
+    "control_seed_gains_bb": [1.181196324886796, 1.092086371010002],
+    "averaged_seed_gains_bb": [0.7891559114471409, 0.8615915443089223],
+    "control_mean_gain_bb": 1.136641347948399,
+    "averaged_mean_gain_bb": 0.8253737278780314,
+    "mean_delta_bb": -0.31126762007036746,
+    "one_sided_95_paired_root_bootstrap_upper_delta_bb": -0.006242370790936056,
+    "bootstrap_replicates": 10000,
+    "screen_passed": true,
+    "interpretation": "Local deviations per street-stratified sampled decision, conditional on two training seeds. Narrowly positive screening evidence, not bb/hand exploitability or a release certificate."
+  },
+  "ordinary_averaged_pair_validation": {
+    "authentic_decisions": 3082,
+    "forced_decisions": 1605,
+    "frequency_mae": 0.07861486112553982,
+    "primary_agreement": 0.7275443074227481,
+    "maximum_aggregate_action_delta": 0.009738533789177661,
+    "observed_authentic_and_forced_lookup_coverage": 1.0,
+    "probabilities_valid": true,
+    "artifact_integrity_valid": true,
+    "failed_measured_gates": ["frequency_mae_at_most_0_05", "primary_agreement_at_least_0_85"],
+    "unmeasured_release_gates": ["full_game_exploitability_mean_at_most_0_50", "full_game_exploitability_one_sided_99_upper_at_most_0_50", "authentic_frozen_information_set_ev_qualification"]
+  },
+  "averaged_pair_stratified_ev_diagnostics": {
+    "actions_per_seed": 145,
+    "nominal_95_interval_coverage": [0.3793103448275862, 0.503448275862069],
+    "predicted_precision_coverage": [0.33793103448275863, 0.35172413793103446],
+    "reference_action_precision_coverage": [0.05517241379310345, 0.05517241379310345],
+    "rmse_against_reference_bb": [10.04865762415356, 8.78972303733336],
+    "qualified": false,
+    "interpretation": "Small stratified diagnostics, not authentic reach-weighted qualification or a global accuracy estimate. Sampling SE excludes learned approximation error."
+  },
+  "verification": {
+    "python_tests_passed": 72,
+    "real_checkpoint_resume_export_parameters_identical": true,
+    "typescript_tests_passed": 286,
+    "optional_typescript_tests_skipped": 8,
+    "browser_or_rust_implementation_changed": false
+  },
+  "provenance": {
+    "output_root": "/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-50bb",
+    "summary_sha256": "2c8f0eaf01e2fdc257d666eb68d96c362192ba9c481405652d8e2ff14e4ae7f1",
+    "initial_attempt_summary_sha256": "a7d2cc362511d049d43720301a855de82b7e9758cb815726afa554400dcc5b5c",
+    "control_validation_sha256": "0709268a1872c6508cfd7f8ddca0e44703e074a5a8090243576b3aa5e8afbb20",
+    "averaged_validation_sha256": "4fa0e13fcfff1ea381c12988ce0028893a8fcd3ace5a6f546fba0c4e487bc794",
+    "sampler_sha256": "d667908af924d08192d877487b85e645cb1402dd6534208048bd6f5424508aec",
+    "training_source_sha256": "4f1a608af8fa13da4d4c3ff2d42aea48f22cd340f112cbdfd66f05b24cab89cb",
+    "artifact_sha256s": {
+      "control-51701": "beed3d2651e3a75b0dfa4dc53852ce9e1616e6f4c5cae100614395f3f5619b39",
+      "control-51702": "fcbab80c7044fc20710f01472268f97a079069332fa8c907fe1c614128b0fef5",
+      "averaged-51701": "8a86dee99f3a3c90d64245d12f22b3a4c0893030baf89cd7f2fb5c20dc196853",
+      "averaged-51702": "839049c52eb6da101b0efa4afad61ba1597121369586cca59acdb8c623df08ec"
+    }
+  }
+}

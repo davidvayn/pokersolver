@@ -378,3 +378,69 @@ The 50bb run is saved outside Git under
 `/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-50bb`.
 Its output records frozen source/binary hashes, checkpoints, reference samples,
 the paired response analysis, and ordinary validation reports.
+
+### Checkpoint recovery during the comparison
+
+Foreground CPU/GPU contention substantially slowed late updates. Both controls
+had already completed 64 rounds. The averaged seeds received a supported
+graceful stop request and finished/checkpointed rounds 60/57; no sampler was
+killed mid-update. The incomplete attempt remains preserved, including its
+source hashes and summary hash. This is a scheduling interruption, not a
+measured failure of the estimator.
+
+`--resume-existing` now resumes only the missing updates and skips completed
+runs without retraining them. It requires the same depth, seeds, sampler,
+iteration budget and predeclared evaluation settings; learning/evaluation
+source changes are rejected. Only the two scheduling drivers may change during
+recovery, and the old summary is retained under its content hash. Recovery is
+bounded to two attempts with the same per-invocation time/RSS/disk guards.
+The fixed 64-round/16,384-traversal target did not increase. Wall times from
+this experiment must not be used to rank estimator efficiency because of the
+external contention and checkpoint overhead.
+
+The real native regression compares three uninterrupted updates against two
+updates followed by a checkpoint resume: all exported parameters match exactly.
+Reopening an already-complete run leaves its update history unchanged. Seven
+new matched-run tests and the 65 existing Python/native checks passed.
+
+### Completed 50bb comparison; conditional 100bb replication
+
+All four runs completed exactly 64 rounds and 16,384 traversals. The recovery
+did not alter the learner or add updates. On both fixed common held-out
+distributions, averaged regret targets improved stability:
+
+| Batch | Control frequency MAE | Averaged MAE | Control primary agreement | Averaged agreement |
+| --- | --- | --- | --- | --- |
+| 1 (3,115 decisions) | 8.63 points | 8.19 points | 64.14% | 72.24% |
+| 2 (3,119 decisions) | 8.89 points | 7.93 points | 62.99% | 72.87% |
+
+Independent held-out local response gains decreased in both seed pairs:
+1.181/1.092bb to 0.789/0.862bb **per sampled decision**, not per complete hand.
+The pooled difference is -0.3113bb, with a paired-root one-sided 95% bootstrap
+upper delta of -0.0062bb. That only narrowly satisfies the predeclared screen.
+It is promising conditional evidence across these 32 roots and two training
+seeds, not proof of a full-game exploitability decrease or a release pass.
+
+The ordinary independent validator still rejects the averaged 50bb pair:
+7.86-point frequency MAE versus the 5-point limit, and 72.75% primary agreement
+versus 85%. Maximum aggregate action delta (0.97 points), sampled authentic
+and forced lookup coverage, probability sums, and artifact integrity pass.
+This ordinary validator uses a separate seed and the pair's own reach mixture,
+not the four-policy common distribution in the table.
+
+EV feedback is also not qualified. On the small stratified frozen probes,
+nominal 95% intervals covered references only 37.9%/50.3%; only 5.5% of
+reference action estimates met the 0.02bb SE threshold. Those action-level
+diagnostics are not the authentic reach-weighted decision qualification gate.
+No valid EV receipt or full-game exploitability certificate was generated;
+both remain unmeasured release gates. Strength qualification is not claimed
+from local response gains or cross-seed stability.
+
+Because the **screen** passed, the authorized 100bb replication has started
+with the same frozen implementation, two seeds, action grid, and fixed
+64x256/160 budget. Its per-invocation wall-time guard is explicitly 60 minutes
+to account for the observed contention and deeper tree; iteration counts and
+model architecture are unchanged. No paid compute or serving promotion is
+involved. The final 50bb reports/weights remain outside Git; their hashes and
+the decision are recorded in
+[the 50bb audit](depth-repair-longer-50bb-2026-10-17.json).
