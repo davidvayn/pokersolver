@@ -3236,6 +3236,7 @@ fn run_neural_frozen_values(args: &[String]) -> Result<(), Box<dyn Error>> {
         hidden_blocks: parse_or(args, "--hidden-blocks", 32usize)?,
         rollouts_per_block: parse_or(args, "--rollouts-per-block", 2usize)?,
         policy_only: args.iter().any(|arg| arg == "--policy-only"),
+        integrate_terminal_responses: args.iter().any(|arg| arg == "--integrate-terminal-responses"),
     })?;
     let output = serde_json::to_string_pretty(&report)?;
     if let Some(path) = value(args, "--output") {

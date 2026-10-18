@@ -10,6 +10,7 @@ pub struct FrozenValueConfig {
     pub hidden_blocks: usize,
     pub rollouts_per_block: usize,
     pub policy_only: bool,
+    pub integrate_terminal_responses: bool,
 }
 
 #[derive(Deserialize)]
@@ -295,6 +296,7 @@ fn rollout(
     game: &BlueprintConfig,
     actor: usize,
     rng: &mut SplitMix64,
+    integrate_terminal_responses: bool,
 ) -> Result<f64, String> {
     for _ in 0..MAX_TRAJECTORY_ACTIONS + 1 {
         if state.terminal.is_some() {
@@ -302,9 +304,28 @@ fn rollout(
         }
         let actions = state.legal_actions(game);
         let strategy = policy.strategy(&state, deal, &actions, game)?;
+        if integrate_terminal_responses {
+            if let Some(value) = closed_terminal_value(&state, deal, &actions, &strategy, game, actor) {
+                // Match the legacy draw at this node. There is no downstream
+                // information set to skip; only terminal action noise is removed.
+                let _ = sample_index(&strategy, rng);
+                return Ok(value);
+            }
+        }
         state = state.apply(&actions[sample_index(&strategy, rng)], game);
     }
     Err("qualification rollout exceeded the modeled trajectory".into())
+}
+
+fn closed_terminal_value(state: &GameState, deal: &Deal, actions: &[LegalAction],
+                         strategy: &[f64], game: &BlueprintConfig, actor: usize) -> Option<f64> {
+    let mut value = 0.;
+    for (action, probability) in actions.iter().zip(strategy) {
+        let child = state.apply(action, game);
+        child.terminal.as_ref()?;
+        value += probability * child.complete_runout_utilities(deal, game)[actor];
+    }
+    Some(value)
 }
 
 fn column_summary(blocks: &[Vec<f64>]) -> (Vec<f64>, Vec<f64>) {
@@ -391,6 +412,7 @@ pub fn qualify_frozen_values(
                             &config.game,
                             state.actor,
                             &mut SplitMix64::new(seed),
+                            config.integrate_terminal_responses,
                         )? / config.rollouts_per_block as f64;
                     }
                 }
@@ -412,6 +434,7 @@ pub fn qualify_frozen_values(
         "input_sha256":format!("{:x}",Sha256::digest(&input_bytes)),"seed":config.seed,
         "hidden_blocks":config.hidden_blocks,"rollouts_per_block":config.rollouts_per_block,
         "policy_only":config.policy_only,"snapshot_average":policy.snapshot_average,"records":output,
+        "integrates_terminal_responses":config.integrate_terminal_responses,
         "uncertainty_contract":"Independent outer opponent-posterior/future-board blocks; SE of block means includes inner rollout noise, excludes neural approximation error.",
         "qualification":"research_only_not_an_exploitability_certificate"}),
     )
@@ -479,6 +502,30 @@ mod tests {
         let averaged = instantaneous_regrets(&p, &[0., 0.]);
         assert_eq!(averaged, vec![0., 0.]);
         assert_eq!(a[0] + b[0], 0.);
+    }
+
+    #[test]
+    fn frozen_terminal_integration_is_exact_and_does_not_close_open_trees() {
+        let game = BlueprintConfig::default();
+        let deal = Deal::sample(&mut SplitMix64::new(2818011));
+        let policy = uniform_policy();
+        let initial = GameState::initial(&game);
+        let actions = initial.legal_actions(&game);
+        assert!(closed_terminal_value(&initial, &deal, &actions,
+            &vec![1. / actions.len() as f64; actions.len()], &game, 0).is_none());
+        let shove = actions.iter().find(|a| matches!(a.kind, ActionKind::RaiseTo(v)
+            if (v - game.effective_stack_bb).abs() < EPSILON)).unwrap();
+        let state = initial.apply(shove, &game);
+        let responses = state.legal_actions(&game);
+        let p = policy.strategy(&state, &deal, &responses, &game).unwrap();
+        let expected: f64 = responses.iter().zip(&p).map(|(a, p)|
+            p * state.apply(a, &game).complete_runout_utilities(&deal, &game)[0]).sum();
+        let values: Vec<_> = (0..32).map(|seed|
+            rollout(state.clone(), &deal, &policy, &game, 0,
+                &mut SplitMix64::new(seed), true).unwrap()).collect();
+        assert!(values.iter().all(|v| (*v - expected).abs() < 1e-12));
+        assert!((0..32).any(|seed| (rollout(state.clone(), &deal, &policy, &game, 0,
+            &mut SplitMix64::new(seed), false).unwrap() - expected).abs() > 1e-6));
     }
 
     #[test]

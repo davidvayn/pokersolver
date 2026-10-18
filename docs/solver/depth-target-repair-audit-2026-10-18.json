@@ -1,0 +1,293 @@
+{
+  "schema": "hu-depth-target-repair-checkpoint-v1",
+  "date": "2026-10-18",
+  "status": "ev_contract_and_stability_isolation_completed_policy_pilot_running",
+  "active_models_changed": false,
+  "release_eligible": false,
+  "full_game_exploitability_measured": false,
+  "stability": {
+    "50": {
+      "receipt": {
+        "path": "/Users/davidvayntrub/pokersolver-training/depth-stability-isolation-2026-10-18-50bb-v2/summary.json",
+        "sha256": "e7fee14c71ce52ec6867efdf4652dcfb70a6e9ebf49bfb357b160a0a5cf7160f"
+      },
+      "batches": [
+        {
+          "exported_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.0751436200209128,
+            "primary_agreement": 0.7890625
+          },
+          "direct_average_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.08002618084217497,
+            "primary_agreement": 0.734375
+          },
+          "compression_error_by_seed": [
+            {
+              "decisions": 128,
+              "frequency_mae": 0.05315537004559352,
+              "primary_agreement": 0.859375
+            },
+            {
+              "decisions": 128,
+              "frequency_mae": 0.05230351599679582,
+              "primary_agreement": 0.8359375
+            }
+          ]
+        },
+        {
+          "exported_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.0695294922444351,
+            "primary_agreement": 0.75
+          },
+          "direct_average_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.08205511828004206,
+            "primary_agreement": 0.6796875
+          },
+          "compression_error_by_seed": [
+            {
+              "decisions": 128,
+              "frequency_mae": 0.05116854100110382,
+              "primary_agreement": 0.859375
+            },
+            {
+              "decisions": 128,
+              "frequency_mae": 0.05482379411818386,
+              "primary_agreement": 0.765625
+            }
+          ]
+        }
+      ]
+    },
+    "100": {
+      "receipt": {
+        "path": "/Users/davidvayntrub/pokersolver-training/depth-stability-isolation-2026-10-18-100bb-v2/summary.json",
+        "sha256": "4be06f5c328ede6008dd76cbe524f3652aee56c4d6b8e99fb16515e8caedaa0c"
+      },
+      "batches": [
+        {
+          "exported_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.06975215974182289,
+            "primary_agreement": 0.625
+          },
+          "direct_average_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.0814704547867683,
+            "primary_agreement": 0.609375
+          },
+          "compression_error_by_seed": [
+            {
+              "decisions": 128,
+              "frequency_mae": 0.053172951668614354,
+              "primary_agreement": 0.8125
+            },
+            {
+              "decisions": 128,
+              "frequency_mae": 0.049668133867773884,
+              "primary_agreement": 0.78125
+            }
+          ]
+        },
+        {
+          "exported_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.07124254088685887,
+            "primary_agreement": 0.734375
+          },
+          "direct_average_cross_seed": {
+            "decisions": 128,
+            "frequency_mae": 0.08206042823627877,
+            "primary_agreement": 0.6953125
+          },
+          "compression_error_by_seed": [
+            {
+              "decisions": 128,
+              "frequency_mae": 0.053826359449140694,
+              "primary_agreement": 0.8125
+            },
+            {
+              "decisions": 128,
+              "frequency_mae": 0.05713178468836328,
+              "primary_agreement": 0.796875
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "frozen_value_fits": [
+    {
+      "depth": 50,
+      "seed": 51701,
+      "receipt": {
+        "path": "/Users/davidvayntrub/pokersolver-training/frozen-policy-values-2026-10-18-50bb-51701-v3/report.json",
+        "sha256": "0e387c732d7c80ffaf57f0a955a2dc167ac1f0c949fac2bb2590540418dba32e"
+      },
+      "policy_artifact_sha256": "8a86dee99f3a3c90d64245d12f22b3a4c0893030baf89cd7f2fb5c20dc196853",
+      "selected_steps": 400,
+      "fixed_policy_fit_better_on_tuning": true,
+      "matched_before_rmse_bb": 5.6749722577982,
+      "matched_after_rmse_bb": 4.31758771917685,
+      "matched_before_centered_action_rmse_bb": 3.4254807849092117,
+      "matched_after_centered_action_rmse_bb": 2.814861059586112,
+      "heldout_empirical_interval_coverage": 0.9473684210526315,
+      "sidecar_sha256": "a7b7fa8e49a2ebe8891afe0671cda34ecdf808e1c9bd8b8c10983962bd9493d7"
+    },
+    {
+      "depth": 50,
+      "seed": 51702,
+      "receipt": {
+        "path": "/Users/davidvayntrub/pokersolver-training/frozen-policy-values-2026-10-18-50bb-51702-v3/report.json",
+        "sha256": "19e5eae7e5f48bd54823f50cc031941aa5aec6e3543414fc58747adb86cabc5c"
+      },
+      "policy_artifact_sha256": "839049c52eb6da101b0efa4afad61ba1597121369586cca59acdb8c623df08ec",
+      "selected_steps": 400,
+      "fixed_policy_fit_better_on_tuning": false,
+      "matched_before_rmse_bb": 4.706268474572571,
+      "matched_after_rmse_bb": 5.819227065162961,
+      "matched_before_centered_action_rmse_bb": 3.3822955218813884,
+      "matched_after_centered_action_rmse_bb": 3.693728594298949,
+      "heldout_empirical_interval_coverage": 0.8210526315789474,
+      "sidecar_sha256": "d473ae0d2180c672614da44be060d31d913bab8cfd77d2fa40c7d74520a32990"
+    },
+    {
+      "depth": 100,
+      "seed": 51701,
+      "receipt": {
+        "path": "/Users/davidvayntrub/pokersolver-training/frozen-policy-values-2026-10-18-100bb-51701-v3/report.json",
+        "sha256": "6b911de9c0b0f26e2fe707404478aea29365e83e5d3fd88592de11acc643b7f7"
+      },
+      "policy_artifact_sha256": "a4f9f9aa47f6d9bd49c0d23893fe399923dbaf6d372698eda8c0c1d039261ae6",
+      "selected_steps": 1600,
+      "fixed_policy_fit_better_on_tuning": true,
+      "matched_before_rmse_bb": 8.24007454072465,
+      "matched_after_rmse_bb": 5.657013723719405,
+      "matched_before_centered_action_rmse_bb": 5.245621578433077,
+      "matched_after_centered_action_rmse_bb": 3.8993559238646034,
+      "heldout_empirical_interval_coverage": 0.9444444444444444,
+      "sidecar_sha256": "71be2d95320a795b80cf4eab6ef169f16f4cbe8f6877da1a975c5f4916d5d16f"
+    },
+    {
+      "depth": 100,
+      "seed": 51702,
+      "receipt": {
+        "path": "/Users/davidvayntrub/pokersolver-training/frozen-policy-values-2026-10-18-100bb-51702-v3/report.json",
+        "sha256": "a7483b7fcfcb520ff81ed95ad52193281d29b4df9aa55da63facb19c7e4a92f4"
+      },
+      "policy_artifact_sha256": "cd94db211f5f8e6188c44dc25658c515eb88e5723f6f4465da28558cc1881b38",
+      "selected_steps": 1600,
+      "fixed_policy_fit_better_on_tuning": false,
+      "matched_before_rmse_bb": 8.600790139999345,
+      "matched_after_rmse_bb": 6.552477828445862,
+      "matched_before_centered_action_rmse_bb": 6.586971985478232,
+      "matched_after_centered_action_rmse_bb": 4.442146647344124,
+      "heldout_empirical_interval_coverage": 0.9722222222222222,
+      "sidecar_sha256": "5c037f533ddda75743d70c89d00fc70f8156907229f17056eacee191c4934ca7"
+    }
+  ],
+  "variance_probe": {
+    "receipt": {
+      "path": "/Users/davidvayntrub/pokersolver-training/frozen-value-precision-2026-10-18-50bb/summary.json",
+      "sha256": "d1fdf581a269ce645a85f37141db7d8651ae4c64f849530840cd96a5155402c9"
+    },
+    "candidates": [
+      {
+        "estimators": {
+          "integrated": {
+            "action_precision_coverage": 0.05333333333333334,
+            "decision_precision_coverage": 0.0,
+            "mean_action_sampling_variance_bb2": 0.6929261120956589,
+            "median_decision_max_se_bb": 1.0196552719475083,
+            "optimistic_outer_blocks_for_95_percent_decisions": 2358762,
+            "p95_decision_max_se_bb": 1.3569451253332385,
+            "projection_assumption": "IID square-root sampling-error scaling only; not a guarantee and does not reduce neural bias.",
+            "report_sha256": "ad67711cdab318b8af93c5604ef3f3f0970f048accf7f48e0668bcb49c93e364",
+            "seconds": 61.61017949995585
+          },
+          "sampled": {
+            "action_precision_coverage": 0.05333333333333334,
+            "decision_precision_coverage": 0.0,
+            "mean_action_sampling_variance_bb2": 0.7959609338811617,
+            "median_decision_max_se_bb": 1.1265313318443364,
+            "optimistic_outer_blocks_for_95_percent_decisions": 2551554,
+            "p95_decision_max_se_bb": 1.41181880520948,
+            "projection_assumption": "IID square-root sampling-error scaling only; not a guarantee and does not reduce neural bias.",
+            "report_sha256": "314e4344007392f65b6ee682a0c709b310045b1bb494a523d1a66354c3d0b5a7",
+            "seconds": 79.55723404115997
+          }
+        },
+        "seed": 51701,
+        "variance_ratio_integrated_over_sampled": 0.8705529161046915,
+        "variance_times_wall_time_ratio": 0.6741677494427638
+      },
+      {
+        "estimators": {
+          "integrated": {
+            "action_precision_coverage": 0.05333333333333334,
+            "decision_precision_coverage": 0.0,
+            "mean_action_sampling_variance_bb2": 0.679004834356089,
+            "median_decision_max_se_bb": 1.0509235127918213,
+            "optimistic_outer_blocks_for_95_percent_decisions": 2268448,
+            "p95_decision_max_se_bb": 1.3288724212157343,
+            "projection_assumption": "IID square-root sampling-error scaling only; not a guarantee and does not reduce neural bias.",
+            "report_sha256": "d0fcf788211c4050ff97d4567ecb28afbb94a755e823c45311aec98c18617527",
+            "seconds": 41.75009062490426
+          },
+          "sampled": {
+            "action_precision_coverage": 0.05333333333333334,
+            "decision_precision_coverage": 0.0,
+            "mean_action_sampling_variance_bb2": 0.7786272049312148,
+            "median_decision_max_se_bb": 1.140867071468696,
+            "optimistic_outer_blocks_for_95_percent_decisions": 2556312,
+            "p95_decision_max_se_bb": 1.4120587260765778,
+            "projection_assumption": "IID square-root sampling-error scaling only; not a guarantee and does not reduce neural bias.",
+            "report_sha256": "6f8d1d4f370195ffa5038570cd411366df9e25321246a55dc42e0fd9340c6f18",
+            "seconds": 46.10496591590345
+          }
+        },
+        "seed": 51702,
+        "variance_ratio_integrated_over_sampled": 0.8720538276286832,
+        "variance_times_wall_time_ratio": 0.7896834019940893
+      }
+    ]
+  },
+  "validation": {
+    "targeted_python_native_passed": 69,
+    "typescript_passed": 286,
+    "typescript_optional_skipped": 16,
+    "rust_library_passed": 464,
+    "rust_library_ignored": 59,
+    "rust_binary_passed": 9,
+    "rust_cli_passed": 15,
+    "production_build_passed": true,
+    "old_new_default_evaluator_fixture_identical": true,
+    "full_python_suite": {
+      "total": 768,
+      "errors": 4,
+      "skipped": 5,
+      "limitations": [
+        "Two cash process cleanup OS permission failures in unchanged code.",
+        "Two missing ignored legacy v26 policy fixture failures in unchanged code."
+      ]
+    }
+  },
+  "policy_pilot": {
+    "path": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb",
+    "rounds": 24,
+    "traversals_per_round": 128,
+    "steps_per_round": 240,
+    "profiles": [
+      "averaged",
+      "retained"
+    ],
+    "seeds": [
+      51701,
+      51702
+    ],
+    "status": "running_not_activated"
+  }
+}

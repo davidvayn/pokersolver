@@ -1565,7 +1565,15 @@ def export_browser_artifact(
             "primaryTraversalSampleReused": True,
             "extraRandomness": "canonical_state_action_seeded",
         },
+        "valueTargetPolicy": {
+            "kind": "historical_training_policies",
+            "purpose": "training_control_variate",
+            "servingPolicyMatched": False,
+            "releaseEligible": False,
+            "requiredServingFit": "independent_frozen_exported_policy_values",
+        },
         "valueUncertaintyTraining": {
+            "scope": "continuation_actions_conditional_on_deal",
             "kind": "sample_standard_error"
             if config.value_rollouts_per_action >= 2
             else "unevaluated_prior",
