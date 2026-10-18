@@ -336,3 +336,45 @@ Final checks: 65 Python tests passed with real native transport/estimator probes
 research tests ignored; 290 TypeScript tests passed, with four optional native
 tests skipped; `npm run build` passed and reverified all active 20bb artifact
 hashes. No browser-facing code or active model manifest changed.
+
+## Longer matched estimator comparison — 2026-10-17
+
+The user authorized a longer 50bb comparison, a conditional 100bb replication,
+and subsequent validation, with major checkpoints committed and pushed.
+`run_matched_depth_repair.py` pins the implementation and predeclares the
+following screen before any training results are observed:
+
+- Original versus averaged regret targets, each with seeds 51701/51702.
+- 64 rounds, 256 traversals/round (16,384 traversals/seed), 160 optimizer
+  steps/round. Same network, action grid, replay, baseline, and all other
+  training parameters. This is a longer cold-start comparison, not a resume or
+  a claim to outperform the completed eight-hour checkpoints.
+- Two concurrent training processes, at most 35 minutes per run plus a
+  two-minute hard-stop allowance, 3.5GiB RSS/owned process family, and at least
+  20GiB free disk. Truncated/nonfinite records reject the experiment.
+- Two independent held-out evaluation seeds. Each evaluation batch mixes
+  authentic trajectories from all four frozen policies equally, giving both
+  estimators exactly the same comparison distribution. Whole-hand family IDs
+  are namespaced across independent corpora.
+- 32 distinct street-stratified response roots, 512 independent hidden
+  opponent/runout blocks/root, two inner continuations/block. Action selection
+  and measurement use disjoint halves. Both configurations see the same roots
+  and random seeds, but their own posterior and continuation policy.
+- Proceed to the same 100bb comparison only if frequency MAE decreases and
+  primary agreement increases on **both** evaluation batches, both training
+  seeds reduce their held-out local response gain, and a paired-root bootstrap
+  has a negative one-sided 95% upper delta. Seed pairs remain grouped when
+  resampling whole roots. This is an exploratory conditional screen, not a
+  full-game exploitability confidence bound or an across-training-seeds proof.
+- Run the ordinary independent release validator on both frozen seed pairs.
+  Missing authentic EV qualification or a missing full-game certificate stays
+  unmeasured. Expensive strength qualification is not justified by a candidate
+  already failing the measured stability/precision checks. No activation or
+  automatic eight-hour extension is built into this runner.
+
+Initial checks: 68 Python tests passed, including the explicit native
+transport/estimator tests and the new matched-budget/promotion-guard tests.
+The 50bb run is saved outside Git under
+`/Users/davidvayntrub/pokersolver-training/depth-repair-longer-2026-10-17-50bb`.
+Its output records frozen source/binary hashes, checkpoints, reference samples,
+the paired response analysis, and ordinary validation reports.

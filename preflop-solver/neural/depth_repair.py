@@ -216,9 +216,12 @@ def fit_frozen_value_head(records: list[dict], reference: dict, depth: int,
     return report
 
 
-def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: int, traversals: int, steps: int) -> dict:
-    argv = [sys.executable, str(Path(__file__).with_name('train.py')), '--run-dir', str(output),
-        '--depth-bb', '50', '--seed', str(seed), '--target-round', str(rounds), '--max-minutes', '10',
+def training_command(binary: Path, output: Path, profile: str, seed: int, rounds: int,
+                     traversals: int, steps: int, *, depth: int = 50, max_minutes: float = 10) -> list[str]:
+    if depth not in (50, 100) or not 2 <= rounds <= 128 or traversals < 2 or traversals % 2 or steps < 1 or not 0 < max_minutes <= 60:
+        raise ValueError('invalid bounded matched training budget')
+    return [sys.executable, str(Path(__file__).with_name('train.py')), '--run-dir', str(output),
+        '--depth-bb', str(depth), '--seed', str(seed), '--target-round', str(rounds), '--max-minutes', str(max_minutes),
         '--traversals-per-round', str(traversals), '--steps-per-round', str(steps),
         '--reservoir-capacity', '40000', '--batch-size', '512', '--hidden-sizes', '256,128',
         '--artifact-every', '1', '--sample-turn-rivers', '--preflop-runout-samples', '64',
@@ -226,13 +229,19 @@ def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: in
         '--sampler-binary', str(binary), '--sampler-sha256', hashlib.sha256(binary.read_bytes()).hexdigest(),
         '--action-abstraction-json', json.dumps(PILOT_GRID, sort_keys=True, separators=(',', ':')),
         '--replay-street-proposal', '.25,.25,.25,.25', '--retain-policy-snapshots'] + PROFILES[profile]
+
+
+def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: int, traversals: int,
+                 steps: int, *, depth: int = 50, max_minutes: float = 10) -> dict:
+    argv = training_command(binary, output, profile, seed, rounds, traversals, steps,
+                            depth=depth, max_minutes=max_minutes)
     output.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     with (output / 'train.log').open('w') as log:
         process = subprocess.Popen(argv, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             while process.poll() is None:
-                if time.monotonic() - started > 720 or sum(process_family(process.pid).values()) > 3.5 * 1024**3 or shutil.disk_usage(output).free < 20 * 1024**3:
+                if time.monotonic() - started > max_minutes * 60 + 120 or sum(process_family(process.pid).values()) > 3.5 * 1024**3 or shutil.disk_usage(output).free < 20 * 1024**3:
                     raise RuntimeError('repair pilot exceeded its time, memory or disk guard')
                 time.sleep(2)
             if process.returncode:
@@ -245,7 +254,7 @@ def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: in
         raise RuntimeError('pilot did not finish its matched iteration budget')
     if any(metric.get('records_truncated') or not finite_metrics(metric) for metric in state['metrics']):
         raise RuntimeError('repair pilot contains truncated or nonfinite training data')
-    return {'profile': profile, 'seed': seed, 'seconds': time.monotonic() - started,
+    return {'profile': profile, 'seed': seed, 'depth_bb': depth, 'seconds': time.monotonic() - started,
             'output': str(output), 'rounds': rounds, 'traversals': state['completed_traversals']}
 
 
