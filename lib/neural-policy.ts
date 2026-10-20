@@ -47,6 +47,9 @@ const SEATS: readonly Seat[] = ['button-small-blind', 'big-blind'];
 
 export const NEURAL_STATE_FEATURE_SCHEMA =
   'hu-cash-trajectory-poker-aware-v4' as const;
+export const NEURAL_ARRIVAL_FEATURE_SCHEMA = 'hu-home-card-arrival-recall-v5' as const;
+type StateFeatureSchema = typeof NEURAL_STATE_FEATURE_SCHEMA | typeof NEURAL_ARRIVAL_FEATURE_SCHEMA;
+export const NEURAL_ARRIVAL_FEATURE_COUNT = 820;
 export const NEURAL_ACTION_FEATURE_SCHEMA = 'hu-cash-legal-action-v1' as const;
 export const MAX_TRAJECTORY_ACTIONS = 32;
 export const NEURAL_ACTION_FEATURE_COUNT = 9;
@@ -85,7 +88,7 @@ export interface NeuralPolicyArtifactMetadata {
   kind: 'deep-cfr-baseline-response';
   modelVersion: string;
   depthBb: number;
-  stateFeatureSchema: typeof NEURAL_STATE_FEATURE_SCHEMA;
+  stateFeatureSchema: StateFeatureSchema;
   stateFeatureCount: number;
   actionFeatureSchema: typeof NEURAL_ACTION_FEATURE_SCHEMA;
   actionFeatureCount: number;
@@ -448,7 +451,10 @@ export function neuralLegalActions(
   return actions;
 }
 
-export function encodeNeuralState(state: HandState): number[] {
+export function encodeNeuralState(state: HandState, schema: StateFeatureSchema = NEURAL_STATE_FEATURE_SCHEMA): number[] {
+  if (schema !== NEURAL_STATE_FEATURE_SCHEMA && schema !== NEURAL_ARRIVAL_FEATURE_SCHEMA) {
+    throw new Error('Unsupported neural state schema');
+  }
   const actor = state.toAct;
   if (!actor || state.terminal) throw new Error('Cannot encode a terminal state');
   if (state.actionHistory.length > MAX_TRAJECTORY_ACTIONS) {
@@ -528,7 +534,14 @@ export function encodeNeuralState(state: HandState): number[] {
     state.street
   );
   const features = [...prefix, ...trajectory, ...poker, ...texture];
-  if (features.length !== NEURAL_STATE_FEATURE_COUNT) {
+  if (schema === NEURAL_ARRIVAL_FEATURE_SCHEMA) {
+    const arrivals = Array<number>(104).fill(0);
+    for (let index = 3; index < state.board.length; index++) {
+      arrivals[(index - 3) * 52 + canonicalCard(state.board[index], suitMap)] = 1;
+    }
+    features.push(...arrivals);
+  }
+  if (features.length !== (schema === NEURAL_ARRIVAL_FEATURE_SCHEMA ? NEURAL_ARRIVAL_FEATURE_COUNT : NEURAL_STATE_FEATURE_COUNT)) {
     throw new Error('State feature count does not match the pinned schema');
   }
   return features;
@@ -615,10 +628,10 @@ export function validateNeuralArtifact(artifact: NeuralPolicyArtifact): string[]
   if (!metadata.modelVersion || ![20, 50, 100].includes(metadata.depthBb)) {
     errors.push('Model identity or depth is invalid');
   }
-  if (metadata.stateFeatureSchema !== NEURAL_STATE_FEATURE_SCHEMA) {
+  if (metadata.stateFeatureSchema !== NEURAL_STATE_FEATURE_SCHEMA && metadata.stateFeatureSchema !== NEURAL_ARRIVAL_FEATURE_SCHEMA) {
     errors.push('State feature schema mismatch');
   }
-  if (metadata.stateFeatureCount !== NEURAL_STATE_FEATURE_COUNT) {
+  if (metadata.stateFeatureCount !== (metadata.stateFeatureSchema === NEURAL_ARRIVAL_FEATURE_SCHEMA ? NEURAL_ARRIVAL_FEATURE_COUNT : NEURAL_STATE_FEATURE_COUNT)) {
     errors.push('State feature count mismatch');
   }
   if (metadata.actionFeatureSchema !== NEURAL_ACTION_FEATURE_SCHEMA) {
@@ -683,7 +696,7 @@ export function validateNeuralArtifact(artifact: NeuralPolicyArtifact): string[]
   ) {
     errors.push('Value calibration is invalid');
   }
-  const stateAction = NEURAL_STATE_FEATURE_COUNT + NEURAL_ACTION_FEATURE_COUNT;
+  const stateAction = metadata.stateFeatureCount + NEURAL_ACTION_FEATURE_COUNT;
   const postflopNetworks = [
     metadata.networks.postflopBaselinePolicy,
     metadata.networks.postflopExploitResponse,
@@ -872,7 +885,7 @@ export async function inferNeuralPolicy(input: {
   }
   const legal = neuralLegalActions(input.state, metadata.actionAbstraction);
   if (legal.length === 0) throw new Error('Neural policy has no legal actions');
-  const stateFeatures = encodeNeuralState(input.state);
+  const stateFeatures = encodeNeuralState(input.state, input.artifact.metadata.stateFeatureSchema);
   const networks = neuralNetworksForStreet(metadata, input.state.street);
   const baselineLogits: number[] = [];
   const responseLogits: number[] = [];

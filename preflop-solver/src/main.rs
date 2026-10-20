@@ -3237,6 +3237,7 @@ fn run_neural_frozen_values(args: &[String]) -> Result<(), Box<dyn Error>> {
         rollouts_per_block: parse_or(args, "--rollouts-per-block", 2usize)?,
         policy_only: args.iter().any(|arg| arg == "--policy-only"),
         integrate_terminal_responses: args.iter().any(|arg| arg == "--integrate-terminal-responses"),
+        exact_river_values: args.iter().any(|arg| arg == "--exact-river-values"),
     })?;
     let output = serde_json::to_string_pretty(&report)?;
     if let Some(path) = value(args, "--output") {
@@ -3298,9 +3299,10 @@ fn run_neural_samples(args: &[String]) -> Result<(), Box<dyn Error>> {
             .iter()
             .any(|argument| argument == "--enumerate-turn-river-chance"),
     };
-    blueprint::neural::generate_samples_with_estimators(config,
+    blueprint::neural::generate_samples_with_recall(config,
         args.iter().any(|arg| arg == "--average-regret-rollouts"),
-        args.iter().any(|arg| arg == "--integrate-closed-opponent-actions"))?;
+        args.iter().any(|arg| arg == "--integrate-closed-opponent-actions"),
+        args.iter().any(|arg| arg == "--card-arrival-memory"))?;
     eprintln!("wrote compact neural traversal batch {}", output.display());
     Ok(())
 }
@@ -3903,6 +3905,7 @@ Neural sample options:
   --evaluate-action-values       Evaluate every reached trajectory action; requires 2+ rollouts
   --value-rollouts-per-action <N> Independent external samples per value target; default: 1
   --average-regret-rollouts       Opt in to using those averaged values in regret targets
+  --card-arrival-memory           Home v5 turn/river recall (requires matching new weights)
   --integrate-closed-opponent-actions  Integrate responses only when every child is terminal
   --preflop-runout-samples <int>  Default: 256
   --flop-runout-samples <int>     Default: 128

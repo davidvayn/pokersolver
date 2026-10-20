@@ -9,6 +9,7 @@ import {
   NEURAL_ACTION_FEATURE_SCHEMA,
   NEURAL_STATE_FEATURE_COUNT,
   NEURAL_STATE_FEATURE_SCHEMA,
+  NEURAL_ARRIVAL_FEATURE_SCHEMA,
   NeuralArtifactClient,
   neuralNetworksForStreet,
   neuralLegalActions,
@@ -36,7 +37,7 @@ const abstraction: ActionAbstraction = {
   includeAllIn: true,
 };
 
-function artifact(): NeuralPolicyArtifact {
+function artifact(arrivalMemory = false): NeuralPolicyArtifact {
   const parameters: number[] = [];
   const layer = (
     inputSize: number,
@@ -64,8 +65,9 @@ function artifact(): NeuralPolicyArtifact {
       ],
     };
   };
-  const stateAction = NEURAL_STATE_FEATURE_COUNT + NEURAL_ACTION_FEATURE_COUNT;
-  const kindOffset = NEURAL_STATE_FEATURE_COUNT;
+  const stateCount = arrivalMemory ? 820 : NEURAL_STATE_FEATURE_COUNT;
+  const stateAction = stateCount + NEURAL_ACTION_FEATURE_COUNT;
+  const kindOffset = stateCount;
   const baselinePolicy = layer(
     stateAction,
     1,
@@ -96,8 +98,8 @@ function artifact(): NeuralPolicyArtifact {
       kind: 'deep-cfr-baseline-response',
       modelVersion: 'deep-cfr-test-v1',
       depthBb: 20,
-      stateFeatureSchema: NEURAL_STATE_FEATURE_SCHEMA,
-      stateFeatureCount: NEURAL_STATE_FEATURE_COUNT,
+      stateFeatureSchema: arrivalMemory ? NEURAL_ARRIVAL_FEATURE_SCHEMA : NEURAL_STATE_FEATURE_SCHEMA,
+      stateFeatureCount: stateCount,
       actionFeatureSchema: NEURAL_ACTION_FEATURE_SCHEMA,
       actionFeatureCount: NEURAL_ACTION_FEATURE_COUNT,
       opponentProfileSchema: 'local-opponent-profile-v1',
@@ -177,6 +179,28 @@ async function digest(bytes: Uint8Array): Promise<string> {
 }
 
 describe('frozen neural policy runtime', () => {
+  it('versions public-card arrival memory without changing legacy encodings', async () => {
+    const initial = createHand({ modelVersion: 'deep-cfr-test-v1', depthBb: 20,
+      button: 'button-small-blind', hero: 'button-small-blind', random: seededRandom(19) });
+    const state: HandState = { ...initial, street: 'turn', board: [34, 47, 49, 22] };
+    const changed: HandState = { ...state, board: [22, 47, 49, 34] };
+    expect(encodeNeuralState(state)).toEqual(encodeNeuralState(changed));
+    const memory = encodeNeuralState(state, NEURAL_ARRIVAL_FEATURE_SCHEMA);
+    expect(memory).toHaveLength(820);
+    expect(memory.slice(0, 716)).toEqual(encodeNeuralState(state));
+    expect(memory).not.toEqual(encodeNeuralState(changed, NEURAL_ARRIVAL_FEATURE_SCHEMA));
+    expect(memory).toEqual(encodeNeuralState({ ...state, board: [49, 34, 47, 22] }, NEURAL_ARRIVAL_FEATURE_SCHEMA));
+    expect(memory.slice(768)).toEqual(Array(52).fill(0));
+    const decoded = decodeNeuralArtifact(encodeNeuralArtifact(artifact(true)));
+    expect(decoded.metadata.stateFeatureSchema).toBe(NEURAL_ARRIVAL_FEATURE_SCHEMA);
+    expect(decoded.metadata.stateFeatureCount).toBe(820);
+    const inferred = await inferNeuralPolicy({ artifact: decoded, state: initial,
+      profile: buildOpponentModel([], 'baseline'), usage: 'grading' });
+    expect(inferred.node.actions.reduce((sum,a) => sum+a.probability,0)).toBeCloseTo(1,10);
+    const invalid = artifact(true);
+    invalid.metadata.stateFeatureSchema = NEURAL_STATE_FEATURE_SCHEMA;
+    expect(() => encodeNeuralArtifact(invalid)).toThrow();
+  });
   it('canonicalizes globally permuted suits to identical state features', () => {
     const state = createHand({
       modelVersion: 'canonical-test',

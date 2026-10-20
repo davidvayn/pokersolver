@@ -66,6 +66,20 @@ def initial_state():
 
 
 class NeuralTrainerTests(unittest.TestCase):
+    def test_home_arrival_memory_separates_turn_histories_without_changing_legacy(self):
+        state = {**initial_state(), "street": "turn", "board": [34,47,49,22]}
+        swapped = {**state, "board": [22,47,49,34]}
+        action = {"kind": "check", "amount_to_bb": None}
+        old = expand_state_action(state, action, 50)
+        np.testing.assert_array_equal(old, expand_state_action(swapped, action, 50))
+        new = expand_state_action(state, action, 50, card_arrival_memory=True)
+        self.assertEqual(new.shape, (829,))
+        np.testing.assert_array_equal(new[:716], old[:716])
+        np.testing.assert_array_equal(new[820:], old[716:])
+        self.assertFalse(np.array_equal(new, expand_state_action(swapped, action, 50, card_arrival_memory=True)))
+        np.testing.assert_array_equal(new, expand_state_action({**state, "board": [49,34,47,22]}, action, 50, card_arrival_memory=True))
+        self.assertEqual(np.count_nonzero(new[768:820]), 0)  # No future river.
+
     def test_explicit_pilot_grid_is_pinned_and_passed_to_native_sampling(self):
         config = RunConfig(schema='test', depth_bb=50, seed=1, reservoir_capacity=100,
             hidden_sizes=(8,4), batch_size=4, learning_rate=.001, learning_rate_final=None,
@@ -327,6 +341,13 @@ class NeuralTrainerTests(unittest.TestCase):
             compact_serving_grid=False,
         )
         models, _ = initialize_models(config)
+        recall_models, _ = initialize_models(replace(config, card_arrival_memory=True))
+        actions = [{"kind": "fold", "amount_to_bb": None}, {"kind": "call", "amount_to_bb": None}]
+        old_x = mx.array(np.stack([expand_state_action(initial_state(), a, 20) for a in actions]))
+        new_x = mx.array(np.stack([expand_state_action(initial_state(), a, 20, card_arrival_memory=True) for a in actions]))
+        for name, old in models.items():
+            np.testing.assert_allclose(np.asarray(old(old_x)), np.asarray(recall_models[name](new_x)), atol=1e-7, rtol=1e-6)
+            self.assertTrue(np.all(np.asarray(linear_layers(recall_models[name])[0].weight)[:,716:820] == 0))
         for model in models.values():
             weights = np.asarray(linear_layers(model)[0].weight)
             self.assertTrue(np.all(weights[:, TEXTURE_FEATURE_OFFSET:STATE_FEATURE_COUNT] == 0))

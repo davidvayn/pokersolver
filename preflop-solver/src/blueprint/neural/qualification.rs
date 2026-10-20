@@ -11,6 +11,7 @@ pub struct FrozenValueConfig {
     pub rollouts_per_block: usize,
     pub policy_only: bool,
     pub integrate_terminal_responses: bool,
+    pub exact_river_values: bool,
 }
 
 #[derive(Deserialize)]
@@ -344,6 +345,42 @@ fn column_summary(blocks: &[Vec<f64>]) -> (Vec<f64>, Vec<f64>) {
     (means, errors)
 }
 
+/// Exhaustive action expectation on a known river. No private information is
+/// passed into an actor's policy beyond its own ordinary information set.
+fn exact_river_tree(state: GameState, deal: &Deal, policy: &StudyPolicy,
+                    game: &BlueprintConfig, actor: usize, nodes: &mut usize) -> Result<f64, String> {
+    *nodes += 1;
+    if *nodes > 2_000_000 { return Err("exact river label exceeded two million nodes".into()); }
+    if state.terminal.is_some() {
+        return Ok(state.complete_runout_utilities(deal, game)[actor]);
+    }
+    if state.street != Street::River { return Err("exact river evaluator received an open chance node".into()); }
+    let actions = state.legal_actions(game);
+    let probabilities = policy.strategy(&state, deal, &actions, game)?;
+    let mut value = 0.;
+    for (action, probability) in actions.iter().zip(probabilities) {
+        if probability > 0. {
+            value += probability * exact_river_tree(state.apply(action, game), deal, policy, game, actor, nodes)?;
+        }
+    }
+    Ok(value)
+}
+
+fn exact_river_action_values(state: &GameState, compact: &CompactState, actions: &[LegalAction],
+    combos: &[[u8;2]], weights: &[f64], policy: &StudyPolicy, game: &BlueprintConfig) -> Result<(Vec<f64>,usize),String> {
+    if state.street != Street::River { return Err("exact river labels require a complete visible board".into()); }
+    let mut nodes = 0;
+    let mut values = vec![0.;actions.len()];
+    for (opponent, weight) in combos.iter().zip(weights) {
+        if *weight <= 0. { continue; }
+        let deal = complete_deal(compact, *opponent, &mut SplitMix64::new(0));
+        for (index, action) in actions.iter().enumerate() {
+            values[index] += weight * exact_river_tree(state.apply(action,game), &deal, policy, game, state.actor, &mut nodes)?;
+        }
+    }
+    Ok((values,nodes))
+}
+
 pub fn qualify_frozen_values(
     config: FrozenValueConfig,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
@@ -388,10 +425,14 @@ pub fn qualify_frozen_values(
         let probabilities = policy.strategy(&state, &synthetic, &legal, &config.game)?;
         let mut blocks = Vec::new();
         let mut posterior_combos = 0;
+        let mut exact = None;
         if !config.policy_only {
             let (combos, weights) = opponent_posterior(&record.state, &policy, &config.game)?;
             posterior_combos = weights.iter().filter(|weight| **weight > 0.0).count();
-            for block in 0..config.hidden_blocks {
+            if config.exact_river_values && state.street == Street::River {
+                exact = Some(exact_river_action_values(&state, &record.state, &legal, &combos, &weights, &policy, &config.game)?);
+            }
+            for block in 0..if exact.is_some() { 0 } else { config.hidden_blocks } {
                 let block_seed = config
                     .seed
                     .wrapping_add((index as u64).wrapping_mul(0x9e3779b97f4a7c15))
@@ -419,13 +460,17 @@ pub fn qualify_frozen_values(
                 blocks.push(values);
             }
         }
-        let (means, errors) = if blocks.is_empty() {
+        let (means, errors) = if let Some((values,_)) = &exact {
+            (values.clone(), vec![0.;values.len()])
+        } else if blocks.is_empty() {
             (Vec::new(), Vec::new())
         } else {
             column_summary(&blocks)
         };
         output.push(serde_json::json!({"state":record.state,"actions":record.actions,"probabilities":probabilities,
             "action_values_bb":means,"standard_errors_bb":errors,"independent_hidden_block_values_bb":blocks,
+            "estimator":if exact.is_some() { "exact_river_posterior_and_action_tree_v1" } else { "independent_hidden_blocks_v1" },
+            "exact_tree_nodes":exact.as_ref().map(|(_,nodes)| *nodes),
             "posterior_supported_combos":posterior_combos}));
     }
     Ok(
@@ -435,6 +480,7 @@ pub fn qualify_frozen_values(
         "hidden_blocks":config.hidden_blocks,"rollouts_per_block":config.rollouts_per_block,
         "policy_only":config.policy_only,"snapshot_average":policy.snapshot_average,"records":output,
         "integrates_terminal_responses":config.integrate_terminal_responses,
+        "exact_river_values":config.exact_river_values,
         "uncertainty_contract":"Independent outer opponent-posterior/future-board blocks; SE of block means includes inner rollout noise, excludes neural approximation error.",
         "qualification":"research_only_not_an_exploitability_certificate"}),
     )
@@ -464,6 +510,42 @@ mod tests {
             source_hashes: vec![],
             snapshot_average: false,
         }
+    }
+
+    #[test]
+    fn exact_river_values_enumerate_the_posterior_and_terminal_policy_mix() {
+        let game = BlueprintConfig::default();
+        let deal = Deal::sample(&mut SplitMix64::new(2919011));
+        let policy = uniform_policy();
+        let mut state = GameState::initial(&game);
+        while state.street != Street::River {
+            let passive = state.legal_actions(&game).into_iter()
+                .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check)).unwrap();
+            state = state.apply(&passive,&game);
+        }
+        let shove = state.legal_actions(&game).into_iter().find(|a| matches!(a.kind, ActionKind::RaiseTo(v)
+            if (v - state.street_invested[state.actor] - state.remaining(state.actor,&game)).abs() < EPSILON)).unwrap();
+        state = state.apply(&shove,&game);
+        let compact = compact_state(&state,&deal,&game);
+        let actions = state.legal_actions(&game);
+        let (combos,weights) = opponent_posterior(&compact,&policy,&game).unwrap();
+        assert_eq!(combos.len(),990);
+        let (values,nodes) = exact_river_action_values(&state,&compact,&actions,&combos,&weights,&policy,&game).unwrap();
+        assert_eq!(nodes,990*actions.len());
+        for (i,action) in actions.iter().enumerate() {
+            let expected:f64 = combos.iter().zip(&weights).map(|(cards,p)| {
+                let exact_deal = complete_deal(&compact,*cards,&mut SplitMix64::new(0));
+                p*state.apply(action,&game).complete_runout_utilities(&exact_deal,&game)[state.actor]
+            }).sum();
+            assert!((values[i]-expected).abs() < 1e-12);
+        }
+        let expected_mix:f64 = actions.iter().map(|a|
+            state.apply(a,&game).complete_runout_utilities(&deal,&game)[state.actor] / actions.len() as f64).sum();
+        let exact_mix = exact_river_tree(state.clone(),&deal,&policy,&game,state.actor,&mut 0).unwrap();
+        assert!((exact_mix-expected_mix).abs() < 1e-12);
+        let initial = GameState::initial(&game);
+        assert!(exact_river_tree(initial,&deal,&policy,&game,0,&mut 0).is_err());
+        assert!(exact_river_tree(state.clone(),&deal,&policy,&game,0,&mut 2_000_000).is_err());
     }
 
     #[test]

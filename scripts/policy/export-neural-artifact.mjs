@@ -48,7 +48,7 @@ export function encodeNeuralArtifact(source) {
     throw new Error('Unsupported neural artifact schema');
   }
   if (
-    metadata.stateFeatureSchema !== 'hu-cash-trajectory-poker-aware-v4' ||
+    !['hu-cash-trajectory-poker-aware-v4', 'hu-home-card-arrival-recall-v5'].includes(metadata.stateFeatureSchema) ||
     metadata.actionFeatureSchema !== 'hu-cash-legal-action-v1' ||
     metadata.opponentProfileSchema !== 'local-opponent-profile-v1'
   ) {
@@ -64,7 +64,7 @@ export function encodeNeuralArtifact(source) {
     throw new Error('Metadata parameter count does not match the model');
   }
   if (
-    metadata.stateFeatureCount !== 716 ||
+    metadata.stateFeatureCount !== (metadata.stateFeatureSchema === 'hu-home-card-arrival-recall-v5' ? 820 : 716) ||
     metadata.actionFeatureCount !== 9 ||
     metadata.opponentProfileFeatureCount !== 16
   ) {

@@ -43,6 +43,8 @@ pub const MAX_TRAJECTORY_ACTIONS: usize = 32;
 
 const DATASET_SCHEMA: &str = "hu-neural-traversal-jsonl-v7";
 const TRAINING_NETWORK_SCHEMA: &str = "hu-neural-training-networks-v4";
+const ARRIVAL_TRAINING_NETWORK_SCHEMA: &str = "hu-neural-training-networks-v5";
+const ARRIVAL_STATE_FEATURE_SCHEMA: &str = "hu-home-card-arrival-recall-v5";
 const CASH_TRAINING_NETWORK_SCHEMA: &str = "hu-neural-own-payoff-training-networks-v3";
 const POKER_FEATURE_OFFSET: usize = 604;
 const TEXTURE_FEATURE_OFFSET: usize = 652;
@@ -3482,7 +3484,7 @@ impl TrainingNetworkBundle {
 }
 
 fn validate_training_bundle(bundle: &TrainingNetworkBundle) -> Result<(), Box<dyn Error>> {
-    let input_count = if bundle.cash_rules.is_some() { CASH_MODEL_INPUT_COUNT } else { MODEL_INPUT_COUNT };
+    let input_count = if bundle.cash_rules.is_some() || bundle.schema == ARRIVAL_TRAINING_NETWORK_SCHEMA { CASH_MODEL_INPUT_COUNT } else { MODEL_INPUT_COUNT };
     let schema_valid = if let Some(rules) = &bundle.cash_rules {
         rules.validate()?;
         if let Some(depth) = bundle.cash_depth_bb { cash::cash_units(depth, rules)?; }
@@ -3494,7 +3496,7 @@ fn validate_training_bundle(bundle: &TrainingNetworkBundle) -> Result<(), Box<dy
         source_game.validate()?;
         bundle.schema == CASH_TRAINING_NETWORK_SCHEMA && bundle.cash_depth_bb.is_some_and(|depth| depth > 1.0)
             && bundle.sampling_baseline.is_none()
-    } else { bundle.schema == TRAINING_NETWORK_SCHEMA && bundle.cash_depth_bb.is_none() && bundle.cash_action_abstraction.is_none() };
+    } else { (bundle.schema == TRAINING_NETWORK_SCHEMA || bundle.schema == ARRIVAL_TRAINING_NETWORK_SCHEMA) && bundle.cash_depth_bb.is_none() && bundle.cash_action_abstraction.is_none() };
     if !schema_valid
         || bundle.input_size != input_count
         || bundle.networks.len() != 2
@@ -3530,7 +3532,7 @@ fn strategy_from_bundle(
     config: &BlueprintConfig,
 ) -> Vec<f64> {
     let network = bundle.policy_network(state.street, state.actor);
-    let state_features = encode_state_features(state, deal, config);
+    let state_features = encode_state_features_for_width(state, deal, config, bundle.input_size - ACTION_FEATURE_COUNT);
     let action_features = actions
         .iter()
         .map(|action| encode_action_features(state, action, config))
@@ -3760,6 +3762,7 @@ struct SampleGenerator {
     range_self_play_only: bool,
     average_regret_rollouts: bool,
     integrate_home_closed_actions: bool,
+    card_arrival_memory: bool,
 }
 
 impl SampleGenerator {
@@ -3805,6 +3808,7 @@ impl SampleGenerator {
             range_self_play_only: false,
             average_regret_rollouts: false,
             integrate_home_closed_actions: false,
+            card_arrival_memory: false,
             config,
             networks,
         })
@@ -3821,6 +3825,7 @@ impl SampleGenerator {
             config: self.config.clone(),
             average_regret_rollouts: self.average_regret_rollouts,
             integrate_home_closed_actions: self.integrate_home_closed_actions,
+            card_arrival_memory: self.card_arrival_memory,
             networks: self
                 .networks
                 .as_ref()
@@ -3939,7 +3944,7 @@ impl SampleGenerator {
         if scale <= 0.0 {
             return None;
         }
-        let state_features = encode_state_features(state, deal, &self.config.game);
+        let state_features = encode_state_features_for_width(state, deal, &self.config.game, bundle.input_size - ACTION_FEATURE_COUNT);
         let action_features = actions
             .iter()
             .map(|action| encode_action_features(state, action, &self.config.game))
@@ -4149,7 +4154,7 @@ impl SampleGenerator {
         } else {
             (None, None)
         };
-        self.push_record(training_sample(
+        self.push_record(training_sample_with_recall(
             SampleKind::AverageStrategy,
             iteration,
             1.0,
@@ -4161,6 +4166,7 @@ impl SampleGenerator {
             action_values,
             action_value_standard_errors,
             &self.config.game,
+            self.card_arrival_memory,
         ));
         let selected = sample_index(&strategy, &mut self.rng);
         self.sample_trajectory(
@@ -4241,7 +4247,7 @@ impl SampleGenerator {
                 self.push_range_record(record);
             }
             if !self.range_self_play_only {
-                self.push_record(training_sample(
+                self.push_record(training_sample_with_recall(
                     if traverser == 0 {
                         SampleKind::AdvantageP0
                     } else {
@@ -4259,6 +4265,7 @@ impl SampleGenerator {
                     Some(action_value_targets),
                     action_value_standard_errors,
                     &self.config.game,
+                    self.card_arrival_memory,
                 ));
             }
             node_value
@@ -4267,7 +4274,7 @@ impl SampleGenerator {
                 .powf(self.config.game.dcfr.strategy_exponent)
                 .min(f32::MAX as f64) as f32;
             if !self.range_self_play_only {
-                self.push_record(training_sample(
+                self.push_record(training_sample_with_recall(
                     SampleKind::AverageStrategy,
                     iteration,
                     iteration_weight,
@@ -4279,6 +4286,7 @@ impl SampleGenerator {
                     None,
                     None,
                     &self.config.game,
+                    self.card_arrival_memory,
                 ));
             }
             if let Some(value) =
@@ -4421,9 +4429,24 @@ fn training_sample(
     action_value_standard_errors: Option<Vec<f64>>,
     config: &BlueprintConfig,
 ) -> TrainingSample {
+    training_sample_with_recall(kind, iteration, weight, reach_probability, state, deal, actions,
+        targets, action_values, action_value_standard_errors, config, false)
+}
+
+fn training_sample_with_recall(
+    kind: SampleKind, iteration: u64, weight: f32, reach_probability: f64,
+    state: &GameState, deal: &Deal, actions: &[LegalAction], targets: Vec<f64>,
+    action_values: Option<Vec<f64>>, action_value_standard_errors: Option<Vec<f64>>,
+    config: &BlueprintConfig, card_arrival_memory: bool,
+) -> TrainingSample {
     let feature_sha256 = actions
         .iter()
-        .map(|action| feature_sha256(&encode_state_action(state, deal, action, config)))
+        .map(|action| {
+            let width = if card_arrival_memory || config.cash_rules.is_some() { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT };
+            let mut features = encode_state_features_for_width(state, deal, config, width);
+            features.extend(encode_action_features(state, action, config));
+            feature_sha256(&features)
+        })
         .collect();
     TrainingSample {
         kind,
@@ -4653,9 +4676,14 @@ fn encode_state_action(
 }
 
 fn encode_state_features(state: &GameState, deal: &Deal, config: &BlueprintConfig) -> Vec<f32> {
+    encode_state_features_for_width(state, deal, config, if config.cash_rules.is_some() { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT })
+}
+
+fn encode_state_features_for_width(state: &GameState, deal: &Deal, config: &BlueprintConfig, width: usize) -> Vec<f32> {
     assert!(state.trajectory.len() <= MAX_TRAJECTORY_ACTIONS);
+    assert!(width == STATE_FEATURE_COUNT || width == CASH_STATE_FEATURE_COUNT);
     let depth = config.effective_stack_bb as f32;
-    let mut features = vec![0.0f32; if config.cash_rules.is_some() { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT }];
+    let mut features = vec![0.0f32; width];
     let visible_board = &deal.board[..state.street.board_len()];
     let suit_map = canonical_suit_map(deal.holes[state.actor], visible_board);
     for card in deal.holes[state.actor] {
@@ -4721,7 +4749,7 @@ fn encode_state_features(state: &GameState, deal: &Deal, config: &BlueprintConfi
     // Board membership and the two ordered later arrivals reconstruct the
     // flop/turn information available at every trajectory action. Do not
     // expose future cards or change the legacy Home feature contract.
-    if config.cash_rules.is_some() {
+    if width == CASH_STATE_FEATURE_COUNT {
         for index in 3..visible_board.len() {
             features[STATE_FEATURE_COUNT + (index-3)*52 + canonical_card(visible_board[index],&suit_map)] = 1.0;
         }
@@ -4952,12 +4980,25 @@ pub fn generate_samples(config: SampleGenerationConfig) -> Result<(), Box<dyn Er
 /// Opt-in estimator experiment: reuse already-computed independent action-value
 /// samples for regret targets, rather than spending them only on the EV head.
 pub fn generate_samples_with_estimators(config: SampleGenerationConfig, average_regrets: bool, integrate_closed_actions: bool) -> Result<(), Box<dyn Error>> {
+    generate_samples_with_recall(config, average_regrets, integrate_closed_actions, false)
+}
+
+pub fn generate_samples_with_recall(config: SampleGenerationConfig, average_regrets: bool, integrate_closed_actions: bool, card_arrival_memory: bool) -> Result<(), Box<dyn Error>> {
+    if card_arrival_memory && config.game.cash_rules.is_some() {
+        return Err("Home arrival-memory experiment cannot change cash profiles".into());
+    }
     if average_regrets && (config.value_rollouts_per_action < 2 || config.trajectory_sampling) {
         return Err("averaged regrets require external sampling and at least two value rollouts".into());
     }
     let mut generator = SampleGenerator::new(config)?;
     generator.average_regret_rollouts = average_regrets;
     generator.integrate_home_closed_actions = integrate_closed_actions;
+    generator.card_arrival_memory = card_arrival_memory;
+    if let Some(policy) = &generator.networks {
+        if (policy.bundle.schema == ARRIVAL_TRAINING_NETWORK_SCHEMA) != card_arrival_memory && generator.config.game.cash_rules.is_none() {
+            return Err("network and requested card-memory schema differ".into());
+        }
+    }
     let (config, records, attempted_records, _, _) = generator.run()?;
     if let Some(parent) = config.output.parent() {
         if !parent.as_os_str().is_empty() {
@@ -4970,9 +5011,9 @@ pub fn generate_samples_with_estimators(config: SampleGenerationConfig, average_
     let mut writer = GzEncoder::new(buffered, Compression::fast());
     let metadata = DatasetMetadata {
         record_type: "metadata",
-        schema: if config.game.cash_rules.is_some() { "hu-neural-own-payoff-traversal-jsonl-v3" } else { DATASET_SCHEMA },
-        state_feature_schema: if config.game.cash_rules.is_some() { CASH_STATE_FEATURE_SCHEMA } else { "hu-cash-trajectory-poker-aware-v4" },
-        state_feature_count: if config.game.cash_rules.is_some() { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT },
+        schema: if config.game.cash_rules.is_some() { "hu-neural-own-payoff-traversal-jsonl-v3" } else if card_arrival_memory { "hu-neural-traversal-jsonl-v8" } else { DATASET_SCHEMA },
+        state_feature_schema: if config.game.cash_rules.is_some() { CASH_STATE_FEATURE_SCHEMA } else if card_arrival_memory { ARRIVAL_STATE_FEATURE_SCHEMA } else { "hu-cash-trajectory-poker-aware-v4" },
+        state_feature_count: if config.game.cash_rules.is_some() || card_arrival_memory { CASH_STATE_FEATURE_COUNT } else { STATE_FEATURE_COUNT },
         action_feature_schema: "hu-cash-legal-action-v1",
         action_feature_count: ACTION_FEATURE_COUNT,
         depth_bb: config.game.effective_stack_bb,
@@ -9071,6 +9112,26 @@ mod tests {
             normalize_ranges_for_board(&mut ranges, &[0, 5, 10]),
             Err("range policy public action has zero conditional reach".to_owned())
         );
+    }
+
+    #[test]
+    fn home_arrival_features_separate_histories_without_leaking_future_cards() {
+        let config = BlueprintConfig::default();
+        let mut state = GameState::initial(&config);
+        while state.street != Street::Turn {
+            let passive = state.legal_actions(&config).into_iter()
+                .find(|a| matches!(a.kind, ActionKind::Call | ActionKind::Check)).unwrap();
+            state = state.apply(&passive, &config);
+        }
+        let deal = Deal::from_cards([[0,5],[8,13]], [34,47,49,22,40]);
+        let swapped = Deal::from_cards([[0,5],[8,13]], [22,47,49,34,40]);
+        assert_eq!(encode_state_features(&state,&deal,&config), encode_state_features(&state,&swapped,&config));
+        let new = encode_state_features_for_width(&state,&deal,&config,CASH_STATE_FEATURE_COUNT);
+        assert_ne!(new, encode_state_features_for_width(&state,&swapped,&config,CASH_STATE_FEATURE_COUNT));
+        assert_eq!(&new[..716], encode_state_features(&state,&deal,&config));
+        assert!(new[768..].iter().all(|x| *x == 0.));
+        let other_future = Deal::from_cards([[0,5],[8,13]], [34,47,49,22,41]);
+        assert_eq!(new, encode_state_features_for_width(&state,&other_future,&config,CASH_STATE_FEATURE_COUNT));
     }
 
     #[test]

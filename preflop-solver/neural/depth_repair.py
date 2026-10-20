@@ -18,15 +18,16 @@ import numpy as np
 
 from run_depth_pilots import PILOT_GRID, process_family, stop_family
 from run_depth_full import finite_metrics
-from train import (ActionScorer, INPUT_FEATURE_COUNT, NETWORK_SCHEMA, atomic_json,
+from train import (ActionScorer, INPUT_FEATURE_COUNT, NETWORK_SCHEMA, ARRIVAL_NETWORK_SCHEMA, atomic_json,
                    expand_state_action, make_compiled_step, save_model, scorer_json)
 from validate_seeds import (compare, evaluation_records, latest_artifact, load_artifact_model,
-                            load_run, policy, verify_evaluation_game)
+                            load_run, policy, verify_evaluation_game, model_has_arrival_memory, model_input_count, record_features)
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = {
     'control': [],
     'averaged': ['--average-regret-rollouts'],
+    'recall': ['--average-regret-rollouts', '--card-arrival-memory'],
     'retained': ['--average-regret-rollouts', '--regret-training', 'retained_instantaneous'],
     'no-baseline': ['--average-regret-rollouts', '--variance-baseline-scale', '0'],
     'integrated': ['--average-regret-rollouts', '--integrate-closed-opponent-actions'],
@@ -104,7 +105,7 @@ def frozen_reference(binary: Path, model, records: list[dict], depth: int, outpu
                      snapshots: Path | None = None, policy_only: bool = False) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     network_path = output.with_suffix('.networks.json')
-    source = {'schema': NETWORK_SCHEMA, 'input_size': INPUT_FEATURE_COUNT,
+    source = {'schema': ARRIVAL_NETWORK_SCHEMA if model_has_arrival_memory(model) else NETWORK_SCHEMA, 'input_size': model_input_count(model),
               'strategy_transform': 'softmax', 'networks': [scorer_json(model)] * 2,
               'qualification_game': {'depth_bb': depth, 'action_abstraction': PILOT_GRID}}
     atomic_json(network_path, source)
@@ -136,7 +137,7 @@ def audit_exported_values(model, value_model, records: list[dict], reference: di
     responses = []
     with mx.stream(mx.cpu):
         for record, row in zip(records, reference['records'], strict=True):
-            features = np.stack([expand_state_action(record['state'], a, depth) for a in record['actions']])
+            features = record_features(value_model, record, depth)
             values = np.asarray(value_model(mx.array(features)))
             if values.shape != (len(record['actions']), 2):
                 raise RuntimeError('exported value head has a wrong shape')
@@ -249,6 +250,7 @@ def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: in
         if (starting_round > rounds or any(previous['config'].get(key) != value for key, value in expected.items())
                 or previous['config'].get('average_regret_rollouts', False) != (profile != 'control')
                 or previous['config'].get('integrate_closed_opponent_actions', False) != (profile == 'integrated')
+                or previous['config'].get('card_arrival_memory', False) != (profile == 'recall')
                 or previous['config'].get('regret_training', 'bootstrapped_dcfr') != ('retained_instantaneous' if profile == 'retained' else 'bootstrapped_dcfr')
                 or previous['config'].get('variance_baseline_scale') != (0. if profile == 'no-baseline' else .5)):
             raise ValueError('recovery run does not match the requested frozen configuration')

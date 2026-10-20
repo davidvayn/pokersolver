@@ -20,7 +20,7 @@ import numpy as np
 
 from train import (ActionScorer, INPUT_FEATURE_COUNT, atomic_json, camel_action_abstraction,
                    expand_state_action, linear_layers, make_compiled_step, scorer_json)
-from validate_seeds import load_artifact_model, verify_artifact
+from validate_seeds import load_artifact_model, verify_artifact, model_input_count, model_has_arrival_memory
 
 
 def digest(path: Path) -> str:
@@ -78,6 +78,11 @@ def verify_frozen_targets(source: Path, reference_path: Path) -> tuple[dict, lis
         if (values.shape != (n,) or errors.shape != (n,) or not np.all(np.isfinite(values))
                 or not np.all(np.isfinite(errors)) or np.any(errors < 0)):
             raise ValueError('invalid frozen value targets')
+        if row.get('estimator') == 'exact_river_posterior_and_action_tree_v1':
+            if (not reference.get('exact_river_values') or record['state']['street'] != 'river'
+                    or np.any(errors) or row.get('independent_hidden_block_values_bb')
+                    or not 0 < row.get('exact_tree_nodes',0) <= 2_000_000):
+                raise ValueError('invalid exact river uncertainty contract')
     return checked, records, reference
 
 
@@ -93,7 +98,7 @@ def split_families(records: list[dict], seed: int) -> list[list[int]]:
 def mean_from_training_head(source: Path, depth: int):
     original = load_artifact_model(source, 'baselineActionValue')
     hidden = tuple(int(layer.weight.shape[0]) for layer in linear_layers(original)[:2])
-    mean = ActionScorer(INPUT_FEATURE_COUNT, hidden)
+    mean = ActionScorer(model_input_count(original), hidden)
     for i, (destination, old) in enumerate(zip(linear_layers(mean), linear_layers(original))):
         destination.weight = mx.array(np.asarray(old.weight) if i < 2 else np.asarray(old.weight)[:1] / depth)
         destination.bias = mx.array(np.asarray(old.bias) if i < 2 else np.asarray(old.bias)[:1] / depth)
@@ -108,13 +113,14 @@ def fit_policy_values(source: Path, reference_path: Path, output: Path, *, seed=
         raise ValueError('invalid short frozen-policy fitting budget')
     checked, records, reference = verify_frozen_targets(source, reference_path)
     depth = int(reference['depth_bb'])
+    arrival = model_has_arrival_memory(load_artifact_model(source))
     splits = split_families(records, seed)
     datasets = []
     for families in splits:
         features, targets, errors, groups = [], [], [], []
         for i, (record, row) in enumerate(zip(records, reference['records'], strict=True)):
             if record['iteration'] in families:
-                features.extend(expand_state_action(record['state'], a, depth) for a in record['actions'])
+                features.extend(expand_state_action(record['state'], a, depth, card_arrival_memory=arrival) for a in record['actions'])
                 targets.extend(row['action_values_bb']); errors.extend(row['standard_errors_bb'])
                 groups.extend([i] * len(record['actions']))
         datasets.append((np.asarray(features, dtype=np.float32), np.asarray(targets), np.asarray(errors), np.asarray(groups)))
@@ -159,6 +165,7 @@ def fit_policy_values(source: Path, reference_path: Path, output: Path, *, seed=
         'policy_artifact_sha256': checked['sha256'], 'policy_source_sha256': digest(source),
         'policy_network_sha256': reference['source_network_sha256s'][0],
         'reference_sha256': digest(reference_path), 'depth_bb': depth,
+        'state_feature_schema': json.loads(source.read_text())['metadata']['stateFeatureSchema'],
         'action_abstraction': reference['action_abstraction'],
         'mean_network_bb': scorer_json(selected, output_index=0, output_scale=depth),
         'confidence': {'kind': 'empirical_prediction_residual_envelope',

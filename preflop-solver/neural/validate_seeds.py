@@ -25,6 +25,7 @@ from frozen_ev_gate import frozen_ev_gate
 from train import (
     ACTIONS,
     NETWORK_SCHEMA,
+    ARRIVAL_NETWORK_SCHEMA, ARRIVAL_STATE_FEATURE_SCHEMA, STATE_FEATURE_SCHEMA, input_feature_count,
     ActionScorer,
     INPUT_FEATURE_COUNT,
     expand_state_action,
@@ -59,10 +60,15 @@ def select_exploitability_certificate(
 def load_artifact_model(source_path: Path, network_name: str = 'baselinePolicy') -> ActionScorer:
     source = json.loads(source_path.read_text(encoding="utf-8"))
     descriptors = source["metadata"]["networks"][network_name]["layers"]
-    if len(descriptors) != 3 or int(descriptors[0]["inputSize"]) != INPUT_FEATURE_COUNT:
+    metadata = source['metadata']
+    arrival = metadata.get('stateFeatureSchema') == ARRIVAL_STATE_FEATURE_SCHEMA
+    width = input_feature_count(card_arrival_memory=arrival)
+    if (metadata.get('stateFeatureSchema') not in (STATE_FEATURE_SCHEMA, ARRIVAL_STATE_FEATURE_SCHEMA)
+            or metadata.get('stateFeatureCount') != width - 9
+            or len(descriptors) != 3 or int(descriptors[0]["inputSize"]) != width):
         raise RuntimeError("browser artifact has an incompatible baseline network")
     hidden = (int(descriptors[0]["outputSize"]), int(descriptors[1]["outputSize"]))
-    model = ActionScorer(INPUT_FEATURE_COUNT, hidden,output_size=int(descriptors[-1]['outputSize']))
+    model = ActionScorer(width, hidden,output_size=int(descriptors[-1]['outputSize']))
     parameters = np.asarray(source["parameters"], dtype=np.float32)
     for layer, descriptor in zip(linear_layers(model), descriptors):
         input_size = int(descriptor["inputSize"])
@@ -90,7 +96,7 @@ def load_run(
         return state, load_artifact_model(Path(artifact["source"]))
     config = state["config"]
     hidden = tuple(int(value) for value in config["hidden_sizes"])
-    model = ActionScorer(INPUT_FEATURE_COUNT, (hidden[0], hidden[1]))
+    model = ActionScorer(input_feature_count(card_arrival_memory=config.get('card_arrival_memory', False)), (hidden[0], hidden[1]))
     checkpoint = state.get("checkpoint")
     if not checkpoint:
         raise RuntimeError("run state does not name an atomic checkpoint")
@@ -120,6 +126,7 @@ def routing_compatible_config(state: dict[str, Any]) -> dict[str, Any]:
     }
     compatible['action_abstraction'] = (
         json.loads(config['action_abstraction_json']) if config.get('action_abstraction_json') else None)
+    compatible['card_arrival_memory'] = config.get('card_arrival_memory', False)
     return compatible
 
 
@@ -279,8 +286,8 @@ def evaluation_records(
                 else None
             )
             bundle = {
-                "schema": NETWORK_SCHEMA,
-                "input_size": INPUT_FEATURE_COUNT,
+                "schema": ARRIVAL_NETWORK_SCHEMA if model_has_arrival_memory(policy_model) else NETWORK_SCHEMA,
+                "input_size": model_input_count(policy_model),
                 "strategy_transform": "softmax",
                 "networks": [network, network],
             }
@@ -291,6 +298,8 @@ def evaluation_records(
                 encoding="utf-8",
             )
             command.extend(("--networks", str(network_path)))
+            if model_has_arrival_memory(policy_model):
+                command.append('--card-arrival-memory')
         subprocess.run(command, cwd=root, check=True, capture_output=True)
         metadata, records = load_jsonl_gzip(output)
     verify_evaluation_game(metadata,depth_bb,action_abstraction)
@@ -328,8 +337,8 @@ def exploitability_certificate(
         network_path = Path(directory) / "certificate-networks.json"
         network = scorer_json(policy_model)
         bundle: dict[str, Any] = {
-            "schema": NETWORK_SCHEMA,
-            "input_size": INPUT_FEATURE_COUNT,
+            "schema": ARRIVAL_NETWORK_SCHEMA if model_has_arrival_memory(policy_model) else NETWORK_SCHEMA,
+            "input_size": model_input_count(policy_model),
             "strategy_transform": "softmax",
             "networks": [network, network],
         }
@@ -472,6 +481,27 @@ def policy(model: Any, features: np.ndarray) -> np.ndarray:
     return probabilities
 
 
+def model_input_count(model: Any) -> int:
+    if isinstance(model, StreetRoutedModel):
+        first, second = model_input_count(model.preflop), model_input_count(model.postflop)
+        if first != second:
+            raise ValueError('routed models have different feature schemas')
+        return first
+    return int(linear_layers(model)[0].weight.shape[1]) if isinstance(model, ActionScorer) else INPUT_FEATURE_COUNT
+
+
+def model_has_arrival_memory(model: Any) -> bool:
+    width = model_input_count(model)
+    if width not in (725, 829):
+        raise ValueError('unsupported Home model input width')
+    return width == 829
+
+
+def record_features(model: Any, record: dict, depth: int) -> np.ndarray:
+    return np.stack([expand_state_action(record['state'], a, depth,
+        card_arrival_memory=model_has_arrival_memory(model)) for a in record['actions']])
+
+
 def served_action_value_audit(policy_model: Any, value_model: Any,
                               datasets: list[list[dict[str, Any]]], depth: int,
                               floor: float = .005, threshold: float = .02) -> dict[str, Any]:
@@ -481,7 +511,7 @@ def served_action_value_audit(policy_model: Any, value_model: Any,
         if not records: raise RuntimeError('served action-value audit reached no decisions')
         weight=1./(len(datasets)*len(records))
         for record in records:
-            features=np.stack([expand_state_action(record['state'],a,depth) for a in record['actions']])
+            features=record_features(value_model, record, depth)
             outputs=np.asarray(value_model(mx.array(features)))
             if outputs.shape!=(len(record['actions']),2) or not np.all(np.isfinite(outputs)):
                 raise RuntimeError('exported action-value head returned invalid values')
@@ -527,14 +557,9 @@ def compare(
     for record, raw_weight in weighted_records:
         decision_weight = raw_weight / total_weight
         squared_weight += decision_weight * decision_weight
-        features = np.stack(
-            [
-                expand_state_action(record["state"], action, depth_bb)
-                for action in record["actions"]
-            ]
-        )
+        features = record_features(first_model, record, depth_bb)
         first = policy(first_model, features)
-        second = policy(second_model, features)
+        second = policy(second_model, record_features(second_model, record, depth_bb))
         absolute += decision_weight * float(np.mean(np.abs(first - second)))
         first_primary = int(np.argmax(first))
         second_primary = int(np.argmax(second))

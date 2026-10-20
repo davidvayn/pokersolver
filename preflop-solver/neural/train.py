@@ -51,6 +51,9 @@ RUN_SCHEMA = "hu-neural-mlx-run-v14"
 LEGACY_RESUME_SCHEMA = "hu-neural-mlx-run-v9"
 NETWORK_SCHEMA = "hu-neural-training-networks-v4"
 STATE_FEATURE_SCHEMA = "hu-cash-trajectory-poker-aware-v4"
+ARRIVAL_STATE_FEATURE_SCHEMA = "hu-home-card-arrival-recall-v5"
+ARRIVAL_NETWORK_SCHEMA = "hu-neural-training-networks-v5"
+ARRIVAL_DATASET_SCHEMA = "hu-neural-traversal-jsonl-v8"
 POKER_FEATURE_OFFSET = 604
 TEXTURE_FEATURE_OFFSET = 652
 TEXTURE_FEATURE_COUNT = 64
@@ -104,10 +107,13 @@ class RunConfig:
     regret_training: str = "bootstrapped_dcfr"
     retain_policy_snapshots: bool = False
     integrate_closed_opponent_actions: bool = False
+    card_arrival_memory: bool = False
 
 
 def run_config_payload(config: RunConfig) -> dict:
     payload = asdict(config)
+    if not config.card_arrival_memory:
+        payload.pop("card_arrival_memory")
     if not config.average_regret_rollouts:
         payload.pop("average_regret_rollouts")
     if config.regret_training == "bootstrapped_dcfr":
@@ -131,18 +137,18 @@ def run_config_payload(config: RunConfig) -> dict:
     return payload
 
 
-def state_feature_count(cash_profile: str | None = None) -> int:
+def state_feature_count(cash_profile: str | None = None, card_arrival_memory: bool = False) -> int:
     # Hot encoder path: profile validation must not reopen the rules JSON for
     # every decision. The immutable rules themselves are validated at run/load.
     if cash_profile in (None,"home"):
-        return STATE_FEATURE_COUNT
+        return CASH_STATE_FEATURE_COUNT if card_arrival_memory else STATE_FEATURE_COUNT
     if cash_profile not in ("nl25","nl25-rake-off-control"):
         raise ValueError("unknown cash study profile")
     return CASH_STATE_FEATURE_COUNT
 
 
-def input_feature_count(cash_profile: str | None = None) -> int:
-    return state_feature_count(cash_profile) + ACTION_FEATURE_COUNT
+def input_feature_count(cash_profile: str | None = None, card_arrival_memory: bool = False) -> int:
+    return state_feature_count(cash_profile, card_arrival_memory) + ACTION_FEATURE_COUNT
 
 
 class ActionScorer(nn.Module):
@@ -654,8 +660,8 @@ def texture_features(private_cards: list[int], board: list[int], street: str) ->
     return output
 
 
-def expand_state(state: dict[str, Any], depth_bb: float, cash_profile: str | None = None) -> np.ndarray:
-    features = np.zeros(state_feature_count(cash_profile), dtype=np.float32)
+def expand_state(state: dict[str, Any], depth_bb: float, cash_profile: str | None = None, card_arrival_memory: bool = False) -> np.ndarray:
+    features = np.zeros(state_feature_count(cash_profile, card_arrival_memory), dtype=np.float32)
     suit_map = canonical_suit_map(state["private_cards"], state["board"])
     for card in state["private_cards"]:
         features[canonical_card(int(card), suit_map)] = 1.0
@@ -751,8 +757,8 @@ def expand_action(state: dict[str, Any], action: dict[str, Any], depth_bb: float
     return features
 
 
-def expand_state_action(state: dict[str, Any], action: dict[str, Any], depth_bb: float, cash_profile: str | None = None) -> np.ndarray:
-    return np.concatenate((expand_state(state, depth_bb, cash_profile), expand_action(state, action, depth_bb)))
+def expand_state_action(state: dict[str, Any], action: dict[str, Any], depth_bb: float, cash_profile: str | None = None, card_arrival_memory: bool = False) -> np.ndarray:
+    return np.concatenate((expand_state(state, depth_bb, cash_profile, card_arrival_memory), expand_action(state, action, depth_bb)))
 
 
 def load_jsonl_gzip(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -762,15 +768,17 @@ def load_jsonl_gzip(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if metadata.get("schema") not in (
         "hu-neural-traversal-jsonl-v6",
         "hu-neural-traversal-jsonl-v7",
+        ARRIVAL_DATASET_SCHEMA,
         CASH_DATASET_SCHEMA,
     ):
         raise ValueError("Rust traversal shard has an incompatible schema")
     is_cash = metadata.get("schema") == CASH_DATASET_SCHEMA
-    if metadata.get("state_feature_count") != (CASH_STATE_FEATURE_COUNT if is_cash else STATE_FEATURE_COUNT):
+    is_arrival = metadata.get("schema") == ARRIVAL_DATASET_SCHEMA
+    if metadata.get("state_feature_count") != (CASH_STATE_FEATURE_COUNT if is_cash or is_arrival else STATE_FEATURE_COUNT):
         raise ValueError("Rust and MLX state feature schemas differ")
     if metadata.get("action_feature_count") != ACTION_FEATURE_COUNT:
         raise ValueError("Rust and MLX action feature schemas differ")
-    if metadata.get("state_feature_schema") != (CASH_STATE_FEATURE_SCHEMA if is_cash else STATE_FEATURE_SCHEMA):
+    if metadata.get("state_feature_schema") != (CASH_STATE_FEATURE_SCHEMA if is_cash else ARRIVAL_STATE_FEATURE_SCHEMA if is_arrival else STATE_FEATURE_SCHEMA):
         raise ValueError("Rust and MLX suit-canonical feature schemas differ")
     if metadata.get("sampling_mode") not in ("external_sampling", "trajectory"):
         raise ValueError("Rust traversal shard has an unknown sampling mode")
@@ -808,6 +816,7 @@ def ingest_records(
     reservoir_rng: random.Random,
     cash_profile: str | None = None,
     regret_training: str = "bootstrapped_dcfr",
+    card_arrival_memory: bool = False,
 ) -> dict[str, list[tuple[np.ndarray, np.ndarray, float]]]:
     heldout: dict[str, list[tuple[np.ndarray, np.ndarray, float]]] = {
         "advantage_p0": [],
@@ -826,7 +835,7 @@ def ingest_records(
         if kind not in ("advantage_p0", "advantage_p1", "average_strategy"):
             raise ValueError(f"unknown training sample kind: {kind}")
         street = STREETS.index(record["state"]["street"])
-        state_features = expand_state(record["state"], depth_bb, cash_profile)
+        state_features = expand_state(record["state"], depth_bb, cash_profile, card_arrival_memory)
         action_features = np.stack(
             [expand_action(record["state"], action, depth_bb) for action in actions]
         )
@@ -1303,14 +1312,15 @@ def export_traversal_networks(
     depth_bb: int,
     cash_profile: str | None = None,
     action_abstraction: dict[str, Any] | None = None,
+    card_arrival_memory: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    expected_input = input_feature_count(cash_profile)
+    expected_input = input_feature_count(cash_profile, card_arrival_memory)
     if any(linear_layers(model)[0].weight.shape[1] != expected_input for model in models.values()):
         raise ValueError("network features differ from the pinned game schema")
     source = {
-        "schema": NETWORK_SCHEMA,
-        "input_size": input_feature_count(cash_profile),
+        "schema": ARRIVAL_NETWORK_SCHEMA if card_arrival_memory else NETWORK_SCHEMA,
+        "input_size": expected_input,
         "strategy_transform": "regret_matching",
         "networks": [scorer_json(models["advantage_p0"]), scorer_json(models["advantage_p1"])],
         "sampling_baseline": scorer_json(
@@ -1369,7 +1379,7 @@ def response_from_baseline(
     baseline: ActionScorer,
     hidden_sizes: tuple[int, int],
 ) -> ActionScorer:
-    response = ActionScorer(INPUT_FEATURE_COUNT + PROFILE_FEATURE_COUNT, hidden_sizes)
+    response = ActionScorer(int(linear_layers(baseline)[0].weight.shape[1]) + PROFILE_FEATURE_COUNT, hidden_sizes)
     baseline_layers = linear_layers(baseline)
     response_layers = linear_layers(response)
     first = np.asarray(baseline_layers[0].weight, dtype=np.float32)
@@ -1429,7 +1439,7 @@ def export_teacher_snapshot(
             "completedTraversals": completed_traversals,
             "strategyWeight": float(round_number if config.regret_training == "retained_instantaneous" else completed_traversals**2),
             "strategyTransform": "regret_matching",
-            "networkSchema": CASH_NETWORK_SCHEMA if config.cash_profile else NETWORK_SCHEMA,
+            "networkSchema": CASH_NETWORK_SCHEMA if config.cash_profile else ARRIVAL_NETWORK_SCHEMA if config.card_arrival_memory else NETWORK_SCHEMA,
             **({"cashRules": profile_rules(config.cash_profile),
                 "rulesSha256": rules_digest(profile_rules(config.cash_profile)),
                 "payoffContract": PAYOFF_CONTRACT} if config.cash_profile else {}),
@@ -1450,9 +1460,10 @@ def retain_sampling_policy(run_dir: Path, config: RunConfig, round_number: int,
     if round_number > 128:
         raise RuntimeError("exact snapshot pilot is bounded to 128 rounds")
     if source is None:
-        network = {"layers": [{"input_size": input_feature_count(config.cash_profile),
-            "output_size": 1, "activation": "linear", "weights": [0.] * input_feature_count(config.cash_profile), "biases": [0.]}]}
-        policy = {"schema": NETWORK_SCHEMA, "input_size": INPUT_FEATURE_COUNT,
+        width = input_feature_count(config.cash_profile, config.card_arrival_memory)
+        network = {"layers": [{"input_size": width,
+            "output_size": 1, "activation": "linear", "weights": [0.] * width, "biases": [0.]}]}
+        policy = {"schema": ARRIVAL_NETWORK_SCHEMA if config.card_arrival_memory else NETWORK_SCHEMA, "input_size": width,
                   "strategy_transform": "regret_matching", "networks": [network, network]}
     else:
         policy = json.loads(source.read_text())
@@ -1506,7 +1517,7 @@ def export_browser_artifact(
     ).hexdigest()[:12]
     model_version = (
         # A new value-target contract must not reuse immutable v12 artifact URLs.
-        f"deep-dcfr-plus-v13-{config.depth_bb}bb-cfg{config_fingerprint}"
+        f"deep-dcfr-plus-{'v14-recall' if config.card_arrival_memory else 'v13'}-{config.depth_bb}bb-cfg{config_fingerprint}"
         f"-seed{config.seed}"
         f"-r{round_number:06d}-experimental"
     )
@@ -1524,8 +1535,8 @@ def export_browser_artifact(
         "kind": "deep-cfr-baseline-response",
         "modelVersion": model_version,
         "depthBb": config.depth_bb,
-        "stateFeatureSchema": STATE_FEATURE_SCHEMA,
-        "stateFeatureCount": STATE_FEATURE_COUNT,
+        "stateFeatureSchema": ARRIVAL_STATE_FEATURE_SCHEMA if config.card_arrival_memory else STATE_FEATURE_SCHEMA,
+        "stateFeatureCount": state_feature_count(config.cash_profile, config.card_arrival_memory),
         "actionFeatureSchema": "hu-cash-legal-action-v1",
         "actionFeatureCount": ACTION_FEATURE_COUNT,
         "opponentProfileSchema": "local-opponent-profile-v1",
@@ -1665,6 +1676,8 @@ def migrate_legacy_resume_state(
         legacy_config.pop("retain_policy_snapshots", None)
     if not legacy_config.get("integrate_closed_opponent_actions", False):
         legacy_config.pop("integrate_closed_opponent_actions", None)
+    if not legacy_config.get("card_arrival_memory", False):
+        legacy_config.pop("card_arrival_memory", None)
     expected_config = json.loads(json.dumps(run_config_payload(config)))
     if legacy_config != expected_config:
         raise RuntimeError("resume configuration differs from the existing neural run")
@@ -1798,11 +1811,20 @@ def initialize_models(config: RunConfig) -> tuple[dict[str, ActionScorer], dict[
     optimizers: dict[str, optim.Optimizer] = {}
     for offset, (name, output_size) in enumerate(names_outputs.items()):
         mx.random.seed(config.seed + offset * 1009)
+        # Initialize exactly the legacy network, then insert zero arrival columns.
+        # Both arms start with identical predictions and existing RNG draws.
         model = ActionScorer(input_feature_count(config.cash_profile), config.hidden_sizes, output_size)
         first_layer = linear_layers(model)[0]
         first_weights = np.asarray(first_layer.weight, dtype=np.float32)
         first_weights[:, TEXTURE_FEATURE_OFFSET : TEXTURE_FEATURE_OFFSET + TEXTURE_FEATURE_COUNT] = 0
         first_layer.weight = mx.array(first_weights)
+        if config.card_arrival_memory:
+            if config.cash_profile is not None:
+                raise ValueError("Home card-arrival experiment cannot change cash profiles")
+            widened = np.zeros((first_weights.shape[0], CASH_STATE_FEATURE_COUNT + ACTION_FEATURE_COUNT), dtype=np.float32)
+            widened[:, :STATE_FEATURE_COUNT] = first_weights[:, :STATE_FEATURE_COUNT]
+            widened[:, CASH_STATE_FEATURE_COUNT:] = first_weights[:, STATE_FEATURE_COUNT:]
+            first_layer.weight = mx.array(widened)
         optimizer = optim.AdamW(learning_rate=config.learning_rate, weight_decay=1e-5)
         optimizer.init(model.trainable_parameters())
         mx.eval(model.parameters(), optimizer.state)
@@ -1836,6 +1858,7 @@ def save_checkpoint(
     depth_bb: int,
     cash_profile: str | None = None,
     action_abstraction: dict[str, Any] | None = None,
+    card_arrival_memory: bool = False,
 ) -> Path:
     checkpoints = run_dir / "checkpoints"
     checkpoints.mkdir(parents=True, exist_ok=True)
@@ -1856,6 +1879,7 @@ def save_checkpoint(
         depth_bb,
         cash_profile,
         action_abstraction,
+        card_arrival_memory,
     )
     os.replace(staging, checkpoint)
     return checkpoint
@@ -1926,6 +1950,8 @@ def generate_shard(
         command.extend(("--action-abstraction-json", config.action_abstraction_json))
     if config.average_regret_rollouts:
         command.append("--average-regret-rollouts")
+    if config.card_arrival_memory:
+        command.append("--card-arrival-memory")
     if config.integrate_closed_opponent_actions:
         command.append("--integrate-closed-opponent-actions")
     if config.cash_profile: command.extend(("--cash-profile", config.cash_profile))
@@ -1937,6 +1963,7 @@ def generate_shard(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--card-arrival-memory", action="store_true", help="Opt-in Home v5 public-card arrival recall; old weights remain v4")
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--depth-bb", type=int, choices=(20,40,50,100,200,1000,2000), default=20)
     parser.add_argument("--seed", type=int, required=True)
@@ -2132,6 +2159,7 @@ def main() -> None:
         regret_training=args.regret_training,
         retain_policy_snapshots=args.retain_policy_snapshots,
         integrate_closed_opponent_actions=args.integrate_closed_opponent_actions,
+        card_arrival_memory=args.card_arrival_memory,
     )
     validate_training_profile(config.cash_profile, config.depth_bb, config.variance_baseline_scale)
     root = Path(__file__).resolve().parents[2]
@@ -2189,7 +2217,7 @@ def main() -> None:
             2,
             size=int(state.get("reservoirs", {}).get("value", {}).get("size", 0)),
             seen=int(state.get("reservoirs", {}).get("value", {}).get("seen", 0)),
-            feature_count=input_feature_count(config.cash_profile),
+            feature_count=input_feature_count(config.cash_profile, config.card_arrival_memory),
         )
     }
     for name in ("advantage_p0", "advantage_p1", "average_strategy"):
@@ -2200,7 +2228,7 @@ def main() -> None:
             normalize_targets=name == "average_strategy",
             size=int(state.get("reservoirs", {}).get(name, {}).get("size", 0)),
             seen=int(state.get("reservoirs", {}).get(name, {}).get("seen", 0)),
-            feature_count=state_feature_count(config.cash_profile),
+            feature_count=state_feature_count(config.cash_profile, config.card_arrival_memory),
         )
     reservoir_rng = random.Random(config.seed ^ 0xD1B54A32D192ED03)
     if state.get("reservoir_rng_state") is not None:
@@ -2252,6 +2280,8 @@ def main() -> None:
             raise RuntimeError("sample shard depth changed during a pinned run")
         if metadata["sampling_mode"] != "external_sampling":
             raise RuntimeError("training requires external-sampling traversal shards")
+        if metadata['state_feature_count'] != state_feature_count(config.cash_profile, config.card_arrival_memory):
+            raise RuntimeError('sampler did not apply the pinned card-memory schema')
         if config.average_regret_rollouts and metadata.get("regret_target_estimator") != "averaged_action_values_v1":
             raise RuntimeError("sampler did not apply the pinned averaged-regret estimator")
         if config.integrate_closed_opponent_actions and not metadata.get('integrates_closed_opponent_actions'):
@@ -2275,6 +2305,7 @@ def main() -> None:
             reservoir_rng,
             config.cash_profile,
             config.regret_training,
+            config.card_arrival_memory,
         )
         if config.regret_training == "retained_instantaneous":
             # Targets are raw instantaneous regrets across iterations. Refit
@@ -2321,6 +2352,7 @@ def main() -> None:
             config.depth_bb,
             config.cash_profile,
             action_abstraction,
+            config.card_arrival_memory,
         )
         traversal_networks = checkpoint / "traversal-networks.json"
         exported_artifact: tuple[Path, Path] | None = None
