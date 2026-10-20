@@ -3238,6 +3238,7 @@ fn run_neural_frozen_values(args: &[String]) -> Result<(), Box<dyn Error>> {
         policy_only: args.iter().any(|arg| arg == "--policy-only"),
         integrate_terminal_responses: args.iter().any(|arg| arg == "--integrate-terminal-responses"),
         exact_river_values: args.iter().any(|arg| arg == "--exact-river-values"),
+        exact_closed_values: args.iter().any(|arg| arg == "--exact-closed-values"),
     })?;
     let output = serde_json::to_string_pretty(&report)?;
     if let Some(path) = value(args, "--output") {

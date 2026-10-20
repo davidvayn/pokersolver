@@ -102,7 +102,8 @@ def independent_response_gain(blocks: np.ndarray, probabilities: np.ndarray) -> 
 
 def frozen_reference(binary: Path, model, records: list[dict], depth: int, output: Path,
                      seed: int = 2471701, blocks: int = 32, inner: int = 2,
-                     snapshots: Path | None = None, policy_only: bool = False) -> dict:
+                     snapshots: Path | None = None, policy_only: bool = False,
+                     exact_river_values: bool = False, exact_closed_values: bool = False) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     network_path = output.with_suffix('.networks.json')
     source = {'schema': ARRIVAL_NETWORK_SCHEMA if model_has_arrival_memory(model) else NETWORK_SCHEMA, 'input_size': model_input_count(model),
@@ -119,11 +120,18 @@ def frozen_reference(binary: Path, model, records: list[dict], depth: int, outpu
         argv += ['--snapshots', str(snapshots)]
     if policy_only:
         argv += ['--policy-only']
+    if exact_river_values:
+        argv += ['--exact-river-values']
+    if exact_closed_values:
+        argv += ['--exact-closed-values']
     try:
         subprocess.run(argv, cwd=ROOT, check=True, capture_output=True, text=True, timeout=600)
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f'native qualification failed: {error.stderr.strip()}') from error
     report = json.loads(output.read_text())
+    if (bool(report.get('exact_river_values')) != exact_river_values
+            or bool(report.get('exact_closed_values')) != exact_closed_values):
+        raise RuntimeError('native frozen reference changed the requested exact estimator')
     verify_evaluation_game(report, depth, PILOT_GRID)
     if report['input_sha256'] != hashlib.sha256(input_path.read_bytes()).hexdigest():
         raise RuntimeError('native frozen reference changed its input identity')

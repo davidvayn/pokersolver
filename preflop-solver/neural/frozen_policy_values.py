@@ -83,6 +83,20 @@ def verify_frozen_targets(source: Path, reference_path: Path) -> tuple[dict, lis
                     or np.any(errors) or row.get('independent_hidden_block_values_bb')
                     or not 0 < row.get('exact_tree_nodes',0) <= 2_000_000):
                 raise ValueError('invalid exact river uncertainty contract')
+        estimators = row.get('action_estimators')
+        if estimators is not None:
+            if len(estimators) != n: raise ValueError('exact action estimator count differs')
+            for index,estimator in enumerate(estimators):
+                if estimator not in ('independent_hidden_blocks_v1','exact_river_posterior_and_action_tree_v1','exact_closed_posterior_runouts_v1'):
+                    raise ValueError('unknown frozen action estimator')
+                if estimator == 'exact_river_posterior_and_action_tree_v1' and (
+                        row.get('estimator') != estimator or not reference.get('exact_river_values')
+                        or record['state']['street'] != 'river' or errors[index] != 0.):
+                    raise ValueError('invalid per-action river uncertainty contract')
+                if estimator == 'exact_closed_posterior_runouts_v1' and (
+                        not reference.get('exact_closed_values') or errors[index] != 0.
+                        or not 0 <= row.get('exact_closed_runouts',-1) <= 2_000_000):
+                    raise ValueError('invalid closed-action uncertainty contract')
     return checked, records, reference
 
 

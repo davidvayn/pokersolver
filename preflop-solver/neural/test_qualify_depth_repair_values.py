@@ -35,6 +35,16 @@ class AuthenticFrozenValueTests(unittest.TestCase):
             self.assertEqual(single['records'], chunks['records'])
             self.assertEqual(single['input_sha256'], chunks['input_sha256'])
             self.assertEqual(single['source_network_sha256s'], chunks['source_network_sha256s'])
+            exact = frozen_reference(binary,model,rows,50,root/'exact.json',blocks=8,
+                exact_river_values=True,exact_closed_values=True)
+            self.assertTrue(exact['exact_river_values'] and exact['exact_closed_values'])
+            first=exact['records'][0]
+            fold=next(i for i,a in enumerate(first['actions']) if a['kind']=='fold')
+            self.assertEqual(first['action_estimators'][fold],'exact_closed_posterior_runouts_v1')
+            self.assertEqual(first['standard_errors_bb'][fold],0.)
+            exact_chunks=chunked_frozen_reference(binary,model,rows,50,root/'exact-chunks.json',blocks=8,chunk_size=1,
+                exact_river_values=True,exact_closed_values=True)
+            self.assertEqual(exact['records'],exact_chunks['records'])
 
     def test_policy_mixture_is_equal_even_when_trajectory_lengths_differ(self):
         first = [{'iteration': 0, 'state': {'street': 'preflop'}}]

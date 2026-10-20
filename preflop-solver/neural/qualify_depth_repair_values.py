@@ -64,7 +64,8 @@ def chunk_seed(seed: int, start: int) -> int:
 
 def chunked_frozen_reference(binary: Path, model, records: list[dict], depth: int,
                              output: Path, *, blocks: int, seed: int = 2471701,
-                             chunk_size: int = 32) -> dict:
+                             chunk_size: int = 32, exact_river_values: bool = False,
+                             exact_closed_values: bool = False) -> dict:
     # Preserve qualification.rs's GLOBAL root-index seed schedule exactly.
     # Small subprocess batches avoid a single timeout discarding all labels.
     if not records or not 1 <= chunk_size <= 32 or blocks < 4 or len(records) * blocks > 1_000_000:
@@ -74,8 +75,11 @@ def chunked_frozen_reference(binary: Path, model, records: list[dict], depth: in
     chunks, receipts = [], []
     for start in range(0, len(records), chunk_size):
         path = directory / f'roots-{start:04d}.json'
+        options = {}
+        if exact_river_values: options['exact_river_values'] = True
+        if exact_closed_values: options['exact_closed_values'] = True
         part = frozen_reference(binary, model, records[start:start + chunk_size], depth,
-            path, seed=chunk_seed(seed, start), blocks=blocks)
+            path, seed=chunk_seed(seed, start), blocks=blocks, **options)
         if chunks and part['source_network_sha256s'] != chunks[0]['source_network_sha256s']:
             raise ValueError('chunked reference changed its frozen policy')
         chunks.append(part)

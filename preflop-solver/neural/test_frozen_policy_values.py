@@ -43,6 +43,34 @@ class FrozenPolicyValueTests(unittest.TestCase):
         self.assertTrue(native_equal({'amount': 2.333}, {'amount': float(np.float32(2.333))}))
         self.assertFalse(native_equal({'amount': 2.333}, {'amount': 2.334}))
 
+    def test_exact_action_errors_require_an_explicit_valid_estimator_contract(self):
+        from test_train import initial_state
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); source,_=self.fixture(directory)
+            state={**initial_state(),'stacks_bb':[49.5,49.]}
+            record={'iteration':0,'state':state,'actions':[{'kind':'fold','amount_to_bb':None}]}
+            path=root/'reference.json'
+            atomic_json(path.with_suffix('.input.json'),[record])
+            policy=scorer_json(load_artifact_model(source))
+            atomic_json(path.with_suffix('.networks.json'),{'strategy_transform':'softmax','networks':[policy,policy]})
+            row={**record,'action_values_bb':[-.5],'standard_errors_bb':[0.],
+                'action_estimators':['exact_closed_posterior_runouts_v1'],'exact_closed_runouts':0}
+            report={'schema':'hu-frozen-information-set-values-v1','depth_bb':50,'hidden_blocks':4,
+                'action_abstraction':PILOT_GRID,'input_sha256':digest(path.with_suffix('.input.json')),
+                'source_network_sha256s':[digest(path.with_suffix('.networks.json'))],
+                'uncertainty_contract':'Independent outer opponent-posterior/future-board blocks; fixture.',
+                'records':[row]}
+            atomic_json(path,report)
+            with self.assertRaises(ValueError): verify_frozen_targets(source,path)
+            report['exact_closed_values']=True; atomic_json(path,report)
+            verify_frozen_targets(source,path)
+            row['standard_errors_bb']=[.01]; atomic_json(path,report)
+            with self.assertRaises(ValueError): verify_frozen_targets(source,path)
+            row['standard_errors_bb']=[0.]; row['action_estimators']=['unknown']; atomic_json(path,report)
+            with self.assertRaises(ValueError): verify_frozen_targets(source,path)
+            row['action_estimators']=['exact_river_posterior_and_action_tree_v1']; atomic_json(path,report)
+            with self.assertRaises(ValueError): verify_frozen_targets(source,path)
+
     def test_frozen_fit_binds_policy_rejects_corruption_and_keeps_error_contract_separate(self):
         from test_train import initial_state
         with tempfile.TemporaryDirectory() as directory:

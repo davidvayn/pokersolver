@@ -87,6 +87,22 @@ class MatchedDepthRepairTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             paired_response_summary(np.full((2, 16), np.nan), np.ones((2, 16)))
 
+    @unittest.skipUnless(os.environ.get('POKER_CERTIFICATE_TEST_BINARY'), 'explicit native binary required')
+    def test_recall_checkpoint_resume_preserves_expanded_weights_and_rng(self):
+        binary = Path(os.environ['POKER_CERTIFICATE_TEST_BINARY'])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_training(binary,root/'continuous','recall',2919041,3,4,2)
+            run_training(binary,root/'resumed','recall',2919041,2,4,2)
+            run_training(binary,root/'resumed','recall',2919041,3,4,2,resume=True)
+            artifacts = []
+            for name in ('continuous','resumed'):
+                state = json.loads((root/name/'state.json').read_text())
+                source = json.loads(Path(state['artifacts'][-1]['source']).read_text())
+                self.assertEqual(source['metadata']['stateFeatureCount'],820)
+                artifacts.append(source)
+            self.assertEqual(artifacts[0]['parameters'],artifacts[1]['parameters'])
+
     def test_stability_alone_cannot_promote_or_start_100bb(self):
         batches = [{'control': {'action_frequency_mae': .14, 'primary_action_agreement': .50},
                     'averaged': {'action_frequency_mae': .12, 'primary_action_agreement': .60}}] * 2

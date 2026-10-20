@@ -1,0 +1,893 @@
+{
+  "schema": "hu-card-memory-fit-and-ev-label-audit-v1",
+  "status": "completed_not_activated",
+  "verified_current_source_sha256s": {
+    "preflop-solver/src/main.rs": "9a47d08aa180458da3585366a6b929d42b40de29e03583ef5f7c5155ac925ec8",
+    "preflop-solver/src/blueprint/neural.rs": "bbd449db1a564d3fa67b213a3e18e22b5aca77fdbaccd19ba95f5aff19fbd240",
+    "preflop-solver/src/blueprint/neural/qualification.rs": "b94981b32ebf75364bd149bf1c76e9878c6acdec8f2fadd74808d1012eba5a2d",
+    "preflop-solver/neural/train.py": "d3d5dd0e4960df912ab540f15f531e279b8ab806a55638bb59cbf7d528fe7afc",
+    "preflop-solver/neural/validate_seeds.py": "de9986ff8b52f95a43df7f2b0dfeb97f08a860da41159c7f07ba921cad01a91a",
+    "preflop-solver/neural/depth_repair.py": "ec7ed44bdd64c379823f08d87bdcf81a19e9fdc096c11a1209f5d5f77fa9c38c",
+    "preflop-solver/neural/frozen_policy_values.py": "d723f138adbd13538c7ed481b23a4a502a65070209c68a19b1023c039411db90",
+    "preflop-solver/neural/probe_exact_river_labels.py": "479226d4fa008298728e1b12269d8d694c60a56c3b56804ef3846843581b19aa",
+    "preflop-solver/neural/probe_regret_fit_budget.py": "2ac6206226cab8759bf31b6ec74dc6df031077368805232e0960e1050bfbcd5b",
+    "preflop-solver/neural/run_regret_learning_pilot.py": "246d7c4a000eca7a05316fc89c764d1a1318569a862d8fd80c94d542eb36c82c"
+  },
+  "active_models_changed": false,
+  "card_memory_pilot": {
+    "schema": "hu-upstream-regret-learning-pilot-v1",
+    "status": "completed_not_activated",
+    "depth_bb": 50,
+    "seeds": [
+      51701,
+      51702
+    ],
+    "profiles": [
+      "averaged",
+      "recall"
+    ],
+    "rounds": 24,
+    "traversals_per_round": 128,
+    "steps_per_round": 240,
+    "source_sha256s": {
+      "depth_repair.py": "594f546c952e380253baf49f397805f3bb5fd3b29276c1f2416f128fb28220a6",
+      "run_regret_learning_pilot.py": "246d7c4a000eca7a05316fc89c764d1a1318569a862d8fd80c94d542eb36c82c",
+      "train.py": "d3d5dd0e4960df912ab540f15f531e279b8ab806a55638bb59cbf7d528fe7afc",
+      "validate_seeds.py": "de9986ff8b52f95a43df7f2b0dfeb97f08a860da41159c7f07ba921cad01a91a"
+    },
+    "sampler_sha256": "a03b41b0bb829796ed32763c8f2edda0a538605434d0724e6c173447ee4cc1af",
+    "criteria": "Both batches MAE lower and primary agreement higher; both seeds lower local response gain; paired-root 95% upper delta negative.",
+    "contrast": "Only card-arrival inputs differ; zero-extended shared initialization, identical game and training budgets.",
+    "active_models_changed": false,
+    "release_eligible": false,
+    "full_game_exploitability_measured": false,
+    "training": [
+      {
+        "depth_bb": 50,
+        "output": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/averaged-51701",
+        "profile": "averaged",
+        "rounds": 24,
+        "seconds": 714.5666085418779,
+        "seed": 51701,
+        "starting_round": 0,
+        "total_update_seconds": 712.5087565435097,
+        "traversals": 3072
+      },
+      {
+        "depth_bb": 50,
+        "output": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/averaged-51702",
+        "profile": "averaged",
+        "rounds": 24,
+        "seconds": 705.462416583905,
+        "seed": 51702,
+        "starting_round": 0,
+        "total_update_seconds": 703.8038691659458,
+        "traversals": 3072
+      },
+      {
+        "depth_bb": 50,
+        "output": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/recall-51701",
+        "profile": "recall",
+        "rounds": 24,
+        "seconds": 641.5374049160164,
+        "seed": 51701,
+        "starting_round": 0,
+        "total_update_seconds": 639.3684149158653,
+        "traversals": 3072
+      },
+      {
+        "depth_bb": 50,
+        "output": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/recall-51702",
+        "profile": "recall",
+        "rounds": 24,
+        "seconds": 657.8517847501207,
+        "seed": 51702,
+        "starting_round": 0,
+        "total_update_seconds": 655.8192852092907,
+        "traversals": 3072
+      }
+    ],
+    "batches": [
+      {
+        "averaged": {
+          "action_frequency_mae": 0.10661501607747656,
+          "action_probabilities": 13470,
+          "aggregate_action_deltas": {
+            "all_in": 0.01893543125437025,
+            "bet": 0.0009174361566230624,
+            "call": 0.000012977585445578255,
+            "check": 0.006087596792971148,
+            "fold": 0.009561534263007043,
+            "raise": 0.004190758769567565
+          },
+          "decisions": 2844,
+          "effective_decisions": 2839.934682662273,
+          "evaluation_distribution": "fixed equal-policy mixture; diagnostic only",
+          "lookup_coverage": 1,
+          "maximum_aggregate_action_delta": 0.01893543125437025,
+          "mean_policy_entropy": [
+            1.2147703029431878,
+            1.2244906007173462
+          ],
+          "mean_top_probability": [
+            0.5010279969156725,
+            0.49697744168623526
+          ],
+          "primary_action_agreement": 0.6012676033437823,
+          "primary_action_agreement_tie_aware_0_01": 0.6388821206158763,
+          "probability_sums_valid": true,
+          "reach_weighted": true,
+          "sampling_method": "empirical_pure_trajectories",
+          "street_breakdown": {
+            "flop": {
+              "action_frequency_mae": 0.13338934761957497,
+              "decisions": 512,
+              "primary_action_agreement": 0.6051286362948076,
+              "reach_mass": 0.17938539725391964
+            },
+            "preflop": {
+              "action_frequency_mae": 0.09787773669465355,
+              "decisions": 2116,
+              "primary_action_agreement": 0.6004796047764264,
+              "reach_mass": 0.7449796244358595
+            },
+            "river": {
+              "action_frequency_mae": 0.1289414684647738,
+              "decisions": 71,
+              "primary_action_agreement": 0.6441647860128221,
+              "reach_mass": 0.024763227303293514
+            },
+            "turn": {
+              "action_frequency_mae": 0.1292856726826464,
+              "decisions": 145,
+              "primary_action_agreement": 0.5783109974691065,
+              "reach_mass": 0.05087175100688353
+            }
+          }
+        },
+        "recall": {
+          "action_frequency_mae": 0.12884531131651578,
+          "action_probabilities": 13470,
+          "aggregate_action_deltas": {
+            "all_in": 0.06781797189758315,
+            "bet": 0.014526812165048406,
+            "call": 0.016505924551105,
+            "check": 0.03101175400174587,
+            "fold": 0.059958085888832474,
+            "raise": 0.02513098037905373
+          },
+          "decisions": 2844,
+          "effective_decisions": 2839.934682662273,
+          "evaluation_distribution": "fixed equal-policy mixture; diagnostic only",
+          "lookup_coverage": 1,
+          "maximum_aggregate_action_delta": 0.06781797189758315,
+          "mean_policy_entropy": [
+            1.1851294107947876,
+            1.2401641992338228
+          ],
+          "mean_top_probability": [
+            0.5131118152438916,
+            0.4834085350916705
+          ],
+          "primary_action_agreement": 0.461623136804905,
+          "primary_action_agreement_tie_aware_0_01": 0.4891760618360436,
+          "probability_sums_valid": true,
+          "reach_weighted": true,
+          "sampling_method": "empirical_pure_trajectories",
+          "street_breakdown": {
+            "flop": {
+              "action_frequency_mae": 0.15065688809959726,
+              "decisions": 512,
+              "primary_action_agreement": 0.4858587341153689,
+              "reach_mass": 0.17938539725391964
+            },
+            "preflop": {
+              "action_frequency_mae": 0.11943221478151124,
+              "decisions": 2116,
+              "primary_action_agreement": 0.44795093496908917,
+              "reach_mass": 0.7449796244358595
+            },
+            "river": {
+              "action_frequency_mae": 0.1401430856663304,
+              "decisions": 71,
+              "primary_action_agreement": 0.663689379603125,
+              "reach_mass": 0.024763227303293514
+            },
+            "turn": {
+              "action_frequency_mae": 0.18428113464481397,
+              "decisions": 145,
+              "primary_action_agreement": 0.47802098473451904,
+              "reach_mass": 0.05087175100688353
+            }
+          }
+        }
+      },
+      {
+        "averaged": {
+          "action_frequency_mae": 0.10591664671523904,
+          "action_probabilities": 14001,
+          "aggregate_action_deltas": {
+            "all_in": 0.015948830481685383,
+            "bet": 0.0002976391955450339,
+            "call": 0.0015143449513871088,
+            "check": 0.008849335524661425,
+            "fold": 0.00893067912618345,
+            "raise": 0.0006144784133156056
+          },
+          "decisions": 2969,
+          "effective_decisions": 2965.4929855448786,
+          "evaluation_distribution": "fixed equal-policy mixture; diagnostic only",
+          "lookup_coverage": 1,
+          "maximum_aggregate_action_delta": 0.015948830481685383,
+          "mean_policy_entropy": [
+            1.2160727675224672,
+            1.2213417378463955
+          ],
+          "mean_top_probability": [
+            0.496403054767465,
+            0.4946551850685233
+          ],
+          "primary_action_agreement": 0.5631358586010279,
+          "primary_action_agreement_tie_aware_0_01": 0.6009403860866266,
+          "probability_sums_valid": true,
+          "reach_weighted": true,
+          "sampling_method": "empirical_pure_trajectories",
+          "street_breakdown": {
+            "flop": {
+              "action_frequency_mae": 0.1293706639095993,
+              "decisions": 546,
+              "primary_action_agreement": 0.5782641966072203,
+              "reach_mass": 0.18259595972555998
+            },
+            "preflop": {
+              "action_frequency_mae": 0.09625928818670951,
+              "decisions": 2204,
+              "primary_action_agreement": 0.5578177929988337,
+              "reach_mass": 0.7445039571533546
+            },
+            "river": {
+              "action_frequency_mae": 0.12793676480270688,
+              "decisions": 48,
+              "primary_action_agreement": 0.6299128604912506,
+              "reach_mass": 0.015956853642320433
+            },
+            "turn": {
+              "action_frequency_mae": 0.15080277423209143,
+              "decisions": 171,
+              "primary_action_agreement": 0.5654433610609474,
+              "reach_mass": 0.05694322947877574
+            }
+          }
+        },
+        "recall": {
+          "action_frequency_mae": 0.12370339873269119,
+          "action_probabilities": 14001,
+          "aggregate_action_deltas": {
+            "all_in": 0.07257153102348213,
+            "bet": 0.010140001822475271,
+            "call": 0.02334475443369574,
+            "check": 0.025984580587937678,
+            "fold": 0.053794201956520904,
+            "raise": 0.020412004132197098
+          },
+          "decisions": 2969,
+          "effective_decisions": 2965.4929855448786,
+          "evaluation_distribution": "fixed equal-policy mixture; diagnostic only",
+          "lookup_coverage": 1,
+          "maximum_aggregate_action_delta": 0.07257153102348213,
+          "mean_policy_entropy": [
+            1.1845222994988183,
+            1.230942326533069
+          ],
+          "mean_top_probability": [
+            0.5114450855919276,
+            0.4865619758312075
+          ],
+          "primary_action_agreement": 0.46434873753501876,
+          "primary_action_agreement_tie_aware_0_01": 0.5009713645627926,
+          "probability_sums_valid": true,
+          "reach_weighted": true,
+          "sampling_method": "empirical_pure_trajectories",
+          "street_breakdown": {
+            "flop": {
+              "action_frequency_mae": 0.14525976789204179,
+              "decisions": 546,
+              "primary_action_agreement": 0.5159619110122219,
+              "reach_mass": 0.18259595972555998
+            },
+            "preflop": {
+              "action_frequency_mae": 0.11461875996548669,
+              "decisions": 2204,
+              "primary_action_agreement": 0.44697682851435194,
+              "reach_mass": 0.7445039571533546
+            },
+            "river": {
+              "action_frequency_mae": 0.17398444310119973,
+              "decisions": 48,
+              "primary_action_agreement": 0.5028361510418331,
+              "reach_mass": 0.015956853642320433
+            },
+            "turn": {
+              "action_frequency_mae": 0.15926717601063206,
+              "decisions": 171,
+              "primary_action_agreement": 0.5151881448840081,
+              "reach_mass": 0.05694322947877574
+            }
+          }
+        }
+      }
+    ],
+    "paired_response": {
+      "averaged_mean_gain_bb": 1.34982396544679,
+      "bootstrap_replicates": 10000,
+      "control_mean_gain_bb": 1.3122144873714334,
+      "independent_roots": 32,
+      "interpretation": "recall minus bootstrapped-v4 local response gain; negative favors candidate. Not full-game exploitability.",
+      "mean_delta_bb": 0.03760947807535682,
+      "one_sided_95_bootstrap_upper_delta_bb": 0.4034114603886689,
+      "seed_mean_deltas_bb": [
+        -0.16735285117183585,
+        0.24257180732254943
+      ]
+    },
+    "decision": {
+      "improvements_hold": false,
+      "interpretation": "Screening criterion only, not release validation or proof of equilibrium strength.",
+      "local_response_reduction_credible_in_this_screen": false,
+      "release_eligible": false,
+      "stability_better_on_both_evaluation_batches": false
+    },
+    "validation": {
+      "averaged": {
+        "gates": {
+          "action_ev_standard_error_coverage_at_least_0_95": false,
+          "action_frequency_mae_at_most_0_05": false,
+          "aggregate_action_delta_at_most_0_03": true,
+          "coverage_at_least_0_9999": true,
+          "estimated_exploitability_at_most_0_50": false,
+          "exploitability_upper_99_at_most_0_50": false,
+          "independent_seed_count_at_least_2": true,
+          "primary_action_agreement_at_least_0_85": false,
+          "probabilities_valid": true,
+          "reach_weighting_valid": true
+        },
+        "path": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/averaged-release-validation.json",
+        "release_eligible": false,
+        "sha256": "411752ea3c066bdf0721620182506d7a3428952e8db74ee174fd318be397d863",
+        "unmeasured_gates": [
+          "estimated_exploitability_at_most_0_50",
+          "exploitability_upper_99_at_most_0_50",
+          "action_ev_standard_error_coverage_at_least_0_95"
+        ]
+      },
+      "recall": {
+        "gates": {
+          "action_ev_standard_error_coverage_at_least_0_95": false,
+          "action_frequency_mae_at_most_0_05": false,
+          "aggregate_action_delta_at_most_0_03": false,
+          "coverage_at_least_0_9999": true,
+          "estimated_exploitability_at_most_0_50": false,
+          "exploitability_upper_99_at_most_0_50": false,
+          "independent_seed_count_at_least_2": true,
+          "primary_action_agreement_at_least_0_85": false,
+          "probabilities_valid": true,
+          "reach_weighting_valid": true
+        },
+        "path": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/recall-release-validation.json",
+        "release_eligible": false,
+        "sha256": "0eb3ed46f7270a5583e65a936fdbcb226cc5b1a82f0b703d03f9ee763d1a6514",
+        "unmeasured_gates": [
+          "estimated_exploitability_at_most_0_50",
+          "exploitability_upper_99_at_most_0_50",
+          "action_ev_standard_error_coverage_at_least_0_95"
+        ]
+      }
+    },
+    "artifacts": {
+      "averaged-51701": {
+        "bytes": 2646611,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/averaged-51701/artifacts/round-000024/model.bin",
+        "sha256": "31e7c21d062785d670bab522cb11eca9179276b187eabeeb316a8a03954285bb"
+      },
+      "averaged-51702": {
+        "bytes": 2646611,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/averaged-51702/artifacts/round-000024/model.bin",
+        "sha256": "1de19c191d54ec5d5ec9c885fcf08fc9ec0de9a6cee9405ef26c8fef21c6f18f"
+      },
+      "recall-51701": {
+        "bytes": 2966103,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/recall-51701/artifacts/round-000024/model.bin",
+        "sha256": "60e4c6c21513d4d0e8550d01d996a7da12e29a0ccb665ba0718323c1718cbdde"
+      },
+      "recall-51702": {
+        "bytes": 2966103,
+        "descriptor_matches": true,
+        "magic_valid": true,
+        "path": "/Users/davidvayntrub/pokersolver-training/card-memory-pilot-2026-10-19-50bb/recall-51702/artifacts/round-000024/model.bin",
+        "sha256": "a310c005f153b0239b25776774017d10c6159cbfaa4abbb4e8a92ba2074bc25f"
+      }
+    },
+    "source_summary_sha256": "17ba09381601e5429d69e49783e4ba83de033b31e8115ee91a7b4c5824a86bf2",
+    "mean_local_response_gain_by_policy": {
+      "averaged-51701": 1.5183107146877861,
+      "averaged-51702": 1.1061182600550807,
+      "recall-51701": 1.3509578635159503,
+      "recall-51702": 1.34869006737763
+    },
+    "legacy_control_parameter_parity": [
+      {
+        "seed": 51701,
+        "bit_identical_parameters": true,
+        "parameters_sha256": "a73ab74ebc5e28c3a446afe28ee542abbc831d612af77d00c00365aa4268c14a",
+        "interpretation": "Numeric weights match the prior v4 control exactly. Metadata/version differ correctly because sampler identity changed."
+      },
+      {
+        "seed": 51702,
+        "bit_identical_parameters": true,
+        "parameters_sha256": "ed821c493f37c7746002a84eb4da950a90cde5959da136c05a8f66efff5b0e6b",
+        "interpretation": "Numeric weights match the prior v4 control exactly. Metadata/version differ correctly because sampler identity changed."
+      }
+    ],
+    "100bb_followup": {
+      "run": false,
+      "reason": "50bb failed the predeclared stability and paired-response screen; no conditional replication or activation."
+    }
+  },
+  "earlier_frozen_diagnostics": {
+    "regret-fit-budget-2026-10-19-v2.json": {
+      "sha256": "f08cc5420a0312f7a488866fa8b1adc1e39060dfbf1712dd68995577a6d8c863",
+      "report": {
+        "interpretation": "Fits historical noisy instantaneous targets; improvement is not evidence of equilibrium or playing strength.",
+        "release_eligible": false,
+        "results": [
+          {
+            "heldout_states": 4120,
+            "player": 0,
+            "records": 20632,
+            "run": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/retained-51701",
+            "source_config_hash": "7a0840fd71693ee8b1023d72189fb8a296570393c9f517edd8a3805bfe848d62",
+            "train_states": 16512,
+            "trials": [
+              {
+                "heldout": {
+                  "target_mix_mae": 0.35623929616317007,
+                  "target_primary_agreement": 0.36067961165048545,
+                  "weighted_mse_stack_fraction": 0.09056322020695486
+                },
+                "steps": 240,
+                "train": {
+                  "target_mix_mae": 0.3454058798708657,
+                  "target_primary_agreement": 0.37415213178294576,
+                  "weighted_mse_stack_fraction": 0.07781892325275781
+                }
+              },
+              {
+                "heldout": {
+                  "target_mix_mae": 0.33307224847738026,
+                  "target_primary_agreement": 0.3978155339805825,
+                  "weighted_mse_stack_fraction": 0.08195127984645033
+                },
+                "steps": 960,
+                "train": {
+                  "target_mix_mae": 0.2965434845103774,
+                  "target_primary_agreement": 0.45221656976744184,
+                  "weighted_mse_stack_fraction": 0.046223239292451715
+                }
+              }
+            ]
+          },
+          {
+            "heldout_states": 6288,
+            "player": 1,
+            "records": 31269,
+            "run": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/retained-51701",
+            "source_config_hash": "7a0840fd71693ee8b1023d72189fb8a296570393c9f517edd8a3805bfe848d62",
+            "train_states": 24981,
+            "trials": [
+              {
+                "heldout": {
+                  "target_mix_mae": 0.37312920281601925,
+                  "target_primary_agreement": 0.38740458015267176,
+                  "weighted_mse_stack_fraction": 0.10524819804592705
+                },
+                "steps": 240,
+                "train": {
+                  "target_mix_mae": 0.3732976248808225,
+                  "target_primary_agreement": 0.38769464793242864,
+                  "weighted_mse_stack_fraction": 0.09720177646383789
+                }
+              },
+              {
+                "heldout": {
+                  "target_mix_mae": 0.29828156132734457,
+                  "target_primary_agreement": 0.5729961832061069,
+                  "weighted_mse_stack_fraction": 0.06670938143504072
+                },
+                "steps": 960,
+                "train": {
+                  "target_mix_mae": 0.2873517797628981,
+                  "target_primary_agreement": 0.5849645730755374,
+                  "weighted_mse_stack_fraction": 0.05109217757981419
+                }
+              }
+            ]
+          },
+          {
+            "heldout_states": 4238,
+            "player": 0,
+            "records": 21182,
+            "run": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/retained-51702",
+            "source_config_hash": "73a0ce259381182e8c0549b8003bc8f953c48b4fc035f4adb144f59182525338",
+            "train_states": 16944,
+            "trials": [
+              {
+                "heldout": {
+                  "target_mix_mae": 0.3587985306542231,
+                  "target_primary_agreement": 0.3980651250589901,
+                  "weighted_mse_stack_fraction": 0.10010773975718945
+                },
+                "steps": 240,
+                "train": {
+                  "target_mix_mae": 0.34255451836374373,
+                  "target_primary_agreement": 0.4227455146364495,
+                  "weighted_mse_stack_fraction": 0.08133319123014127
+                }
+              },
+              {
+                "heldout": {
+                  "target_mix_mae": 0.3212433851457194,
+                  "target_primary_agreement": 0.4443133553563001,
+                  "weighted_mse_stack_fraction": 0.08082764457363381
+                },
+                "steps": 960,
+                "train": {
+                  "target_mix_mae": 0.29391788254378537,
+                  "target_primary_agreement": 0.489199716713881,
+                  "weighted_mse_stack_fraction": 0.04662455648813166
+                }
+              }
+            ]
+          },
+          {
+            "heldout_states": 5566,
+            "player": 1,
+            "records": 26617,
+            "run": "/Users/davidvayntrub/pokersolver-training/regret-learning-pilot-2026-10-18-50bb/retained-51702",
+            "source_config_hash": "73a0ce259381182e8c0549b8003bc8f953c48b4fc035f4adb144f59182525338",
+            "train_states": 21051,
+            "trials": [
+              {
+                "heldout": {
+                  "target_mix_mae": 0.36197048068003734,
+                  "target_primary_agreement": 0.4606539705353935,
+                  "weighted_mse_stack_fraction": 0.09495842288425273
+                },
+                "steps": 240,
+                "train": {
+                  "target_mix_mae": 0.35442527255266276,
+                  "target_primary_agreement": 0.472376609187212,
+                  "weighted_mse_stack_fraction": 0.0817592542600032
+                }
+              },
+              {
+                "heldout": {
+                  "target_mix_mae": 0.3066001591218105,
+                  "target_primary_agreement": 0.5431189363995688,
+                  "weighted_mse_stack_fraction": 0.06884677343185365
+                },
+                "steps": 960,
+                "train": {
+                  "target_mix_mae": 0.2912748445609897,
+                  "target_primary_agreement": 0.560828464205976,
+                  "weighted_mse_stack_fraction": 0.04656390431831611
+                }
+              }
+            ]
+          }
+        ],
+        "schema": "hu-fixed-regret-fitting-budget-v1",
+        "split": "encoded-information-set holdout; not hand-family heldout, not independent validation"
+      }
+    },
+    "exact-river-labels-2026-10-19-50bb/summary.json": {
+      "sha256": "d83b9a532d5bd7cadfb9c9665101f91541b8fab5c96c7586fd9fc6fcaf7d7640",
+      "report": {
+        "active_models_changed": false,
+        "depth_bb": 50,
+        "input_sha256": "5060eb38275dab0e2e0a180ab25479fbfe87f84d8ccf34a2811faef865fee952",
+        "interpretation": "Exact river labels have zero Monte Carlo SE conditional on the frozen modeled game and posterior. This is not zero neural error, an exploitability bound, or an authentic-distribution EV qualification. Other streets remain sampled.",
+        "release_eligible": false,
+        "results": [
+          {
+            "estimators": {
+              "exact_river": {
+                "all_action_reference_precision_coverage": 0.25,
+                "median_max_action_se_bb": 1.0651344409620398,
+                "seconds": 49.621020833961666,
+                "sha256": "ea8e17ec5f790a907fe06d4b9ce4c907e9d4209efab5b2a1e2add9ea61c7648b"
+              },
+              "sampled": {
+                "all_action_reference_precision_coverage": 0,
+                "median_max_action_se_bb": 1.106620397812671,
+                "seconds": 37.4628719589673,
+                "sha256": "bcf8f6945b87c5226193faed6c44678cd0401d0e8b2e075457b4d981075d3227"
+              }
+            },
+            "exact_nodes_per_river_decision": [
+              37620,
+              37620,
+              37620,
+              37620
+            ],
+            "fraction_within_sampled_95_interval": 1,
+            "nonriver_outputs_identical": true,
+            "river_decisions": 4,
+            "sampled_minus_exact_z_scores": [
+              0.710267076224294,
+              1.3747564399830572,
+              0.8969263980530531,
+              0.18269847861954097,
+              0.7348619685092216,
+              0.22968838583047865,
+              -0.12218199862477684,
+              -0.173035347906333,
+              -1.1628321906138268,
+              -1.0431818896234044,
+              -0.20409978315884386,
+              -0.212198045081763,
+              -0.9618436786064755,
+              -0.33249432212916347,
+              -0.3654389134844934,
+              -0.4425125135824013
+            ],
+            "seed": 51701
+          },
+          {
+            "estimators": {
+              "exact_river": {
+                "all_action_reference_precision_coverage": 0.25,
+                "median_max_action_se_bb": 1.1179193015081657,
+                "seconds": 90.5996615421027,
+                "sha256": "820670208b3194fdea5a312d2f66c7519e7159171467f6f4c6de9777001eb99e"
+              },
+              "sampled": {
+                "all_action_reference_precision_coverage": 0,
+                "median_max_action_se_bb": 1.1574057437563516,
+                "seconds": 60.641465958207846,
+                "sha256": "9ce62d89e2494a0aac4c34cdc95e809c6cbbcfc16c3db74cb517a6ce8a9e13b5"
+              }
+            },
+            "exact_nodes_per_river_decision": [
+              37620,
+              37620,
+              37620,
+              37620
+            ],
+            "fraction_within_sampled_95_interval": 1,
+            "nonriver_outputs_identical": true,
+            "river_decisions": 4,
+            "sampled_minus_exact_z_scores": [
+              -0.25668163839490227,
+              -0.12663784465119127,
+              -0.13351218902138318,
+              0.8869626517266341,
+              -0.5161515715733918,
+              -0.5063810930202287,
+              0.04904878719671138,
+              -0.29502249220077087,
+              -0.5774109282284485,
+              1.2163095284856482,
+              0.530739619061811,
+              1.2227385947672633,
+              -0.399915304892857,
+              0.008833279976395046,
+              0.22221624519334132,
+              0.5582783701100953
+            ],
+            "seed": 51702
+          }
+        ],
+        "sampler_sha256": "a03b41b0bb829796ed32763c8f2edda0a538605434d0724e6c173447ee4cc1af",
+        "schema": "hu-exact-river-label-probe-v1",
+        "source_experiment_sha256": "2c8f0eaf01e2fdc257d666eb68d96c362192ba9c481405652d8e2ff14e4ae7f1",
+        "status": "completed_not_activated"
+      }
+    },
+    "exact-closed-labels-2026-10-19-50bb/summary.json": {
+      "sha256": "3683511957dcc5eea528714d10c8247ba9f2597d4021fba4bd741bfbec061138",
+      "report": {
+        "active_models_changed": false,
+        "decisions": 16,
+        "depth_bb": 50,
+        "input_sha256": "5060eb38275dab0e2e0a180ab25479fbfe87f84d8ccf34a2811faef865fee952",
+        "interpretation": "Exact actions enumerate the frozen-policy posterior and applicable finite action/chance trees, giving zero Monte Carlo SE. This is not zero neural error, an exploitability bound, or authentic-distribution EV qualification. Open preflop/flop/turn subtrees remain sampled.",
+        "release_eligible": false,
+        "results": [
+          {
+            "estimators": {
+              "exact_river": {
+                "action_reference_precision_coverage": 0.37333333333333335,
+                "all_action_reference_precision_coverage": 0.25,
+                "mean_action_sampling_variance_bb2": 0.5076249269410719,
+                "median_max_action_se_bb": 0.8874611520078997,
+                "seconds": 42.40765349986032,
+                "sha256": "cd8975386345774efb2b54824764e6ba41d89fde043c3e4d9c60d38f22097f35"
+              },
+              "sampled": {
+                "action_reference_precision_coverage": 0.05333333333333334,
+                "all_action_reference_precision_coverage": 0,
+                "mean_action_sampling_variance_bb2": 0.8096204244374661,
+                "median_max_action_se_bb": 1.106620397812671,
+                "seconds": 81.78905004193075,
+                "sha256": "95ba2270afaa595dce8973851ea38734b1f4ab63fe7c6663978ec1500b8f1ece"
+              }
+            },
+            "exact_actions": 28,
+            "exact_closed_runouts": 4462920,
+            "exact_nodes_per_river_decision": [
+              37620,
+              37620,
+              37620,
+              37620
+            ],
+            "fraction_within_sampled_95_interval": 1,
+            "nonriver_outputs_identical": false,
+            "river_decisions": 4,
+            "sampled_action_columns_identical": true,
+            "sampled_minus_exact_z_scores": [
+              -1.4016973894415685,
+              0.42923171512253566,
+              -1.1492661469384624,
+              -0.925168261882274,
+              -0.8701990341283726,
+              0.2623817968070493,
+              -1.6070680787255944,
+              0.3258010221851096,
+              0.710267076224294,
+              1.3747564399830572,
+              0.8969263980530531,
+              0.18269847861954097,
+              0.7348619685092216,
+              0.22968838583047865,
+              -0.12218199862477684,
+              -0.173035347906333,
+              -1.1628321906138268,
+              -1.0431818896234044,
+              -0.20409978315884386,
+              -0.212198045081763,
+              -0.9618436786064755,
+              -0.33249432212916347,
+              -0.3654389134844934,
+              -0.4425125135824013
+            ],
+            "seed": 51701
+          },
+          {
+            "estimators": {
+              "exact_river": {
+                "action_reference_precision_coverage": 0.37333333333333335,
+                "all_action_reference_precision_coverage": 0.25,
+                "mean_action_sampling_variance_bb2": 0.5063559037775033,
+                "median_max_action_se_bb": 0.7622752465139773,
+                "seconds": 24.695217875065282,
+                "sha256": "db1f3694921e7dd3e533cf93cd4c86b0b9b1bc32792da7d6af97c687220dbdf1"
+              },
+              "sampled": {
+                "action_reference_precision_coverage": 0.05333333333333334,
+                "all_action_reference_precision_coverage": 0,
+                "mean_action_sampling_variance_bb2": 0.8019402701037328,
+                "median_max_action_se_bb": 1.1574057437563516,
+                "seconds": 22.871470417128876,
+                "sha256": "2abea7367c9399c138f54a27698d27fb5edab1b5ff93166ba05b4d8bcf6769b9"
+              }
+            },
+            "exact_actions": 28,
+            "exact_closed_runouts": 4462920,
+            "exact_nodes_per_river_decision": [
+              37620,
+              37620,
+              37620,
+              37620
+            ],
+            "fraction_within_sampled_95_interval": 1,
+            "nonriver_outputs_identical": false,
+            "river_decisions": 4,
+            "sampled_action_columns_identical": true,
+            "sampled_minus_exact_z_scores": [
+              1.634271916029009,
+              0.2724333937336932,
+              -0.7489722868130172,
+              0.882900268437797,
+              0.9850866151680875,
+              -1.4360089754663559,
+              0.8039572833432114,
+              0.4084055420695792,
+              -0.25668163839490227,
+              -0.12663784465119127,
+              -0.13351218902138318,
+              0.8869626517266341,
+              -0.5161515715733918,
+              -0.5063810930202287,
+              0.04904878719671138,
+              -0.29502249220077087,
+              -0.5774109282284485,
+              1.2163095284856482,
+              0.530739619061811,
+              1.2227385947672633,
+              -0.399915304892857,
+              0.008833279976395046,
+              0.22221624519334132,
+              0.5582783701100953
+            ],
+            "seed": 51702
+          }
+        ],
+        "sampler_sha256": "3d1a9b96c86c3025291e7dee805f0a85fea93cdc11bb41a8ff02d7c10425879f",
+        "schema": "hu-exact-closed-label-probe-v1",
+        "source_experiment_sha256": "2c8f0eaf01e2fdc257d666eb68d96c362192ba9c481405652d8e2ff14e4ae7f1",
+        "status": "completed_not_activated"
+      }
+    }
+  },
+  "verification": {
+    "typescript_unit_tests": {
+      "passed": 287,
+      "optional_skipped": 20
+    },
+    "expanded_artifact_complete_hand_tests": {
+      "passed": 4
+    },
+    "active_resolver_integration": {
+      "passed": 4
+    },
+    "rust_release_tests": {
+      "passed": 491,
+      "resource_guarded_ignored": 59
+    },
+    "focused_python_native_tests": {
+      "passed": 73
+    },
+    "build": "passed",
+    "policy_tools": {
+      "passed": 9
+    },
+    "practice_tools": {
+      "passed": 11
+    },
+    "native_audit_tools": {
+      "passed": 1
+    },
+    "initial_checkpoint_ci": {
+      "commit": "04f3d70",
+      "conclusion": "success",
+      "url": "https://github.com/davidvayn/pokersolver/actions/runs/39354631602"
+    },
+    "browser": {
+      "practice": "Completed a full hand to terminal review; desktop dark and mobile 375px reduced-motion layout inspected.",
+      "solver": "Preflop Call/Check to flop; light mobile/desktop; 375/768/1024/1440 widths without horizontal overflow; keyboard focus has visible 2px outline.",
+      "application_console_errors": [],
+      "other_network_issue": "Existing favicon.ico 404 only.",
+      "active_depths_unchanged": [
+        20
+      ],
+      "temporary_tab_closed": true,
+      "original_tab_and_theme_restored": true
+    }
+  },
+  "limitations": [
+    "Short cold 24-round pilots are not directly comparable to the prior 64-round candidates.",
+    "The card-memory weights failed the predeclared improvement screen; code is retained opt-in, weights are not promoted.",
+    "Full-game exploitability was not measured for the new 50bb policies; local gains are bb/decision, not bb/hand.",
+    "Frozen EV estimator checks use unchanged earlier 64-round policies, not the new card-memory weights.",
+    "Exact-label precision fractions use a 16-decision street-stratified diagnostic, not authentic-reach release qualification.",
+    "Zero Monte Carlo SE of exact references is not zero neural prediction error.",
+    "Larger fitting budget helped a fixed old retained-regret dataset, not a newly trained CFR policy.",
+    "Full Python unittest discovery was not claimed; verification uses the named focused suites."
+  ]
+}
