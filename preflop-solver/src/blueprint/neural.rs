@@ -9242,6 +9242,30 @@ mod tests {
         assert!(cards.contains(&51));
     }
 
+    /// Diagnostic seam through the actual traversal scorer, not a Python
+    /// reimplementation. Explicit paths keep large private fixtures out of Git.
+    #[test]
+    #[ignore = "requires POKER_BOOTSTRAP_FIXTURE and POKER_BOOTSTRAP_OUTPUT"]
+    fn real_weight_bootstrap_inference_fixture() {
+        #[derive(Deserialize)]
+        struct Row { state: Vec<f32>, actions: Vec<Vec<f32>> }
+        #[derive(Deserialize)]
+        struct Head { network: DenseScorer, rows: Vec<Row> }
+        let input = std::env::var("POKER_BOOTSTRAP_FIXTURE").expect("fixture path");
+        let output = std::env::var("POKER_BOOTSTRAP_OUTPUT").expect("output path");
+        assert!(!Path::new(&output).exists(), "refuse to overwrite diagnostic");
+        let heads: Vec<Head> = serde_json::from_slice(&fs::read(input).unwrap()).unwrap();
+        let values = heads.into_iter().map(|head| {
+            head.network.validate(head.rows[0].state.len()+ACTION_FEATURE_COUNT, 1).unwrap();
+            head.rows.into_iter().map(|row| {
+                assert!(matches!(row.state.len(), STATE_FEATURE_COUNT|CASH_STATE_FEATURE_COUNT));
+                assert!(row.actions.iter().all(|action| action.len()==ACTION_FEATURE_COUNT));
+                head.network.score_state_actions(&row.state, &row.actions)
+            }).collect::<Vec<_>>()
+        }).collect::<Vec<_>>();
+        fs::write(output, serde_json::to_vec(&values).unwrap()).unwrap();
+    }
+
     #[test]
     fn shared_state_batch_scoring_matches_individual_dense_inference() {
         let first = DenseLayer {

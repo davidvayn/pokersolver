@@ -64,6 +64,12 @@ class FrozenPolicyValueTests(unittest.TestCase):
             with self.assertRaises(ValueError): verify_frozen_targets(source,path)
             report['exact_closed_values']=True; atomic_json(path,report)
             verify_frozen_targets(source,path)
+            for invalid in (-1,3,True,'1'):
+                report['action_expectation_depth']=invalid; atomic_json(path,report)
+                with self.assertRaisesRegex(ValueError,'expectation depth'):
+                    verify_frozen_targets(source,path)
+            report['action_expectation_depth']=1; atomic_json(path,report)
+            verify_frozen_targets(source,path)
             row['standard_errors_bb']=[.01]; atomic_json(path,report)
             with self.assertRaises(ValueError): verify_frozen_targets(source,path)
             row['standard_errors_bb']=[0.]; row['action_estimators']=['unknown']; atomic_json(path,report)

@@ -13,6 +13,7 @@ pub struct FrozenValueConfig {
     pub integrate_terminal_responses: bool,
     pub exact_river_values: bool,
     pub exact_closed_values: bool,
+    pub action_expectation_depth: usize,
 }
 
 #[derive(Deserialize)]
@@ -330,6 +331,33 @@ fn closed_terminal_value(state: &GameState, deal: &Deal, actions: &[LegalAction]
     Some(value)
 }
 
+fn prefix_branch_seed(seed: u64, index: usize) -> u64 {
+    seed ^ (index as u64 + 1).wrapping_mul(0xa0761d6478bd642f)
+}
+
+/// Rao-Blackwellize a bounded prefix of future action draws, conditional on
+/// the sampled hidden deal. Future boards/private cards remain sampled; this
+/// never turns a sampled open-street value into an exact information-set EV.
+fn prefix_expectation(state: GameState, deal: &Deal, policy: &StudyPolicy,
+                      game: &BlueprintConfig, actor: usize, seed: u64, depth: usize,
+                      integrate_terminal_responses: bool) -> Result<f64,String> {
+    if depth > 2 { return Err("action expectation depth must be 0..2".into()); }
+    if depth == 0 {
+        return rollout(state,deal,policy,game,actor,&mut SplitMix64::new(seed),integrate_terminal_responses);
+    }
+    if state.terminal.is_some() { return Ok(state.complete_runout_utilities(deal,game)[actor]); }
+    let actions = state.legal_actions(game);
+    let probabilities = policy.strategy(&state,deal,&actions,game)?;
+    let mut value = 0.;
+    for (index,(action,p)) in actions.iter().zip(probabilities).enumerate() {
+        if p > 0. {
+            value += p * prefix_expectation(state.apply(action,game),deal,policy,game,actor,
+                prefix_branch_seed(seed,index),depth-1,integrate_terminal_responses)?;
+        }
+    }
+    Ok(value)
+}
+
 fn column_summary(blocks: &[Vec<f64>]) -> (Vec<f64>, Vec<f64>) {
     let count = blocks.len() as f64;
     let means = (0..blocks[0].len())
@@ -460,6 +488,9 @@ pub fn qualify_frozen_values(
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     config.game.validate()?;
     config.game.require_legacy_home()?;
+    if config.action_expectation_depth > 2 {
+        return Err("action expectation depth must be 0..2".into());
+    }
     if !config.policy_only
         && (config.hidden_blocks < 4
             || config.hidden_blocks > 1_000_000
@@ -525,13 +556,14 @@ pub fn qualify_frozen_values(
                     let seed = block_seed ^ (inner as u64 + 1).wrapping_mul(0x94d049bb133111eb);
                     for (action_index, action) in legal.iter().enumerate() {
                         if let Some(value) = closed[action_index] { values[action_index]=value; continue; }
-                        values[action_index] += rollout(
+                        values[action_index] += prefix_expectation(
                             state.apply(action, &config.game),
                             &deal,
                             &policy,
                             &config.game,
                             state.actor,
-                            &mut SplitMix64::new(seed),
+                            seed,
+                            config.action_expectation_depth,
                             config.integrate_terminal_responses,
                         )? / config.rollouts_per_block as f64;
                     }
@@ -574,6 +606,7 @@ pub fn qualify_frozen_values(
         "integrates_terminal_responses":config.integrate_terminal_responses,
         "exact_river_values":config.exact_river_values,
         "exact_closed_values":config.exact_closed_values,
+        "action_expectation_depth":config.action_expectation_depth,
         "uncertainty_contract":"Independent outer opponent-posterior/future-board blocks for sampled actions; SE includes inner rollout noise and excludes neural approximation error. Explicit exact action estimators enumerate the full posterior and applicable action/chance trees; they have zero Monte Carlo SE, not zero neural error. Fully exact decisions contain no sampled blocks.",
         "qualification":"research_only_not_an_exploitability_certificate"}),
     )
@@ -699,6 +732,25 @@ mod tests {
             unique.dedup();
             assert_eq!(unique.len(), 9);
         }
+    }
+
+    #[test]
+    fn action_prefix_expectation_matches_manual_policy_average_and_zero_is_legacy() {
+        let game = BlueprintConfig::default();
+        let deal = Deal::sample(&mut SplitMix64::new(2919061));
+        let policy = uniform_policy();
+        let state = GameState::initial(&game);
+        let actions = state.legal_actions(&game);
+        let p = policy.strategy(&state,&deal,&actions,&game).unwrap();
+        let seed = 2919063;
+        let expected:f64 = actions.iter().zip(p).enumerate().map(|(index,(action,p))|
+            p * rollout(state.apply(action,&game),&deal,&policy,&game,0,
+                &mut SplitMix64::new(prefix_branch_seed(seed,index)),true).unwrap()).sum();
+        let actual = prefix_expectation(state.clone(),&deal,&policy,&game,0,seed,1,true).unwrap();
+        assert!((actual-expected).abs()<1e-12);
+        assert_eq!(prefix_expectation(state.clone(),&deal,&policy,&game,0,seed,0,true).unwrap(),
+            rollout(state.clone(),&deal,&policy,&game,0,&mut SplitMix64::new(seed),true).unwrap());
+        assert!(prefix_expectation(state,&deal,&policy,&game,0,seed,3,true).is_err());
     }
 
     #[test]

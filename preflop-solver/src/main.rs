@@ -3239,6 +3239,7 @@ fn run_neural_frozen_values(args: &[String]) -> Result<(), Box<dyn Error>> {
         integrate_terminal_responses: args.iter().any(|arg| arg == "--integrate-terminal-responses"),
         exact_river_values: args.iter().any(|arg| arg == "--exact-river-values"),
         exact_closed_values: args.iter().any(|arg| arg == "--exact-closed-values"),
+        action_expectation_depth: parse_or(args, "--action-expectation-depth", 0usize)?,
     })?;
     let output = serde_json::to_string_pretty(&report)?;
     if let Some(path) = value(args, "--output") {
@@ -3924,6 +3925,9 @@ Frozen information-set EV options (offline Home research only):
   --snapshots <path>              Optional hash-pinned, own-reach-weighted history
   --hidden-blocks <N>             Default: 32 independent opponent/runout blocks
   --rollouts-per-block <N>        Default: 2 conditional continuation samples
+  --exact-river-values            Exact posterior/action tree on known rivers
+  --exact-closed-values           Exact tractable postflop all-in runouts
+  --action-expectation-depth <N>  Sum 0..2 future policy action draws; hidden deals remain sampled
   --policy-only                  Query snapshot distributions without EV sampling
   --seed <integer>                Deterministic independent evaluation seed
   --output <path>                 Optional report JSON; default: stdout

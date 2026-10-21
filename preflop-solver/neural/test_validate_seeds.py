@@ -73,6 +73,44 @@ class RankMarkerModel:
 
 
 class ReachAwareValidationTests(unittest.TestCase):
+    def test_value_audit_also_uses_native_aligned_cpu_inference(self):
+        from contextlib import contextmanager
+        active = [False]
+        actual_stream = mx.stream
+        @contextmanager
+        def tracked_stream(device):
+            self.assertEqual(device,mx.cpu)
+            with actual_stream(device):
+                active[0] = True
+                try: yield
+                finally: active[0] = False
+        test = self
+        class Value:
+            def __call__(self,features):
+                test.assertTrue(active[0],'value head was evaluated outside the CPU stream')
+                return mx.zeros((features.shape[0],2))
+        with patch('validate_seeds.mx.stream',tracked_stream):
+            served_action_value_audit(UniformModel(),Value(),[[record([48,49])]],20)
+
+    def test_artifact_json_source_cannot_differ_from_the_frozen_binary(self):
+        from test_frozen_policy_values import FrozenPolicyValueTests
+        from validate_seeds import verify_artifact
+        with tempfile.TemporaryDirectory() as directory:
+            source,binary = FrozenPolicyValueTests().fixture(directory)
+            artifact = {'source':str(source),'binary':str(binary)}
+            self.assertTrue(verify_artifact(artifact)['descriptor_matches'])
+            data = json.loads(source.read_text()); data['parameters'][0] += 1
+            source.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError,'source.*binary'):
+                verify_artifact(artifact)
+
+    def test_policy_comparisons_use_native_aligned_cpu_inference(self):
+        from validate_seeds import policy
+        with patch('validate_seeds.mx.stream',wraps=mx.stream) as stream:
+            result = policy(UniformModel(),np.zeros((2,INPUT_FEATURE_COUNT),np.float32))
+        stream.assert_called_with(mx.cpu)
+        np.testing.assert_array_equal(result,[.5,.5])
+
     @unittest.skipUnless(os.environ.get('POKER_CERTIFICATE_TEST_BINARY'),'explicit native certificate binary required')
     def test_native_certificate_entry_point_preserves_custom_grid_identity(self):
         # Structural transport test, not an evaluation of trained poker strength.

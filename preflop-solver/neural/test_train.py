@@ -66,6 +66,18 @@ def initial_state():
 
 
 class NeuralTrainerTests(unittest.TestCase):
+    def test_average_policy_fit_budget_is_separate_and_legacy_identity_is_preserved(self):
+        import train
+        args = parse_args(['--run-dir','/tmp/budget-probe','--seed','1'])
+        self.assertIsNone(args.average_policy_steps_per_round)
+        args = parse_args(['--run-dir','/tmp/budget-probe','--seed','1','--average-policy-steps-per-round','480'])
+        self.assertEqual(args.average_policy_steps_per_round,480)
+        from types import SimpleNamespace
+        config = SimpleNamespace(steps_per_round=240,average_policy_steps_per_round=480)
+        self.assertEqual(train.head_fitting_steps(config,'average_strategy'),480)
+        self.assertEqual(train.head_fitting_steps(config,'advantage_p0'),240)
+        self.assertEqual(train.head_fitting_steps(config,'value'),240)
+
     def test_home_arrival_memory_separates_turn_histories_without_changing_legacy(self):
         state = {**initial_state(), "street": "turn", "board": [34,47,49,22]}
         swapped = {**state, "board": [22,47,49,34]}
@@ -90,6 +102,10 @@ class NeuralTrainerTests(unittest.TestCase):
             exact_turn_rivers=False, compact_serving_grid=False)
         self.assertNotIn('action_abstraction_json', run_config_payload(config))
         self.assertNotIn('sampler_sha256', run_config_payload(config))
+        self.assertNotIn('matmul_precision',run_config_payload(config))
+        full_precision = replace(config,matmul_precision='full-fp32-v1')
+        self.assertEqual(run_config_payload(full_precision)['matmul_precision'],'full-fp32-v1')
+        self.assertNotEqual(run_config_payload(full_precision),run_config_payload(config))
         grid = '{"open_sizes_bb":[2,3.5,5]}'
         configured = replace(config, action_abstraction_json=grid)
         self.assertEqual(run_config_payload(configured)['action_abstraction_json'], grid)
@@ -157,6 +173,23 @@ class NeuralTrainerTests(unittest.TestCase):
         actual = heldout["advantage_p0"][0][1]
         target = bootstrap_dcfr_plus_targets(expected.reshape(-1),np.asarray(record["targets"],dtype=np.float32)/20,32,2.)
         np.testing.assert_allclose(actual,target,rtol=0,atol=2e-6)
+
+    def test_home_cpu_bootstrap_opt_in_uses_frozen_cpu_prior(self):
+        mx.random.seed(7203)
+        model = ActionScorer(829,(64,32))
+        state = {**initial_state(), 'street':'turn', 'board':[8,13,22,31]}
+        actions = [{'kind':'check','amount_to_bb':None}, {'kind':'bet','amount_to_bb':3.}]
+        features = np.stack([expand_state_action(state,a,50,card_arrival_memory=True) for a in actions])
+        with mx.stream(mx.cpu):
+            expected = np.asarray(model(mx.array(features))).reshape(-1).copy()
+        record = {'kind':'advantage_p0','state':state,'actions':actions,'targets':[-2.,2.],'weight':1.,
+            'feature_sha256':[hashlib.sha256(np.rint(f.astype(np.float64)*1e6).astype('<i4').tobytes()).hexdigest() for f in features]}
+        with patch('train.mx.stream',wraps=mx.stream) as stream:
+            result = ingest_records([record],50,{}, {'advantage_p0':model},24,2.,random.Random(7),
+                card_arrival_memory=True,bootstrap_cpu_prior=True)
+        stream.assert_called_with(mx.cpu)
+        np.testing.assert_array_equal(result['advantage_p0'][0][1],
+            bootstrap_dcfr_plus_targets(expected,np.array([-.04,.04],np.float32),24,2.))
 
     def test_cli_defaults_match_leading_20bb_profile(self):
         args = parse_args(["--run-dir", "/tmp/leading-profile", "--seed", "4501"])

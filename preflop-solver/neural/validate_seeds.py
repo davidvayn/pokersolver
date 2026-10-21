@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import subprocess
+import struct
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -188,6 +189,13 @@ def verify_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         (binary.parent / "descriptor.json").read_text(encoding="utf-8")
     )
     payload = binary.read_bytes()
+    # The native evaluator loads JSON weights while serving decodes model.bin.
+    # A correct binary descriptor alone cannot bind those two policies.
+    source = json.loads(Path(artifact['source']).read_text())
+    metadata_size = struct.unpack_from('<I',payload,8)[0]
+    if (json.loads(payload[16:16+metadata_size]) != source['metadata']
+            or payload[16+metadata_size:] != np.asarray(source['parameters'],dtype='<f4').tobytes()):
+        raise ValueError('artifact JSON source and frozen binary disagree')
     sha256 = hashlib.sha256(payload).hexdigest()
     return {
         "path": str(binary),
@@ -471,7 +479,10 @@ def action_ev_standard_error_summary(
 
 
 def policy(model: Any, features: np.ndarray) -> np.ndarray:
-    logits = np.asarray(model(mx.array(features))).reshape(-1)
+    # Compare the exported policy using native-aligned FP32 arithmetic, not
+    # MLX's potentially reduced-precision GPU matmul path on the audit host.
+    with mx.stream(mx.cpu):
+        logits = np.asarray(model(mx.array(features))).reshape(-1)
     probabilities = softmax(logits.astype(np.float64))
     if (
         not np.all(np.isfinite(probabilities))
@@ -512,7 +523,8 @@ def served_action_value_audit(policy_model: Any, value_model: Any,
         weight=1./(len(datasets)*len(records))
         for record in records:
             features=record_features(value_model, record, depth)
-            outputs=np.asarray(value_model(mx.array(features)))
+            with mx.stream(mx.cpu):
+                outputs=np.asarray(value_model(mx.array(features)))
             if outputs.shape!=(len(record['actions']),2) or not np.all(np.isfinite(outputs)):
                 raise RuntimeError('exported action-value head returned invalid values')
             errors=floor+np.logaddexp(0.,outputs[:,1].astype(np.float64))

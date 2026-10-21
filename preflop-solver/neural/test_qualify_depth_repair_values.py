@@ -45,6 +45,11 @@ class AuthenticFrozenValueTests(unittest.TestCase):
             exact_chunks=chunked_frozen_reference(binary,model,rows,50,root/'exact-chunks.json',blocks=8,chunk_size=1,
                 exact_river_values=True,exact_closed_values=True)
             self.assertEqual(exact['records'],exact_chunks['records'])
+            prefix = frozen_reference(binary,model,rows,50,root/'prefix.json',blocks=8,action_expectation_depth=1)
+            prefix_chunks = chunked_frozen_reference(binary,model,rows,50,root/'prefix-chunks.json',blocks=8,
+                chunk_size=1,action_expectation_depth=1)
+            self.assertEqual(prefix['records'],prefix_chunks['records'])
+            self.assertEqual(prefix['action_expectation_depth'],1)
 
     def test_policy_mixture_is_equal_even_when_trajectory_lengths_differ(self):
         first = [{'iteration': 0, 'state': {'street': 'preflop'}}]

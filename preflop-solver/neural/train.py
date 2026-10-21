@@ -30,6 +30,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Iterable
 
+from mlx_precision import matmul_precision as launch_matmul_precision
+
+# Capture the launch setting before any MLX computation. Do not toggle it in a
+# running process: the backend may have already cached its math-mode switch.
+LAUNCH_MATMUL_PRECISION = launch_matmul_precision(os.environ)
+
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
@@ -108,10 +114,21 @@ class RunConfig:
     retain_policy_snapshots: bool = False
     integrate_closed_opponent_actions: bool = False
     card_arrival_memory: bool = False
+    average_policy_steps_per_round: int | None = None
+    bootstrap_cpu_prior: bool = False
+    matmul_precision: str | None = None
 
 
 def run_config_payload(config: RunConfig) -> dict:
     payload = asdict(config)
+    if config.matmul_precision is None:
+        payload.pop('matmul_precision')
+    elif config.matmul_precision != 'full-fp32-v1':
+        raise ValueError('unknown pinned matrix-multiplication precision')
+    if config.average_policy_steps_per_round is None:
+        payload.pop('average_policy_steps_per_round')
+    if not config.bootstrap_cpu_prior:
+        payload.pop('bootstrap_cpu_prior')
     if not config.card_arrival_memory:
         payload.pop("card_arrival_memory")
     if not config.average_regret_rollouts:
@@ -149,6 +166,12 @@ def state_feature_count(cash_profile: str | None = None, card_arrival_memory: bo
 
 def input_feature_count(cash_profile: str | None = None, card_arrival_memory: bool = False) -> int:
     return state_feature_count(cash_profile, card_arrival_memory) + ACTION_FEATURE_COUNT
+
+
+def head_fitting_steps(config: RunConfig, name: str) -> int:
+    if name == 'average_strategy' and config.average_policy_steps_per_round is not None:
+        return config.average_policy_steps_per_round
+    return config.steps_per_round
 
 
 class ActionScorer(nn.Module):
@@ -817,6 +840,7 @@ def ingest_records(
     cash_profile: str | None = None,
     regret_training: str = "bootstrapped_dcfr",
     card_arrival_memory: bool = False,
+    bootstrap_cpu_prior: bool = False,
 ) -> dict[str, list[tuple[np.ndarray, np.ndarray, float]]]:
     heldout: dict[str, list[tuple[np.ndarray, np.ndarray, float]]] = {
         "advantage_p0": [],
@@ -867,7 +891,7 @@ def ingest_records(
         elif regret_training != "bootstrapped_dcfr":
             raise ValueError("unknown regret-training rule")
         elif kind in ("advantage_p0", "advantage_p1"):
-            if cash_profile is not None:
+            if cash_profile is not None or bootstrap_cpu_prior:
                 # Native traversals use frozen FP32 CPU predictions. On the
                 # pilot host GPU inference differed by .0536bb on identical
                 # real grouped poker features. Recycling those predictions
@@ -1678,6 +1702,12 @@ def migrate_legacy_resume_state(
         legacy_config.pop("integrate_closed_opponent_actions", None)
     if not legacy_config.get("card_arrival_memory", False):
         legacy_config.pop("card_arrival_memory", None)
+    if legacy_config.get('average_policy_steps_per_round') is None:
+        legacy_config.pop('average_policy_steps_per_round', None)
+    if not legacy_config.get('bootstrap_cpu_prior',False):
+        legacy_config.pop('bootstrap_cpu_prior',None)
+    if legacy_config.get('matmul_precision') is None:
+        legacy_config.pop('matmul_precision',None)
     expected_config = json.loads(json.dumps(run_config_payload(config)))
     if legacy_config != expected_config:
         raise RuntimeError("resume configuration differs from the existing neural run")
@@ -1999,6 +2029,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=LEADING_20BB_PROFILE["advantage_alpha"],
         help="positive cumulative-advantage discount exponent for Deep DCFR+",
     )
+    parser.add_argument('--average-policy-steps-per-round', type=int,
+                        help='opt-in average-policy fit budget; other heads retain --steps-per-round')
+    parser.add_argument('--bootstrap-cpu-prior', action='store_true',
+                        help='opt-in Home prior inference matching native FP32; optimizer remains on GPU')
     parser.add_argument(
         "--variance-baseline-scale",
         type=float,
@@ -2092,6 +2126,8 @@ def main() -> None:
         or (args.target_round is not None and args.target_round <= 0)
         or args.traversals_per_round <= 0
         or args.steps_per_round < 0
+        or (args.average_policy_steps_per_round is not None and args.average_policy_steps_per_round < 1)
+        or (args.bootstrap_cpu_prior and args.regret_training != 'bootstrapped_dcfr')
         or args.advantage_alpha <= 0
         or args.value_rollouts_per_action <= 0
         or args.learning_rate <= 0
@@ -2160,6 +2196,9 @@ def main() -> None:
         retain_policy_snapshots=args.retain_policy_snapshots,
         integrate_closed_opponent_actions=args.integrate_closed_opponent_actions,
         card_arrival_memory=args.card_arrival_memory,
+        average_policy_steps_per_round=args.average_policy_steps_per_round,
+        bootstrap_cpu_prior=args.bootstrap_cpu_prior,
+        matmul_precision=LAUNCH_MATMUL_PRECISION,
     )
     validate_training_profile(config.cash_profile, config.depth_bb, config.variance_baseline_scale)
     root = Path(__file__).resolve().parents[2]
@@ -2306,6 +2345,7 @@ def main() -> None:
             config.cash_profile,
             config.regret_training,
             config.card_arrival_memory,
+            config.bootstrap_cpu_prior,
         )
         if config.regret_training == "retained_instantaneous":
             # Targets are raw instantaneous regrets across iterations. Refit
@@ -2325,7 +2365,7 @@ def main() -> None:
                     optimizers[name],
                     compiled_steps[name],
                     reservoir,
-                    config.steps_per_round,
+                    head_fitting_steps(config, name),
                     config.batch_size,
                     np_rng,
                     config.replay_street_proposal,
@@ -2336,7 +2376,7 @@ def main() -> None:
                     optimizers[name],
                     compiled_steps[name],
                     reservoir,
-                    config.steps_per_round,
+                    head_fitting_steps(config, name),
                     config.batch_size,
                     np_rng,
                     config.replay_street_proposal,

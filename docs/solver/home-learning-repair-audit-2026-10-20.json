@@ -1,0 +1,1302 @@
+{
+  "schema": "hu-home-learning-repair-audit-v1",
+  "date": "2026-10-20",
+  "active_models_changed": false,
+  "depths_activated": [],
+  "depth_100_tested": false,
+  "release_eligible": false,
+  "full_game_exploitability_measured": false,
+  "references": {
+    "fit": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-v5-fit-2026-10-20-v2.json",
+      "sha256": "562d411301f958ffd29f352609dff32bf640e6e581d78eaa302ddfa9ecd66ec3"
+    },
+    "parity": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-bootstrap-parity-2026-10-20-v2/summary.json",
+      "sha256": "fd9d416b6fd613c4c227793d5215174cd0592a9d4f99b17e6eead81bcf4a25fa"
+    },
+    "fp32_parity": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-bootstrap-parity-full-fp32-2026-10-20/summary.json",
+      "sha256": "0bebed4292eb313cbf3a295784bd11c661338b54a84a936781e421dd8faf0f8f"
+    },
+    "fp32_fit": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-v5-fit-full-fp32-2026-10-20.json",
+      "sha256": "f4ba18bb16054760e6697c0887aa84c6a18e3cd25b5485a57b2f9d4f475156dd"
+    },
+    "cpu_pilot": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-pilot-2026-10-20-50bb/summary.json",
+      "sha256": "7d9dbe42e98f1ce4469d952656e10ea7cf9252c365d246532578a8f0435bcfd7"
+    },
+    "cpu_audit": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-native-audit-2026-10-20-50bb/summary.json",
+      "sha256": "ed8b5be1e5d44a1eb0e44b74d58878ce36b84425576350fd1d7242974fdf9103"
+    },
+    "fp32_pilot": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-full-fp32-pilot-2026-10-20-50bb/summary.json",
+      "sha256": "ccecd27d849cbb85e69877dede50a5f692bb6d321894623666a410bfd59aac06"
+    },
+    "fp32_audit": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-full-fp32-native-audit-2026-10-20-50bb/summary.json",
+      "sha256": "8b331a3f91759971cde2979f51c2659fd178302a3e4b60be334231080f9de610"
+    },
+    "ev": {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-open-action-variance-2026-10-20-50bb/summary.json",
+      "sha256": "2413730d507a8ce4adfb4bedf2dcf7a14d6ddaf78daddb9a42f1253b7c982a08"
+    }
+  },
+  "bootstrap_parity": {
+    "parity": [
+      {
+        "run": "recall-51701",
+        "heads": [
+          {
+            "actions": 402,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.000029802322387695312,
+                "mean_absolute_difference_bb": 0.0000054075206578964024,
+                "p95_absolute_difference_bb": 0.000014901161193847656
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.1892685890197754,
+                "mean_absolute_difference_bb": 0.044850136016713296,
+                "p95_absolute_difference_bb": 0.12055546045303338
+              }
+            },
+            "head": "advantage_p0"
+          },
+          {
+            "actions": 357,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00002384185791015625,
+                "mean_absolute_difference_bb": 0.0000041353852808976375,
+                "p95_absolute_difference_bb": 0.000011920928955078125
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.1305699348449707,
+                "mean_absolute_difference_bb": 0.035705764879699516,
+                "p95_absolute_difference_bb": 0.09865641593933104
+              }
+            },
+            "head": "advantage_p1"
+          }
+        ]
+      },
+      {
+        "run": "recall-51702",
+        "heads": [
+          {
+            "actions": 371,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00002384185791015625,
+                "mean_absolute_difference_bb": 0.000005688849645804845,
+                "p95_absolute_difference_bb": 0.000014901161193847656
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.2695918083190918,
+                "mean_absolute_difference_bb": 0.0523184026990618,
+                "p95_absolute_difference_bb": 0.12955069541931152
+              }
+            },
+            "head": "advantage_p0"
+          },
+          {
+            "actions": 365,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.000035762786865234375,
+                "mean_absolute_difference_bb": 0.0000059401795063933285,
+                "p95_absolute_difference_bb": 0.000016689300537109402
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.21054744720458984,
+                "mean_absolute_difference_bb": 0.048889596500012976,
+                "p95_absolute_difference_bb": 0.11481404304504397
+              }
+            },
+            "head": "advantage_p1"
+          }
+        ]
+      },
+      {
+        "run": "averaged-51701",
+        "heads": [
+          {
+            "actions": 391,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00004023313522338867,
+                "mean_absolute_difference_bb": 0.00000634472436078674,
+                "p95_absolute_difference_bb": 0.000017881393432617188
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.1850605010986328,
+                "mean_absolute_difference_bb": 0.0435152671673833,
+                "p95_absolute_difference_bb": 0.11880695819854736
+              }
+            },
+            "head": "advantage_p0"
+          },
+          {
+            "actions": 376,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.000035762786865234375,
+                "mean_absolute_difference_bb": 0.00000519757258131149,
+                "p95_absolute_difference_bb": 0.000015273690223693848
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.17230510711669922,
+                "mean_absolute_difference_bb": 0.039548750847895095,
+                "p95_absolute_difference_bb": 0.10219216346740723
+              }
+            },
+            "head": "advantage_p1"
+          }
+        ]
+      },
+      {
+        "run": "averaged-51702",
+        "heads": [
+          {
+            "actions": 399,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00002384185791015625,
+                "mean_absolute_difference_bb": 0.000004729904925315302,
+                "p95_absolute_difference_bb": 0.000011920928955078125
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.22562742233276367,
+                "mean_absolute_difference_bb": 0.04292513642992292,
+                "p95_absolute_difference_bb": 0.10962367057800289
+              }
+            },
+            "head": "advantage_p0"
+          },
+          {
+            "actions": 347,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00002682209014892578,
+                "mean_absolute_difference_bb": 0.000004947550530392429,
+                "p95_absolute_difference_bb": 0.000011920928955078125
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.13365745544433594,
+                "mean_absolute_difference_bb": 0.04007972519232835,
+                "p95_absolute_difference_bb": 0.0942862033843994
+              }
+            },
+            "head": "advantage_p1"
+          }
+        ]
+      }
+    ],
+    "fp32_parity": [
+      {
+        "run": "recall-51701",
+        "heads": [
+          {
+            "actions": 402,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.000029802322387695312,
+                "mean_absolute_difference_bb": 0.0000054075206578964024,
+                "p95_absolute_difference_bb": 0.000014901161193847656
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.00008344650268554688,
+                "mean_absolute_difference_bb": 0.000011208594605252517,
+                "p95_absolute_difference_bb": 0.000035762786865234375
+              }
+            },
+            "head": "advantage_p0"
+          },
+          {
+            "actions": 357,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00002384185791015625,
+                "mean_absolute_difference_bb": 0.0000041353852808976375,
+                "p95_absolute_difference_bb": 0.000011920928955078125
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.00006966292858123779,
+                "mean_absolute_difference_bb": 0.00000877973704444928,
+                "p95_absolute_difference_bb": 0.00002384185791015625
+              }
+            },
+            "head": "advantage_p1"
+          }
+        ]
+      },
+      {
+        "run": "recall-51702",
+        "heads": [
+          {
+            "actions": 371,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.00002384185791015625,
+                "mean_absolute_difference_bb": 0.000005688849645804845,
+                "p95_absolute_difference_bb": 0.000014901161193847656
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.00007152557373046875,
+                "mean_absolute_difference_bb": 0.000011499197977893758,
+                "p95_absolute_difference_bb": 0.000029802322387695312
+              }
+            },
+            "head": "advantage_p0"
+          },
+          {
+            "actions": 365,
+            "differences_from_native": {
+              "cpu": {
+                "maximum_absolute_difference_bb": 0.000035762786865234375,
+                "mean_absolute_difference_bb": 0.0000059401795063933285,
+                "p95_absolute_difference_bb": 0.000016689300537109402
+              },
+              "gpu": {
+                "maximum_absolute_difference_bb": 0.00006556510925292969,
+                "mean_absolute_difference_bb": 0.000012367070741849402,
+                "p95_absolute_difference_bb": 0.000032782554626464844
+              }
+            },
+            "head": "advantage_p1"
+          }
+        ]
+      }
+    ]
+  },
+  "fitting": [
+    {
+      "run": "recall-51701",
+      "head": "advantage_p0",
+      "variants": [
+        {
+          "hide_arrivals": false,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 717,
+                "target_mix_mae": 0.02258951893411421,
+                "target_primary_agreement": 0.9344490934449093,
+                "weighted_mse_stack_fraction": 0.011087069119037112
+              },
+              "heldout": {
+                "decisions": 215,
+                "target_mix_mae": 0.10185762006183004,
+                "target_primary_agreement": 0.7348837209302326,
+                "weighted_mse_stack_fraction": 0.3318574062613554
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 717,
+                "target_mix_mae": 0.012386442228341203,
+                "target_primary_agreement": 0.9623430962343096,
+                "weighted_mse_stack_fraction": 0.004374686311644656
+              },
+              "heldout": {
+                "decisions": 215,
+                "target_mix_mae": 0.1031938064930051,
+                "target_primary_agreement": 0.7302325581395349,
+                "weighted_mse_stack_fraction": 0.3473611876021984
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 717,
+                "target_mix_mae": 0.008433175968159526,
+                "target_primary_agreement": 0.9693165969316597,
+                "weighted_mse_stack_fraction": 0.0027905567919360046
+              },
+              "heldout": {
+                "decisions": 215,
+                "target_mix_mae": 0.10036313256552053,
+                "target_primary_agreement": 0.7441860465116279,
+                "weighted_mse_stack_fraction": 0.36112450887990555
+              }
+            }
+          ]
+        },
+        {
+          "hide_arrivals": true,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 717,
+                "target_mix_mae": 0.02629617168314786,
+                "target_primary_agreement": 0.9288702928870293,
+                "weighted_mse_stack_fraction": 0.012762853291244188
+              },
+              "heldout": {
+                "decisions": 215,
+                "target_mix_mae": 0.10288932268009629,
+                "target_primary_agreement": 0.7302325581395349,
+                "weighted_mse_stack_fraction": 0.34180528507676233
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 717,
+                "target_mix_mae": 0.013045024007267866,
+                "target_primary_agreement": 0.9581589958158996,
+                "weighted_mse_stack_fraction": 0.004580289956748569
+              },
+              "heldout": {
+                "decisions": 215,
+                "target_mix_mae": 0.10416777854742006,
+                "target_primary_agreement": 0.7255813953488373,
+                "weighted_mse_stack_fraction": 0.3464404616245004
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 717,
+                "target_mix_mae": 0.00952613353729248,
+                "target_primary_agreement": 0.9735006973500697,
+                "weighted_mse_stack_fraction": 0.002955523120808302
+              },
+              "heldout": {
+                "decisions": 215,
+                "target_mix_mae": 0.1046507857566656,
+                "target_primary_agreement": 0.7441860465116279,
+                "weighted_mse_stack_fraction": 0.35887580694154253
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "run": "recall-51701",
+      "head": "advantage_p1",
+      "variants": [
+        {
+          "hide_arrivals": false,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 889,
+                "target_mix_mae": 0.0420979670384067,
+                "target_primary_agreement": 0.8920134983127109,
+                "weighted_mse_stack_fraction": 0.01566875490482532
+              },
+              "heldout": {
+                "decisions": 198,
+                "target_mix_mae": 0.10279930962456597,
+                "target_primary_agreement": 0.7929292929292929,
+                "weighted_mse_stack_fraction": 0.12402964119959359
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 889,
+                "target_mix_mae": 0.02822102792351533,
+                "target_primary_agreement": 0.9325084364454443,
+                "weighted_mse_stack_fraction": 0.009887769868591103
+              },
+              "heldout": {
+                "decisions": 198,
+                "target_mix_mae": 0.09924987831501046,
+                "target_primary_agreement": 0.7929292929292929,
+                "weighted_mse_stack_fraction": 0.13272429957534326
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 889,
+                "target_mix_mae": 0.013712125500356118,
+                "target_primary_agreement": 0.9595050618672666,
+                "weighted_mse_stack_fraction": 0.002371404751615664
+              },
+              "heldout": {
+                "decisions": 198,
+                "target_mix_mae": 0.10697147581312391,
+                "target_primary_agreement": 0.797979797979798,
+                "weighted_mse_stack_fraction": 0.13110949294735688
+              }
+            }
+          ]
+        },
+        {
+          "hide_arrivals": true,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 889,
+                "target_mix_mae": 0.04250863593394362,
+                "target_primary_agreement": 0.8875140607424072,
+                "weighted_mse_stack_fraction": 0.014237965588092268
+              },
+              "heldout": {
+                "decisions": 198,
+                "target_mix_mae": 0.10530191960960927,
+                "target_primary_agreement": 0.8181818181818182,
+                "weighted_mse_stack_fraction": 0.12731301664101957
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 889,
+                "target_mix_mae": 0.02574417266588243,
+                "target_primary_agreement": 0.9235095613048369,
+                "weighted_mse_stack_fraction": 0.007357907912058021
+              },
+              "heldout": {
+                "decisions": 198,
+                "target_mix_mae": 0.10074098182447029,
+                "target_primary_agreement": 0.8080808080808081,
+                "weighted_mse_stack_fraction": 0.14029999935265744
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 889,
+                "target_mix_mae": 0.014999156325418582,
+                "target_primary_agreement": 0.9448818897637795,
+                "weighted_mse_stack_fraction": 0.0024348568125168034
+              },
+              "heldout": {
+                "decisions": 198,
+                "target_mix_mae": 0.10608725595955897,
+                "target_primary_agreement": 0.7878787878787878,
+                "weighted_mse_stack_fraction": 0.14810217751397026
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "run": "recall-51701",
+      "head": "average_strategy",
+      "variants": [
+        {
+          "hide_arrivals": false,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.11437759553887715,
+                "target_primary_agreement": 0.7574811443214449,
+                "weighted_cross_entropy": 0.8070832966300252,
+                "weighted_kl": 0.1701177171192727
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12895349325181646,
+                "target_primary_agreement": 0.6880599264393605,
+                "weighted_cross_entropy": 0.8615579037540165,
+                "weighted_kl": 0.20221028031342828
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.09940123206885496,
+                "target_primary_agreement": 0.8088770004421079,
+                "weighted_cross_entropy": 0.7729784316553457,
+                "weighted_kl": 0.1360128708437878
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12527555354383021,
+                "target_primary_agreement": 0.7201941468994066,
+                "weighted_cross_entropy": 0.8569865765461397,
+                "weighted_kl": 0.19763895648116445
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.07545722868388821,
+                "target_primary_agreement": 0.8349260755785817,
+                "weighted_cross_entropy": 0.7326552753016468,
+                "weighted_kl": 0.09568970485717043
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12268946431649344,
+                "target_primary_agreement": 0.7296363802222849,
+                "weighted_cross_entropy": 0.8568273331256236,
+                "weighted_kl": 0.19747971418585272
+              }
+            }
+          ]
+        },
+        {
+          "hide_arrivals": true,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.11579854110560772,
+                "target_primary_agreement": 0.7687012164077694,
+                "weighted_cross_entropy": 0.8099609236243476,
+                "weighted_kl": 0.17299534411359507
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12655629601703225,
+                "target_primary_agreement": 0.703837393316675,
+                "weighted_cross_entropy": 0.8567530741393006,
+                "weighted_kl": 0.19740542144339918
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.10236933653299143,
+                "target_primary_agreement": 0.7857641748417581,
+                "weighted_cross_entropy": 0.7828709130541576,
+                "weighted_kl": 0.14590534147639667
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12298230718777299,
+                "target_primary_agreement": 0.7048748947393834,
+                "weighted_cross_entropy": 0.8521689916149051,
+                "weighted_kl": 0.19282135635967118
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.08106939841848604,
+                "target_primary_agreement": 0.8317081957722359,
+                "weighted_cross_entropy": 0.7448206358745223,
+                "weighted_kl": 0.10785505749705428
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12349215922052036,
+                "target_primary_agreement": 0.7271661020901328,
+                "weighted_cross_entropy": 0.8562003197524709,
+                "weighted_kl": 0.19685269912489348
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "run": "recall-51702",
+      "head": "advantage_p0",
+      "variants": [
+        {
+          "hide_arrivals": false,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 1047,
+                "target_mix_mae": 0.028830825200850552,
+                "target_primary_agreement": 0.9235912129894938,
+                "weighted_mse_stack_fraction": 0.018091014827447724
+              },
+              "heldout": {
+                "decisions": 269,
+                "target_mix_mae": 0.09560174126607335,
+                "target_primary_agreement": 0.7732342007434945,
+                "weighted_mse_stack_fraction": 0.20274246315087527
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 1047,
+                "target_mix_mae": 0.013788364222762464,
+                "target_primary_agreement": 0.958930276981853,
+                "weighted_mse_stack_fraction": 0.005161807325303042
+              },
+              "heldout": {
+                "decisions": 269,
+                "target_mix_mae": 0.097202464107244,
+                "target_primary_agreement": 0.7843866171003717,
+                "weighted_mse_stack_fraction": 0.22847880395371675
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 1047,
+                "target_mix_mae": 0.00826215248736406,
+                "target_primary_agreement": 0.9742120343839542,
+                "weighted_mse_stack_fraction": 0.0022755870817953217
+              },
+              "heldout": {
+                "decisions": 269,
+                "target_mix_mae": 0.09944402063646281,
+                "target_primary_agreement": 0.79182156133829,
+                "weighted_mse_stack_fraction": 0.23945240460363906
+              }
+            }
+          ]
+        },
+        {
+          "hide_arrivals": true,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 1047,
+                "target_mix_mae": 0.03291413891053587,
+                "target_primary_agreement": 0.9149952244508118,
+                "weighted_mse_stack_fraction": 0.021855860977027113
+              },
+              "heldout": {
+                "decisions": 269,
+                "target_mix_mae": 0.09570225109398144,
+                "target_primary_agreement": 0.7732342007434945,
+                "weighted_mse_stack_fraction": 0.19363226766479946
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 1047,
+                "target_mix_mae": 0.013731408825121045,
+                "target_primary_agreement": 0.9493791786055397,
+                "weighted_mse_stack_fraction": 0.005550378771657133
+              },
+              "heldout": {
+                "decisions": 269,
+                "target_mix_mae": 0.09726972828124092,
+                "target_primary_agreement": 0.8066914498141264,
+                "weighted_mse_stack_fraction": 0.19932256223543868
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 1047,
+                "target_mix_mae": 0.0082550061921791,
+                "target_primary_agreement": 0.9732569245463228,
+                "weighted_mse_stack_fraction": 0.002381621126117542
+              },
+              "heldout": {
+                "decisions": 269,
+                "target_mix_mae": 0.09835717226049714,
+                "target_primary_agreement": 0.8029739776951673,
+                "weighted_mse_stack_fraction": 0.21978737785027372
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "run": "recall-51702",
+      "head": "advantage_p1",
+      "variants": [
+        {
+          "hide_arrivals": false,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 1032,
+                "target_mix_mae": 0.06614237099654915,
+                "target_primary_agreement": 0.8091085271317829,
+                "weighted_mse_stack_fraction": 0.05476392609204433
+              },
+              "heldout": {
+                "decisions": 235,
+                "target_mix_mae": 0.12358936959124626,
+                "target_primary_agreement": 0.7361702127659574,
+                "weighted_mse_stack_fraction": 0.20008749454579455
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 1032,
+                "target_mix_mae": 0.04237353177957757,
+                "target_primary_agreement": 0.8827519379844961,
+                "weighted_mse_stack_fraction": 0.022633032974346663
+              },
+              "heldout": {
+                "decisions": 235,
+                "target_mix_mae": 0.13197399707550697,
+                "target_primary_agreement": 0.7404255319148936,
+                "weighted_mse_stack_fraction": 0.2241258499470163
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 1032,
+                "target_mix_mae": 0.028663202311641486,
+                "target_primary_agreement": 0.9176356589147286,
+                "weighted_mse_stack_fraction": 0.011175533944322157
+              },
+              "heldout": {
+                "decisions": 235,
+                "target_mix_mae": 0.13172861870298994,
+                "target_primary_agreement": 0.7276595744680852,
+                "weighted_mse_stack_fraction": 0.24530698897990774
+              }
+            }
+          ]
+        },
+        {
+          "hide_arrivals": true,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 1032,
+                "target_mix_mae": 0.07036632207012916,
+                "target_primary_agreement": 0.7974806201550387,
+                "weighted_mse_stack_fraction": 0.06712969051775082
+              },
+              "heldout": {
+                "decisions": 235,
+                "target_mix_mae": 0.12722200028439787,
+                "target_primary_agreement": 0.7574468085106383,
+                "weighted_mse_stack_fraction": 0.21083171114008478
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 1032,
+                "target_mix_mae": 0.0432931244835373,
+                "target_primary_agreement": 0.873062015503876,
+                "weighted_mse_stack_fraction": 0.024756170982538267
+              },
+              "heldout": {
+                "decisions": 235,
+                "target_mix_mae": 0.12181366453779505,
+                "target_primary_agreement": 0.7574468085106383,
+                "weighted_mse_stack_fraction": 0.1974530889632854
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 1032,
+                "target_mix_mae": 0.029300498407940533,
+                "target_primary_agreement": 0.9127906976744186,
+                "weighted_mse_stack_fraction": 0.010272386231163675
+              },
+              "heldout": {
+                "decisions": 235,
+                "target_mix_mae": 0.12987502077792554,
+                "target_primary_agreement": 0.7574468085106383,
+                "weighted_mse_stack_fraction": 0.22268113481237534
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "run": "recall-51702",
+      "head": "average_strategy",
+      "variants": [
+        {
+          "hide_arrivals": false,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12231708560065209,
+                "target_primary_agreement": 0.7294802899744255,
+                "weighted_cross_entropy": 0.8050088274120759,
+                "weighted_kl": 0.16759288807262643
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.1332763628226355,
+                "target_primary_agreement": 0.7050590942613478,
+                "weighted_cross_entropy": 0.8326329379754207,
+                "weighted_kl": 0.19071662058462072
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.09555458654060954,
+                "target_primary_agreement": 0.7905565253642556,
+                "weighted_cross_entropy": 0.7613488312908222,
+                "weighted_kl": 0.12393290019420329
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.1223514873693476,
+                "target_primary_agreement": 0.7171815095013802,
+                "weighted_cross_entropy": 0.8198688734387586,
+                "weighted_kl": 0.17795255445496505
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.06932342253490074,
+                "target_primary_agreement": 0.8308269464768395,
+                "weighted_cross_entropy": 0.7198266495371123,
+                "weighted_kl": 0.08241070085578825
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.11716850185963727,
+                "target_primary_agreement": 0.7266906273566613,
+                "weighted_cross_entropy": 0.8211365840593606,
+                "weighted_kl": 0.17922026773055638
+              }
+            }
+          ]
+        },
+        {
+          "hide_arrivals": true,
+          "trials": [
+            {
+              "steps": 240,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.13006565513434593,
+                "target_primary_agreement": 0.7150195868337246,
+                "weighted_cross_entropy": 0.8206486993329968,
+                "weighted_kl": 0.18323275284976082
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.13333767183350365,
+                "target_primary_agreement": 0.7015686351689819,
+                "weighted_cross_entropy": 0.8332657004921623,
+                "weighted_kl": 0.19134940115528903
+              }
+            },
+            {
+              "steps": 480,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.10186625981080924,
+                "target_primary_agreement": 0.7648636489656754,
+                "weighted_cross_entropy": 0.7714800217637103,
+                "weighted_kl": 0.13406406813668795
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.12325219670727558,
+                "target_primary_agreement": 0.7138230628445759,
+                "weighted_cross_entropy": 0.8208029092632628,
+                "weighted_kl": 0.17888658496949097
+              }
+            },
+            {
+              "steps": 960,
+              "train": {
+                "decisions": 2048,
+                "target_mix_mae": 0.07945584338762662,
+                "target_primary_agreement": 0.8046092941189427,
+                "weighted_cross_entropy": 0.7330504335278253,
+                "weighted_kl": 0.0956344689103622
+              },
+              "heldout": {
+                "decisions": 2048,
+                "target_mix_mae": 0.11897894643681609,
+                "target_primary_agreement": 0.7230220609680423,
+                "weighted_cross_entropy": 0.8165759837755606,
+                "weighted_kl": 0.17465966638476063
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "policies": {
+    "cpu": {
+      "profiles": [
+        "recall",
+        "recall-cpu"
+      ],
+      "decision": {
+        "improvements_hold": false,
+        "interpretation": "Screening criterion only, not release validation or proof of equilibrium strength.",
+        "local_response_reduction_credible_in_this_screen": false,
+        "release_eligible": false,
+        "stability_better_on_both_evaluation_batches": true
+      },
+      "batches": [
+        {
+          "recall": {
+            "action_frequency_mae": 0.12899800091929794,
+            "primary_action_agreement": 0.4735683471312435,
+            "maximum_aggregate_action_delta": 0.06880238017758994,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          },
+          "recall-cpu": {
+            "action_frequency_mae": 0.1182882682657434,
+            "primary_action_agreement": 0.5305353454654672,
+            "maximum_aggregate_action_delta": 0.022066017903488888,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          }
+        },
+        {
+          "recall": {
+            "action_frequency_mae": 0.12876100015649675,
+            "primary_action_agreement": 0.45682229347396386,
+            "maximum_aggregate_action_delta": 0.07261556281359138,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          },
+          "recall-cpu": {
+            "action_frequency_mae": 0.117491912798452,
+            "primary_action_agreement": 0.5391535101857453,
+            "maximum_aggregate_action_delta": 0.02204428115246554,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          }
+        }
+      ],
+      "paired_response": {
+        "averaged_mean_gain_bb": 1.5190814532881722,
+        "bootstrap_replicates": 10000,
+        "control_mean_gain_bb": 1.6185685270675978,
+        "independent_roots": 32,
+        "interpretation": "recall-cpu minus recall local response gain; negative favors candidate. Not full-game exploitability.",
+        "mean_delta_bb": -0.09948707377942533,
+        "one_sided_95_bootstrap_upper_delta_bb": 0.2653671951399754,
+        "seed_mean_deltas_bb": [
+          -0.2970056809473386,
+          0.09803153338848786
+        ]
+      },
+      "native_probability_checks": [
+        {
+          "artifact_sha256": "60e4c6c21513d4d0e8550d01d996a7da12e29a0ccb665ba0718323c1718cbdde",
+          "maximum_probability_delta": 7.248725113484511e-7,
+          "profile": "recall",
+          "seed": 51701
+        },
+        {
+          "artifact_sha256": "a310c005f153b0239b25776774017d10c6159cbfaa4abbb4e8a92ba2074bc25f",
+          "maximum_probability_delta": 4.6284563490206487e-7,
+          "profile": "recall",
+          "seed": 51702
+        },
+        {
+          "artifact_sha256": "581856a75acda1646164f2d4ebbebf7bb27db75e857b16ad0c9876e166b802bf",
+          "maximum_probability_delta": 4.7529795743628256e-7,
+          "profile": "recall-cpu",
+          "seed": 51701
+        },
+        {
+          "artifact_sha256": "8c667223fa36f050e76961d86be4e1b3855f7eef46f8607bcab43d7b69ec3ac9",
+          "maximum_probability_delta": 5.352352750453981e-7,
+          "profile": "recall-cpu",
+          "seed": 51702
+        }
+      ],
+      "validation": {
+        "recall": {
+          "gates": {
+            "action_ev_standard_error_coverage_at_least_0_95": false,
+            "action_frequency_mae_at_most_0_05": false,
+            "aggregate_action_delta_at_most_0_03": false,
+            "coverage_at_least_0_9999": true,
+            "estimated_exploitability_at_most_0_50": false,
+            "exploitability_upper_99_at_most_0_50": false,
+            "independent_seed_count_at_least_2": true,
+            "primary_action_agreement_at_least_0_85": false,
+            "probabilities_valid": true,
+            "reach_weighting_valid": true
+          },
+          "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-native-audit-2026-10-20-50bb/recall-validation.json",
+          "release_eligible": false,
+          "sha256": "6450b060c791d16bb126b0cc3e75d6272ebb342bd915aa9e7811cbcbc0edf372",
+          "unmeasured_gates": [
+            "estimated_exploitability_at_most_0_50",
+            "exploitability_upper_99_at_most_0_50",
+            "action_ev_standard_error_coverage_at_least_0_95"
+          ]
+        },
+        "recall-cpu": {
+          "gates": {
+            "action_ev_standard_error_coverage_at_least_0_95": false,
+            "action_frequency_mae_at_most_0_05": false,
+            "aggregate_action_delta_at_most_0_03": true,
+            "coverage_at_least_0_9999": true,
+            "estimated_exploitability_at_most_0_50": false,
+            "exploitability_upper_99_at_most_0_50": false,
+            "independent_seed_count_at_least_2": true,
+            "primary_action_agreement_at_least_0_85": false,
+            "probabilities_valid": true,
+            "reach_weighting_valid": true
+          },
+          "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-native-audit-2026-10-20-50bb/recall-cpu-validation.json",
+          "release_eligible": false,
+          "sha256": "008bd600f3c9862621f1a12df5a82cc0720c1e276b2f575b721de205988c81d9",
+          "unmeasured_gates": [
+            "estimated_exploitability_at_most_0_50",
+            "exploitability_upper_99_at_most_0_50",
+            "action_ev_standard_error_coverage_at_least_0_95"
+          ]
+        }
+      }
+    },
+    "fp32": {
+      "profiles": [
+        "recall-cpu",
+        "recall-fp32"
+      ],
+      "decision": {
+        "improvements_hold": false,
+        "interpretation": "Screening criterion only, not release validation or proof of equilibrium strength.",
+        "local_response_reduction_credible_in_this_screen": false,
+        "release_eligible": false,
+        "stability_better_on_both_evaluation_batches": false
+      },
+      "batches": [
+        {
+          "recall-cpu": {
+            "action_frequency_mae": 0.11854837924069128,
+            "primary_action_agreement": 0.520960487770387,
+            "maximum_aggregate_action_delta": 0.021473291969887648,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          },
+          "recall-fp32": {
+            "action_frequency_mae": 0.12928388489786652,
+            "primary_action_agreement": 0.5088959060035138,
+            "maximum_aggregate_action_delta": 0.049369321700898264,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          }
+        },
+        {
+          "recall-cpu": {
+            "action_frequency_mae": 0.11517684049839823,
+            "primary_action_agreement": 0.5466376610660197,
+            "maximum_aggregate_action_delta": 0.02342318369315488,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          },
+          "recall-fp32": {
+            "action_frequency_mae": 0.12368866607327585,
+            "primary_action_agreement": 0.5030946151981419,
+            "maximum_aggregate_action_delta": 0.048372668325262824,
+            "lookup_coverage": 1,
+            "probability_sums_valid": true
+          }
+        }
+      ],
+      "paired_response": {
+        "averaged_mean_gain_bb": 1.792928603906434,
+        "bootstrap_replicates": 10000,
+        "control_mean_gain_bb": 1.5491334727993027,
+        "independent_roots": 32,
+        "interpretation": "recall-fp32 minus recall-cpu local response gain; negative favors candidate. Not full-game exploitability.",
+        "mean_delta_bb": 0.24379513110713144,
+        "one_sided_95_bootstrap_upper_delta_bb": 0.7312189283932159,
+        "seed_mean_deltas_bb": [
+          0.39749687908684095,
+          0.09009338312742216
+        ]
+      },
+      "native_probability_checks": [
+        {
+          "artifact_sha256": "581856a75acda1646164f2d4ebbebf7bb27db75e857b16ad0c9876e166b802bf",
+          "maximum_probability_delta": 2.8310817407062316e-7,
+          "profile": "recall-cpu",
+          "seed": 51701
+        },
+        {
+          "artifact_sha256": "8c667223fa36f050e76961d86be4e1b3855f7eef46f8607bcab43d7b69ec3ac9",
+          "maximum_probability_delta": 3.988929588860657e-7,
+          "profile": "recall-cpu",
+          "seed": 51702
+        },
+        {
+          "artifact_sha256": "a034d0b36812deda7d392ddb8095fca03db1e9eed86daecc001312445dd4d2b2",
+          "maximum_probability_delta": 8.894517043167571e-7,
+          "profile": "recall-fp32",
+          "seed": 51701
+        },
+        {
+          "artifact_sha256": "4ba5f7497602dbad797ff3059d6295c2288219612995e1efd790efd6fff354e9",
+          "maximum_probability_delta": 5.16919696047502e-7,
+          "profile": "recall-fp32",
+          "seed": 51702
+        }
+      ],
+      "validation": {
+        "recall-cpu": {
+          "gates": {
+            "action_ev_standard_error_coverage_at_least_0_95": false,
+            "action_frequency_mae_at_most_0_05": false,
+            "aggregate_action_delta_at_most_0_03": true,
+            "coverage_at_least_0_9999": true,
+            "estimated_exploitability_at_most_0_50": false,
+            "exploitability_upper_99_at_most_0_50": false,
+            "independent_seed_count_at_least_2": true,
+            "primary_action_agreement_at_least_0_85": false,
+            "probabilities_valid": true,
+            "reach_weighting_valid": true
+          },
+          "path": "/Users/davidvayntrub/pokersolver-training/home-full-fp32-native-audit-2026-10-20-50bb/recall-cpu-validation.json",
+          "release_eligible": false,
+          "sha256": "3936e7170e5bf8ce05c55eb8eb01e1b5b7db8279c69dfb1adff688785e46dcd0",
+          "unmeasured_gates": [
+            "estimated_exploitability_at_most_0_50",
+            "exploitability_upper_99_at_most_0_50",
+            "action_ev_standard_error_coverage_at_least_0_95"
+          ]
+        },
+        "recall-fp32": {
+          "gates": {
+            "action_ev_standard_error_coverage_at_least_0_95": false,
+            "action_frequency_mae_at_most_0_05": false,
+            "aggregate_action_delta_at_most_0_03": false,
+            "coverage_at_least_0_9999": true,
+            "estimated_exploitability_at_most_0_50": false,
+            "exploitability_upper_99_at_most_0_50": false,
+            "independent_seed_count_at_least_2": true,
+            "primary_action_agreement_at_least_0_85": false,
+            "probabilities_valid": true,
+            "reach_weighting_valid": true
+          },
+          "path": "/Users/davidvayntrub/pokersolver-training/home-full-fp32-native-audit-2026-10-20-50bb/recall-fp32-validation.json",
+          "release_eligible": false,
+          "sha256": "706ad4e1686eb394398510f3f444bb4d79595e68c9deb746e8e18cf73ed7a1e2",
+          "unmeasured_gates": [
+            "estimated_exploitability_at_most_0_50",
+            "exploitability_upper_99_at_most_0_50",
+            "action_ev_standard_error_coverage_at_least_0_95"
+          ]
+        }
+      }
+    }
+  },
+  "ev_variance": {
+    "results": [
+      {
+        "seed": 51701,
+        "comparison": {
+          "all_action_reference_precision_after": 0.25,
+          "all_action_reference_precision_before": 0.25,
+          "cost_adjusted_improvement": false,
+          "interpretation": "Small stratified estimator diagnostic, not authentic-reach confidence or neural accuracy.",
+          "mean_sampled_action_variance_after_bb2": 588.4510525716901,
+          "mean_sampled_action_variance_before_bb2": 994.8007642996215,
+          "precision_gate_passed_in_stratified_probe": false,
+          "sampled_actions": 45,
+          "variance_ratio": 0.5915265384682153,
+          "variance_times_wall_time_ratio": 1.4331112535793948,
+          "wall_time_ratio": 2.4227336567020323
+        }
+      },
+      {
+        "seed": 51702,
+        "comparison": {
+          "all_action_reference_precision_after": 0.25,
+          "all_action_reference_precision_before": 0.25,
+          "cost_adjusted_improvement": true,
+          "interpretation": "Small stratified estimator diagnostic, not authentic-reach confidence or neural accuracy.",
+          "mean_sampled_action_variance_after_bb2": 718.8626981164426,
+          "mean_sampled_action_variance_before_bb2": 1040.122659259192,
+          "precision_gate_passed_in_stratified_probe": false,
+          "sampled_actions": 45,
+          "variance_ratio": 0.6911326195205085,
+          "variance_times_wall_time_ratio": 0.9578267516720513,
+          "wall_time_ratio": 1.385879821931381
+        }
+      }
+    ],
+    "improvements_hold": false
+  },
+  "verification": {
+    "focused_python_native_passed": 66,
+    "rust_release_passed": 492,
+    "rust_release_ignored": 60,
+    "typescript_passed": 287,
+    "typescript_optional_skipped": 20,
+    "actual_native_serving_passed": 4,
+    "production_build_passed": true,
+    "explicit_full_fp32_resume_passed": true
+  },
+  "limitations": [
+    "Cold fixed-target fitting is not the warm-started CFR loop or its original Adam state.",
+    "Fitting splits group the union of encoded representations, not independent hand families.",
+    "Local response gains are bb/decision, not full-game exploitability bb/hand.",
+    "EV label variance and 25% precision are from 16 stratified older-v5 decisions, not current-policy served confidence.",
+    "Timing was host-contended; no controlled throughput claim.",
+    "Shared-street interference and bootstrap target/data sparsity remain unisolated."
+  ],
+  "verified_binary_source_identities": [
+    {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-pilot-2026-10-20-50bb/recall-51701/artifacts/round-000024/model.bin",
+      "bytes": 2966103,
+      "sha256": "60e4c6c21513d4d0e8550d01d996a7da12e29a0ccb665ba0718323c1718cbdde",
+      "descriptor_matches": true,
+      "magic_valid": true
+    },
+    {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-pilot-2026-10-20-50bb/recall-51702/artifacts/round-000024/model.bin",
+      "bytes": 2966103,
+      "sha256": "a310c005f153b0239b25776774017d10c6159cbfaa4abbb4e8a92ba2074bc25f",
+      "descriptor_matches": true,
+      "magic_valid": true
+    },
+    {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-pilot-2026-10-20-50bb/recall-cpu-51701/artifacts/round-000024/model.bin",
+      "bytes": 2966103,
+      "sha256": "581856a75acda1646164f2d4ebbebf7bb27db75e857b16ad0c9876e166b802bf",
+      "descriptor_matches": true,
+      "magic_valid": true
+    },
+    {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-cpu-prior-pilot-2026-10-20-50bb/recall-cpu-51702/artifacts/round-000024/model.bin",
+      "bytes": 2966103,
+      "sha256": "8c667223fa36f050e76961d86be4e1b3855f7eef46f8607bcab43d7b69ec3ac9",
+      "descriptor_matches": true,
+      "magic_valid": true
+    },
+    {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-full-fp32-pilot-2026-10-20-50bb/recall-fp32-51701/artifacts/round-000024/model.bin",
+      "bytes": 2966103,
+      "sha256": "a034d0b36812deda7d392ddb8095fca03db1e9eed86daecc001312445dd4d2b2",
+      "descriptor_matches": true,
+      "magic_valid": true
+    },
+    {
+      "path": "/Users/davidvayntrub/pokersolver-training/home-full-fp32-pilot-2026-10-20-50bb/recall-fp32-51702/artifacts/round-000024/model.bin",
+      "bytes": 2966103,
+      "sha256": "4ba5f7497602dbad797ff3059d6295c2288219612995e1efd790efd6fff354e9",
+      "descriptor_matches": true,
+      "magic_valid": true
+    }
+  ]
+}

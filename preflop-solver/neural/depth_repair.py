@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -28,6 +29,10 @@ PROFILES = {
     'control': [],
     'averaged': ['--average-regret-rollouts'],
     'recall': ['--average-regret-rollouts', '--card-arrival-memory'],
+    'recall-cpu': ['--average-regret-rollouts', '--card-arrival-memory', '--bootstrap-cpu-prior'],
+    'recall-fp32': ['--average-regret-rollouts', '--card-arrival-memory', '--bootstrap-cpu-prior'],
+    'recall-data': ['--average-regret-rollouts', '--card-arrival-memory'],
+    'recall-fit': ['--average-regret-rollouts', '--card-arrival-memory', '--average-policy-steps-per-round', '480'],
     'retained': ['--average-regret-rollouts', '--regret-training', 'retained_instantaneous'],
     'no-baseline': ['--average-regret-rollouts', '--variance-baseline-scale', '0'],
     'integrated': ['--average-regret-rollouts', '--integrate-closed-opponent-actions'],
@@ -103,7 +108,10 @@ def independent_response_gain(blocks: np.ndarray, probabilities: np.ndarray) -> 
 def frozen_reference(binary: Path, model, records: list[dict], depth: int, output: Path,
                      seed: int = 2471701, blocks: int = 32, inner: int = 2,
                      snapshots: Path | None = None, policy_only: bool = False,
-                     exact_river_values: bool = False, exact_closed_values: bool = False) -> dict:
+                     exact_river_values: bool = False, exact_closed_values: bool = False,
+                     action_expectation_depth: int = 0) -> dict:
+    if action_expectation_depth not in (0,1,2):
+        raise ValueError('bounded action expectation depth must be 0..2')
     output.parent.mkdir(parents=True, exist_ok=True)
     network_path = output.with_suffix('.networks.json')
     source = {'schema': ARRIVAL_NETWORK_SCHEMA if model_has_arrival_memory(model) else NETWORK_SCHEMA, 'input_size': model_input_count(model),
@@ -124,6 +132,8 @@ def frozen_reference(binary: Path, model, records: list[dict], depth: int, outpu
         argv += ['--exact-river-values']
     if exact_closed_values:
         argv += ['--exact-closed-values']
+    if action_expectation_depth:
+        argv += ['--action-expectation-depth',str(action_expectation_depth)]
     try:
         subprocess.run(argv, cwd=ROOT, check=True, capture_output=True, text=True, timeout=600)
     except subprocess.CalledProcessError as error:
@@ -132,6 +142,8 @@ def frozen_reference(binary: Path, model, records: list[dict], depth: int, outpu
     if (bool(report.get('exact_river_values')) != exact_river_values
             or bool(report.get('exact_closed_values')) != exact_closed_values):
         raise RuntimeError('native frozen reference changed the requested exact estimator')
+    if report.get('action_expectation_depth',0) != action_expectation_depth:
+        raise RuntimeError('native frozen reference changed its action expectation depth')
     verify_evaluation_game(report, depth, PILOT_GRID)
     if report['input_sha256'] != hashlib.sha256(input_path.read_bytes()).hexdigest():
         raise RuntimeError('native frozen reference changed its input identity')
@@ -258,14 +270,18 @@ def run_training(binary: Path, output: Path, profile: str, seed: int, rounds: in
         if (starting_round > rounds or any(previous['config'].get(key) != value for key, value in expected.items())
                 or previous['config'].get('average_regret_rollouts', False) != (profile != 'control')
                 or previous['config'].get('integrate_closed_opponent_actions', False) != (profile == 'integrated')
-                or previous['config'].get('card_arrival_memory', False) != (profile == 'recall')
+                or previous['config'].get('card_arrival_memory', False) != profile.startswith('recall')
+                or previous['config'].get('bootstrap_cpu_prior',False) != (profile in ('recall-cpu','recall-fp32'))
+                or previous['config'].get('matmul_precision') != ('full-fp32-v1' if profile == 'recall-fp32' else None)
+                or previous['config'].get('average_policy_steps_per_round') != (480 if profile == 'recall-fit' else None)
                 or previous['config'].get('regret_training', 'bootstrapped_dcfr') != ('retained_instantaneous' if profile == 'retained' else 'bootstrapped_dcfr')
                 or previous['config'].get('variance_baseline_scale') != (0. if profile == 'no-baseline' else .5)):
             raise ValueError('recovery run does not match the requested frozen configuration')
     started = time.monotonic()
     if starting_round < rounds:
         with (output / 'train.log').open('a' if resume else 'w') as log:
-            process = subprocess.Popen(argv, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            environment = dict(os.environ, MLX_ENABLE_TF32='0' if profile == 'recall-fp32' else '1')
+            process = subprocess.Popen(argv, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             try:
                 while process.poll() is None:
                     if time.monotonic() - started > max_minutes * 60 + 120 or sum(process_family(process.pid).values()) > 3.5 * 1024**3 or shutil.disk_usage(output).free < 20 * 1024**3:

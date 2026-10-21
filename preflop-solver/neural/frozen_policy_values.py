@@ -50,6 +50,9 @@ def verify_frozen_targets(source: Path, reference_path: Path) -> tuple[dict, lis
             or binary[16 + metadata_size:] != np.asarray(contents['parameters'], dtype='<f4').tobytes()):
         raise ValueError('policy source and immutable binary disagree')
     reference = json.loads(reference_path.read_text())
+    prefix_depth = reference.get('action_expectation_depth',0)
+    if type(prefix_depth) is not int or prefix_depth not in (0,1,2):
+        raise ValueError('invalid frozen action expectation depth')
     inputs = reference_path.with_suffix('.input.json')
     networks = reference_path.with_suffix('.networks.json')
     records = json.loads(inputs.read_text())
