@@ -23,6 +23,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 pub mod sampled_flop;
+pub mod solved_spot;
 mod frozen_flop_walk;
 #[cfg(test)]
 pub(super) mod frozen_turn_response;

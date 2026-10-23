@@ -929,6 +929,7 @@ export default function PracticePage() {
   return (
     <div className="practice-study pb-8">
       <PageHeading title="Practice" meta="Heads-up · exact cards · no rake">
+        <Link href="/practice/spots" className="study-button-secondary">Solved spots</Link>
         <Link href="/stats" className="study-button-secondary">
           <BarChart3 className="h-4 w-4" aria-hidden="true" />
           Stats

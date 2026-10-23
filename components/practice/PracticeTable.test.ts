@@ -7,6 +7,26 @@ import type { PolicyNode } from '@/lib/practice-types';
 import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
 
 describe('PracticeTable decision controls', () => {
+  it('exposes every saved library action without revealing the answer or inventing blinds', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const state = createHand({ modelVersion: 'saved-test', depthBb: 50, button: 'button-small-blind', hero: 'big-blind', random: seededRandom(3) });
+    const actions = [
+      { id: 'check', kind: 'check' as const, label: 'Check', probability: .8, evBb: 2, standardErrorBb: 0, confidence: 'high' as const },
+      { id: 'bet6', kind: 'bet' as const, label: 'Bet 6.0bb', amountToBb: 6, probability: .15, evBb: 1.9, standardErrorBb: 0, confidence: 'high' as const },
+      { id: 'bet12', kind: 'bet' as const, label: 'Bet 12.0bb', amountToBb: 12, probability: .04, evBb: 1.8, standardErrorBb: 0, confidence: 'high' as const },
+      { id: 'jam', kind: 'all-in' as const, label: 'All-in 44.0bb', amountToBb: 44, probability: .01, evBb: 1.7, standardErrorBb: 0, confidence: 'high' as const },
+    ];
+    const html = renderToStaticMarkup(React.createElement(PracticeTable, {
+      state, node: { actions }, status: 'decision', mode: 'postflop', allModeledActions: true,
+      initialEventLabel: 'River spot loaded', showTableHistory: false, revealOpponent: false, selectedActionId: null,
+      onAction: vi.fn(), onContinue: vi.fn(), onRetry: vi.fn(),
+    }));
+    expect(html.match(/class="practice-action-button /g)).toHaveLength(4);
+    expect(html).not.toContain('80%');
+    expect(html).not.toContain('Blinds posted');
+    expect(html).toContain('River spot loaded');
+    expect(html).not.toContain('practice-action-strip');
+  });
   it('shows actual raked blinds and separates refunds, gross pot, rake and awards', () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const state = createHand({ modelVersion: 'inactive-cash-test', depthBb: 20,

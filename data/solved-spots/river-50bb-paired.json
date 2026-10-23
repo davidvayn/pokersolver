@@ -1,0 +1,17 @@
+{
+  "id": "river-50bb-paired",
+  "title": "50bb · Paired river",
+  "description": "A 12bb river pot on Qs 9h 6c 2d 2s. BB acts first with 44bb behind. Half-pot, pot, all-in, and one subsequent raise are modeled.",
+  "rangeAssumptions": "Illustrative study ranges, not inferred or certified preflop ranges. Every unblocked exact combination in each listed hand class has equal starting weight. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43, 30, 16, 1, 3],
+  "depthBb": 50,
+  "potBb": 12,
+  "rangeClasses": [
+    ["AA", "KK", "QQ", "99", "66", "AQs", "AQo", "KQs", "KQo", "QJs", "QTs", "JTs", "T8s", "87s", "AJs", "ATs"],
+    ["QQ", "99", "66", "AQs", "KQs", "QJs", "QTs", "J9s", "T9s", "98s", "97s", "76s", "65s", "JTs", "T8s", "87s", "A5s", "A4s", "A3s"]
+  ],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 2000
+}

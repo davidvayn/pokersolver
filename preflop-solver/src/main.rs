@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "full-game-response-check" => run_full_game_response_check(&args[1..]),
         "tabular-flop-pilot" => run_tabular_flop_pilot(&args[1..]),
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
+        "solved-spot" => run_solved_spot(&args[1..]),
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "turn-pbs-upgrade-targets" => run_turn_pbs_upgrade_targets(&args[1..]),
@@ -1366,6 +1367,29 @@ fn run_turn_pbs_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
             "counterfactualValuesBb": prediction,
         }))?
     );
+    Ok(())
+}
+
+fn run_solved_spot(args: &[String]) -> Result<(), Box<dyn Error>> {
+    use blueprint::public_belief::solved_spot;
+    let input = value(args, "--input").ok_or("--input is required")?;
+    let bytes = fs::read(input)?;
+    if args.iter().any(|arg| arg == "--verify") {
+        let spot: solved_spot::SolvedSpot = serde_json::from_slice(&bytes)?;
+        let report = solved_spot::verify(&spot)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if !report.accepted { return Err("solved-spot verification rejected".into()); }
+    } else {
+        let spot = solved_spot::solve(serde_json::from_slice(&bytes)?)?;
+        if !spot.verification.accepted {
+            eprintln!("{}", serde_json::to_string_pretty(&spot.verification)?);
+            return Err("spot not converged; no serving artifact exported".into());
+        }
+        let output = value(args, "--output").ok_or("--output is required")?;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+        file.write_all(&serde_json::to_vec(&spot)?)?;
+        println!("{}", serde_json::to_string_pretty(&spot.verification)?);
+    }
     Ok(())
 }
 
@@ -3808,6 +3832,8 @@ Usage:
   preflop-solver full-game-lbr (--networks <json> | --tabular-checkpoint <msgpack.gz>) [options]
   preflop-solver tabular-flop-pilot --tabular-checkpoint <msgpack.gz> --proposal-response <json> --opponent-responses <json,json> --seed <integer> --output <new.json> [--weight 0.25] [--evaluation-deals 2048] [--response-workers 2]
   preflop-solver river-pbs-solve [options]
+  preflop-solver solved-spot --input <spot.json> --output <new-artifact.json>
+  preflop-solver solved-spot --verify --input <artifact.json>
   preflop-solver turn-river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
   preflop-solver turn-pbs-upgrade-targets [options]

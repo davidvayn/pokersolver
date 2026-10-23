@@ -1,0 +1,38 @@
+[
+  {
+    "id": "river-50bb-paired",
+    "title": "50bb · Paired river",
+    "board": [
+      43,
+      30,
+      16,
+      1,
+      3
+    ],
+    "depthBb": 50,
+    "url": "/models/solved-spots/river-50bb-paired/8823f13de847f54cb1c7f9f03c1e3cafd90c216162e74b199acf341033e00292.json",
+    "sha256": "8823f13de847f54cb1c7f9f03c1e3cafd90c216162e74b199acf341033e00292",
+    "bytes": 87240,
+    "verification": {
+      "method": "direct-compatible-pair-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 3979,
+      "profileValueBb": [
+        2.3682139454728324,
+        -2.368213945472831
+      ],
+      "bestResponseValueBb": [
+        2.3682757940560837,
+        -2.368103774126243
+      ],
+      "unilateralGainBb": [
+        0.0000618485832513116,
+        0.00011017134658786176
+      ],
+      "totalBestResponseGainBb": 0.00017201992983917336,
+      "maximumActionEvErrorBb": 0.0000018901577831798022,
+      "maximumProbabilitySumError": 3.725290298461914e-8,
+      "zeroSumResidualBb": 1.3322676295501878e-15,
+      "accepted": true
+    }
+  }
+]

@@ -43,7 +43,7 @@ export type TableStatus =
 
 interface PracticeTableProps {
   state: HandState | null;
-  node: PolicyNode | null;
+  node: Pick<PolicyNode, 'actions'> | null;
   status: TableStatus;
   mode: PracticeMode;
   unavailableMessage?: string;
@@ -54,6 +54,10 @@ interface PracticeTableProps {
   onContinue: () => void;
   onRetry: () => void;
   onOpenAnalyst?: () => void;
+  /** Solved libraries expose the whole pinned tree, not the two-choice drill. */
+  allModeledActions?: boolean;
+  initialEventLabel?: string;
+  showTableHistory?: boolean;
 }
 
 function SeatDisplay({
@@ -202,6 +206,9 @@ export function PracticeTable({
   onContinue,
   onRetry,
   onOpenAnalyst,
+  allModeledActions = false,
+  initialEventLabel = 'Blinds posted',
+  showTableHistory = true,
 }: PracticeTableProps) {
   const [soundsEnabled, setSoundsEnabled] = useState(true);
   usePracticeTableSounds(state, status, soundsEnabled);
@@ -247,7 +254,7 @@ export function PracticeTable({
   const actionAnnouncement = latestAction
     ? `${latestActor} ${latestAction.label}.`
     : showBlindsEvent
-      ? 'Blinds posted.'
+      ? `${initialEventLabel}.`
       : '';
   const liveMessage =
     status === 'loading'
@@ -373,7 +380,7 @@ export function PracticeTable({
                   </span>
                   <span className="practice-action-event-copy">
                     <small>{latestActor ?? 'Table'}</small>
-                    <strong>{latestAction?.label ?? 'Blinds posted'}</strong>
+                    <strong>{latestAction?.label ?? initialEventLabel}</strong>
                   </span>
                   {isWagerAction(latestAction) && (
                     <span className="practice-action-chip-flight">
@@ -385,7 +392,7 @@ export function PracticeTable({
                 </div>
               )}
 
-              <div className="practice-action-strip">
+              {showTableHistory && <div className="practice-action-strip">
                 <div
                   className="practice-action-strip-heading"
                   aria-hidden="true"
@@ -414,11 +421,11 @@ export function PracticeTable({
                   {state.actionHistory.length === 0 && (
                     <li className="practice-action-log-latest">
                       <span className="practice-action-log-actor">Table</span>
-                      <strong>Blinds posted</strong>
+                      <strong>{initialEventLabel}</strong>
                     </li>
                   )}
                 </ol>
-              </div>
+              </div>}
             </>
           ) : (
             <div className="practice-empty-table" aria-hidden="true">
@@ -518,7 +525,7 @@ export function PracticeTable({
       <div className="practice-action-dock">
         {status === 'decision' && node ? (
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:justify-center">
-            {playableActionChoices(node.actions).map((action) => (
+            {(allModeledActions ? node.actions : playableActionChoices(node.actions)).map((action) => (
               <button
                 key={action.id}
                 type="button"

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "predev": "npm run build:solver",
-    "build": "npm run build:solver && npm run practice:verify-resolver-artifacts && next build",
+    "build": "npm run build:solver && npm run practice:verify-resolver-artifacts && npm run spots:verify && next build",
     "build:solver": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo build --release --manifest-path preflop-solver/Cargo.toml",
     "start": "next start",
     "lint": "next lint",
@@ -19,6 +19,8 @@
     "practice:activate-experimental": "node scripts/practice/activate-experimental-resolver.mjs",
     "practice:complete-action-ev-candidate": "scripts/complete-canonical-action-ev-candidate.sh",
     "test:watch": "vitest",
+    "spots:build": "npm run build:solver && node scripts/solved-spots/build.mjs",
+    "spots:verify": "node scripts/solved-spots/build.mjs --verify",
     "preflop:catalog": "node scripts/generate-preflop-catalog.mjs",
     "preflop:compare-blueprints": "node scripts/compare-blueprint-artifacts.mjs",
     "test:blueprint-compare": "node --test scripts/compare-blueprint-artifacts.test.mjs",
