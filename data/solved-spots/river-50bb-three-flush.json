@@ -1,0 +1,17 @@
+{
+  "id": "river-50bb-three-flush",
+  "title": "50bb · Three-heart river",
+  "description": "A 12bb river pot on Kh Jh 8h 3c 2d. BB acts first with 44bb behind. Exact suits matter: half-pot, pot, all-in, and one subsequent raise are modeled.",
+  "rangeAssumptions": "Illustrative study ranges, not inferred or certified preflop ranges. Equal starting weight per unblocked exact combination, not equal weight per hand class. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [46, 38, 26, 4, 1],
+  "depthBb": 50,
+  "potBb": 12,
+  "rangeClasses": [
+    ["AA", "KK", "JJ", "88", "AKs", "AKo", "AQs", "ATs", "A5s", "KQs", "KJs", "QJs", "QTs", "JTs", "T9s", "97s", "76s", "65s"],
+    ["JJ", "88", "33", "22", "AKs", "AQs", "ATs", "A5s", "KQs", "KJs", "KTs", "QJs", "QTs", "JTs", "J9s", "T9s", "97s", "76s", "65s", "54s"]
+  ],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 2000
+}

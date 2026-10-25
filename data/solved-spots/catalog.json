@@ -34,5 +34,149 @@
       "zeroSumResidualBb": 1.3322676295501878e-15,
       "accepted": true
     }
+  },
+  {
+    "id": "river-50bb-dry",
+    "title": "50bb · Ace-high dry river",
+    "board": [
+      51,
+      45,
+      22,
+      8,
+      3
+    ],
+    "depthBb": 50,
+    "url": "/models/solved-spots/river-50bb-dry/8a388dc9f462000b7c9eb109b1e840aae86dbf7ce20d81c2bd3ff19da32e88af.json",
+    "sha256": "8a388dc9f462000b7c9eb109b1e840aae86dbf7ce20d81c2bd3ff19da32e88af",
+    "bytes": 80295,
+    "verification": {
+      "method": "direct-compatible-pair-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 2886,
+      "profileValueBb": [
+        -0.3831775242290595,
+        0.38317752422905965
+      ],
+      "bestResponseValueBb": [
+        -0.3830122232613958,
+        0.38330617736130745
+      ],
+      "unilateralGainBb": [
+        0.00016530096766370628,
+        0.0001286531322478024
+      ],
+      "totalBestResponseGainBb": 0.00029395409991150867,
+      "maximumActionEvErrorBb": 0.000002000943517543874,
+      "maximumProbabilitySumError": 4.202593117952347e-8,
+      "zeroSumResidualBb": 1.6653345369377348e-16,
+      "accepted": true
+    }
+  },
+  {
+    "id": "river-50bb-three-flush",
+    "title": "50bb · Three-heart river",
+    "board": [
+      46,
+      38,
+      26,
+      4,
+      1
+    ],
+    "depthBb": 50,
+    "url": "/models/solved-spots/river-50bb-three-flush/07b8939d8e4ed747e1639b10f537e1416608e9c8c1fe1550edefd8937f355815.json",
+    "sha256": "07b8939d8e4ed747e1639b10f537e1416608e9c8c1fe1550edefd8937f355815",
+    "bytes": 94178,
+    "verification": {
+      "method": "direct-compatible-pair-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 4420,
+      "profileValueBb": [
+        0.7183136961389578,
+        -0.7183136961389567
+      ],
+      "bestResponseValueBb": [
+        0.718346495759999,
+        -0.718245591359595
+      ],
+      "unilateralGainBb": [
+        0.00003279962104119072,
+        0.00006810477936169956
+      ],
+      "totalBestResponseGainBb": 0.00010090440040289028,
+      "maximumActionEvErrorBb": 0.0000023068961496619522,
+      "maximumProbabilitySumError": 3.065042619709857e-8,
+      "zeroSumResidualBb": 1.1102230246251565e-15,
+      "accepted": true
+    }
+  },
+  {
+    "id": "river-100bb-connected",
+    "title": "100bb · Connected river",
+    "board": [
+      35,
+      29,
+      24,
+      22,
+      3
+    ],
+    "depthBb": 100,
+    "url": "/models/solved-spots/river-100bb-connected/3f7bd6925858bb9bf4f11cbf86013280ed34d0334faf2b136a1d36b91c280c93.json",
+    "sha256": "3f7bd6925858bb9bf4f11cbf86013280ed34d0334faf2b136a1d36b91c280c93",
+    "bytes": 101429,
+    "verification": {
+      "method": "direct-compatible-pair-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 3717,
+      "profileValueBb": [
+        -2.71724704095404,
+        2.7172470409540406
+      ],
+      "bestResponseValueBb": [
+        -2.717225068572126,
+        2.7172624387972326
+      ],
+      "unilateralGainBb": [
+        0.000021972381913926142,
+        0.00001539784319204429
+      ],
+      "totalBestResponseGainBb": 0.000037370225105970434,
+      "maximumActionEvErrorBb": 0.00000404853980739972,
+      "maximumProbabilitySumError": 3.8779035094194114e-8,
+      "zeroSumResidualBb": 4.440892098500626e-16,
+      "accepted": true
+    }
+  },
+  {
+    "id": "turn-50bb-draws",
+    "title": "50bb · Turn to river",
+    "board": [
+      43,
+      30,
+      16,
+      1
+    ],
+    "depthBb": 50,
+    "url": "/models/solved-spots/turn-50bb-draws/0f1a25bf2de1c4adcd471cfe6a4a084a17b386bbaa97542808e2c5fbafa91807.json",
+    "sha256": "0f1a25bf2de1c4adcd471cfe6a4a084a17b386bbaa97542808e2c5fbafa91807",
+    "bytes": 2092523,
+    "verification": {
+      "method": "direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 177,
+      "profileValueBb": [
+        3.5276573310627426,
+        -3.5276573310627435
+      ],
+      "bestResponseValueBb": [
+        3.5312092604830183,
+        -3.5230753701721964
+      ],
+      "unilateralGainBb": [
+        0.0035519294202757123,
+        0.0045819608905470766
+      ],
+      "totalBestResponseGainBb": 0.008133890310822789,
+      "maximumActionEvErrorBb": 0.0000032943093160042736,
+      "maximumProbabilitySumError": 4.194589564576745e-8,
+      "zeroSumResidualBb": 8.881784197001252e-16,
+      "accepted": true,
+      "riverOutcomes": 7788
+    }
   }
 ]

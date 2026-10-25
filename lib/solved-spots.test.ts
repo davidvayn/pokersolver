@@ -8,11 +8,10 @@ import { seededRandom } from '@/lib/practice-engine';
 import { advanceSpot, loadSolvedSpot, playSpotOpponent, sessionNode, spotActions, spotCombo,
   spotEvLoss, SPOT_SEATS, startSpot, validateSolvedSpot, type SolvedSpot, type SpotSession, type SpotCatalogEntry } from '@/lib/solved-spots';
 
-const entry = catalog[0] as SpotCatalogEntry;
-const bytes = readFileSync(path.join(process.cwd(), 'public', entry.url));
-const spot = validateSolvedSpot(JSON.parse(bytes.toString()));
-
-describe('saved river library', () => {
+describe.each(catalog.filter((e) => e.board.length === 5))('saved river: $title', (rawEntry) => {
+  const entry = rawEntry as SpotCatalogEntry;
+  const bytes = readFileSync(path.join(process.cwd(), 'public', entry.url));
+  const spot = validateSolvedSpot(JSON.parse(bytes.toString()));
   it('pins bytes, checks the checksum and fails closed on corrupt/missing files', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
     try {
@@ -43,8 +42,8 @@ describe('saved river library', () => {
       const state = session.state;
       expect(new Set([...state.board, ...Object.values(state.holeCards).flat()]).size).toBe(9);
       for (let p=0; p<2; p++) expect(spot.ranges[p].some(([key]) => key === comboKey(...state.holeCards[SPOT_SEATS[p]]))).toBe(true);
-      expect(state.potBb).toBe(12);
-      expect(state.stacksBb['big-blind']).toBe(44);
+      expect(state.potBb).toBe(spot.input.potBb);
+      expect(state.stacksBb['big-blind']).toBe(spot.input.depthBb-spot.input.potBb/2);
     }
   });
 
@@ -55,7 +54,7 @@ describe('saved river library', () => {
     function walk(session: SpotSession) {
       const state = session.state;
       expect(state.stacksBb['big-blind'] + state.stacksBb['button-small-blind'] + state.potBb
-        + state.streetBetsBb['big-blind'] + state.streetBetsBb['button-small-blind']).toBeCloseTo(100,8);
+        + state.streetBetsBb['big-blind'] + state.streetBetsBb['button-small-blind']).toBeCloseTo(spot.input.depthBb*2,8);
       if (state.terminal) { terminals++; expect(session.nodeId).toBeNull(); return; }
       const node = sessionNode(spot,session);
       expect(visited.has(node.id)).toBe(false);

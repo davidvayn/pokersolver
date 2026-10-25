@@ -4,17 +4,19 @@ import { useEffect, useRef, useState } from 'react';
 import { PracticeTable, type TableStatus } from '@/components/practice/PracticeTable';
 import { advanceSpot, loadSolvedSpot, playSpotOpponent, spotActions, spotEvLoss, startSpot,
   type SolvedSpot, type SpotCatalogEntry, type SpotSession } from '@/lib/solved-spots';
-import type { LegalAction, PolicyAction, Seat } from '@/lib/practice-types';
+import type { LegalAction, PolicyAction, PracticeStreet, Seat } from '@/lib/practice-types';
 
-interface DecisionReview { actions: PolicyAction[]; chosen: string; loss: number | null }
+interface DecisionReview { actions: PolicyAction[]; chosen: string; loss: number | null; street: PracticeStreet }
 const buttonClass = 'min-h-11 rounded-md border border-border bg-surface px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 
 export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) {
   const [entryId, setEntryId] = useState(entries[0]?.id ?? '');
+  const [nextEntryId, setNextEntryId] = useState(entries[0]?.id ?? '');
   const entry = entries.find((item) => item.id === entryId);
   const [spot, setSpot] = useState<SolvedSpot | null>(null);
   const [session, setSession] = useState<SpotSession | null>(null);
   const [hero, setHero] = useState<Seat>('big-blind');
+  const nextHero = useRef<Seat>('big-blind');
   const [status, setStatus] = useState<TableStatus>('loading');
   const [reviews, setReviews] = useState<DecisionReview[]>([]);
   const [error, setError] = useState('');
@@ -29,7 +31,7 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
       if (abort.signal.aborted) return;
       setSpot(loaded);
       // Seat changes apply to the next deal, not to a hand in progress.
-      setSession(playSpotOpponent(loaded, startSpot(loaded, entry.sha256, 'big-blind')));
+      setSession(playSpotOpponent(loaded, startSpot(loaded, entry.sha256, nextHero.current)));
       setStatus('decision');
     }).catch((cause: unknown) => {
       if (abort.signal.aborted) return;
@@ -42,6 +44,9 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
     setError(cause instanceof Error ? cause.message : 'The saved solution could not be read.'); setStatus('error');
   }
   function nextDeal() {
+    if (nextEntryId !== entryId) {
+      setStatus('loading'); setSpot(null); setSession(null); setReviews([]); setEntryId(nextEntryId); return;
+    }
     if (!spot || !entry) return;
     try {
       const next = playSpotOpponent(spot, startSpot(spot, entry.sha256, hero));
@@ -53,7 +58,7 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
     try {
       const actions = spotActions(spot, session);
       const next = advanceSpot(spot, session, action.id);
-      setReviews((previous) => [...previous, { actions, chosen: action.id, loss: spotEvLoss(actions, action.id) }]);
+      setReviews((previous) => [...previous, { actions, chosen: action.id, loss: spotEvLoss(actions, action.id), street: session.state.street }]);
       setSession(next); setStatus('feedback');
     } catch (cause) { fail(cause); }
   }
@@ -77,23 +82,24 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
     <>
       {entries.length === 1 && <p className="mb-3 text-sm font-semibold">{entry?.title}</p>}
       <div className="mb-5 flex flex-wrap items-end gap-4">
-        {entries.length > 1 && <label className="grid gap-1 text-sm font-medium">Saved spot
-          <select className={buttonClass} value={entryId} onChange={(event) => setEntryId(event.target.value)}>
+        {entries.length > 1 && <label className="grid gap-1 text-sm font-medium">Saved spot · next deal
+          <select className={buttonClass} value={nextEntryId} onChange={(event) => setNextEntryId(event.target.value)}>
             {entries.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
           </select>
         </label>}
         <label className="grid gap-1 text-sm font-medium">Your seat · next deal
-          <select className={buttonClass} value={hero} onChange={(event) => setHero(event.target.value as Seat)}>
+          <select className={buttonClass} value={hero} onChange={(event) => { nextHero.current = event.target.value as Seat; setHero(nextHero.current); }}>
             <option value="big-blind">Big blind · first to act</option>
             <option value="button-small-blind">Button · in position</option>
           </select>
         </label>
-        <button className={buttonClass} disabled={!spot || status === 'loading'} onClick={nextDeal}>New deal</button>
+        <button className={buttonClass} disabled={(!spot && nextEntryId === entryId) || status === 'loading'} onClick={nextDeal}>New deal</button>
         {session && session.state.hero !== hero && <p className="text-sm text-muted" role="status">Seat change applies on the next deal.</p>}
+        {nextEntryId !== entryId && <p className="text-sm text-muted" role="status">Spot change applies on the next deal.</p>}
       </div>
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <PracticeTable state={session?.state ?? null} node={actions.length ? { actions } : null}
-          status={lookupError ? 'error' : status} mode="postflop" allModeledActions initialEventLabel="River spot loaded" showTableHistory={false}
+          status={lookupError ? 'error' : status} mode="postflop" allModeledActions initialEventLabel={spot?.input.board.length === 4 ? 'Turn spot loaded' : 'River spot loaded'} showTableHistory={false}
           errorMessage={lookupError || error} revealOpponent={Boolean(session?.state.terminal && status === 'review')}
           selectedActionId={status === 'feedback' ? lastReview?.chosen ?? null : null}
           onAction={choose} onContinue={continueHand} onRetry={() => setRetry((v) => v+1)}
@@ -102,7 +108,7 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
           <section ref={feedbackRef} tabIndex={-1} aria-labelledby="spot-feedback-title" className="scroll-mt-4 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
             <h2 id="spot-feedback-title" className="text-lg font-semibold">Decision feedback</h2>
             {showReview ? <div className="mt-3" role="status" aria-live="polite">
-              <p className="text-sm">Decision {reviews.length} · {lastReview.actions.find((a) => a.id === lastReview.chosen)?.label}</p>
+              <p className="text-sm">Decision {reviews.length} · {lastReview.street} · {lastReview.actions.find((a) => a.id === lastReview.chosen)?.label}</p>
               <p className="mt-2 text-xl font-semibold">{lastReview.loss === null ? 'EV unavailable at this off-path node' : `${lastReview.loss.toFixed(3)}bb EV loss`}</p>
               <div className="mt-3 overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -122,10 +128,10 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
             </p>}
           </section>
           {session && session.state.actionHistory.length > 0 && <section aria-labelledby="spot-history-title" className="border-t border-border pt-5">
-            <h2 id="spot-history-title" className="text-lg font-semibold">River action history</h2>
-            <ol className="mt-3 space-y-2 text-sm" aria-label="Complete river action history">
+            <h2 id="spot-history-title" className="text-lg font-semibold">Action history</h2>
+            <ol className="mt-3 space-y-2 text-sm" aria-label="Complete spot action history">
               {session.state.actionHistory.map((action) => <li key={action.id} className="flex flex-wrap justify-between gap-2 border-b border-border py-2">
-                <span className="text-muted">{action.actor === session.state.hero ? 'You' : 'Opponent'}</span><strong>{action.label}</strong>
+                <span className="text-muted">{action.street} · {action.actor === session.state.hero ? 'You' : 'Opponent'}</span><strong>{action.label}</strong>
               </li>)}
             </ol>
           </section>}
@@ -136,6 +142,7 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
               <div><dt className="text-muted">Total best-response gain · this spot only</dt><dd className="font-mono">{spot.verification.totalBestResponseGainBb.toFixed(5)}bb / ≤0.05000bb</dd></div>
               <div><dt className="text-muted">Complete saved decision nodes</dt><dd>{spot.nodes.length}</dd></div>
               <div><dt className="text-muted">Compatible private-card deals checked</dt><dd>{spot.verification.compatibleDeals.toLocaleString()}</dd></div>
+              {spot.verification.riverOutcomes && <div><dt className="text-muted">Compatible deal–river outcomes</dt><dd>{spot.verification.riverOutcomes.toLocaleString()}</dd></div>}
             </dl>
             <details className="mt-4 text-sm">
               <summary className="cursor-pointer py-2 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Ranges, accuracy and version</summary>
@@ -143,7 +150,7 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
               <p className="mt-3 break-words"><strong>BTN:</strong> {spot.input.rangeClasses[0].join(', ')}</p>
               <p className="mt-2 break-words"><strong>BB:</strong> {spot.input.rangeClasses[1].join(', ')}</p>
               <p className="mt-3 leading-6 text-muted">Bets: {spot.input.betPotFractions.map((f) => `${f*100}% pot`).join(', ')}, plus all-in. Raises: {spot.input.raisePotFractions.map((f) => `${f*100}% of the pot after calling`).join(', ')}, plus all-in. Raise cap: {spot.input.raiseCap} after the initial bet.</p>
-              <p className="mt-3 leading-6 text-muted">Direct pair enumeration checks every saved action EV to 0.0001bb and sums both players’ best-response gains. This is a conditional river solution, not a full-hand exploitability certificate. No online resolver or neural values are used.</p>
+              <p className="mt-3 leading-6 text-muted">Exact pair{spot.input.board.length === 4 ? ' and river' : ''} enumeration checks every saved action EV to 0.0001bb and sums both players’ best-response gains. This is a conditional {spot.input.board.length === 4 ? 'turn-to-river' : 'river'} solution, not a full-hand exploitability certificate. No online resolver or neural values are used.</p>
               <p className="mt-3 break-all font-mono text-xs">Version SHA-256: {entry?.sha256}</p>
             </details>
           </section>}

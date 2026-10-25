@@ -1,0 +1,17 @@
+{
+  "id": "river-100bb-connected",
+  "title": "100bb · Connected river",
+  "description": "A 20bb river pot on Ts 9d 8c 7h 2s. BB acts first with 90bb behind. Half-pot, pot, all-in, and one subsequent raise are modeled.",
+  "rangeAssumptions": "Illustrative study ranges, not inferred or certified preflop ranges. Equal starting weight per unblocked exact combination. This conditional river solution does not activate a 100bb full-hand model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [35, 29, 24, 22, 3],
+  "depthBb": 100,
+  "potBb": 20,
+  "rangeClasses": [
+    ["AA", "KK", "QQ", "JJ", "TT", "99", "88", "AKs", "AQs", "AJs", "KJs", "QJs", "JTs", "T9s", "98s", "87s", "76s", "65s"],
+    ["JJ", "TT", "99", "88", "77", "AJs", "KJs", "QJs", "JTs", "J9s", "T9s", "T8s", "98s", "97s", "87s", "86s", "76s", "65s", "64s"]
+  ],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 2000
+}

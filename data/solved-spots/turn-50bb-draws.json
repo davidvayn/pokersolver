@@ -1,0 +1,14 @@
+{
+  "id": "turn-50bb-draws",
+  "title": "50bb · Turn to river",
+  "description": "A complete turn-to-river game on Qs 9h 6c 2d with a 32bb pot and 34bb behind. All legal river cards and both streets' modeled betting actions are solved together. Half-pot, pot, all-in, and one subsequent raise are modeled.",
+  "rangeAssumptions": "A deliberately narrow illustrative turn exercise: QQ, AQ suited and missed straight draws against sets, top pair and draws. These are declared study ranges, not certified preflop ranges. Equal weight per unblocked exact combination; rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43, 30, 16, 1],
+  "depthBb": 50,
+  "potBb": 32,
+  "rangeClasses": [["QQ", "AQs", "JTs", "T8s"], ["99", "QJs", "87s", "A5s"]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 512
+}

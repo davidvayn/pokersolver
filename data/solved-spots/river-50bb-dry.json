@@ -1,0 +1,17 @@
+{
+  "id": "river-50bb-dry",
+  "title": "50bb · Ace-high dry river",
+  "description": "A 12bb river pot on As Kd 7h 4c 2s. BB acts first with 44bb behind. Half-pot, pot, all-in, and one subsequent raise are modeled.",
+  "rangeAssumptions": "Illustrative study ranges, not inferred or certified preflop ranges. Equal starting weight per unblocked exact combination. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [51, 45, 22, 8, 3],
+  "depthBb": 50,
+  "potBb": 12,
+  "rangeClasses": [
+    ["AA", "KK", "77", "AKs", "AKo", "AQs", "AQo", "AJs", "ATs", "A5s", "KQs", "KJs", "QJs", "QTs", "JTs", "T9s"],
+    ["77", "44", "22", "AKs", "AQs", "AJs", "ATs", "A7s", "A5s", "A4s", "A3s", "KQs", "KJs", "KTs", "QJs", "JTs", "65s", "53s"]
+  ],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 2000
+}

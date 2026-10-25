@@ -2,7 +2,7 @@
 
 ## Scope
 
-`/practice/spots` serves complete, offline-solved river games, separately from
+`/practice/spots` serves complete, offline-solved river and turn-to-river games, separately from
 experimental full-hand practice. Each game pins the board, initial equal stacks,
 pot, declared exact-combo ranges, betting sizes, and complete continuation policy.
 It does **not** certify a preflop strategy or full-game Hold'em exploitability.
@@ -16,7 +16,7 @@ database is required for this slice.
 
 ## Solve and verify
 
-- Source input: `data/solved-spots/river-50bb-paired.json`.
+- Source registry: `data/solved-spots/library.json`; each ID pins its own JSON input.
 - Native module: `preflop-solver/src/blueprint/public_belief/solved_spot.rs`.
 - Reuse existing exact-card-removal river DCFR with paired alternating updates;
   alpha=1.5, beta=0, gamma=2, discard first 10% for averaging.
@@ -50,7 +50,7 @@ npx vitest run lib/solved-spots.test.ts components/practice/PracticeTable.test.t
 cargo test --release --manifest-path preflop-solver/Cargo.toml solved_spot
 ```
 
-`spots:build` builds the native binary and runs the input with a 10-minute process
+`spots:build` builds the native binary and runs each registered input with a 10-minute process
 timeout. Failed convergence exports no serving artifact. A successful artifact
 is named by its complete SHA-256 and written exclusively; existing bytes are
 never overwritten. The small activation catalog points at those immutable bytes.
@@ -116,3 +116,91 @@ database after measured artifact size/latency warrants it.
 
 This is an accepted **conditional river study**, not a release of the rejected
 50bb full-hand neural policy, an arbitrary-board solver, or a full-game GTO claim.
+
+## Expansion (2026-10-24)
+
+Five independent starting situations are now published locally. Each remains a
+conditional study using disclosed illustrative ranges, not a newly activated
+full-hand depth. All retain the unchanged ≤0.05bb **summed** best-response gate
+and ≤0.0001bb action-EV discrepancy gate.
+
+| Starting spot | Total response gain (bb/spot) | Artifact bytes |
+| --- | ---: | ---: |
+| 50bb paired river | 0.000172020 | 87,240 |
+| 50bb ace-high dry river | 0.000293954 | 80,295 |
+| 50bb three-heart river | 0.000100904 | 94,178 |
+| 100bb connected river | 0.000037370 | 101,429 |
+| 50bb turn-to-river | 0.008133890 | 2,092,523 |
+
+The original paired-river artifact and its SHA-256 are unchanged. Registry,
+catalog metadata, complete artifact bytes and native validation are checked
+together; an empty/missing catalog cannot silently clear production validation.
+
+### Complete turn game, not independent street resolves
+
+The new `solved-turn-river-spot-v1` schema adds an explicit board at each node
+and a river-card-to-node map at each non-all-in turn round closure. Existing
+`solved-river-spot-v1` bytes remain readable and reproducible. A single joint
+turn/river DCFR solve supplies **all** descendants. No river strategy is freshly
+solved, substituted or predicted during playback. Bet sizes remain half-pot,
+pot and all-in, with one subsequent raise; illegal stack-clipped sizes disappear
+according to the existing rules, not arbitrary UI filtering.
+
+The turn exercise starts on Qs 9h 6c 2d with a 32bb pot and 34bb behind at an
+initial 50bb depth. Its deliberately narrow ranges each contain 14 unblocked
+combos, producing 177 compatible pairs and 7,788 pair–river outcomes. Every pair
+has exactly 44 possible rivers. The public chance maps contain all 48 non-board
+cards; the dealt private hands remove four at playback. Turn response choices
+integrate future river chance **before** maximizing. After a river is revealed,
+the responder can condition on that public card, never on the opponent's cards.
+All-in turn calls integrate river showdown outcomes too.
+
+The bounded pilot at 128 rounds took 8.55 seconds, reached 0.064991070bb total
+response gain, and was rejected without exporting a serving artifact. The same
+configuration at 512 rounds took 25.70 seconds and reached 0.008133890bb; maximum
+EV discrepancy is 0.00000329431bb. Peak memory footprint was about 204MB (maximum
+resident set about 214MB). This is measured local performance for this narrow
+tree—not a full-game training-time estimate or evidence for arbitrary ranges.
+The production export repeats the solve and independently verifies the result.
+
+Accepted turn artifact SHA-256:
+`0f1a25bf2de1c4adcd471cfe6a4a084a17b386bbaa97542808e2c5fbafa91807`.
+
+### Playback and verification additions
+
+- Starting private cards still sample the exact joint ranges. The hidden deck
+  is shuffled uniformly; turn strategies/EVs do not read the future deck.
+- The shared hand engine draws the river, then the pinned chance edge selects
+  its precomputed policy. Missing chance edges pause rather than re-solve.
+- Opponent playback continues until the hero acts or the hand ends, including
+  BB calling a BTN turn bet and then acting first again on the river.
+- Both spot and seat changes apply on the next deal, with pending notices.
+  Feedback and complete action history identify the street of each decision.
+- Rust directly enumerates private pairs and river chance, including a separate
+  structural pass over every public edge. TypeScript independently reproduces
+  the whole-subgame response values and **every** served action EV.
+- Tests cover every river artifact, every turn/river public node and all legal
+  chance edges through the actual hand engine, chip conservation, card removal,
+  no future-card leakage, missing chance maps and consecutive opponent actions.
+- `npm test`: 321 passed, 20 optional integration cases skipped. Rust release:
+  473 library + 9 binary + 15 CLI passed; 60 fixture/resource cases ignored.
+  `npm run build` passes with fresh native verification of all five artifacts.
+- Browser acceptance completed a turn decision, bet/call, river decision and
+  all-in showdown through the shared engine. Opponent cards remained hidden
+  through feedback and were revealed only in terminal review. Pending spot
+  changes preserved the active hand; mobile feedback focus and visible keyboard
+  focus worked under reduced motion. No horizontal overflow at
+  375/768/1024/1440px in either theme, or at 812px landscape; 48px mobile action
+  controls cleared the bottom navigation. No captured console/unhandled errors
+  or resolver/neural API requests occurred. Artifact responses retained
+  immutable caching and COOP/COEP headers. Native select options were exercised
+  via a DOM change event because macOS menu selection did not respond to CDP
+  keyboard events; native option-keyboard selection is not certified by this run.
+
+The complete library is about 2.46MB uncompressed. Static immutable hosting still
+suffices; no database, neural weights, paid compute or online solve was added.
+The response bound is weighted from each spot's declared starting distribution,
+not a pointwise equilibrium guarantee for every low-reach or off-path mix.
+Next expansion should broaden the *declared range support* and starting turn
+situations before attempting a full flop tree. This checkpoint does not solve
+preflop, arbitrary flops, or prove full-game Hold'em exploitability.

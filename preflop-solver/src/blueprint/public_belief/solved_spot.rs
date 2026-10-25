@@ -1,9 +1,10 @@
-//! Small, complete river games. No neural leaves, policy priors or online solves.
+//! Small, complete river or turn/river games. No neural leaves or online solves.
 //! Verification enumerates compatible opponent hands directly, independently of
 //! RiverSolver's card-marginal terminal evaluator and vectorized BR traversal.
 use super::*;
 
 pub const SCHEMA: &str = "solved-river-spot-v1";
+pub const TURN_SCHEMA: &str = "solved-turn-river-spot-v1";
 const GAIN_LIMIT: f64 = 0.05; // SUM of both unilateral gains, not their average.
 const EV_TOLERANCE: f64 = 0.0001;
 
@@ -14,7 +15,7 @@ pub struct SpotInput {
     pub title: String,
     pub description: String,
     pub range_assumptions: String,
-    pub board: [u8; 5],
+    pub board: Vec<u8>,
     pub depth_bb: f64,
     pub pot_bb: f64,
     /// Exact hand-class labels, equal weight per unblocked combination. These
@@ -35,6 +36,10 @@ pub struct SpotAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount_to_bb: Option<f64>,
     pub next_node_id: Option<String>,
+    /// Public river chance, only on a non-all-in turn round closure. All 48
+    /// public candidates are present; the dealt private cards exclude four.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_by_river: Option<Vec<(u8, String)>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -55,6 +60,8 @@ pub struct SpotNode {
     pub street_bets_bb: [f64; 2],
     pub actions: Vec<SpotAction>,
     pub rows: Vec<SpotRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -70,6 +77,8 @@ pub struct Verification {
     pub maximum_probability_sum_error: f64,
     pub zero_sum_residual_bb: f64,
     pub accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub river_outcomes: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -84,7 +93,12 @@ pub struct SolvedSpot {
     pub verification: Verification,
 }
 
-fn config(input: &SpotInput) -> Result<RiverSolveConfig, String> {
+struct SpotConfig {
+    game: BlueprintConfig,
+    state: PublicBeliefState,
+}
+
+fn config(input: &SpotInput) -> Result<SpotConfig, String> {
     if input.id.is_empty()
         || input.id.len() > 80
         || !input
@@ -93,6 +107,7 @@ fn config(input: &SpotInput) -> Result<RiverSolveConfig, String> {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         || input.title.is_empty()
         || input.range_assumptions.is_empty()
+        || !matches!(input.board.len(), 4 | 5)
         || !input.depth_bb.is_finite()
         || input.depth_bb < 2.0
         || input.depth_bb > 1000.0
@@ -128,7 +143,22 @@ fn config(input: &SpotInput) -> Result<RiverSolveConfig, String> {
         negative_regret_exponent: 0.0,
         strategy_exponent: 2.0,
     };
-    let mut state = PublicBeliefState::uniform_river_start(input.board, 1, [input.pot_bb / 2.0; 2]);
+    let initial_ranges = std::array::from_fn(|_| uniform_range(&input.board));
+    let mut state = if input.board.len() == 5 {
+        PublicBeliefState::river_start(
+            input.board.clone().try_into().unwrap(),
+            1,
+            [input.pot_bb / 2.0; 2],
+            initial_ranges,
+        )
+    } else {
+        PublicBeliefState::turn_start(
+            input.board.clone().try_into().unwrap(),
+            1,
+            [input.pot_bb / 2.0; 2],
+            initial_ranges,
+        )
+    };
     state.public_history = vec![format!("solved-spot:{}", input.id)];
     let combos = all_combos();
     for player in 0..2 {
@@ -152,21 +182,42 @@ fn config(input: &SpotInput) -> Result<RiverSolveConfig, String> {
             })
             .collect();
     }
-    state = state.validate_and_normalize(&game)?;
-    Ok(RiverSolveConfig {
-        game,
-        state,
-        iterations: input.iterations,
-        averaging_delay: input.iterations / 10,
-    })
+    state = state.validate_street_and_normalize(&game, state.street, input.board.len())?;
+    Ok(SpotConfig { game, state })
 }
 
 fn node_id(history: &[String]) -> String {
     history.join("/")
 }
 
+fn key(state: &GameState, board: &[u8], turn_root: bool) -> Vec<String> {
+    if turn_root {
+        TurnRiverSolver::node_key(state, board.get(4).copied())
+    } else {
+        state.public_history.clone()
+    }
+}
+
+fn river_edges(state: &GameState, board: &[u8], turn_root: bool) -> Option<Vec<(u8, String)>> {
+    if state.terminal.is_some() || state.street != Street::River || board.len() != 4 {
+        return None;
+    }
+    Some(
+        (0..52u8)
+            .filter(|card| !board.contains(card))
+            .map(|card| {
+                let mut next_board = board.to_vec();
+                next_board.push(card);
+                (card, node_id(&key(state, &next_board, turn_root)))
+            })
+            .collect(),
+    )
+}
+
 fn export_nodes(
     state: GameState,
+    board: Vec<u8>,
+    turn_root: bool,
     game: &BlueprintConfig,
     ranges: [Vec<f64>; 2],
     policies: &BTreeMap<Vec<String>, &PublicBeliefStrategy>,
@@ -175,8 +226,33 @@ fn export_nodes(
     if state.terminal.is_some() {
         return Ok(());
     }
+    if let Some(edges) = river_edges(&state, &board, turn_root) {
+        for (card, _) in edges {
+            let mut next_board = board.clone();
+            next_board.push(card);
+            let mut next_ranges = ranges.clone();
+            for player in &mut next_ranges {
+                for combo in all_combos() {
+                    if combo.cards().contains(&card) {
+                        player[combo.key()] = 0.0;
+                    }
+                }
+            }
+            export_nodes(
+                state.clone(),
+                next_board,
+                turn_root,
+                game,
+                next_ranges,
+                policies,
+                output,
+            )?;
+        }
+        return Ok(());
+    }
+    let public_key = key(&state, &board, turn_root);
     let policy = policies
-        .get(&state.public_history)
+        .get(&public_key)
         .ok_or("missing frozen river policy")?;
     let legal = state.legal_actions(game);
     let mut actions = Vec::new();
@@ -221,18 +297,29 @@ fn export_nodes(
             kind: kind.into(),
             label,
             amount_to_bb,
-            next_node_id: if next.terminal.is_some() {
+            next_node_id: if next.terminal.is_some()
+                || river_edges(&next, &board, turn_root).is_some()
+            {
                 None
             } else {
-                Some(node_id(&next.public_history))
+                Some(node_id(&key(&next, &board, turn_root)))
             },
+            next_by_river: river_edges(&next, &board, turn_root),
         });
         let mut next_ranges = ranges.clone();
         for combo in 0..COMBO_COUNT {
             next_ranges[state.actor][combo] *=
                 policy.probabilities[combo * legal.len() + index] as f64;
         }
-        export_nodes(next, game, next_ranges, policies, output)?;
+        export_nodes(
+            next,
+            board.clone(),
+            turn_root,
+            game,
+            next_ranges,
+            policies,
+            output,
+        )?;
     }
     let rows = all_combos()
         .iter()
@@ -266,12 +353,13 @@ fn export_nodes(
         })
         .collect::<Result<Vec<_>, String>>()?;
     output.push(SpotNode {
-        id: node_id(&state.public_history),
+        id: node_id(&public_key),
         actor: state.actor,
         invested_bb: state.invested,
         street_bets_bb: state.street_invested,
         actions,
         rows,
+        board: turn_root.then_some(board),
     });
     Ok(())
 }
@@ -281,12 +369,53 @@ struct PairVerifier<'a> {
     nodes: BTreeMap<String, &'a SpotNode>,
     rows: BTreeMap<(String, usize), &'a SpotRow>,
     combos: Vec<crate::cards::Combo>,
-    strengths: Vec<u32>,
+    strengths: Vec<Vec<u32>>,
+    turn_root: bool,
+    root_board: Vec<u8>,
+    all_in_equities: BTreeMap<(usize, usize), f64>,
     maximum_ev_error: f64,
     visited: BTreeSet<String>,
 }
 
 impl PairVerifier<'_> {
+    fn equity(&mut self, combo: usize, other: usize, river: Option<u8>) -> f64 {
+        let comparison = |a: u32, b: u32| match a.cmp(&b) {
+            std::cmp::Ordering::Greater => 1.0,
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Equal => 0.0,
+        };
+        if !self.turn_root {
+            return comparison(self.strengths[52][combo], self.strengths[52][other]);
+        }
+        if let Some(card) = river {
+            return comparison(
+                self.strengths[card as usize][combo],
+                self.strengths[card as usize][other],
+            );
+        }
+        if let Some(value) = self.all_in_equities.get(&(combo, other)) {
+            return *value;
+        }
+        let mut value = 0.0;
+        let mut count = 0;
+        for card in 0..52u8 {
+            if self.root_board.contains(&card)
+                || self.combos[combo].cards().contains(&card)
+                || self.combos[other].cards().contains(&card)
+            {
+                continue;
+            }
+            value += comparison(
+                self.strengths[card as usize][combo],
+                self.strengths[card as usize][other],
+            );
+            count += 1;
+        }
+        assert_eq!(count, 44);
+        value /= 44.0;
+        self.all_in_equities.insert((combo, other), value);
+        value
+    }
     fn probability(row: &SpotRow, action: usize) -> f64 {
         // Match actual categorical serving: renormalize stored f32 rows in f64.
         row.probabilities[action] as f64 / row.probabilities.iter().map(|p| *p as f64).sum::<f64>()
@@ -294,6 +423,7 @@ impl PairVerifier<'_> {
     fn walk(
         &mut self,
         state: &GameState,
+        board: &[u8],
         game: &BlueprintConfig,
         own: usize,
         combo: usize,
@@ -313,20 +443,34 @@ impl PairVerifier<'_> {
                             }
                         }
                         Terminal::Showdown => {
-                            match self.strengths[combo].cmp(&self.strengths[*other]) {
-                                std::cmp::Ordering::Greater => state.invested[1 - own],
-                                std::cmp::Ordering::Less => -state.invested[own],
-                                std::cmp::Ordering::Equal => {
-                                    (state.invested[1 - own] - state.invested[own]) / 2.0
-                                }
-                            }
+                            self.equity(combo, *other, board.get(4).copied()) * state.invested[own]
                         }
                     };
                     weight * value
                 })
                 .sum());
         }
-        let id = node_id(&state.public_history);
+        if let Some(edges) = river_edges(state, board, self.turn_root) {
+            let mut total = 0.0;
+            for (card, _) in edges {
+                // Empty opponents is a separate structural pass, covering even
+                // public boards impossible for a particular private holding.
+                if !opponents.is_empty() && self.combos[combo].cards().contains(&card) {
+                    continue;
+                }
+                let masked = opponents
+                    .iter()
+                    .copied()
+                    .filter(|(other, _)| !self.combos[*other].cards().contains(&card))
+                    .map(|(other, w)| (other, w / 44.0))
+                    .collect::<Vec<_>>();
+                let mut next_board = board.to_vec();
+                next_board.push(card);
+                total += self.walk(state, &next_board, game, own, combo, &masked, best_response)?;
+            }
+            return Ok(total);
+        }
+        let id = node_id(&key(state, board, self.turn_root));
         self.visited.insert(id.clone());
         let node = *self.nodes.get(&id).ok_or("incomplete exported tree")?;
         let actions = state.legal_actions(game);
@@ -334,16 +478,18 @@ impl PairVerifier<'_> {
             || node.invested_bb != state.invested
             || node.street_bets_bb != state.street_invested
             || node.actions.len() != actions.len()
+            || node.board != self.turn_root.then_some(board.to_vec())
         {
             return Err("exported node/state mismatch".into());
         }
         let mut values = Vec::new();
         for (index, action) in actions.iter().enumerate() {
             let next = state.apply(action, game);
-            let expected = if next.terminal.is_some() {
+            let chance = river_edges(&next, board, self.turn_root);
+            let expected = if next.terminal.is_some() || chance.is_some() {
                 None
             } else {
-                Some(node_id(&next.public_history))
+                Some(node_id(&key(&next, board, self.turn_root)))
             };
             let (kind, target) = match action.kind {
                 ActionKind::Fold => ("fold", None),
@@ -371,6 +517,7 @@ impl PairVerifier<'_> {
                 || node.actions[index].next_node_id != expected
                 || node.actions[index].kind != kind
                 || node.actions[index].amount_to_bb != target
+                || node.actions[index].next_by_river != chance
             {
                 return Err("exported tree edge mismatch".into());
             }
@@ -388,7 +535,18 @@ impl PairVerifier<'_> {
             } else {
                 opponents.to_vec()
             };
-            values.push(self.walk(&next, game, own, combo, &next_opponents, best_response)?);
+            values.push(self.walk(
+                &next,
+                board,
+                game,
+                own,
+                combo,
+                &next_opponents,
+                best_response,
+            )?);
+        }
+        if opponents.is_empty() {
+            return Ok(0.0);
         }
         if state.actor != own {
             return Ok(values.iter().sum());
@@ -420,7 +578,8 @@ impl PairVerifier<'_> {
 
 pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
     let config = config(&spot.input)?;
-    if spot.schema != SCHEMA
+    let turn_root = spot.input.board.len() == 4;
+    if spot.schema != if turn_root { TURN_SCHEMA } else { SCHEMA }
         || spot.input_sha256
             != format!(
                 "{:x}",
@@ -435,14 +594,29 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
     let mut verifier = PairVerifier {
         nodes: BTreeMap::new(),
         rows: BTreeMap::new(),
-        strengths: combos
-            .iter()
-            .map(|combo| {
-                let mut cards = config.state.board.clone();
-                cards.extend(combo.cards());
-                evaluate(&cards)
+        strengths: (0..53)
+            .map(|river| {
+                if (turn_root && (river == 52 || config.state.board.contains(&(river as u8))))
+                    || (!turn_root && river != 52)
+                {
+                    return Vec::new();
+                }
+                combos
+                    .iter()
+                    .map(|combo| {
+                        let mut cards = config.state.board.clone();
+                        if turn_root {
+                            cards.push(river as u8);
+                        }
+                        cards.extend(combo.cards());
+                        evaluate(&cards)
+                    })
+                    .collect()
             })
             .collect(),
+        turn_root,
+        root_board: config.state.board.clone(),
+        all_in_equities: BTreeMap::new(),
         combos,
         maximum_ev_error: 0.0,
         visited: BTreeSet::new(),
@@ -457,7 +631,14 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
         }
         let expected_rows = config.state.ranges[node.actor]
             .iter()
-            .filter(|p| **p > 0.0)
+            .enumerate()
+            .filter(|(combo, p)| {
+                **p > 0.0
+                    && !verifier.combos[*combo]
+                        .cards()
+                        .iter()
+                        .any(|c| node.board.as_ref().unwrap_or(&spot.input.board).contains(c))
+            })
             .count();
         if node.rows.len() != expected_rows {
             return Err("incomplete combo rows".into());
@@ -465,6 +646,10 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
         for row in &node.rows {
             if row.combo >= COMBO_COUNT
                 || config.state.ranges[node.actor][row.combo] <= 0.0
+                || verifier.combos[row.combo]
+                    .cards()
+                    .iter()
+                    .any(|c| node.board.as_ref().unwrap_or(&spot.input.board).contains(c))
                 || row.probabilities.len() != node.actions.len()
                 || row
                     .probabilities
@@ -485,10 +670,27 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
         }
     }
     let mut report = Verification {
-        method: "direct-compatible-pair-enumeration-of-exported-f32-policy-v1".into(),
+        method: if turn_root {
+            "direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1"
+        } else {
+            "direct-compatible-pair-enumeration-of-exported-f32-policy-v1"
+        }
+        .into(),
         maximum_probability_sum_error: max_sum_error,
         ..Verification::default()
     };
+    if max_sum_error > 1e-6 {
+        return Err("invalid stored probability sums".into());
+    }
+    verifier.walk(
+        &config.state.game_state(),
+        &config.state.board,
+        &config.game,
+        0,
+        0,
+        &[],
+        false,
+    )?;
     let mut joint = 0.0;
     for own in 0..2 {
         for (combo, own_weight) in &spot.ranges[own] {
@@ -504,6 +706,7 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
             report.profile_value_bb[own] += own_weight
                 * verifier.walk(
                     &config.state.game_state(),
+                    &config.state.board,
                     &config.game,
                     own,
                     *combo,
@@ -513,6 +716,7 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
             report.best_response_value_bb[own] += own_weight
                 * verifier.walk(
                     &config.state.game_state(),
+                    &config.state.board,
                     &config.game,
                     own,
                     *combo,
@@ -528,6 +732,7 @@ pub fn verify(spot: &SolvedSpot) -> Result<Verification, String> {
             (report.best_response_value_bb[own] - report.profile_value_bb[own]).max(0.0);
     }
     report.total_best_response_gain_bb = report.unilateral_gain_bb.iter().sum();
+    report.river_outcomes = turn_root.then_some(report.compatible_deals * 44);
     if verifier.visited.len() != spot.nodes.len() {
         return Err("unreachable extra nodes in exported tree".into());
     }
@@ -553,9 +758,28 @@ fn sparse_ranges(ranges: &[Vec<f64>; 2]) -> [Vec<(usize, f64)>; 2] {
 
 pub fn solve(input: SpotInput) -> Result<SolvedSpot, String> {
     let config = config(&input)?;
-    let mut solver = RiverSolver::new(config.clone())?;
-    solver.train();
-    let policies = solver.policy_strategies_with_action_values();
+    let turn_root = input.board.len() == 4;
+    let policies = if turn_root {
+        let mut solver = TurnRiverSolver::new(TurnRiverSolveConfig {
+            game: config.game.clone(),
+            state: config.state.clone(),
+            iterations: input.iterations,
+            averaging_delay: input.iterations / 10,
+            river_refinement_iterations: 0,
+            regret_matching_plus: false,
+        })?;
+        solver.train();
+        solver.policy_strategies_with_action_values()
+    } else {
+        let mut solver = RiverSolver::new(RiverSolveConfig {
+            game: config.game.clone(),
+            state: config.state.clone(),
+            iterations: input.iterations,
+            averaging_delay: input.iterations / 10,
+        })?;
+        solver.train();
+        solver.policy_strategies_with_action_values()
+    };
     let map = policies
         .iter()
         .map(|p| (p.public_history.clone(), p))
@@ -563,13 +787,15 @@ pub fn solve(input: SpotInput) -> Result<SolvedSpot, String> {
     let mut nodes = Vec::new();
     export_nodes(
         config.state.game_state(),
+        config.state.board.clone(),
+        turn_root,
         &config.game,
         config.state.ranges.clone(),
         &map,
         &mut nodes,
     )?;
     let mut spot = SolvedSpot {
-        schema: SCHEMA.into(),
+        schema: if turn_root { TURN_SCHEMA } else { SCHEMA }.into(),
         input_sha256: format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(&input).map_err(|e| e.to_string())?)
@@ -593,7 +819,7 @@ mod tests {
             title: "River test".into(),
             description: "Declared test ranges".into(),
             range_assumptions: "Illustrative equal-weight combos".into(),
-            board: [43, 30, 16, 1, 3],
+            board: vec![43, 30, 16, 1, 3],
             depth_bb: 50.0,
             pot_bb: 12.0,
             range_classes: [
@@ -643,6 +869,37 @@ mod tests {
         let mut value = input();
         value.board[1] = value.board[0];
         assert!(solve(value).is_err());
+    }
+    #[test]
+    fn complete_turn_game_exports_every_river_and_detects_missing_chance() {
+        let mut value = input();
+        value.board.pop();
+        value.pot_bb = 32.0;
+        value.iterations = 20;
+        let mut spot = solve(value).unwrap();
+        assert_eq!(spot.schema, TURN_SCHEMA);
+        assert_eq!(
+            spot.verification.river_outcomes,
+            Some(spot.verification.compatible_deals * 44)
+        );
+        assert!(spot.verification.maximum_action_ev_error_bb < EV_TOLERANCE);
+        assert!(spot
+            .nodes
+            .iter()
+            .any(|n| n.board.as_ref().unwrap().len() == 4));
+        assert!(spot
+            .nodes
+            .iter()
+            .any(|n| n.board.as_ref().unwrap().len() == 5));
+        let chance = spot
+            .nodes
+            .iter_mut()
+            .flat_map(|n| &mut n.actions)
+            .find_map(|a| a.next_by_river.as_mut())
+            .unwrap();
+        assert_eq!(chance.len(), 48);
+        chance.pop();
+        assert!(verify(&spot).is_err());
     }
     #[test]
     fn verifier_checks_served_sizes_and_known_showdown_ordering() {

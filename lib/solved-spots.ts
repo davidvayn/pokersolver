@@ -13,13 +13,14 @@ export interface SpotVerification {
   maximumProbabilitySumError: number;
   zeroSumResidualBb: number;
   accepted: boolean;
+  riverOutcomes?: number;
 }
 export interface SpotCatalogEntry {
   id: string; title: string; board: number[]; depthBb: number;
   url: string; sha256: string; bytes: number; verification: SpotVerification;
 }
 export interface SolvedSpot {
-  schema: 'solved-river-spot-v1';
+  schema: 'solved-river-spot-v1' | 'solved-turn-river-spot-v1';
   inputSha256: string;
   input: {
     id: string; title: string; description: string; rangeAssumptions: string;
@@ -34,8 +35,9 @@ export interface SolvedSpot {
 }
 export interface SolvedSpotNode {
   id: string; actor: 0 | 1; investedBb: [number, number]; streetBetsBb: [number, number];
-  actions: Array<LegalAction & { nextNodeId: string | null }>;
+  actions: Array<LegalAction & { nextNodeId: string | null; nextByRiver?: Array<[number,string]> }>;
   rows: Array<{ combo: number; probabilities: number[]; evBb: number[] | null }>;
+  board?: number[];
 }
 export interface SpotSession { state: HandState; nodeId: string | null }
 export const SPOT_SEATS: readonly Seat[] = ['button-small-blind', 'big-blind'];
@@ -53,8 +55,9 @@ export function validateSolvedSpot(value: unknown): SolvedSpot {
   const spot = value as SolvedSpot;
   try {
     const v = spot.verification;
-    if (spot.schema !== 'solved-river-spot-v1' || !/^[a-f0-9]{64}$/.test(spot.inputSha256)
-      || !v.accepted || v.method !== 'direct-compatible-pair-enumeration-of-exported-f32-policy-v1'
+    const turnRoot = spot.schema === 'solved-turn-river-spot-v1';
+    if ((!turnRoot && spot.schema !== 'solved-river-spot-v1') || !/^[a-f0-9]{64}$/.test(spot.inputSha256)
+      || !v.accepted || v.method !== (turnRoot ? 'direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1' : 'direct-compatible-pair-enumeration-of-exported-f32-policy-v1')
       || !Number.isFinite(v.totalBestResponseGainBb) || v.totalBestResponseGainBb < 0 || v.totalBestResponseGainBb > .05
       || !Number.isFinite(v.maximumActionEvErrorBb) || v.maximumActionEvErrorBb < 0 || v.maximumActionEvErrorBb > .0001
       || !Number.isFinite(v.maximumProbabilitySumError) || v.maximumProbabilitySumError > 1e-6
@@ -62,9 +65,9 @@ export function validateSolvedSpot(value: unknown): SolvedSpot {
     const input = spot.input;
     if (!Number.isFinite(input.depthBb) || input.depthBb < 2 || input.depthBb > 1000
       || !Number.isFinite(input.potBb) || input.potBb < 2 || input.potBb >= input.depthBb * 2
-      || input.board.length !== 5 || new Set(input.board).size !== 5
+      || input.board.length !== (turnRoot ? 4 : 5) || new Set(input.board).size !== input.board.length
       || input.board.some((c) => !Number.isInteger(c) || c < 0 || c > 51)
-      || spot.ranges.length !== 2 || spot.nodes.length < 1 || spot.nodes.length > 1000
+      || spot.ranges.length !== 2 || spot.nodes.length < 1 || spot.nodes.length > 4096
       || !Number.isInteger(input.raiseCap) || input.raiseCap < 0 || input.raiseCap > 1
       || [input.betPotFractions,input.raisePotFractions].some((sizes) => !sizes.length || sizes.length > 2
         || sizes.some((f,i) => !Number.isFinite(f) || f <= 0 || f > 4 || (i>0 && f <= sizes[i-1])))) throw new Error();
@@ -75,8 +78,15 @@ export function validateSolvedSpot(value: unknown): SolvedSpot {
         || !near(range.reduce((sum, [,w]) => sum + w, 0), 1)) throw new Error();
     }
     const ids = new Set(spot.nodes.map((node) => node.id));
+    const nodes = new Map(spot.nodes.map((node) => [node.id,node]));
     if (ids.size !== spot.nodes.length || !ids.has(spot.rootNodeId)) throw new Error();
+    if (turnRoot && (!Number.isSafeInteger(v.riverOutcomes) || v.riverOutcomes !== v.compatibleDeals * 44
+      || JSON.stringify(nodes.get(spot.rootNodeId)?.board) !== JSON.stringify(input.board))) throw new Error();
     for (const node of spot.nodes) {
+      const board = node.board ?? input.board;
+      if (turnRoot ? (!node.board || ![4,5].includes(board.length)
+          || board.some((c,i) => !Number.isInteger(c) || c < 0 || c > 51 || (i<4 && c!==input.board[i]))
+          || new Set(board).size !== board.length) : node.board !== undefined) throw new Error();
       if (![0,1].includes(node.actor) || !node.actions.length || node.actions.length > 8
         || new Set(node.actions.map((a) => a.id)).size !== node.actions.length
         || node.investedBb.length !== 2 || node.streetBetsBb.length !== 2
@@ -87,10 +97,17 @@ export function validateSolvedSpot(value: unknown): SolvedSpot {
           || typeof action.label !== 'string' || typeof action.id !== 'string'
           || (action.nextNodeId !== null && !ids.has(action.nextNodeId))
           || (['bet','raise','all-in'].includes(action.kind) && (!Number.isFinite(action.amountToBb) || action.amountToBb! <= 0))) throw new Error();
+        if (action.nextByRiver !== undefined) {
+          if (!turnRoot || board.length !== 4 || action.nextNodeId !== null || action.nextByRiver.length !== 48
+            || new Set(action.nextByRiver.map(([card]) => card)).size !== 48
+            || action.nextByRiver.some(([card,id]) => !Number.isInteger(card) || card < 0 || card > 51 || board.includes(card)
+              || JSON.stringify(nodes.get(id)?.board) !== JSON.stringify([...board,card]))) throw new Error();
+        }
       }
       const keys = new Set(node.rows.map((r) => r.combo));
-      if (keys.size !== node.rows.length || node.rows.length !== spot.ranges[node.actor].length
-        || spot.ranges[node.actor].some(([key]) => !keys.has(key))) throw new Error();
+      const legalRange = spot.ranges[node.actor].filter(([key]) => !spotCombo(key).some((c) => board.includes(c)));
+      if (keys.size !== node.rows.length || node.rows.length !== legalRange.length
+        || legalRange.some(([key]) => !keys.has(key))) throw new Error();
       for (const row of node.rows) {
         if (row.probabilities.length !== node.actions.length
           || row.probabilities.some((p) => !Number.isFinite(p) || p < 0 || p > 1)
@@ -139,12 +156,18 @@ export function startSpot(spot: SolvedSpot, version: string, hero: Seat, random 
   const deal = deals.find((d) => (roll -= d.weight) < 0) ?? deals.at(-1)!;
   const cards = deal.keys.map(spotCombo);
   const known = [...spot.input.board, ...cards.flat()];
+  const deck = Array.from({length:52}, (_,i) => i).filter((c) => !known.includes(c));
+  // A turn strategy must never depend on this shuffled, unrevealed runout.
+  if (spot.input.board.length === 4) for (let i=deck.length-1; i>0; i--) {
+    const j = Math.floor(randomUnit(random) * (i+1));
+    [deck[i],deck[j]] = [deck[j],deck[i]];
+  }
   const committed = spot.input.potBb / 2;
   const state: HandState = {
     id: `spot-${spot.input.id}-${Date.now()}-${randomUnit(random).toString(36).slice(2)}`,
     modelVersion: version, depthBb: spot.input.depthBb, button: 'button-small-blind', hero,
-    street: 'river', holeCards: { 'button-small-blind': cards[0], 'big-blind': cards[1] },
-    board: [...spot.input.board], deck: Array.from({length:52}, (_,i) => i).filter((c) => !known.includes(c)),
+    street: spot.input.board.length === 4 ? 'turn' : 'river', holeCards: { 'button-small-blind': cards[0], 'big-blind': cards[1] },
+    board: [...spot.input.board], deck,
     potBb: spot.input.potBb, stacksBb: { 'button-small-blind': spot.input.depthBb - committed, 'big-blind': spot.input.depthBb - committed },
     streetBetsBb: { 'button-small-blind': 0, 'big-blind': 0 }, totalCommittedBb: { 'button-small-blind': committed, 'big-blind': committed },
     toAct: 'big-blind', pendingActors: ['big-blind','button-small-blind'], lastFullRaiseBb: 1, raiseReopened: true,
@@ -156,8 +179,9 @@ export function startSpot(spot: SolvedSpot, version: string, hero: Seat, random 
 export function sessionNode(spot: SolvedSpot, session: SpotSession): SolvedSpotNode {
   const { state } = session;
   const node = spot.nodes.find((n) => n.id === session.nodeId);
-  if (!node || state.terminal || state.street !== 'river' || state.depthBb !== spot.input.depthBb
-    || JSON.stringify(state.board) !== JSON.stringify(spot.input.board) || state.toAct !== SPOT_SEATS[node.actor]
+  const expectedBoard = node?.board ?? spot.input.board;
+  if (!node || state.terminal || state.street !== (expectedBoard.length === 4 ? 'turn' : 'river') || state.depthBb !== spot.input.depthBb
+    || JSON.stringify(state.board) !== JSON.stringify(expectedBoard) || state.toAct !== SPOT_SEATS[node.actor]
     || SPOT_SEATS.some((seat, p) => !near(state.totalCommittedBb[seat],node.investedBb[p])
       || !near(state.streetBetsBb[seat],node.streetBetsBb[p]) || !near(state.stacksBb[seat],state.depthBb - node.investedBb[p]))) {
     throw new Error('This hand is outside the saved solution. No fallback strategy will be used.');
@@ -179,18 +203,32 @@ export function advanceSpot(spot: SolvedSpot, session: SpotSession, actionId: st
   const node = sessionNode(spot, session);
   const action = node.actions.find((a) => a.id === actionId);
   if (!action) throw new Error('Action is not part of this saved solution');
-  const next = { state: applyAction(session.state, action), nodeId: action.nextNodeId };
+  const state = applyAction(session.state, action);
+  let nodeId = action.nextNodeId;
+  if (action.nextByRiver) {
+    if (state.terminal || state.board.length !== 5) throw new Error('Saved river transition disagrees with the hand engine');
+    const edge = action.nextByRiver.find(([card]) => card === state.board[4]);
+    if (!edge) throw new Error('The dealt river is missing from this saved solution');
+    nodeId = edge[1];
+  }
+  const next = { state, nodeId };
   if (next.state.terminal !== (next.nodeId === null)) throw new Error('Saved solution/hand engine disagree on settlement');
   if (!next.state.terminal) sessionNode(spot, next);
   return next;
 }
 
 export function playSpotOpponent(spot: SolvedSpot, session: SpotSession, random = Math.random): SpotSession {
-  if (session.state.terminal || session.state.toAct === session.state.hero) return session;
-  const actions = spotActions(spot, session);
-  let roll = randomUnit(random) * actions.reduce((s,a) => s+a.probability,0);
-  const action = actions.find((a) => (roll -= a.probability) < 0) ?? actions.at(-1)!;
-  return advanceSpot(spot, session, action.id);
+  let current = session;
+  // BB can call a BTN turn bet and then act first again on the river.
+  // Keep those two public actions in the log; never show opponent controls.
+  for (let step=0; step<16; step++) {
+    if (current.state.terminal || current.state.toAct === current.state.hero) return current;
+    const actions = spotActions(spot, current);
+    let roll = randomUnit(random) * actions.reduce((s,a) => s+a.probability,0);
+    const action = actions.find((a) => (roll -= a.probability) < 0) ?? actions.at(-1)!;
+    current = advanceSpot(spot, current, action.id);
+  }
+  throw new Error('Saved opponent line exceeds the bounded game');
 }
 
 export function spotEvLoss(actions: PolicyAction[], chosenId: string): number | null {
