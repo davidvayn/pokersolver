@@ -7,9 +7,7 @@ import { seededRandom } from '@/lib/practice-engine';
 import { advanceSpot, playSpotOpponent, sessionNode, spotActions, spotCombo, SPOT_SEATS,
   startSpot, validateSolvedSpot, type SolvedSpot, type SpotCatalogEntry, type SpotSession } from '@/lib/solved-spots';
 
-const entry = catalog.find((e) => e.board.length === 4) as SpotCatalogEntry;
-const bytes = () => readFileSync(path.join(process.cwd(),'public',entry.url));
-const spot = () => validateSolvedSpot(JSON.parse(bytes().toString()));
+const entries = catalog.filter((e) => e.board.length === 4) as SpotCatalogEntry[];
 
 /** Force a legal public river in tests only; the engine burns before drawing. */
 function withRiver(session: SpotSession, card: number): SpotSession {
@@ -18,7 +16,9 @@ function withRiver(session: SpotSession, card: number): SpotSession {
     deck: [...session.state.deck.filter((c) => c !== card && c !== burn),card,burn] } };
 }
 
-describe('complete turn-to-river saved game', () => {
+describe.each(entries)('complete turn-to-river saved game: $id', (entry) => {
+  const bytes = () => readFileSync(path.join(process.cwd(),'public',entry.url));
+  const spot = () => validateSolvedSpot(JSON.parse(bytes().toString()));
   it('rejects missing chance cards, mismatched public boards and false precision metadata', () => {
     const broken = JSON.parse(bytes().toString()) as SolvedSpot;
     broken.nodes.flatMap((n) => n.actions).find((a) => a.nextByRiver)!.nextByRiver!.pop();
@@ -36,7 +36,7 @@ describe('complete turn-to-river saved game', () => {
     function walk(session: SpotSession) {
       const s = session.state;
       expect(s.stacksBb['big-blind']+s.stacksBb['button-small-blind']+s.potBb
-        +s.streetBetsBb['big-blind']+s.streetBetsBb['button-small-blind']).toBeCloseTo(100,8);
+        +s.streetBetsBb['big-blind']+s.streetBetsBb['button-small-blind']).toBeCloseTo(2*solved.input.depthBb,8);
       expect(new Set([...s.board,...Object.values(s.holeCards).flat()]).size).toBe(s.board.length+4);
       if (s.terminal) { expect(session.nodeId).toBeNull(); return; }
       const node = sessionNode(solved,session); visited.add(node.id);
@@ -57,7 +57,7 @@ describe('complete turn-to-river saved game', () => {
     }
     expect(visited.size).toBe(solved.nodes.length);
     expect(riverCards.size).toBe(48);
-  });
+  },30_000);
 
   it('does not let the hidden runout affect turn actions or EVs', () => {
     const solved = spot(), session = startSpot(solved,entry.sha256,'big-blind',seededRandom(3));
@@ -147,5 +147,5 @@ describe('complete turn-to-river saved game', () => {
     }
     expect(maxError).toBeLessThan(.0001);
     expect((response[0]+response[1]-profile[0]-profile[1])/joint).toBeLessThan(.05);
-  });
+  },30_000);
 });

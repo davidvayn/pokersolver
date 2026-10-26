@@ -1,0 +1,14 @@
+{
+  "id": "turn-50bb-broader",
+  "title": "50bb · Turn · Broader ranges",
+  "description": "A complete turn-to-river game on Qs 9h 6c 2d with a 32bb pot and 34bb behind. Broader declared ranges add sets, top pairs, second pair and draws to the original narrow exercise. Every legal river and both streets' modeled actions are solved together.",
+  "rangeAssumptions": "An illustrative expansion of the narrow 50bb turn study: 30 BTN and 27 BB unblocked exact combinations, including made hands and draws. These are declared study ranges, not certified preflop ranges or ranges inferred from a particular prior line. Equal weight per unblocked exact combination; rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43, 30, 16, 1],
+  "depthBb": 50,
+  "potBb": 32,
+  "rangeClasses": [["QQ", "99", "66", "AQs", "KQs", "QJs", "JTs", "T8s", "A5s"], ["99", "66", "QJs", "QTs", "98s", "87s", "75s", "A5s"]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 512
+}

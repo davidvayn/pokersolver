@@ -204,3 +204,73 @@ not a pointwise equilibrium guarantee for every low-reach or off-path mix.
 Next expansion should broaden the *declared range support* and starting turn
 situations before attempting a full flop tree. This checkpoint does not solve
 preflop, arbitrary flops, or prove full-game Hold'em exploitability.
+
+## Broader turn studies (2026-10-25)
+
+Two additional complete turn-to-river games use the existing schema, loader,
+betting engine and exact checks. The original five artifacts are unchanged.
+No new approximation, larger serving limit or relaxed validation gate was used.
+
+| Study | BTN / BB combos | Compatible deals | Deal–river outcomes | 128-round response gain | 512-round response gain |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 50bb broader ranges, Qs 9h 6c 2d | 30 / 27 | 729 | 32,076 | 0.078425705bb | 0.006253188bb |
+| 100bb ace-king-high turn, As Kd 7h 4c | 33 / 26 | 750 | 33,000 | 0.083118981bb | 0.006901902bb |
+
+The 50bb exercise keeps the existing 32bb pot and 34bb behind, expanding support
+from 14 combinations per seat to include more sets, top pairs, second pair and
+draws. The 100bb exercise has a 60bb pot and 70bb behind on a different board.
+All combinations have equal declared starting weight after board removal.
+Neither study claims that these ranges arose from a solved earlier betting line.
+
+Both 128-round pilots failed the unchanged summed-response-gain gate of 0.05bb
+and exported no serving artifact. Both 512-round candidates passed, with maximum
+stored-action EV discrepancies of 0.00000267647bb and 0.00000639473bb respectively
+(gate 0.0001bb). Each contains 1,356 public decision nodes and enumerates every
+legal river. Their small response bounds are conditional on these respective
+starting games; comparing the numbers does not measure an improvement in the
+full-hand model or across different range distributions.
+
+The two independent native jobs ran concurrently. At 128 rounds they took
+8.28s / 8.19s; at 512 rounds, 27.70s / 27.51s. Maximum resident memory at 512 was
+about 225MB per process, with about 204MB peak footprint and no swaps. This is
+measured local cost for these bounded trees, not an estimate for a full flop
+tree or a full-hand solve.
+
+The artifacts are 3,651,444 and 3,550,436 bytes, both below the existing 5MB
+per-spot limit. Local gzip estimates are 468,372 and 400,300 bytes; actual wire
+size depends on hosting compression. The seven-spot library totals 9,657,545
+uncompressed bytes. Only the selected spot is downloaded. Static hosting remains
+sufficient; no database, paid compute, live solve or neural inference was added.
+
+The production builder repeats each solve and independently verifies the
+exported bytes. TypeScript's turn-game tests now enumerate **every installed
+turn study**, rather than selecting only the first one. Their chip-conservation
+assertion uses twice the configured depth, so it also covers 100bb playback.
+
+Accepted immutable artifact identities:
+
+- `turn-50bb-broader`:
+  `ca38bba6455117c9c8ef6e4850b6453a18a5329390e7d8fa818d88c02b77d787`.
+- `turn-100bb-dry`:
+  `7878b4c609dec799c79324decee0ca4d29b50116b6b9b9efd3cf7280282c7e13`.
+
+Both production exports exactly matched the independent pilot artifact bytes.
+`npm test` passed 331 tests (20 optional integrations skipped), the five native
+solved-spot release tests passed, and `npm run build` passed, including fresh
+native verification of all seven artifacts. Rust training code and the active
+full-hand policy were not changed in this expansion.
+
+Browser Use loaded both new studies, exercised feedback in the broader 50bb
+spot and completed turn → river → all-in showdown in the 100bb spot. Opponent
+cards stayed hidden through feedback and appeared only in terminal review.
+Pending changes preserved the old hand; keyboard focus was visible and mobile
+Review decision focused the feedback section. No overflow occurred at
+375/768/1024/1440px or 812px landscape in light/dark, with reduced motion checked.
+Mobile river actions were 48px high and cleared the bottom navigation by 10px.
+There were no captured console/unhandled errors or resolver/neural API requests.
+One local development load of the 100bb artifact took about 104ms from the
+instrumentation start to the ready status, with no recorded ≥50ms long tasks;
+this is a single local observation, not a production/mobile latency guarantee.
+The artifact response retained immutable caching and COOP/COEP headers. Native
+select changes used the same DOM change-event fallback described above; native
+macOS select-keyboard behavior was not newly certified.

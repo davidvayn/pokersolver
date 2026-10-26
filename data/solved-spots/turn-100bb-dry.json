@@ -1,0 +1,14 @@
+{
+  "id": "turn-100bb-dry",
+  "title": "100bb · Turn · Ace-king high",
+  "description": "A complete turn-to-river study on As Kd 7h 4c with a 60bb pot and 70bb behind at an initial 100bb depth. Every legal river, half-pot and pot bets, all-ins, and one subsequent raise are solved in one joint game. This does not activate a 100bb full-hand policy.",
+  "rangeAssumptions": "Illustrative 33-combo BTN and 26-combo BB ranges: BTN has sets, two pair, top pair and suited draws; BB has sets, top or second pair and suited draws. These are declared study ranges, not certified preflop ranges or a solved earlier betting line. Equal weight per unblocked exact combination; rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [51, 45, 22, 8],
+  "depthBb": 100,
+  "potBb": 60,
+  "rangeClasses": [["AA", "KK", "AKs", "AKo", "AQs", "AJs", "QJs", "JTs", "T9s"], ["77", "44", "AQs", "ATs", "KQs", "KJs", "QJs", "65s"]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 512
+}

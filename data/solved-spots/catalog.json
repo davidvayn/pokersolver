@@ -178,5 +178,77 @@
       "accepted": true,
       "riverOutcomes": 7788
     }
+  },
+  {
+    "id": "turn-50bb-broader",
+    "title": "50bb · Turn · Broader ranges",
+    "board": [
+      43,
+      30,
+      16,
+      1
+    ],
+    "depthBb": 50,
+    "url": "/models/solved-spots/turn-50bb-broader/ca38bba6455117c9c8ef6e4850b6453a18a5329390e7d8fa818d88c02b77d787.json",
+    "sha256": "ca38bba6455117c9c8ef6e4850b6453a18a5329390e7d8fa818d88c02b77d787",
+    "bytes": 3651444,
+    "verification": {
+      "method": "direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 729,
+      "profileValueBb": [
+        6.029737926945467,
+        -6.029737926945464
+      ],
+      "bestResponseValueBb": [
+        6.033535548304362,
+        -6.027282360638793
+      ],
+      "unilateralGainBb": [
+        0.0037976213588946095,
+        0.0024555663066712086
+      ],
+      "totalBestResponseGainBb": 0.006253187665565818,
+      "maximumActionEvErrorBb": 0.0000026764748284335838,
+      "maximumProbabilitySumError": 4.470348358154297e-8,
+      "zeroSumResidualBb": 2.6645352591003757e-15,
+      "accepted": true,
+      "riverOutcomes": 32076
+    }
+  },
+  {
+    "id": "turn-100bb-dry",
+    "title": "100bb · Turn · Ace-king high",
+    "board": [
+      51,
+      45,
+      22,
+      8
+    ],
+    "depthBb": 100,
+    "url": "/models/solved-spots/turn-100bb-dry/7878b4c609dec799c79324decee0ca4d29b50116b6b9b9efd3cf7280282c7e13.json",
+    "sha256": "7878b4c609dec799c79324decee0ca4d29b50116b6b9b9efd3cf7280282c7e13",
+    "bytes": 3550436,
+    "verification": {
+      "method": "direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 750,
+      "profileValueBb": [
+        7.036834877842284,
+        -7.0368348778422805
+      ],
+      "bestResponseValueBb": [
+        7.041541425332514,
+        -7.03463952350557
+      ],
+      "unilateralGainBb": [
+        0.0047065474902296955,
+        0.0021953543367105866
+      ],
+      "totalBestResponseGainBb": 0.006901901826940282,
+      "maximumActionEvErrorBb": 0.000006394726725034161,
+      "maximumProbabilitySumError": 4.470348358154297e-8,
+      "zeroSumResidualBb": 3.552713678800501e-15,
+      "accepted": true,
+      "riverOutcomes": 33000
+    }
   }
 ]
