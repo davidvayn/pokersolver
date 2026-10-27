@@ -1,0 +1,15 @@
+{
+  "id": "turn-50bb-weighted",
+  "title": "50bb · Turn · Weighted ranges",
+  "description": "A complete turn-to-river game on Qs 9h 6c 2d with a 32bb pot and 34bb behind. This variant uses explicit mixed hand-class inclusion weights rather than equal combination weights. Every legal river and both streets' modeled actions are solved together.",
+  "rangeAssumptions": "Illustrative weighted starting ranges with 30 BTN and 27 BB unblocked exact combinations. The class multipliers below apply per exact combination before normalization and joint card removal; they are not action frequencies. These ranges were chosen for study, not certified from a solved preflop or flop line. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43, 30, 16, 1],
+  "depthBb": 50,
+  "potBb": 32,
+  "rangeClasses": [["QQ", "99", "66", "AQs", "KQs", "QJs", "JTs", "T8s", "A5s"], ["99", "66", "QJs", "QTs", "98s", "87s", "75s", "A5s"]],
+  "rangeClassWeights": [[1.0, 0.5, 0.5, 0.75, 0.5, 0.5, 1.0, 1.0, 0.25], [0.75, 0.75, 1.0, 0.5, 0.5, 1.0, 0.5, 0.25]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 512
+}

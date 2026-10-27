@@ -309,3 +309,54 @@ No new spot is registered by this support-only checkpoint.
 
 This adds a way to represent mixed range inclusion, not certified preflop ranges,
 a solved earlier action line, or an improvement to full-hand exploitability.
+
+## First weighted study (2026-10-26, part 2)
+
+`turn-50bb-weighted` uses the same Qs 9h 6c 2d board, 32bb pot, 34bb behind,
+action abstraction and 30 / 27 exact-combo support as the broader equal-weight
+50bb study. Its explicitly disclosed multipliers change the starting
+distribution; it is a newly solved joint turn/river strategy, not the old
+policy sampled with different private-card frequencies. The chosen priors are
+illustrative and do not claim to be outputs from a certified earlier line.
+
+The 128-round pilot failed at **0.06027516539bb** summed response gain and
+exported no serving artifact. At 512 rounds it passed at **0.00508366950bb**,
+with maximum stored-action EV discrepancy **0.00000258938bb**. The unchanged
+gates are 0.05bb and 0.0001bb respectively. Maximum stored probability-sum error
+is 4.47e-8 and conservation residual 3.55e-15bb. Exact verification enumerates
+729 compatible deals and 32,076 deal–river outcomes across 1,356 decision nodes.
+
+The pilot jobs ran alongside compilation/regression work: 128 rounds took
+31.53s wall / 21.48s CPU; 512 took 43.80s wall / 40.63s CPU. These are contended
+observations, not clean throughput benchmarks or proof of a speed change.
+Peak resident memory was about 220MB and peak footprint about 204MB per job.
+
+The serving artifact is 3,546,345 bytes, below the existing 5MB limit, bringing
+the eight-spot library to 13,203,890 uncompressed bytes. Only the selected spot
+is fetched. No database, paid compute, neural inference or online solve is used.
+The root response bounds for the two different priors are not a direct
+comparison of full-game playing strength. The existing full-hand model remains
+unchanged.
+
+Accepted weighted artifact SHA-256:
+`8f0773fcd61a486fadd5d86ec0bad3cead11b74c8aaa4f42966e62461ad462cf`.
+The fresh production solve matched the pilot bytes, and all seven earlier
+sources were re-solved to their unchanged catalog entries and artifact hashes.
+Local gzip size is 414,780 bytes; wire size depends on hosting compression.
+
+Part 2 checks: `npm test` passed 342 tests (20 optional integrations skipped),
+including independent TypeScript evaluation of every saved turn-game EV and both
+information-set-consistent best responses under the weighted prior. The native
+release suite had already passed 499 tests in part 1; no Rust source changed
+afterward. `npm run build` passed with fresh native verification of all eight
+spots and unchanged active full-hand artifact checks.
+
+Browser Use completed weighted turn → river → all-in showdown, verified hidden
+opponent cards until terminal review, and displayed every declared multiplier
+with its explanation. No captured console/unhandled errors, inference API
+requests or ≥50ms long tasks occurred. A single local development cold load was
+about 103ms, not a production latency guarantee. Layout checks passed in both
+themes at 375/768/1024/1440px and 812px landscape, with reduced motion, visible
+keyboard focus, 48px mobile controls and 200% root text size at 375px. Immutable
+caching and COOP/COEP headers remained intact. Native select changes used the
+previously documented DOM event fallback.

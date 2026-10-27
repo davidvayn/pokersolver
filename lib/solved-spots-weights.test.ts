@@ -2,12 +2,25 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import catalog from '@/data/solved-spots/catalog.json';
-import { comboKey } from '@/lib/cards';
+import { comboKey, comboLabelToCombos } from '@/lib/cards';
 import { SPOT_SEATS, spotRangeSummary, startSpot, validateSolvedSpot, type SolvedSpot } from '@/lib/solved-spots';
 
 const rawSpot = () => JSON.parse(readFileSync(path.join(process.cwd(),'public',catalog[0].url),'utf8')) as SolvedSpot;
 
 describe('declared saved-spot range weights', () => {
+  it('preserves unequal per-combo inclusion in the published weighted study', () => {
+    const entry = catalog.find((item) => item.id === 'turn-50bb-weighted');
+    expect(entry).toBeDefined();
+    const spot = validateSolvedSpot(JSON.parse(readFileSync(path.join(process.cwd(),'public',entry!.url),'utf8')));
+    expect(spot.input.rangeClassWeights).toBeDefined();
+    function weight(p: 0 | 1,label: string) {
+      const keys = new Set(comboLabelToCombos(label).map((cards) => comboKey(...cards)));
+      return spot.ranges[p].find(([key]) => keys.has(key))![1];
+    }
+    expect(weight(0,'QQ')/weight(0,'KQs')).toBeCloseTo(2,12);
+    expect(weight(1,'QJs')/weight(1,'A5s')).toBeCloseTo(4,12);
+    expect(spotRangeSummary(spot.input,0)).toContain('AQs ×0.75');
+  });
   it('labels inclusion multipliers without presenting them as action probabilities', () => {
     const { input } = rawSpot();
     expect(spotRangeSummary(input,0)).toBe(input.rangeClasses[0].join(', '));

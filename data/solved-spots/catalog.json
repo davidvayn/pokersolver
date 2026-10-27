@@ -250,5 +250,41 @@
       "accepted": true,
       "riverOutcomes": 33000
     }
+  },
+  {
+    "id": "turn-50bb-weighted",
+    "title": "50bb · Turn · Weighted ranges",
+    "board": [
+      43,
+      30,
+      16,
+      1
+    ],
+    "depthBb": 50,
+    "url": "/models/solved-spots/turn-50bb-weighted/8f0773fcd61a486fadd5d86ec0bad3cead11b74c8aaa4f42966e62461ad462cf.json",
+    "sha256": "8f0773fcd61a486fadd5d86ec0bad3cead11b74c8aaa4f42966e62461ad462cf",
+    "bytes": 3546345,
+    "verification": {
+      "method": "direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 729,
+      "profileValueBb": [
+        5.044347683987052,
+        -5.0443476839870485
+      ],
+      "bestResponseValueBb": [
+        5.04753452050177,
+        -5.042450851005698
+      ],
+      "unilateralGainBb": [
+        0.003186836514718294,
+        0.0018968329813509044
+      ],
+      "totalBestResponseGainBb": 0.005083669496069199,
+      "maximumActionEvErrorBb": 0.0000025893798110132593,
+      "maximumProbabilitySumError": 4.470348358154297e-8,
+      "zeroSumResidualBb": 3.552713678800501e-15,
+      "accepted": true,
+      "riverOutcomes": 32076
+    }
   }
 ]
