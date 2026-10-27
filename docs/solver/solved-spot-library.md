@@ -274,3 +274,38 @@ this is a single local observation, not a production/mobile latency guarantee.
 The artifact response retained immutable caching and COOP/COEP headers. Native
 select changes used the same DOM change-event fallback described above; native
 macOS select-keyboard behavior was not newly certified.
+
+## Weighted starting ranges (2026-10-26, part 1)
+
+`rangeClassWeights` is an optional pair of arrays aligned with `rangeClasses`.
+Each value is a finite per-combination inclusion weight in `(0, 1]`. Zero-weight
+classes must be omitted instead. The weight applies to every exact combination
+of that class; public blockers are removed before normalizing each seat's range.
+Private deals then sample the **joint product conditioned on compatibility**,
+not two independent draws from the separately normalized priors. Card removal
+can therefore change each seat's marginal distribution after both are dealt.
+
+Omitting weights keeps the legacy all-one behavior. Rust omits the absent field
+when serializing, preserving prior input hashes and immutable artifact bytes.
+Explicit all-one weights produce the same ranges, policies and action EVs, but
+are a new declared input identity. Different weights require a new solve and
+fresh exact verification; old policies or EVs must never be reweighted at serve
+time. Native verification checks input identity and the exact reconstructed
+prior, and the browser checks the combo support and normalized weights against
+the declared classes rather than merely accepting any array that sums to one.
+Explicit null, invalid array shapes/values and weights that disappear through
+numeric underflow fail closed instead of silently becoming equal or absent.
+The accuracy panel renders declared weights as `hand ×multiplier`, with an
+explanation distinguishing inclusion from action frequency; legacy labels stay
+unchanged when the optional field is absent.
+
+Part 1 checks: 336 TypeScript tests passed (20 optional integrations skipped);
+475 native library + 9 binary + 15 CLI release tests passed (60 fixture/resource
+cases ignored). Production build and fresh native verification of all seven
+installed artifacts passed. Browser Use checked legacy decision → feedback →
+showdown with no captured errors, visible keyboard focus and no overflow at
+375/768/1024/1440px in both themes, plus light landscape and reduced motion.
+No new spot is registered by this support-only checkpoint.
+
+This adds a way to represent mixed range inclusion, not certified preflop ranges,
+a solved earlier action line, or an improvement to full-hand exploitability.

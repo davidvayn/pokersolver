@@ -1,4 +1,4 @@
-import { comboKey, type Combo } from '@/lib/cards';
+import { comboKey, comboLabelToCombos, handClassLabel, type Combo } from '@/lib/cards';
 import { applyAction } from '@/lib/practice-engine';
 import type { HandState, LegalAction, PolicyAction, Seat } from '@/lib/practice-types';
 
@@ -26,6 +26,7 @@ export interface SolvedSpot {
     id: string; title: string; description: string; rangeAssumptions: string;
     board: number[]; depthBb: number; potBb: number;
     rangeClasses: [string[], string[]]; betPotFractions: number[];
+    rangeClassWeights?: [number[], number[]];
     raisePotFractions: number[]; raiseCap: number; iterations: number;
   };
   rootNodeId: string;
@@ -49,6 +50,37 @@ export function spotCombo(key: number): Combo {
 }
 const compatible = (first: Combo, second: Combo) => !first.some((card) => second.includes(card));
 const near = (a: number, b: number) => Number.isFinite(a) && Math.abs(a - b) < 1e-6;
+const handClasses = new Set(Array.from({length:169},(_,i) => handClassLabel(Math.floor(i/13),i%13)));
+
+/** Inclusion multipliers are not action frequencies or normalized range shares. */
+export function spotRangeSummary(input: SolvedSpot['input'], player: 0 | 1): string {
+  const weights = input.rangeClassWeights?.[player];
+  return input.rangeClasses[player].map((label,i) => weights ? `${label} ×${weights[i]}` : label).join(', ');
+}
+
+/** Declared per-combo inclusion weights, normalized after public card removal. */
+function declaredRanges(input: SolvedSpot['input']): Map<number,number>[] {
+  const weights = input.rangeClassWeights;
+  if (!Array.isArray(input.rangeClasses) || input.rangeClasses.length !== 2
+    || (weights !== undefined && (!Array.isArray(weights) || weights.length !== 2))) throw new Error();
+  return input.rangeClasses.map((labels,p) => {
+    if (!Array.isArray(labels) || !labels.length || new Set(labels).size !== labels.length
+      || labels.some((label) => !handClasses.has(label))
+      || (weights !== undefined && (!Array.isArray(weights[p]) || weights[p].length !== labels.length
+        || weights[p].some((w) => !Number.isFinite(w) || w <= 0 || w > 1)))) throw new Error();
+    const range = new Map<number,number>();
+    labels.forEach((label,i) => {
+      for (const combo of comboLabelToCombos(label)) if (!combo.some((c) => input.board.includes(c))) {
+        range.set(comboKey(...combo),weights?.[p][i] ?? 1);
+      }
+    });
+    const sum = [...range.values()].reduce((s,w) => s+w,0);
+    if (!Number.isFinite(sum) || sum <= 0) throw new Error();
+    const normalized = new Map([...range].map(([key,w]) => [key,w/sum]));
+    if ([...normalized.values()].some((w) => w <= 0)) throw new Error();
+    return normalized;
+  });
+}
 
 /** Structural checks in addition to the content hash and offline exact checker. */
 export function validateSolvedSpot(value: unknown): SolvedSpot {
@@ -71,10 +103,13 @@ export function validateSolvedSpot(value: unknown): SolvedSpot {
       || !Number.isInteger(input.raiseCap) || input.raiseCap < 0 || input.raiseCap > 1
       || [input.betPotFractions,input.raisePotFractions].some((sizes) => !sizes.length || sizes.length > 2
         || sizes.some((f,i) => !Number.isFinite(f) || f <= 0 || f > 4 || (i>0 && f <= sizes[i-1])))) throw new Error();
-    for (const range of spot.ranges) {
+    const declared = declaredRanges(input);
+    for (const [p,range] of spot.ranges.entries()) {
       if (!range.length || new Set(range.map(([key]) => key)).size !== range.length
+        || range.length !== declared[p].size
         || range.some(([key, weight]) => !Number.isFinite(weight) || weight <= 0 || weight > 1
-          || spotCombo(key).some((card) => input.board.includes(card)))
+          || spotCombo(key).some((card) => input.board.includes(card))
+          || !declared[p].has(key) || Math.abs(weight-declared[p].get(key)!) > 1e-12)
         || !near(range.reduce((sum, [,w]) => sum + w, 0), 1)) throw new Error();
     }
     const ids = new Set(spot.nodes.map((node) => node.id));

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PracticeTable, type TableStatus } from '@/components/practice/PracticeTable';
-import { advanceSpot, loadSolvedSpot, playSpotOpponent, spotActions, spotEvLoss, startSpot,
+import { advanceSpot, loadSolvedSpot, playSpotOpponent, spotActions, spotEvLoss, spotRangeSummary, startSpot,
   type SolvedSpot, type SpotCatalogEntry, type SpotSession } from '@/lib/solved-spots';
 import type { LegalAction, PolicyAction, PracticeStreet, Seat } from '@/lib/practice-types';
 
@@ -147,8 +147,9 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
             <details className="mt-4 text-sm">
               <summary className="cursor-pointer py-2 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Ranges, accuracy and version</summary>
               <p className="mt-2 leading-6 text-muted">{spot.input.rangeAssumptions}</p>
-              <p className="mt-3 break-words"><strong>BTN:</strong> {spot.input.rangeClasses[0].join(', ')}</p>
-              <p className="mt-2 break-words"><strong>BB:</strong> {spot.input.rangeClasses[1].join(', ')}</p>
+              <p className="mt-3 break-words"><strong>BTN:</strong> {spotRangeSummary(spot.input,0)}</p>
+              <p className="mt-2 break-words"><strong>BB:</strong> {spotRangeSummary(spot.input,1)}</p>
+              {spot.input.rangeClassWeights && <p className="mt-3 leading-6 text-muted">× values are starting-range inclusion multipliers per exact combination, not action probabilities. Public blockers are removed before normalizing; private cards are dealt jointly with card removal.</p>}
               <p className="mt-3 leading-6 text-muted">Bets: {spot.input.betPotFractions.map((f) => `${f*100}% pot`).join(', ')}, plus all-in. Raises: {spot.input.raisePotFractions.map((f) => `${f*100}% of the pot after calling`).join(', ')}, plus all-in. Raise cap: {spot.input.raiseCap} after the initial bet.</p>
               <p className="mt-3 leading-6 text-muted">Exact pair{spot.input.board.length === 4 ? ' and river' : ''} enumeration checks every saved action EV to 0.0001bb and sums both players’ best-response gains. This is a conditional {spot.input.board.length === 4 ? 'turn-to-river' : 'river'} solution, not a full-hand exploitability certificate. No online resolver or neural values are used.</p>
               <p className="mt-3 break-all font-mono text-xs">Version SHA-256: {entry?.sha256}</p>

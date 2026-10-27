@@ -18,13 +18,29 @@ pub struct SpotInput {
     pub board: Vec<u8>,
     pub depth_bb: f64,
     pub pot_bb: f64,
-    /// Exact hand-class labels, equal weight per unblocked combination. These
-    /// are declared study ranges, NOT certified full-game preflop ranges.
+    /// Exact hand-class labels. These are declared study ranges, NOT certified
+    /// full-game preflop ranges. Unspecified class weights default to one.
     pub range_classes: [Vec<String>; 2],
+    /// Inclusion weight per combo, in the same order as range_classes. Omit
+    /// entirely for legacy equal weights; omission preserves old artifact bytes.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_class_weights"
+    )]
+    pub range_class_weights: Option<[Vec<f64>; 2]>,
     pub bet_pot_fractions: Vec<f64>,
     pub raise_pot_fractions: Vec<f64>,
     pub raise_cap: u8,
     pub iterations: u64,
+}
+
+fn deserialize_class_weights<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<[Vec<f64>; 2]>, D::Error> {
+    // Missing means legacy defaults; an explicitly null/malformed prior is not
+    // permission to silently substitute equal weights.
+    <[Vec<f64>; 2]>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -171,18 +187,41 @@ fn config(input: &SpotInput) -> Result<SpotConfig, String> {
         {
             return Err("ranges require unique exact hand-class labels".into());
         }
+        let weights = input.range_class_weights.as_ref().map(|w| &w[player]);
+        if weights.is_some_and(|w| {
+            w.len() != input.range_classes[player].len()
+                || w.iter().any(|x| !x.is_finite() || *x <= 0.0 || *x > 1.0)
+        }) {
+            return Err("class weights must match the labels and be finite in (0, 1]".into());
+        }
+        let weighted_labels: BTreeMap<_, _> = input.range_classes[player]
+            .iter()
+            .enumerate()
+            .map(|(i, label)| (label.clone(), weights.map_or(1.0, |w| w[i])))
+            .collect();
         state.ranges[player] = combos
             .iter()
-            .map(|combo| {
-                if labels.contains(&combo.label()) {
-                    1.0
-                } else {
-                    0.0
-                }
-            })
+            .map(|combo| weighted_labels.get(&combo.label()).copied().unwrap_or(0.0))
             .collect();
     }
+    let support: [Vec<usize>; 2] = std::array::from_fn(|p| {
+        combos
+            .iter()
+            .filter(|combo| {
+                state.ranges[p][combo.key()] > 0.0
+                    && !combo.cards().iter().any(|c| input.board.contains(c))
+            })
+            .map(|combo| combo.key())
+            .collect()
+    });
     state = state.validate_street_and_normalize(&game, state.street, input.board.len())?;
+    if support
+        .iter()
+        .enumerate()
+        .any(|(p, keys)| keys.iter().any(|key| state.ranges[p][*key] <= 0.0))
+    {
+        return Err("class weights underflow after normalization".into());
+    }
     Ok(SpotConfig { game, state })
 }
 
@@ -826,6 +865,7 @@ mod tests {
                 vec!["QQ".into(), "AKs".into()],
                 vec!["99".into(), "JTs".into()],
             ],
+            range_class_weights: None,
             bet_pot_fractions: vec![0.5, 1.0],
             raise_pot_fractions: vec![1.0],
             raise_cap: 1,
@@ -869,6 +909,63 @@ mod tests {
         let mut value = input();
         value.board[1] = value.board[0];
         assert!(solve(value).is_err());
+    }
+    #[test]
+    fn weighted_ranges_are_normalized_and_verified_without_changing_legacy_defaults() {
+        let original = solve(input()).unwrap();
+        assert!(serde_json::to_value(&original.input)
+            .unwrap()
+            .get("rangeClassWeights")
+            .is_none());
+        let mut equal = input();
+        equal.range_class_weights = Some([vec![1.0, 1.0], vec![1.0, 1.0]]);
+        let equal = solve(equal).unwrap();
+        assert_eq!(original.ranges, equal.ranges);
+        assert_eq!(
+            serde_json::to_vec(&original.nodes).unwrap(),
+            serde_json::to_vec(&equal.nodes).unwrap()
+        );
+
+        let mut weighted = input();
+        weighted.range_class_weights = Some([vec![1.0, 0.25], vec![0.5, 1.0]]);
+        let mut spot = solve(weighted).unwrap();
+        for (combo, weight) in &spot.ranges[0] {
+            let expected = if all_combos()[*combo].label() == "QQ" {
+                0.25
+            } else {
+                0.0625
+            };
+            assert!((weight - expected).abs() < 1e-12);
+        }
+        assert!(spot.verification.maximum_action_ev_error_bb < EV_TOLERANCE);
+        assert!(spot.verification.zero_sum_residual_bb < 1e-5);
+        assert_eq!(
+            serde_json::to_vec(&spot).unwrap(),
+            serde_json::to_vec(&solve(spot.input.clone()).unwrap()).unwrap()
+        );
+        // A new prior cannot borrow an earlier artifact's frozen rows/identity.
+        spot.input.range_class_weights.as_mut().unwrap()[0][0] = 0.5;
+        assert!(verify(&spot).is_err());
+    }
+    #[test]
+    fn invalid_class_weights_fail_closed() {
+        let mut null = serde_json::to_value(input()).unwrap();
+        null["rangeClassWeights"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<SpotInput>(null).is_err());
+        for bad in [
+            vec![],
+            vec![1.0],
+            vec![1.0, 0.0],
+            vec![1.0, -0.1],
+            vec![1.0, 1.1],
+            vec![1.0, f64::NAN],
+            vec![1.0, f64::INFINITY],
+            vec![1.0, f64::from_bits(1)],
+        ] {
+            let mut value = input();
+            value.range_class_weights = Some([bad, vec![1.0, 1.0]]);
+            assert!(solve(value).is_err());
+        }
     }
     #[test]
     fn complete_turn_game_exports_every_river_and_detects_missing_chance() {
