@@ -69,7 +69,6 @@ export function ComboInspector({
     [label, row, board]
   );
   const [suitFilter, setSuitFilter] = useState<number | 'all'>('all');
-  const [sortBy, setSortBy] = useState<'default' | 'ev' | 'weight'>('default');
   const filteredCombos = useMemo(() => {
     let list = breakdown.combos;
     if (!deselected && suitFilter !== 'all') {
@@ -77,14 +76,8 @@ export function ComboInspector({
         (c) => c.card0Suit === suitFilter || c.card1Suit === suitFilter
       );
     }
-    if (!deselected && sortBy !== 'default') {
-      list = [...list].sort((a, b) => {
-        if (a.isBlocked !== b.isBlocked) return a.isBlocked ? 1 : -1;
-        return sortBy === 'ev' ? (b.ev ?? -Infinity) - (a.ev ?? -Infinity) : b.weight - a.weight;
-      });
-    }
     return list;
-  }, [breakdown.combos, suitFilter, sortBy, deselected]);
+  }, [breakdown.combos, suitFilter, deselected]);
 
   return (
     <aside
@@ -127,17 +120,6 @@ export function ComboInspector({
             </button>
           ))}
         </div>
-        <select
-          aria-label="Sort combinations"
-          value={deselected ? 'default' : sortBy}
-          disabled={deselected}
-          onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
-          className="min-h-11 max-w-full bg-transparent text-xs text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          <option value="default">By suit</option>
-          <option value="ev">Highest EV</option>
-          <option value="weight">Weight</option>
-        </select>
       </div>
       <div
         className={`grid gap-1 ${breakdown.category === 'suited' ? 'grid-cols-2 lg:grid-cols-4' : breakdown.category === 'offsuit' ? 'grid-cols-3 xl:grid-cols-4' : 'grid-cols-3'}`}

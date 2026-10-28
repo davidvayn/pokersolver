@@ -8,6 +8,7 @@ import {
 } from '@/components/hand-matrix/HandMatrix';
 import { ComboInspector } from '@/components/solver/ComboInspector';
 import { handClassLabel, type Card } from '@/lib/cards';
+import { compactStrategy } from '@/lib/solver/strategy-display';
 import type {
   ActionStrategy,
   ClassRow,
@@ -138,7 +139,7 @@ function HandMixReadout({
 }
 
 export function StrategyView({
-  node,
+  node: sourceNode,
   board,
   framed = true,
   compact = false,
@@ -146,6 +147,8 @@ export function StrategyView({
   settings,
   pending = false,
   completed = false,
+  compactActions = false,
+  fitViewport = false,
 }: {
   node: NodeStrategy;
   board?: Card[];
@@ -155,14 +158,24 @@ export function StrategyView({
   settings?: ReactNode;
   pending?: boolean;
   completed?: boolean;
+  compactActions?: boolean;
+  fitViewport?: boolean;
 }) {
+  const node = useMemo(
+    () => (compactActions ? compactStrategy(sourceNode) : sourceNode),
+    [sourceNode, compactActions]
+  );
+  const matrixFrame = useRef<HTMLDivElement>(null);
+  const strategyLayout = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<{
     completed: boolean;
     hand: string | null;
     preview: string | null;
   }>({ completed, hand: null, preview: null });
-  const selectedHand = selection.completed === completed ? selection.hand : null;
-  const previewHand = selection.completed === completed ? selection.preview : null;
+  const selectedHand =
+    selection.completed === completed ? selection.hand : null;
+  const previewHand =
+    selection.completed === completed ? selection.preview : null;
   const lastInspectedHand = useRef<string | undefined>(undefined);
   const [showMetrics, setShowMetrics] = useState(false);
   const colors = useMemo(() => colorForActions(node.actions), [node.actions]);
@@ -184,10 +197,16 @@ export function StrategyView({
     ? undefined
     : (selectedHand ?? previewHand ?? (completed ? undefined : firstHand));
   const rememberedHand = lastInspectedHand.current;
-  const inspectedHand = activeHand ?? (!pending && completed
-    ? rememberedHand && rowsByClass.has(rememberedHand) ? rememberedHand : firstHand
-    : undefined);
+  const inspectedHand =
+    activeHand ??
+    (!pending && completed
+      ? rememberedHand && rowsByClass.has(rememberedHand)
+        ? rememberedHand
+        : firstHand
+      : undefined);
   const selectedRow = activeHand ? rowsByClass.get(activeHand) : undefined;
+  const hiddenSizes =
+    compactActions && sourceNode.actions.length > node.actions.length;
   const metricsActive = showMetrics && (!completed || Boolean(activeHand));
   const annotation = useMemo(() => {
     const evByClass: Record<string, number> = {};
@@ -199,11 +218,88 @@ export function StrategyView({
       evByClass[label] !== undefined ? evByClass[label].toFixed(1) : undefined;
   }, [node.rows]);
 
+  const metricsToggle = (
+    <button
+      type="button"
+      disabled={pending || (completed && !activeHand)}
+      aria-pressed={metricsActive}
+      onClick={() => setShowMetrics((shown) => !shown)}
+      className="min-h-9 shrink-0 text-xs text-muted underline-offset-4 hover:text-fg aria-pressed:text-accent aria-pressed:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      EV / equity
+    </button>
+  );
+
+  useEffect(() => {
+    if (!fitViewport) return;
+    const frame = matrixFrame.current;
+    const layout = strategyLayout.current;
+    if (!frame || !layout) return;
+    const footer = frame.nextElementSibling;
+    function measure() {
+      if (!frame || !layout) return;
+      if (window.innerWidth < 768) {
+        layout.style.removeProperty('--solver-matrix-size');
+        layout.style.removeProperty('--solver-review-height');
+        return;
+      }
+      const footerSpace = footer
+        ? footer.getBoundingClientRect().height +
+          parseFloat(getComputedStyle(footer).marginTop)
+        : 0;
+      const room = Math.max(
+        240,
+        Math.floor(
+          window.innerHeight -
+            frame.getBoundingClientRect().top -
+            window.scrollY -
+            footerSpace -
+            40
+        )
+      );
+      layout.style.setProperty('--solver-matrix-size', `${room}px`);
+      layout.style.setProperty(
+        '--solver-review-height',
+        `${Math.max(240, window.innerHeight - layout.getBoundingClientRect().top - window.scrollY - 40)}px`
+      );
+    }
+    let animation = 0;
+    function fit() {
+      cancelAnimationFrame(animation);
+      animation = requestAnimationFrame(measure);
+    }
+    const observer = new ResizeObserver(fit);
+    const toolbar = layout
+      .closest('[data-solver-workspace]')
+      ?.querySelector('.solver-spot-toolbar');
+    const heading = layout.querySelector('[data-solver-strategy-heading]');
+    if (toolbar) observer.observe(toolbar);
+    if (heading) observer.observe(heading);
+    if (footer) observer.observe(footer);
+    fit();
+    window.addEventListener('resize', fit);
+    return () => {
+      cancelAnimationFrame(animation);
+      observer.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, [fitViewport, pending, completed, node.actions]);
+
   useEffect(() => {
     setSelection((current) => ({
       completed,
-      hand: current.completed === completed && current.hand && rowsByClass.has(current.hand) ? current.hand : null,
-      preview: current.completed === completed && current.preview && rowsByClass.has(current.preview) ? current.preview : null,
+      hand:
+        current.completed === completed &&
+        current.hand &&
+        rowsByClass.has(current.hand)
+          ? current.hand
+          : null,
+      preview:
+        current.completed === completed &&
+        current.preview &&
+        rowsByClass.has(current.preview)
+          ? current.preview
+          : null,
     }));
   }, [rowsByClass, completed]);
 
@@ -231,7 +327,7 @@ export function StrategyView({
           : 'min-h-0'
       }
     >
-      <div className="solver-strategy-layout">
+      <div ref={strategyLayout} className="solver-strategy-layout">
         {settings && (
           <div className="solver-strategy-settings min-w-0">{settings}</div>
         )}
@@ -240,17 +336,11 @@ export function StrategyView({
             data-solver-strategy-heading
             className={`${compact ? 'mb-2' : 'mb-3'} flex items-center justify-between gap-3`}
           >
-            <div className="shrink-0 text-xs text-muted">{completed ? `Last decision · ${node.title}` : node.title}</div>
+            <div className="shrink-0 text-xs text-muted">
+              {completed ? `Last decision · ${node.title}` : node.title}
+            </div>
             <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs">
-              <button
-                type="button"
-                disabled={pending || (completed && !activeHand)}
-                aria-pressed={metricsActive}
-                onClick={() => setShowMetrics((shown) => !shown)}
-                className="min-h-9 text-muted underline-offset-4 hover:text-fg aria-pressed:text-accent aria-pressed:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                EV / equity
-              </button>
+              {!compactActions && metricsToggle}
               {!pending &&
                 node.actions.map((a) => (
                   <span key={a} className="flex items-center gap-1.5">
@@ -263,44 +353,75 @@ export function StrategyView({
                 ))}
             </div>
           </div>
-          <HandMatrix
-            mode="display"
-            strategy={pending ? {} : strategy}
-            annotation={!pending && metricsActive ? annotation : undefined}
-            selectedLabel={activeHand}
-            squareCells
-            cellDescription={
-              pending
-                ? undefined
-                : (label) => {
-                    const row = rowsByClass.get(label);
-                    return row ? handDescription(row) : 'Not in solved range';
-                  }
-            }
-            onCellPreview={pending ? undefined : (label) => setSelection((current) => ({
-              completed,
-              hand: current.completed === completed ? current.hand : null,
-              preview: label,
-            }))}
-            onCellClick={
-              pending
-                ? undefined
-                : (label) => {
-                    setSelection((current) => ({
-                      completed, preview: label,
-                      hand: current.completed === completed && current.hand === label ? null : label,
-                    }));
-                  }
-            }
-          />
+          <div ref={matrixFrame} data-solver-matrix-frame>
+            <HandMatrix
+              mode="display"
+              strategy={pending ? {} : strategy}
+              annotation={!pending && metricsActive ? annotation : undefined}
+              selectedLabel={activeHand}
+              selectionOutline={!compactActions}
+              squareCells
+              cellDescription={
+                pending
+                  ? undefined
+                  : (label) => {
+                      const row = rowsByClass.get(label);
+                      return row ? handDescription(row) : 'Not in solved range';
+                    }
+              }
+              onCellPreview={
+                pending
+                  ? undefined
+                  : (label) =>
+                      setSelection((current) => ({
+                        completed,
+                        hand:
+                          current.completed === completed ? current.hand : null,
+                        preview: label,
+                      }))
+              }
+              onCellClick={
+                pending
+                  ? undefined
+                  : (label) => {
+                      setSelection((current) => ({
+                        completed,
+                        preview: label,
+                        hand:
+                          current.completed === completed &&
+                          current.hand === label
+                            ? null
+                            : label,
+                      }));
+                    }
+              }
+            />
+          </div>
           <div className="mt-3">
-            {!pending && (
+            {!pending && !compactActions && (
               <HandMixReadout
                 label={selectedRow?.class ?? activeHand ?? null}
                 actions={selectedRow?.actions ?? []}
                 colors={colors}
                 policyEv={selectedRow?.ev}
               />
+            )}
+            {compactActions && (
+              <div className="flex items-center justify-between gap-2">
+                {metricsToggle}
+                {hiddenSizes && !pending && (
+                  <p
+                    className="inline-flex items-center gap-1.5 text-xs text-muted"
+                    title="Original policy frequencies. Hatched space represents the smaller trained sizes hidden from this four-action view."
+                  >
+                    <span
+                      className="solver-hidden-size-swatch h-3 w-3 shrink-0"
+                      aria-hidden="true"
+                    />
+                    Other sizes hidden
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -316,10 +437,18 @@ export function StrategyView({
             className="solver-strategy-combos"
           />
         ) : completed && !pending ? (
-          <aside data-solver-combo-inspector data-deselected="true"
-            aria-label="Combination details" className="solver-strategy-combos min-h-64 text-sm text-muted">
-            <p className="border-b border-border pb-2 font-semibold">Combination details</p>
-            <p className="py-4 text-xs">No supported combo values for this last decision.</p>
+          <aside
+            data-solver-combo-inspector
+            data-deselected="true"
+            aria-label="Combination details"
+            className="solver-strategy-combos min-h-64 text-sm text-muted"
+          >
+            <p className="border-b border-border pb-2 font-semibold">
+              Combination details
+            </p>
+            <p className="py-4 text-xs">
+              No supported combo values for this last decision.
+            </p>
           </aside>
         ) : null}
       </div>

@@ -11,7 +11,7 @@ import { practiceGameProfile } from '@/lib/practice-game-profiles';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const TREND_DAYS = 21;
-const ACTIVITY_DAYS = 84;
+const ACTIVITY_DAYS = 365;
 const STRONG_GRADES = new Set<PracticeGrade>(['perfect', 'excellent', 'good']);
 const GRADE_ORDER: PracticeGrade[] = [
   'perfect',

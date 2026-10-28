@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { CARD_SUIT_GLYPHS, PokerCard } from '@/components/cards/PokerCard';
 import { Card, RANKS, makeCard, cardToStr } from '@/lib/cards';
 
@@ -20,6 +21,7 @@ export function PlayingCard({
   return (
     <button
       type="button"
+      aria-label={onClick ? `Edit ${cardToStr(card)}` : undefined}
       onClick={onClick}
       disabled={!onClick}
       className={
@@ -44,12 +46,9 @@ export function CardGrid({
   onPick: (c: Card) => void;
 }) {
   return (
-    <div className="flex w-[412px] max-w-full flex-col gap-1">
+    <div className="card-picker-grid">
       {[3, 2, 1, 0].map((suit) => (
-        <div
-          key={suit}
-          className="grid grid-cols-[repeat(13,minmax(0,1fr))] gap-1"
-        >
+        <div key={suit} className="card-picker-suit">
           {Array.from({ length: 13 }).map((_, i) => {
             const rank = 12 - i;
             const card = makeCard(rank, suit);
@@ -57,11 +56,12 @@ export function CardGrid({
             return (
               <button
                 key={card}
+                type="button"
                 disabled={isUsed}
                 onClick={() => onPick(card)}
                 aria-label={cardToStr(card)}
                 className={
-                  'flex h-8 min-w-0 items-center justify-center rounded border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+                  'card-picker-option flex min-w-0 items-center justify-center rounded border font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
                   (isUsed
                     ? 'cursor-not-allowed border-border bg-surface-2 text-muted opacity-40'
                     : 'border-border bg-white text-gray-900 hover:ring-2 hover:ring-accent')
@@ -117,7 +117,12 @@ export function CardSlots({
   const [open, setOpen] = useState(false);
   const [slot, setSlot] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const slotsRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
+  const [position, setPosition] = useState<CSSProperties>({
+    left: 16,
+    top: 16,
+  });
 
   function openPicker(i: number, el: HTMLButtonElement) {
     setSlot(i);
@@ -127,21 +132,66 @@ export function CardSlots({
 
   function closePicker() {
     setOpen(false);
-    openerRef.current?.focus();
+    requestAnimationFrame(() => {
+      slotsRef.current
+        ?.querySelector<HTMLButtonElement>(
+          `[data-card-slot="${slot}"] > button`
+        )
+        ?.focus({ preventScroll: true });
+    });
   }
 
   // While open: Escape closes and focus moves into the picker.
   useEffect(() => {
     if (!open) return;
+    function place() {
+      const box = openerRef.current?.getBoundingClientRect();
+      const popup = popoverRef.current;
+      if (!box || !popup) return;
+      const width = Math.min(680, window.innerWidth - 32);
+      setPosition({
+        width,
+        left: Math.max(16, Math.min(box.left, window.innerWidth - width - 16)),
+        top: Math.max(
+          16,
+          Math.min(box.bottom + 8, window.innerHeight - popup.offsetHeight - 16)
+        ),
+      });
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         closePicker();
       }
+      if (e.key === 'Tab') {
+        const buttons = Array.from(
+          popoverRef.current?.querySelectorAll<HTMLButtonElement>(
+            'button:not(:disabled)'
+          ) ?? []
+        );
+        const first = buttons[0];
+        const last = buttons.at(-1);
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
     };
+    place();
     window.addEventListener('keydown', onKey);
-    popoverRef.current?.focus();
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    popoverRef.current
+      ?.querySelector<HTMLButtonElement>('.card-picker-option:not(:disabled)')
+      ?.focus({ preventScroll: true });
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
   }, [open]);
 
   function pick(c: Card) {
@@ -168,69 +218,79 @@ export function CardSlots({
   });
 
   return (
-    <div className="relative">
+    <div ref={slotsRef} className="relative">
       {label && <div className="mb-1 text-xs text-muted">{label}</div>}
-      <div className="flex items-center gap-1">
+      <div className="card-slots flex items-center gap-1">
         {Array.from({ length: count }).map((_, i) => {
           const c = cards[i];
-          return c !== undefined ? (
-            <div key={i} className="group relative">
-              <PlayingCard
-                card={c}
-                size={size}
-                onClick={(e) => openPicker(i, e.currentTarget)}
-              />
-              <button
-                onClick={() => removeAt(i)}
-                className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-full bg-raise text-[10px] text-white opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
-                aria-label={`Remove ${cardToStr(c)}`}
-              >
-                ×
-              </button>
+          return (
+            <div key={i} data-card-slot={i} className="group relative">
+              {c !== undefined ? (
+                <>
+                  <PlayingCard
+                    card={c}
+                    size={size}
+                    onClick={(e) => openPicker(i, e.currentTarget)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeAt(i)}
+                    className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-raise text-sm text-white opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
+                    aria-label={`Remove ${cardToStr(c)}`}
+                  >
+                    ×
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => openPicker(i, e.currentTarget)}
+                  aria-label={`Add card ${i + 1}`}
+                  className={
+                    'flex items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+                    addDims
+                  }
+                >
+                  +
+                </button>
+              )}
             </div>
-          ) : (
-            <button
-              key={i}
-              onClick={(e) => openPicker(i, e.currentTarget)}
-              aria-label="Add card"
-              className={
-                'flex items-center justify-center rounded-md border border-dashed border-border text-muted hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
-                addDims
-              }
-            >
-              +
-            </button>
           );
         })}
       </div>
-      {open && (
-        <>
-          {/* Click-outside backdrop closes the picker (Escape also closes) */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={closePicker}
-            aria-hidden
-          />
-          <div
-            ref={popoverRef}
-            role="dialog"
-            aria-label="Pick a card"
-            tabIndex={-1}
-            className="absolute left-0 top-full z-50 mt-2 w-[440px] max-w-[calc(100vw-2rem)] rounded-lg border-2 border-accent bg-surface p-3 shadow-card outline-none ring-1 ring-black/20"
-          >
-            <div className="mb-2 flex items-center justify-between text-xs text-muted">
-              <span>Pick a card</span>
-              <button
-                onClick={closePicker}
-                className="rounded hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                Close
-              </button>
+      {open &&
+        createPortal(
+          <>
+            {/* Click-outside backdrop closes the picker (Escape also closes) */}
+            <div
+              className="fixed inset-0 z-[190] bg-black/15"
+              onClick={closePicker}
+              aria-hidden
+            />
+            <div
+              ref={popoverRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Pick a card"
+              tabIndex={-1}
+              style={position}
+              className="card-picker-popover"
+            >
+              <div className="mb-3 flex items-center justify-between text-sm font-medium text-muted">
+                <span>Pick a card</span>
+                <button
+                  type="button"
+                  onClick={closePicker}
+                  className="min-h-11 rounded px-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  Close
+                </button>
+              </div>
+              <CardGrid used={usedExceptEditing} onPick={pick} />
             </div>
-            <CardGrid used={usedExceptEditing} onPick={pick} />
-          </div>
-        </>
-      )}
+          </>,
+          document.body
+        )}
     </div>
   );
 }

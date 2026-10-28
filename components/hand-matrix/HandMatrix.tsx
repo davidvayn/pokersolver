@@ -27,6 +27,7 @@ export interface HandMatrixProps {
   squareCells?: boolean;
   /** display mode: currently inspected hand class */
   selectedLabel?: string;
+  selectionOutline?: boolean;
   className?: string;
 }
 
@@ -43,6 +44,7 @@ export function HandMatrix({
   onCellPreview,
   squareCells = false,
   selectedLabel,
+  selectionOutline = true,
   className,
 }: HandMatrixProps) {
   const [painting, setPainting] = useState<null | number>(null); // target weight while dragging
@@ -106,7 +108,7 @@ export function HandMatrix({
             const cellClass =
               'relative flex items-center justify-center overflow-hidden rounded-[3px] border text-[10px] font-medium leading-none transition-[border-color,box-shadow,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
               (isPair ? 'border-border/80 ' : 'border-border/40 ') +
-              (isSelected
+              (isSelected && selectionOutline
                 ? 'z-10 ring-2 ring-accent ring-offset-1 ring-offset-surface '
                 : '') +
               'bg-surface-2' +
