@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, RefreshCw, Trash2 } from 'lucide-react';
 import Link from 'next/link';
-import { PageHeading } from '@/components/design/DesignShell';
 import { Select } from '@/components/ui/Select';
 import { PracticeStatsDashboard } from '@/components/stats/PracticeStatsDashboard';
 import {
@@ -60,7 +59,8 @@ export default function StatsPage() {
 
   return (
     <div className="stats-study">
-      <PageHeading title="Your game">
+      <header className="study-page-heading stats-page-heading">
+        <h1>Your game</h1>
         <section className="stats-controls" aria-label="History filters">
           <Select
             label="Period"
@@ -85,21 +85,23 @@ export default function StatsPage() {
             ]}
           />
         </section>
-        {!!hands?.length && (
-          <button
-            type="button"
-            disabled={clearing}
-            onClick={() => void clear()}
-            className="design-icon-button"
-            aria-label="Clear practice history"
-          >
-            <Trash2 className="h-5 w-5" aria-hidden="true" />
-          </button>
-        )}
-        <Link href="/practice" className="study-button-primary">
-          Practice <ArrowRight className="h-4 w-4" aria-hidden="true" />
-        </Link>
-      </PageHeading>
+        <div className="stats-header-actions">
+          {!!hands?.length && (
+            <button
+              type="button"
+              disabled={clearing}
+              onClick={() => void clear()}
+              className="design-icon-button"
+              aria-label="Clear practice history"
+            >
+              <Trash2 className="h-5 w-5" aria-hidden="true" />
+            </button>
+          )}
+          <Link href="/practice" className="study-button-primary">
+            Practice <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Link>
+        </div>
+      </header>
 
       {!hands ? (
         <div className="study-empty" role="status">

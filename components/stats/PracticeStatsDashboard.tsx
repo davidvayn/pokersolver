@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Gauge, Layers3, Target, TrendingDown, Zap } from 'lucide-react';
 import { cardToStr } from '@/lib/cards';
 import type {
@@ -61,13 +61,13 @@ function Metric({
   return (
     <div className="stats-overview-item min-w-0 p-4 sm:p-5">
       <div className="flex items-center gap-2 text-xs font-medium text-muted">
-        <Icon className="h-4 w-4 text-accent" aria-hidden="true" />
-        {label}
+        <Icon className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+        <span>{label}</span>
       </div>
       <p className="mt-3 font-mono text-2xl font-semibold tracking-tight sm:text-3xl">
         {value}
       </p>
-      <p className="mt-1 truncate text-xs text-muted">{detail}</p>
+      <p className="mt-1 text-xs text-muted">{detail}</p>
     </div>
   );
 }
@@ -271,11 +271,11 @@ function GradeDonut({
     <div>
       <h2 className="text-sm font-semibold">Decision quality</h2>
       <p className="mt-1 text-xs text-muted">Frequency grades</p>
-      <div className="mt-5 grid grid-cols-[132px_minmax(0,1fr)] items-center gap-5">
+      <div className="stats-quality-layout mt-5 grid items-center gap-4">
         <div className="relative">
           <svg
             viewBox="0 0 120 120"
-            className="stats-quality-ring h-32 w-32 -rotate-90"
+            className="stats-quality-ring h-auto w-full -rotate-90"
             role="img"
             aria-label={`${percent(strongPercentage)} of decisions were perfect, excellent, or good`}
           >
@@ -329,15 +329,43 @@ function GradeDonut({
 }
 
 function ActivityHeatmap({ stats }: { stats: PracticeStats }) {
+  const calendar = useRef<HTMLDivElement>(null);
   const max = Math.max(1, ...stats.activity.map((day) => day.decisions));
   const total = stats.activity.reduce((sum, day) => sum + day.decisions, 0);
+  const offset = stats.activity[0]
+    ? new Date(`${stats.activity[0].key}T12:00:00`).getDay()
+    : 0;
+  const weeks = Math.ceil((offset + stats.activity.length) / 7);
+  const months = stats.activity.flatMap((day, index) => {
+    const date = new Date(day.timestamp);
+    return date.getDate() === 1
+      ? [
+          {
+            key: day.key,
+            column: Math.floor((offset + index) / 7) + 1,
+            label: new Intl.DateTimeFormat('en', { month: 'short' }).format(
+              date
+            ),
+          },
+        ]
+      : [];
+  });
+  useEffect(() => {
+    const showRecent = () => {
+      if (calendar.current)
+        calendar.current.scrollLeft = calendar.current.scrollWidth;
+    };
+    showRecent();
+    window.addEventListener('resize', showRecent);
+    return () => window.removeEventListener('resize', showRecent);
+  }, [stats.activity]);
   return (
-    <figure className="stats-panel min-w-0">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <figure className="stats-panel stats-rhythm min-w-0">
+      <div className="stats-rhythm-heading">
         <div>
           <h2 className="text-sm font-semibold">Practice rhythm</h2>
           <p className="mt-1 text-xs text-muted">
-            {total} decisions across the last 12 weeks
+            {total} decisions · last year
           </p>
         </div>
         <div className="flex items-center gap-3 font-mono text-[11px] text-muted">
@@ -346,30 +374,61 @@ function ActivityHeatmap({ stats }: { stats: PracticeStats }) {
         </div>
       </div>
       <div
-        className="mt-5 grid grid-flow-col grid-rows-7 gap-1.5"
-        role="img"
-        aria-label={`Practice activity over 12 weeks. ${total} decisions, ${stats.activeDays} active days all time, current streak ${stats.currentStreakDays} days.`}
+        ref={calendar}
+        className="stats-activity-scroll"
+        tabIndex={0}
+        role="region"
+        aria-label="Practice activity calendar, scroll for earlier months"
       >
-        {stats.activity.map((day) => {
-          const intensity =
-            day.decisions === 0 ? 0 : 0.2 + (day.decisions / max) * 0.8;
-          return (
-            <span
-              key={day.key}
-              className="aspect-square min-w-0 rounded-[3px] border border-border/60"
-              style={{
-                backgroundColor:
-                  day.decisions === 0
-                    ? 'rgb(var(--surface-2))'
-                    : `rgb(var(--accent) / ${intensity.toFixed(2)})`,
-              }}
-              title={`${day.label}: ${day.decisions} decision${day.decisions === 1 ? '' : 's'}`}
-              aria-hidden="true"
-            />
-          );
-        })}
+        <div className="stats-activity-calendar">
+          <div
+            className="stats-activity-months"
+            aria-hidden="true"
+            style={{
+              gridTemplateColumns: `repeat(${weeks}, var(--activity-cell))`,
+            }}
+          >
+            {months.map((month) => (
+              <span key={month.key} style={{ gridColumn: month.column }}>
+                {month.label}
+              </span>
+            ))}
+          </div>
+          <div className="stats-activity-weekdays" aria-hidden="true">
+            <span style={{ gridRow: 2 }}>Mon</span>
+            <span style={{ gridRow: 4 }}>Wed</span>
+            <span style={{ gridRow: 6 }}>Fri</span>
+          </div>
+          <div
+            className="stats-activity-grid"
+            role="img"
+            aria-label={`Practice activity over the last year. ${total} decisions, ${stats.activeDays} active days all time, current streak ${stats.currentStreakDays} days.`}
+          >
+            {Array.from({ length: offset }, (_, index) => (
+              <span key={`pad-${index}`} aria-hidden="true" />
+            ))}
+            {stats.activity.map((day) => {
+              const intensity =
+                day.decisions === 0 ? 0 : 0.2 + (day.decisions / max) * 0.8;
+              return (
+                <span
+                  key={day.key}
+                  className="rounded-[2px] border border-border/60"
+                  style={{
+                    backgroundColor:
+                      day.decisions === 0
+                        ? 'rgb(var(--surface-2))'
+                        : `rgb(var(--accent) / ${intensity.toFixed(2)})`,
+                  }}
+                  title={`${day.label}: ${day.decisions} decision${day.decisions === 1 ? '' : 's'}`}
+                  aria-hidden="true"
+                />
+              );
+            })}
+          </div>
+        </div>
       </div>
-      <figcaption className="mt-3 flex items-center justify-end gap-1.5 text-[10px] text-muted">
+      <figcaption className="stats-activity-legend flex items-center gap-1.5 text-[10px] text-muted">
         Less
         {[0, 0.22, 0.45, 0.7, 1].map((opacity) => (
           <span

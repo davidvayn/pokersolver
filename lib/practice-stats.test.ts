@@ -121,7 +121,7 @@ describe('practice analytics', () => {
   it('builds calendar, quality, scatter, streak, and response-time visual data', () => {
     const stats = analyzePractice(decisions.map(hand), NOW);
     expect(stats.dailyTrend).toHaveLength(21);
-    expect(stats.activity).toHaveLength(84);
+    expect(stats.activity).toHaveLength(365);
     expect(stats.dailyTrend.at(-1)).toMatchObject({
       decisions: 1,
       graded: 1,
@@ -150,6 +150,18 @@ describe('practice analytics', () => {
     expect(stats.byAction).toHaveLength(1);
     expect(stats.byAction[0].label).toBe('Call');
     expect(stats.decisionPoints.map((point) => point.id)).toEqual(['d3', 'd2', 'd1']);
+  });
+
+  it('includes older practice days in the yearly calendar and excludes days outside the year', () => {
+    const records = [0, -100, -364, -366].map((dayOffset) => hand(decision({
+      id: `calendar-${dayOffset}`, dayOffset, grade: 'perfect', loss: 0, responseMs: 1000,
+    })));
+    const stats = analyzePractice(records, NOW);
+    expect(stats.activity).toHaveLength(365);
+    expect(stats.activity[0].decisions).toBe(1);
+    expect(stats.activity.at(-1)?.decisions).toBe(1);
+    expect(stats.activity.reduce((sum, day) => sum + day.decisions, 0)).toBe(3);
+    expect(stats.dailyTrend).toHaveLength(21);
   });
 
   it('returns stable empty-series data without invented performance', () => {

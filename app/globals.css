@@ -67,7 +67,8 @@ main:has([data-solver-workspace]) {
 }
 
 .solver-decision-card {
-  flex: 0 0 180px;
+  flex: 0 0 440px;
+  max-width: 100%;
   overflow: hidden;
   border-width: 1px;
   border-style: solid;
@@ -77,14 +78,15 @@ main:has([data-solver-workspace]) {
 
 .solver-decision-option {
   display: flex;
-  min-height: 36px;
+  min-height: 44px;
   align-items: center;
   gap: 6px;
   border-left: 3px solid var(--solver-action-color);
   border-radius: 3px;
-  padding: 4px 6px;
+  min-width: 0;
+  padding: 8px;
   color: rgb(var(--fg));
-  font-size: 12px;
+  font-size: 14px;
   text-align: left;
   transition: background-color 150ms ease;
 }
@@ -103,9 +105,166 @@ main:has([data-solver-workspace]) {
   opacity: 0.4;
 }
 
-@media (max-width: 767px) {
-  .solver-decision-option {
-    min-height: 44px;
+.solver-decision-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px;
+}
+
+.solver-study-settings {
+  display: flex;
+  flex-direction: column;
+  justify-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+}
+
+.solver-spot-toolbar {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgb(var(--border));
+}
+
+.solver-settings-heading {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.solver-settings-heading .ui-field-label {
+  margin: 0;
+}
+
+.solver-settings-heading .ui-select {
+  width: 124px;
+}
+
+.solver-settings-heading .ui-select-trigger {
+  min-height: 36px;
+  padding: 4px 8px;
+  font-size: 14px;
+}
+
+.solver-spot-toolbar .solver-line-navigator {
+  padding: 0;
+  border: 0;
+}
+
+.solver-spot-toolbar .solver-line-navigator > div:first-child {
+  gap: 4px 12px;
+  margin-bottom: 4px;
+}
+
+.solver-study-workspace [data-solver-strategy-heading] > div:first-child {
+  display: none;
+}
+
+.solver-study-workspace [data-solver-strategy-heading] > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.solver-study-workspace [data-solver-strategy-heading] {
+  min-height: 36px;
+}
+
+.solver-study-workspace [data-solver-strategy-heading] > div:last-child > span {
+  min-width: 0;
+  font-size: 13px;
+}
+
+.solver-study-settings .solver-board {
+  min-width: 0;
+}
+
+.solver-study-settings .card-slots {
+  gap: 8px;
+}
+
+.solver-study-workspace .text-xs {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.solver-study-workspace .solver-strategy-layout {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'strategy' 'combos';
+}
+
+.solver-study-workspace .solver-workspace-matrix {
+  width: 100%;
+  max-width: 680px;
+}
+
+.solver-study-workspace .solver-strategy-combos {
+  container-type: inline-size;
+}
+
+.solver-study-workspace .solver-strategy-combos [role='list'] {
+  max-width: 620px;
+}
+
+.solver-study-workspace [data-solver-matrix-frame] button:has(> span.absolute.flex),
+.solver-study-workspace [data-solver-combo-row]:not(.opacity-60),
+.solver-hidden-size-swatch {
+  background-color: rgb(var(--fold));
+  background-image: repeating-linear-gradient(135deg, transparent 0 3px, rgb(var(--fg) / 0.16) 3px 4px);
+}
+
+.solver-study-workspace [data-solver-combo-row] .sm\:text-sm {
+  font-size: clamp(11px, 2cqw, 14px);
+}
+
+.solver-study-workspace [data-solver-combo-row] .sm\:text-2xl {
+  font-size: clamp(18px, 3.5cqw, 24px);
+}
+
+@media (max-width: 639px) {
+  .solver-spot-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .solver-spot-toolbar .solver-line-navigator > div:first-child {
+    gap: 4px;
+  }
+
+  .solver-spot-toolbar .solver-line-navigator > div:first-child > div:first-child button,
+  .solver-spot-toolbar .solver-line-navigator > div:first-child > div:first-child summary {
+    padding-inline: 4px;
+  }
+
+  .solver-spot-toolbar [data-solver-active-status='true'],
+  .solver-spot-toolbar dl > div:not(:first-child) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 359px) {
+  .solver-study-settings .card-slots {
+    gap: 6px;
+  }
+
+  .solver-study-settings .playing-card-size-xl,
+  .solver-study-settings .card-slots > div > button {
+    width: 48px;
   }
 }
 
@@ -147,13 +306,80 @@ main:has([data-solver-workspace]) {
     max-width: 100%;
   }
 
-  .solver-workspace:has(.solver-decision-rail) .solver-strategy-layout {
-    grid-template-columns: minmax(0, min(56%, max(380px, calc(100dvh - 440px)))) minmax(0, 1fr);
-  }
-
   .solver-settings [aria-label='Pick a card'] {
     left: auto;
     right: 0;
+  }
+}
+
+@media (min-width: 768px) {
+  .solver-study-workspace .solver-strategy-layout {
+    grid-template-columns: minmax(0, min(52%, var(--solver-matrix-size, 560px))) minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas: 'strategy combos';
+    gap: 24px;
+  }
+
+  .solver-study-workspace .solver-strategy-combos {
+    max-height: var(--solver-review-height, none);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .solver-spot-toolbar {
+    grid-template-columns: 292px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .solver-spot-toolbar .solver-line-navigator > div:first-child > [role='status'] {
+    order: -1;
+    width: 100%;
+  }
+}
+
+.card-picker-popover {
+  position: fixed;
+  z-index: 200;
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgb(var(--border));
+  border-radius: 8px;
+  padding: 12px;
+  background: rgb(var(--surface));
+  color: rgb(var(--fg));
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.2);
+  outline: none;
+}
+
+.card-picker-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.card-picker-suit {
+  display: grid;
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.card-picker-option {
+  min-height: 48px;
+  font-size: 17px;
+}
+
+@media (max-width: 639px) {
+  .card-picker-suit {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 359px) {
+  .card-picker-suit {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
