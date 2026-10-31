@@ -59,6 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "tabular-flop-pilot" => run_tabular_flop_pilot(&args[1..]),
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "solved-spot" => run_solved_spot(&args[1..]),
+        "solved-spot-audit" => run_solved_spot_audit(&args[1..]),
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "turn-pbs-upgrade-targets" => run_turn_pbs_upgrade_targets(&args[1..]),
@@ -1367,6 +1368,21 @@ fn run_turn_pbs_value_predict(args: &[String]) -> Result<(), Box<dyn Error>> {
             "counterfactualValuesBb": prediction,
         }))?
     );
+    Ok(())
+}
+
+fn run_solved_spot_audit(args: &[String]) -> Result<(), Box<dyn Error>> {
+    use blueprint::public_belief::solved_spot;
+    let input = value(args, "--input").ok_or("--input is required")?;
+    let report = solved_spot::audit(&serde_json::from_slice(&fs::read(input)?)?)?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    if let Some(output) = value(args, "--output") {
+        // Research reports are immutable too. This command never exports a
+        // policy or changes the serving catalog, even when board.len() == 3.
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+        writeln!(file,"{serialized}")?;
+    }
+    println!("{serialized}");
     Ok(())
 }
 
@@ -3834,6 +3850,7 @@ Usage:
   preflop-solver river-pbs-solve [options]
   preflop-solver solved-spot --input <spot.json> --output <new-artifact.json>
   preflop-solver solved-spot --verify --input <artifact.json>
+  preflop-solver solved-spot-audit --input <spot.json> [--output <new-report.json>]
   preflop-solver turn-river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
   preflop-solver turn-pbs-upgrade-targets [options]

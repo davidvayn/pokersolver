@@ -3,6 +3,9 @@
 //! RiverSolver's card-marginal terminal evaluator and vectorized BR traversal.
 use super::*;
 
+mod footprint;
+pub use footprint::{audit, SpotFootprint};
+
 pub const SCHEMA: &str = "solved-river-spot-v1";
 pub const TURN_SCHEMA: &str = "solved-turn-river-spot-v1";
 const GAIN_LIMIT: f64 = 0.05; // SUM of both unilateral gains, not their average.
@@ -115,6 +118,11 @@ struct SpotConfig {
 }
 
 fn config(input: &SpotInput) -> Result<SpotConfig, String> {
+    config_for_audit(input, false)
+}
+
+// A flop is accepted ONLY by the structural audit, not solve/export/verify.
+fn config_for_audit(input: &SpotInput, allow_flop: bool) -> Result<SpotConfig, String> {
     if input.id.is_empty()
         || input.id.len() > 80
         || !input
@@ -123,7 +131,7 @@ fn config(input: &SpotInput) -> Result<SpotConfig, String> {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         || input.title.is_empty()
         || input.range_assumptions.is_empty()
-        || !matches!(input.board.len(), 4 | 5)
+        || !(matches!(input.board.len(), 4 | 5) || (allow_flop && input.board.len() == 3))
         || !input.depth_bb.is_finite()
         || input.depth_bb < 2.0
         || input.depth_bb > 1000.0
@@ -151,6 +159,9 @@ fn config(input: &SpotInput) -> Result<SpotConfig, String> {
     game.iterations = 2;
     game.averaging_delay = 0;
     game.action_abstraction.turn_river_bet_pot_fractions = input.bet_pot_fractions.clone();
+    if input.board.len() == 3 {
+        game.action_abstraction.flop_bet_pot_fractions = input.bet_pot_fractions.clone();
+    }
     game.action_abstraction.postflop_raise_pot_fractions = input.raise_pot_fractions.clone();
     game.action_abstraction.postflop_raise_cap = input.raise_cap;
     game.action_abstraction.include_all_in = true;
@@ -160,7 +171,14 @@ fn config(input: &SpotInput) -> Result<SpotConfig, String> {
         strategy_exponent: 2.0,
     };
     let initial_ranges = std::array::from_fn(|_| uniform_range(&input.board));
-    let mut state = if input.board.len() == 5 {
+    let mut state = if input.board.len() == 3 {
+        PublicBeliefState::flop_start(
+            input.board.clone().try_into().unwrap(),
+            1,
+            [input.pot_bb / 2.0; 2],
+            initial_ranges,
+        )
+    } else if input.board.len() == 5 {
         PublicBeliefState::river_start(
             input.board.clone().try_into().unwrap(),
             1,

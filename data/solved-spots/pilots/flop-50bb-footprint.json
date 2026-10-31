@@ -1,0 +1,14 @@
+{
+  "id": "flop-50bb-footprint",
+  "title": "50bb flop structural pilot · not a serving model",
+  "description": "Structural audit only: a hypothetical complete flop-to-river game on Qs 9h 6c, 12bb pot and 44bb behind. No policy is trained or served by this input.",
+  "rangeAssumptions": "Illustrative 30-combo BTN and 27-combo BB ranges, equal weight per unblocked exact combination. These are declared study ranges, not outputs from a certified earlier line. Rake-free Home game.",
+  "board": [43, 30, 16],
+  "depthBb": 50,
+  "potBb": 12,
+  "rangeClasses": [["QQ", "99", "66", "AQs", "KQs", "QJs", "JTs", "T8s", "A5s"], ["99", "66", "QJs", "QTs", "98s", "87s", "75s", "A5s"]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 512
+}

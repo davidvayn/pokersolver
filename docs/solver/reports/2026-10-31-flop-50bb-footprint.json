@@ -1,0 +1,57 @@
+{
+  "schema": "solved-spot-footprint-v1",
+  "inputSha256": "cd7264223c2553b512afa6427a212409331044a7166f1fbc561dbc4038cdcdb5",
+  "id": "flop-50bb-footprint",
+  "board": [
+    43,
+    30,
+    16
+  ],
+  "depthBb": 50.0,
+  "potBb": 12.0,
+  "startingCombos": [
+    30,
+    27
+  ],
+  "compatiblePrivateDeals": 729,
+  "orderedRunoutsPerPrivateDeal": 1980,
+  "compatibleDealRunouts": 1443420,
+  "streets": [
+    {
+      "street": "flop",
+      "publicDecisionNodes": 14,
+      "publicActionEdges": 38,
+      "servedComboRows": 399,
+      "servedActionValues": 1083
+    },
+    {
+      "street": "turn",
+      "publicDecisionNodes": 3038,
+      "publicActionEdges": 7742,
+      "servedComboRows": 83049,
+      "servedActionValues": 211641
+    },
+    {
+      "street": "river",
+      "publicDecisionNodes": 409248,
+      "publicActionEdges": 992544,
+      "servedComboRows": 10721358,
+      "servedActionValues": 26002374
+    }
+  ],
+  "publicDecisionNodes": 412300,
+  "publicActionEdges": 1000324,
+  "publicChanceEdges": 59143,
+  "foldLeaves": 294012,
+  "showdownLeavesBeforeAllInRunout": 351924,
+  "servedComboRows": 10804806,
+  "servedActionValues": 26215098,
+  "denseRegretAverageBytesLowerBound": 21222873984,
+  "sparseRegretAverageArrayBytes": 419441568,
+  "sparseFullValuePayloadBytes": 231330396,
+  "actionHistoryStatesWalked": 619,
+  "maximumActionDepth": 10,
+  "currentReaderNodeLimit": 4096,
+  "exceedsCurrentReaderNodeLimit": true,
+  "strategyStrengthEvaluated": false
+}
