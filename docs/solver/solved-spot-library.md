@@ -58,6 +58,12 @@ never overwritten. The small activation catalog points at those immutable bytes.
 native verification against both artifact and catalog. Production builds run it.
 Rebuilding the same source should produce the same artifact hash.
 
+Saved turn training uses lossless positive-support accumulator storage; it does
+not drop low-reach combinations or change served policies. `solved-spot
+--dense-reference` retains the original allocation for offline comparisons.
+See [the footprint and storage pilots](flop-library-feasibility.md) for measured
+scope and the remaining complete-flop expansion limits.
+
 ## Serving and practice
 
 The catalog is bundled with the route. The browser downloads one immutable

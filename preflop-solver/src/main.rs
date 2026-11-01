@@ -1388,6 +1388,10 @@ fn run_solved_spot_audit(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 fn run_solved_spot(args: &[String]) -> Result<(), Box<dyn Error>> {
     use blueprint::public_belief::solved_spot;
+    let dense_reference = args.iter().any(|arg| arg == "--dense-reference");
+    if dense_reference && args.iter().any(|arg| arg == "--verify") {
+        return Err("--dense-reference is a solve-only benchmark option".into());
+    }
     let input = value(args, "--input").ok_or("--input is required")?;
     let bytes = fs::read(input)?;
     if args.iter().any(|arg| arg == "--verify") {
@@ -1396,7 +1400,12 @@ fn run_solved_spot(args: &[String]) -> Result<(), Box<dyn Error>> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         if !report.accepted { return Err("solved-spot verification rejected".into()); }
     } else {
-        let spot = solved_spot::solve(serde_json::from_slice(&bytes)?)?;
+        let input = serde_json::from_slice(&bytes)?;
+        let spot = if dense_reference {
+            solved_spot::solve_dense_reference(input)?
+        } else {
+            solved_spot::solve(input)?
+        };
         if !spot.verification.accepted {
             eprintln!("{}", serde_json::to_string_pretty(&spot.verification)?);
             return Err("spot not converged; no serving artifact exported".into());
@@ -3848,7 +3857,7 @@ Usage:
   preflop-solver full-game-lbr (--networks <json> | --tabular-checkpoint <msgpack.gz>) [options]
   preflop-solver tabular-flop-pilot --tabular-checkpoint <msgpack.gz> --proposal-response <json> --opponent-responses <json,json> --seed <integer> --output <new.json> [--weight 0.25] [--evaluation-deals 2048] [--response-workers 2]
   preflop-solver river-pbs-solve [options]
-  preflop-solver solved-spot --input <spot.json> --output <new-artifact.json>
+  preflop-solver solved-spot --input <spot.json> --output <new-artifact.json> [--dense-reference]
   preflop-solver solved-spot --verify --input <artifact.json>
   preflop-solver solved-spot-audit --input <spot.json> [--output <new-report.json>]
   preflop-solver turn-river-pbs-solve [options]

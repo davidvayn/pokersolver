@@ -34,10 +34,11 @@ pub struct SpotFootprint {
     pub showdown_leaves_before_all_in_runout: u64,
     pub served_combo_rows: u64,
     pub served_action_values: u64,
-    /// Current RangeNode has two COMBO_COUNT * actions arrays of f64. Does not
+    /// Dense reference has two COMBO_COUNT * actions arrays of f64. Does not
     /// include history strings/maps, rank layouts, caches or traversal scratch.
     pub dense_regret_average_bytes_lower_bound: u64,
-    /// Hypothetical positive-support-only arrays; NOT an implemented solver.
+    /// Positive-support-only arrays (implemented for saved turn studies).
+    /// For flop this remains a projection, not an implemented full-flop solve.
     pub sparse_regret_average_array_bytes: u64,
     /// Hypothetical fixed layout: u16 combo id + two f32 arrays per row. JSON,
     /// node/action metadata, hash indexes and off-path null EVs are not modeled.

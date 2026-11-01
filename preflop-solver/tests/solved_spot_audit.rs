@@ -53,6 +53,18 @@ fn footprint_cli_writes_only_immutable_research_reports_and_keeps_flop_serving_c
         .unwrap();
     assert!(!solve.status.success());
     assert!(!policy.exists());
+    let invalid = Command::new(env!("CARGO_BIN_EXE_preflop-solver"))
+        .args([
+            "solved-spot",
+            "--verify",
+            "--dense-reference",
+            "--input",
+            "must-not-read",
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("solve-only"));
     fs::remove_file(report).unwrap();
     fs::remove_dir(directory).unwrap();
 }

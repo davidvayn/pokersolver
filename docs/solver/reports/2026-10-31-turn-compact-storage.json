@@ -1,0 +1,63 @@
+{
+  "schema": "solved-spot-storage-pilot-v1",
+  "date": "2026-10-31",
+  "input": "data/solved-spots/turn-50bb-weighted.json",
+  "inputSha256": "88b7dacf636374feeb545f548d2657deafe9a6bd20ebf535cd50d2d9efa63d12",
+  "iterations": 512,
+  "machine": {
+    "cpu": "Apple M5",
+    "logicalCpus": 10,
+    "physicalMemoryBytes": 17179869184,
+    "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "profile": "release, opt-level=3, lto=true, codegen-units=1"
+  },
+  "method": {
+    "timingTool": "macOS /usr/bin/time -l",
+    "runOrder": ["dense-1", "compact-1", "compact-2", "dense-2"],
+    "separateProcessPerRun": true,
+    "concurrentRepositoryBuildOrTrainingJobs": 0,
+    "wallIncludes": ["initialization", "training", "policy EV pass", "independent verification", "export"],
+    "caveat": "Two repeats per mode, not a statistical speed guarantee. Full-flop process memory and training time remain unmeasured."
+  },
+  "storage": {
+    "publicDecisionNodes": 1356,
+    "canonicalComboCount": 1326,
+    "denseRegretAverageArrayBytes": 65854464,
+    "compactRegretAverageArrayBytes": 1357056,
+    "sharedComboMapCount": 98,
+    "sharedComboMapElementBytes": 259896,
+    "precision": "f64, unchanged",
+    "omittedRows": "Root-zero or public-board-blocked combinations only; never policy-zero or low-reach combinations",
+    "arrayBytesExclude": ["map and node metadata", "rank layouts", "traversal scratch", "policy export", "allocator overhead"]
+  },
+  "runs": [
+    { "name": "dense-1", "wallSeconds": 29.87, "userSeconds": 29.11, "maxResidentBytes": 224559104, "peakMemoryFootprintBytes": 204095992 },
+    { "name": "compact-1", "wallSeconds": 29.22, "userSeconds": 28.58, "maxResidentBytes": 149045248, "peakMemoryFootprintBytes": 141345224 },
+    { "name": "compact-2", "wallSeconds": 25.95, "userSeconds": 25.64, "maxResidentBytes": 148979712, "peakMemoryFootprintBytes": 141050312 },
+    { "name": "dense-2", "wallSeconds": 28.62, "userSeconds": 28.31, "maxResidentBytes": 224346112, "peakMemoryFootprintBytes": 203948512 }
+  ],
+  "artifact": {
+    "sha256": "8f0773fcd61a486fadd5d86ec0bad3cead11b74c8aaa4f42966e62461ad462cf",
+    "bytes": 3546345,
+    "allFourRunsMatchExistingArtifact": true
+  },
+  "verification": {
+    "method": "direct-compatible-pair-and-river-enumeration-of-exported-f32-policy-v1",
+    "compatibleDeals": 729,
+    "riverOutcomes": 32076,
+    "totalBestResponseGainBb": 0.005083669496069199,
+    "maximumActionEvErrorBb": 0.0000025893798110132593,
+    "maximumProbabilitySumError": 0.00000004470348358154297,
+    "zeroSumResidualBb": 0.000000000000003552713678800501,
+    "accepted": true
+  },
+  "gatesChanged": false,
+  "libraryRebuild": {
+    "studies": 8,
+    "totalArtifactBytes": 13203890,
+    "catalogAndAllArtifactIdentitiesUnchanged": true
+  },
+  "newFullHandStrengthEvaluation": false,
+  "fullFlopSolverImplemented": false,
+  "liveResolverStorageChanged": false
+}

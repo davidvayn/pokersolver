@@ -814,6 +814,15 @@ fn sparse_ranges(ranges: &[Vec<f64>; 2]) -> [Vec<(usize, f64)>; 2] {
 }
 
 pub fn solve(input: SpotInput) -> Result<SolvedSpot, String> {
+    solve_with_storage(input, true)
+}
+
+/// Offline differential/benchmark reference. No schema or solving math changes.
+pub fn solve_dense_reference(input: SpotInput) -> Result<SolvedSpot, String> {
+    solve_with_storage(input, false)
+}
+
+fn solve_with_storage(input: SpotInput, compact: bool) -> Result<SolvedSpot, String> {
     let config = config(&input)?;
     let turn_root = input.board.len() == 4;
     let policies = if turn_root {
@@ -825,6 +834,9 @@ pub fn solve(input: SpotInput) -> Result<SolvedSpot, String> {
             river_refinement_iterations: 0,
             regret_matching_plus: false,
         })?;
+        if compact {
+            solver.enable_compact_nodes()?;
+        }
         solver.train();
         solver.policy_strategies_with_action_values()
     } else {
@@ -870,6 +882,90 @@ pub fn solve(input: SpotInput) -> Result<SolvedSpot, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_turn_training_is_bit_identical_and_matches_audited_storage() {
+        let mut input: SpotInput = serde_json::from_str(include_str!(
+            "../../../../data/solved-spots/turn-50bb-weighted.json"
+        ))
+        .unwrap();
+        // Enough to exercise both traversers, DCFR, an averaging delay and
+        // zero-action-reach rows, without treating a short run as converged.
+        input.iterations = 20;
+        let spot_config = config(&input).unwrap();
+        for regret_matching_plus in [false, true] {
+            let config = TurnRiverSolveConfig {
+                game: spot_config.game.clone(),
+                state: spot_config.state.clone(),
+                iterations: 4,
+                averaging_delay: 1,
+                river_refinement_iterations: 0,
+                regret_matching_plus,
+            };
+            let mut dense = TurnRiverSolver::new(config.clone()).unwrap();
+            let mut compact = TurnRiverSolver::new(config).unwrap();
+            compact.enable_compact_nodes().unwrap();
+            assert!(compact.enable_compact_nodes().is_err());
+            dense.train();
+            compact.train();
+            assert!(dense.enable_compact_nodes().is_err());
+            assert_eq!(dense.nodes.len(), compact.nodes.len());
+            let mut dense_bytes = 0;
+            let mut compact_bytes = 0;
+            for (history, a) in &dense.nodes {
+                let b = &compact.nodes[history];
+                assert_eq!(a.actor, b.actor);
+                assert_eq!(a.action_labels, b.action_labels);
+                assert_eq!(a.last_regret_discount_round, b.last_regret_discount_round);
+                assert_eq!(
+                    a.last_strategy_discount_round,
+                    b.last_strategy_discount_round
+                );
+                let river = TurnRiverSolver::river_from_key(history);
+                assert!(Arc::ptr_eq(
+                    b.combo_layout.as_ref().unwrap(),
+                    compact
+                        .compact_node_layouts
+                        .as_ref()
+                        .unwrap()
+                        .for_node(river, b.actor),
+                ));
+                let legal = dense.legal_for(river, a.actor);
+                assert_eq!(a.average_strategy(legal), b.average_strategy(legal));
+                assert_eq!(a.strategy(legal), b.strategy(legal));
+                for combo in 0..COMBO_COUNT {
+                    if !legal[combo] {
+                        continue;
+                    }
+                    let x = a.storage_offset(combo);
+                    let y = b.storage_offset(combo);
+                    let n = a.action_labels.len();
+                    assert!(a.regrets[x..x + n]
+                        .iter()
+                        .zip(&b.regrets[y..y + n])
+                        .all(|(a, b)| a.to_bits() == b.to_bits()));
+                    assert!(a.strategy_sum[x..x + n]
+                        .iter()
+                        .zip(&b.strategy_sum[y..y + n])
+                        .all(|(a, b)| a.to_bits() == b.to_bits()));
+                }
+                dense_bytes += (a.regrets.len() + a.strategy_sum.len()) as u64 * 8;
+                compact_bytes += (b.regrets.len() + b.strategy_sum.len()) as u64 * 8;
+            }
+            let footprint = audit(&input).unwrap();
+            assert_eq!(
+                dense_bytes,
+                footprint.dense_regret_average_bytes_lower_bound
+            );
+            assert_eq!(compact_bytes, footprint.sparse_regret_average_array_bytes);
+            assert!(compact_bytes * 40 < dense_bytes);
+        }
+        assert_eq!(
+            serde_json::to_vec(&solve(input.clone()).unwrap()).unwrap(),
+            serde_json::to_vec(&solve_dense_reference(input).unwrap()).unwrap()
+        );
+    }
+
     fn input() -> SpotInput {
         SpotInput {
             id: "river-test".into(),

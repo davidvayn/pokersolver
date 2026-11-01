@@ -30,6 +30,8 @@ pub(super) mod frozen_turn_response;
 #[cfg(test)]
 pub(in crate::blueprint) mod counterfactual_turn;
 mod compact_marginals;
+mod compact_node;
+use compact_node::{ComboLayout, CompactNodeLayouts};
 mod card_workers;
 mod cash_river;
 mod cash_turn;
@@ -4215,6 +4217,7 @@ impl FlopSolver {
             node: RangeNode {
                 actor: opponent,
                 action_labels: vec!["enter".to_owned(), "terminate".to_owned()],
+                combo_layout: None,
                 regrets: vec![0.0; COMBO_COUNT * 2],
                 strategy_sum: vec![0.0; COMBO_COUNT * 2],
                 last_regret_discount_round: 0,
@@ -4665,6 +4668,7 @@ impl FlopSolver {
             let node = RangeNode {
                 actor: strategy.actor,
                 action_labels: strategy.action_labels.clone(),
+                combo_layout: None,
                 regrets: vec![0.0; expected],
                 strategy_sum: strategy
                     .probabilities
@@ -7100,6 +7104,7 @@ pub struct RiverSolution {
 struct RangeNode {
     actor: usize,
     action_labels: Vec<String>,
+    combo_layout: Option<Arc<ComboLayout>>,
     regrets: Vec<f64>,
     strategy_sum: Vec<f64>,
     last_regret_discount_round: u64,
@@ -7108,15 +7113,33 @@ struct RangeNode {
 
 impl RangeNode {
     fn new(actor: usize, actions: &[LegalAction]) -> Self {
+        Self::new_with_layout(actor, actions, None)
+    }
+
+    fn new_with_layout(
+        actor: usize,
+        actions: &[LegalAction],
+        combo_layout: Option<Arc<ComboLayout>>,
+    ) -> Self {
         let action_count = actions.len();
+        let rows = combo_layout.as_ref().map_or(COMBO_COUNT, |layout| layout.len());
         Self {
             actor,
             action_labels: actions.iter().map(|action| action.label.clone()).collect(),
-            regrets: vec![0.0; COMBO_COUNT * action_count],
-            strategy_sum: vec![0.0; COMBO_COUNT * action_count],
+            combo_layout,
+            regrets: vec![0.0; rows * action_count],
+            strategy_sum: vec![0.0; rows * action_count],
             last_regret_discount_round: 0,
             last_strategy_discount_round: 0,
         }
+    }
+
+    fn storage_offset(&self, combo: usize) -> usize {
+        self.combo_layout.as_ref().map_or(combo, |layout| {
+            layout
+                .row(combo)
+                .expect("private combo outside compact node support")
+        }) * self.action_labels.len()
     }
 
     fn strategy(&self, legal: &[bool]) -> Vec<f64> {
@@ -7127,13 +7150,14 @@ impl RangeNode {
                 continue;
             }
             let offset = combo * action_count;
-            let positive_sum = self.regrets[offset..offset + action_count]
+            let stored = self.storage_offset(combo);
+            let positive_sum = self.regrets[stored..stored + action_count]
                 .iter()
                 .map(|regret| regret.max(0.0))
                 .sum::<f64>();
             if positive_sum > EPSILON {
                 for action in 0..action_count {
-                    result[offset + action] = self.regrets[offset + action].max(0.0) / positive_sum;
+                    result[offset + action] = self.regrets[stored + action].max(0.0) / positive_sum;
                 }
             } else {
                 result[offset..offset + action_count].fill(1.0 / action_count as f64);
@@ -7150,12 +7174,13 @@ impl RangeNode {
                 continue;
             }
             let offset = combo * action_count;
-            let total = self.strategy_sum[offset..offset + action_count]
+            let stored = self.storage_offset(combo);
+            let total = self.strategy_sum[stored..stored + action_count]
                 .iter()
                 .sum::<f64>();
             if total > EPSILON {
                 for action in 0..action_count {
-                    result[offset + action] = self.strategy_sum[offset + action] / total;
+                    result[offset + action] = self.strategy_sum[stored + action] / total;
                 }
             } else {
                 result[offset..offset + action_count].fill(1.0 / action_count as f64);
@@ -7566,6 +7591,7 @@ impl RiverSolver {
             node: RangeNode {
                 actor: opponent,
                 action_labels: vec!["enter".to_owned(), "terminate".to_owned()],
+                combo_layout: None,
                 regrets: vec![0.0; COMBO_COUNT * 2],
                 strategy_sum: vec![0.0; COMBO_COUNT * 2],
                 last_regret_discount_round: 0,
@@ -7613,6 +7639,7 @@ impl RiverSolver {
             let node = RangeNode {
                 actor: strategy.actor,
                 action_labels: strategy.action_labels.clone(),
+                combo_layout: None,
                 regrets: vec![0.0; expected],
                 strategy_sum: strategy
                     .probabilities
@@ -8867,6 +8894,7 @@ struct TurnRiverSolver {
     river_blocked_combos: Vec<Vec<usize>>,
     river_data: Vec<Option<RiverBoardData>>,
     nodes: BTreeMap<Vec<String>, RangeNode>,
+    compact_node_layouts: Option<CompactNodeLayouts>,
     safe_root: Option<SafeResolveRoot>,
     training_round_offset: u64,
     #[cfg(test)]
@@ -8966,6 +8994,7 @@ impl TurnRiverSolver {
             river_blocked_combos,
             river_data,
             nodes: BTreeMap::new(),
+            compact_node_layouts: None,
             safe_root: None,
             training_round_offset: 0,
             #[cfg(test)]
@@ -8997,6 +9026,7 @@ impl TurnRiverSolver {
             node: RangeNode {
                 actor: opponent,
                 action_labels: vec!["enter".to_owned(), "terminate".to_owned()],
+                combo_layout: None,
                 regrets: vec![0.0; COMBO_COUNT * 2],
                 strategy_sum: vec![0.0; COMBO_COUNT * 2],
                 last_regret_discount_round: 0,
@@ -9036,6 +9066,7 @@ impl TurnRiverSolver {
             let node = RangeNode {
                 actor: strategy.actor,
                 action_labels: strategy.action_labels.clone(),
+                combo_layout: None,
                 regrets: vec![0.0; expected],
                 strategy_sum: strategy
                     .probabilities
@@ -9562,11 +9593,17 @@ impl TurnRiverSolver {
         let key = Self::node_key(&state, river);
         let actor = state.actor;
         let legal = self.legal_for(river, actor).to_vec();
+        let compact_layout = self
+            .compact_node_layouts
+            .as_ref()
+            .map(|layouts| layouts.for_node(river, actor));
         let strategy = {
             let node = self
                 .nodes
                 .entry(key.clone())
-                .or_insert_with(|| RangeNode::new(actor, &actions));
+                .or_insert_with(|| {
+                    RangeNode::new_with_layout(actor, &actions, compact_layout.cloned())
+                });
             if mode == TurnRiverTrainingMode::FrozenAverageTurnRiverRefinement
                 && state.street == Street::Turn
             {
@@ -9632,12 +9669,12 @@ impl TurnRiverSolver {
                 if !legal[combo] {
                     continue;
                 }
-                let offset = combo * action_count;
+                let stored = node.storage_offset(combo);
                 for action in 0..action_count {
-                    node.regrets[offset + action] +=
+                    node.regrets[stored + action] +=
                         children[action][actor][combo] - values[actor][combo];
                     if self.config.regret_matching_plus {
-                        node.regrets[offset + action] = node.regrets[offset + action].max(0.0);
+                        node.regrets[stored + action] = node.regrets[stored + action].max(0.0);
                     }
                 }
             }
@@ -9648,8 +9685,9 @@ impl TurnRiverSolver {
                     continue;
                 }
                 let offset = combo * action_count;
+                let stored = node.storage_offset(combo);
                 for action in 0..action_count {
-                    node.strategy_sum[offset + action] +=
+                    node.strategy_sum[stored + action] +=
                         reaches[actor][combo] * strategy[offset + action];
                 }
             }
@@ -14151,6 +14189,7 @@ mod tests {
         let mut node = RangeNode {
             actor: 0,
             action_labels: vec!["first".to_owned(), "second".to_owned()],
+            combo_layout: None,
             regrets: vec![0.0; COMBO_COUNT * 2],
             strategy_sum: vec![0.0; COMBO_COUNT * 2],
             last_regret_discount_round: 0,
