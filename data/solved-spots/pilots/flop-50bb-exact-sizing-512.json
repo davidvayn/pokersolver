@@ -1,0 +1,14 @@
+{
+  "id": "flop-50bb-exact-sizing",
+  "title": "50bb multi-size exact flop pilot · not a serving model",
+  "description": "Bounded complete flop-to-river research game on Qs 9h 6c with a 32bb pot and 34bb behind. Unlike the high-pot smoke pilot, this retains non-all-in half-pot and pot bets, raises, subsequent betting and every legal public runout.",
+  "rangeAssumptions": "Illustrative seven-combo ranges on each side, equal per-combo weights: BTN QQ/T8s, BB 99/JTs. These deliberately narrow ranges test implementation and computation, not broad strategic coverage or certified earlier-street policies. Rake-free Home game.",
+  "board": [43, 30, 16],
+  "depthBb": 50,
+  "potBb": 32,
+  "rangeClasses": [["QQ", "T8s"], ["99", "JTs"]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 512
+}

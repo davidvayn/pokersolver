@@ -1,0 +1,66 @@
+{
+  "schema": "exact-flop-pilot-v1",
+  "input": {
+    "id": "flop-50bb-exact-sizing",
+    "title": "50bb multi-size exact flop pilot · not a serving model",
+    "description": "Bounded complete flop-to-river research game on Qs 9h 6c with a 32bb pot and 34bb behind. Unlike the high-pot smoke pilot, this retains non-all-in half-pot and pot bets, raises, subsequent betting and every legal public runout.",
+    "rangeAssumptions": "Illustrative seven-combo ranges on each side, equal per-combo weights: BTN QQ/T8s, BB 99/JTs. These deliberately narrow ranges test implementation and computation, not broad strategic coverage or certified earlier-street policies. Rake-free Home game.",
+    "board": [
+      43,
+      30,
+      16
+    ],
+    "depthBb": 50.0,
+    "potBb": 32.0,
+    "rangeClasses": [
+      [
+        "QQ",
+        "T8s"
+      ],
+      [
+        "99",
+        "JTs"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 32
+  },
+  "inputSha256": "be49b02c9d751dc4369501c19e62e1b2f9c41f2216cfc7f6108e6e07bd9b5af5",
+  "limits": {
+    "maxDecisionNodes": 110000,
+    "maxSeconds": 120
+  },
+  "iterationsCompleted": 32,
+  "publicDecisionNodes": 104872,
+  "treeNodesIncludingChanceAndTerminals": 250374,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 23586304,
+  "equityCacheElementBytes": 941584,
+  "frozenPolicySha256": "08513f3afd4468f2e7a5dc8aaf20f80690157c6e1546cd0b5bb40f00ec132799",
+  "profileValueBb": [
+    6.144487887456807,
+    -6.144487887456808
+  ],
+  "bestResponseValueBb": [
+    6.291725642500329,
+    -5.7420991027861845
+  ],
+  "totalBestResponseGainBb": 0.5496265397141453,
+  "maximumProbabilitySumError": 4.470348358154297e-8,
+  "maximumIndependentProfileDifferenceBb": 5.329070518200751e-15,
+  "zeroSumResidualBb": 8.881784197001252e-16,
+  "conditionalResponseGainGatePassed": false,
+  "initializationSeconds": 0.126300709,
+  "trainingSeconds": 2.59975075,
+  "checkingSeconds": 0.583963375,
+  "actionEvValidationCompleted": false,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}

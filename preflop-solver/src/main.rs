@@ -60,6 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "river-pbs-solve" => run_river_pbs_solve(&args[1..]),
         "solved-spot" => run_solved_spot(&args[1..]),
         "solved-spot-audit" => run_solved_spot_audit(&args[1..]),
+        "solved-flop-pilot" => run_solved_flop_pilot(&args[1..]),
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "turn-pbs-upgrade-targets" => run_turn_pbs_upgrade_targets(&args[1..]),
@@ -1382,6 +1383,25 @@ fn run_solved_spot_audit(args: &[String]) -> Result<(), Box<dyn Error>> {
         let mut file = fs::OpenOptions::new().write(true).create_new(true).open(output)?;
         writeln!(file,"{serialized}")?;
     }
+    println!("{serialized}");
+    Ok(())
+}
+
+fn run_solved_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
+    use blueprint::public_belief::solved_spot::{exact_flop, SpotInput};
+    let input = value(args, "--input").ok_or("--input is required")?;
+    let output = value(args, "--output").ok_or("--output is required")?;
+    let max_decision_nodes = value(args, "--max-decision-nodes").ok_or("--max-decision-nodes is required")?.parse()?;
+    let max_seconds = value(args, "--max-seconds").ok_or("--max-seconds is required")?.parse()?;
+    if !(4..=500_000).contains(&max_decision_nodes) || !(1..=600).contains(&max_seconds) {
+        return Err("invalid exact-flop structural/time budget".into());
+    }
+    if PathBuf::from(&output).exists() { return Err("pilot output must be new".into()); }
+    let input: SpotInput = serde_json::from_slice(&fs::read(input)?)?;
+    let report = exact_flop::run(input, exact_flop::PilotLimits { max_decision_nodes, max_seconds })?;
+    let serialized = serde_json::to_string_pretty(&report)?;
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+    writeln!(file, "{serialized}")?;
     println!("{serialized}");
     Ok(())
 }
@@ -3860,6 +3880,7 @@ Usage:
   preflop-solver solved-spot --input <spot.json> --output <new-artifact.json> [--dense-reference]
   preflop-solver solved-spot --verify --input <artifact.json>
   preflop-solver solved-spot-audit --input <spot.json> [--output <new-report.json>]
+  preflop-solver solved-flop-pilot --input <flop.json> --output <new-report.json> --max-decision-nodes <4..500000> --max-seconds <1..600>
   preflop-solver turn-river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
   preflop-solver turn-pbs-upgrade-targets [options]

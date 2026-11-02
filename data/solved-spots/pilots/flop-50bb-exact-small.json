@@ -1,0 +1,14 @@
+{
+  "id": "flop-50bb-exact-small",
+  "title": "50bb exact flop pilot · not a serving model",
+  "description": "Bounded complete flop-to-river research game on Qs 9h 6c. The 80bb pot leaves 10bb behind, so modeled bets collapse to all-in. This cheap first pilot tests both chance arrivals and all-in settlement, not broad strategic coverage.",
+  "rangeAssumptions": "Illustrative seven-combo ranges on each side, equal per-combo weights: BTN QQ/T8s, BB 99/JTs. These are declared study ranges, not certified earlier-street policies. Rake-free Home game.",
+  "board": [43, 30, 16],
+  "depthBb": 50,
+  "potBb": 80,
+  "rangeClasses": [["QQ", "T8s"], ["99", "JTs"]],
+  "betPotFractions": [0.5, 1.0],
+  "raisePotFractions": [1.0],
+  "raiseCap": 1,
+  "iterations": 32
+}

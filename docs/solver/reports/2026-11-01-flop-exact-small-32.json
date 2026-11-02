@@ -1,0 +1,66 @@
+{
+  "schema": "exact-flop-pilot-v1",
+  "input": {
+    "id": "flop-50bb-exact-small",
+    "title": "50bb exact flop pilot · not a serving model",
+    "description": "Bounded complete flop-to-river research game on Qs 9h 6c. The 80bb pot leaves 10bb behind, so modeled bets collapse to all-in. This cheap first pilot tests both chance arrivals and all-in settlement, not broad strategic coverage.",
+    "rangeAssumptions": "Illustrative seven-combo ranges on each side, equal per-combo weights: BTN QQ/T8s, BB 99/JTs. These are declared study ranges, not certified earlier-street policies. Rake-free Home game.",
+    "board": [
+      43,
+      30,
+      16
+    ],
+    "depthBb": 50.0,
+    "potBb": 80.0,
+    "rangeClasses": [
+      [
+        "QQ",
+        "T8s"
+      ],
+      [
+        "99",
+        "JTs"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 32
+  },
+  "inputSha256": "8bbe2e360217206c865df16819613835d0dde0c7b843aa227102f16b2c1dd6ac",
+  "limits": {
+    "maxDecisionNodes": 10000,
+    "maxSeconds": 120
+  },
+  "iterationsCompleted": 32,
+  "publicDecisionNodes": 9608,
+  "treeNodesIncludingChanceAndTerminals": 21618,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 1980160,
+  "equityCacheElementBytes": 941584,
+  "frozenPolicySha256": "5dacc2e93bac802d34fcca062cc040f9d57acf19895390b23461c0e2e0d81258",
+  "profileValueBb": [
+    3.222222222222219,
+    -3.2222222222222188
+  ],
+  "bestResponseValueBb": [
+    3.222222222222219,
+    -3.2222222222222188
+  ],
+  "totalBestResponseGainBb": 0.0,
+  "maximumProbabilitySumError": 0.0,
+  "maximumIndependentProfileDifferenceBb": 5.773159728050814e-15,
+  "zeroSumResidualBb": 4.440892098500626e-16,
+  "conditionalResponseGainGatePassed": true,
+  "initializationSeconds": 0.019999333,
+  "trainingSeconds": 0.22957675,
+  "checkingSeconds": 0.012773,
+  "actionEvValidationCompleted": false,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}

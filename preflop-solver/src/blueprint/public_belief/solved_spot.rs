@@ -5,6 +5,7 @@ use super::*;
 
 mod footprint;
 pub use footprint::{audit, SpotFootprint};
+pub mod exact_flop;
 
 pub const SCHEMA: &str = "solved-river-spot-v1";
 pub const TURN_SCHEMA: &str = "solved-turn-river-spot-v1";
@@ -121,7 +122,7 @@ fn config(input: &SpotInput) -> Result<SpotConfig, String> {
     config_for_audit(input, false)
 }
 
-// A flop is accepted ONLY by the structural audit, not solve/export/verify.
+// A flop is accepted by offline audits/pilots, not serving solve/export/verify.
 fn config_for_audit(input: &SpotInput, allow_flop: bool) -> Result<SpotConfig, String> {
     if input.id.is_empty()
         || input.id.len() > 80
