@@ -7,6 +7,98 @@ struct Checker<'a> {
     frozen: &'a [Vec<f32>],
     equities: BTreeMap<(usize, usize, usize), f64>,
     guard: &'a Guard,
+    values: Option<&'a [values::NodeValues]>,
+    checked: Vec<Vec<bool>>,
+    maximum_error: f64,
+}
+
+pub(super) struct ValueCheck {
+    pub rows: usize,
+    pub actions: usize,
+    pub unavailable_rows: usize,
+    pub maximum_error: f64,
+}
+
+pub(super) fn verify_values(
+    game: &Game,
+    frozen: &[Vec<f32>],
+    values: &[values::NodeValues],
+    guard: &Guard,
+) -> Result<ValueCheck, String> {
+    game.check_probabilities(frozen)?;
+    if values.len() != game.nodes.len() {
+        return Err("incomplete frozen action values".into());
+    }
+    let mut checker = Checker {
+        game,
+        frozen,
+        equities: BTreeMap::new(),
+        guard,
+        values: Some(values),
+        checked: Vec::new(),
+        maximum_error: 0.0,
+    };
+    for (node, values) in game.nodes.iter().zip(values) {
+        let rows = match &node.kind {
+            Kind::Decision { actor, .. } => game.boards[node.board].legal[*actor].len(),
+            _ => 0,
+        };
+        if values.cells.len() != node.sums.len()
+            || values.available.len() != rows
+            || values.cells.iter().any(|v| !v.is_finite())
+        {
+            return Err("invalid frozen action-value dimensions or numbers".into());
+        }
+        checker.checked.push(vec![false; rows]);
+    }
+    for hero in 0..2 {
+        for own in 0..game.combos[hero].len() {
+            let opponents = game.prior[1 - hero]
+                .iter()
+                .enumerate()
+                .map(|(other, w)| {
+                    let pair = if hero == 0 {
+                        game.pair(own, other)
+                    } else {
+                        game.pair(other, own)
+                    };
+                    if game.compatible[pair] {
+                        *w
+                    } else {
+                        0.0
+                    }
+                })
+                .collect::<Vec<_>>();
+            checker.walk(game.root, hero, own, &opponents, false)?;
+        }
+    }
+    let mut report = ValueCheck {
+        rows: 0,
+        actions: 0,
+        unavailable_rows: 0,
+        maximum_error: checker.maximum_error,
+    };
+    for (id, values) in values.iter().enumerate() {
+        for (row, available) in values.available.iter().enumerate() {
+            if *available != checker.checked[id][row] {
+                return Err(
+                    "action-value reach availability disagreed with independent checker".into(),
+                );
+            }
+            if *available {
+                report.rows += 1;
+                if let Kind::Decision { children, .. } = &game.nodes[id].kind {
+                    report.actions += children.len();
+                }
+            } else {
+                report.unavailable_rows += 1;
+            }
+        }
+    }
+    if report.maximum_error > EV_TOLERANCE {
+        return Err("stored action-EV error exceeds unchanged gate".into());
+    }
+    Ok(report)
 }
 
 pub(super) fn verify(
@@ -20,6 +112,9 @@ pub(super) fn verify(
         frozen,
         equities: BTreeMap::new(),
         guard,
+        values: None,
+        checked: Vec::new(),
+        maximum_error: 0.0,
     };
     let mut profile = [0.0; 2];
     let mut best = [0.0; 2];
@@ -189,6 +284,26 @@ impl Checker<'_> {
                             .collect()
                     };
                     values.push(self.walk(*child, hero, own, &masked, best)?);
+                }
+                if *actor == hero && !best {
+                    if let Some(stored) = self.values {
+                        let row = self.game.boards[node.board].rows[hero][own].unwrap();
+                        if !stored[id].available[row] {
+                            return Err("missing reachable action values".into());
+                        }
+                        let mass: f64 = opponents.iter().sum();
+                        for (action, value) in values.iter().enumerate() {
+                            let error =
+                                (f64::from(stored[id].cells[row * children.len() + action])
+                                    - value / mass)
+                                    .abs();
+                            if !error.is_finite() {
+                                return Err("nonfinite independent action-EV discrepancy".into());
+                            }
+                            self.maximum_error = self.maximum_error.max(error);
+                        }
+                        self.checked[id][row] = true;
+                    }
                 }
                 Ok(if *actor != hero {
                     values.iter().sum()

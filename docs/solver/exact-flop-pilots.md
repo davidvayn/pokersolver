@@ -46,8 +46,9 @@ low-reach holding or chance outcome is pruned to clear a quality threshold.
   Both paths still share the native hand rules, card model and evaluator.
 - The report records the **sum** of both unilateral gains; the existing
   conditional response-gain target remains ≤0.05bb/spot, not half that sum.
-  Passing this diagnostic alone does not authorize serving: complete stored
-  action-EV checking and bounded, pinned policy shards remain outstanding.
+  Passing this diagnostic alone does not authorize serving. The initial v1
+  reports lacked action-EV checking; v2 adds the checks below. Bounded, pinned
+  policy shards and browser serving verification still remain outstanding.
 
 Tests reproduce every decision's frozen frequencies against the existing
 river/turn solver on matched inputs. Further tests cover repeatable full-flop
@@ -82,8 +83,10 @@ caches consume additional memory. Measure peak process memory separately.
 
 Only an immutable research report is written. An unconverged completed pilot
 may record `conditionalResponseGainGatePassed: false`; that is useful research,
-not permission to export a failed policy. `servingArtifactProduced`,
-`actionEvValidationCompleted` and `fullHandGtoClaim` are explicitly false.
+not permission to export a failed policy. `servingArtifactProduced` and
+`fullHandGtoClaim` remain false. Historical v1 reports also set
+`actionEvValidationCompleted` false; v2 sets it true only after independently
+checking all available frozen action values and their reach flags.
 `solved-spot` still rejects flop inputs, and the normal serving catalog is not
 changed by this command.
 
@@ -119,7 +122,53 @@ release tests passed (60 resource/fixture cases ignored); `npm run build` passed
 including fresh integrity and native verification of all eight unchanged saved
 studies. This part is offline-only; no browser-facing contract was changed.
 
-Next useful part: generate complete conditional action-EV rows from the frozen
+Next useful part at v1: generate complete conditional action-EV rows from the frozen
 policy, independently verify their quantization/error and zero-reach handling,
 then design bounded, hash-pinned serving shards. No cloud compute is justified
 for these measured narrow pilots.
+
+## Frozen action-EV completion (v2)
+
+The vector profile pass now records each action's EV under the **frozen policy's
+continuation**, not under a best-response continuation. It divides counterfactual
+values by the compatible opponent reach for that exact own combo at that node.
+The stored rows are f32, with an explicit availability bit per combo. A zero
+opponent denominator means unavailable, not a zero EV or permission to grade.
+Zero own-policy reach does not prevent evaluating a user's deviation.
+
+A separate scalar pass compares every available stored action against direct
+private-pair/runout enumeration. It also requires every availability bit to
+match independently observed opponent reach. All available rows must be visited;
+a missing row or a spurious value on a zero-opponent-reach row fails checking.
+The unchanged maximum action-EV discrepancy gate is 0.0001bb. Policy and EV
+hashes are separate, with the EV hash bound to the frozen policy hash.
+
+Tests explicitly reject altered EVs, missing reachable values, and falsely
+available zero-reach values. Exact enumeration has no Monte Carlo sampling
+error; f32 rounding and the finite policy's remaining strategy gap still exist.
+This is not an assertion that every action is an equilibrium action or that
+the full preflop-to-river policy is solved.
+
+The 512-round [v2 report](reports/2026-11-01-flop-exact-sizing-512-values.json)
+checks **1,017,950 action values across 453,288 combo rows**. Maximum stored-EV
+error is **0.00000190734864bb**, below the unchanged 0.0001bb gate. The other
+221,904 rows have zero compatible opponent reach and remain explicitly
+unavailable. They are not treated as successful zero-loss decisions.
+
+The policy hash, both profile/response values and summed response gain exactly
+match v1's 512-round result. A repeated smoke run also reproduces its new EV
+hash. This completes value generation/checking, not a new strategy improvement.
+The full v2 run took 51.46s and 108,642,304 bytes maximum RSS on the same local
+machine; checking itself took 1.136s. No paid compute was used.
+
+Final v2 checks passed: 513 native release tests (60 resource/fixture cases
+ignored), 349 TypeScript tests (20 optional integrations skipped), and production
+build, including fresh verification of the existing eight saved studies. Their
+catalog and immutable artifacts are unchanged. No browser-facing changes were
+made in either offline part.
+
+Remaining before this flop study can enter the library: export the frozen
+policy/EV data as bounded immutable shards, implement pinned lazy lookup and
+fail-closed loading in the library, reproduce values with the TypeScript
+rules/evaluator, and exercise the complete browser practice flow. Broader range
+and depth coverage remain separate from this narrow conditional pilot.

@@ -64,10 +64,10 @@ fn exact_flop_cli_writes_immutable_research_not_serving_artifacts() {
     );
     let bytes = fs::read(&output).unwrap();
     let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(report["schema"], "exact-flop-pilot-v1");
+    assert_eq!(report["schema"], "exact-flop-pilot-v2");
     assert_eq!(report["publicDecisionNodes"], 9608);
     assert_eq!(report["servingArtifactProduced"], false);
-    assert_eq!(report["actionEvValidationCompleted"], false);
+    assert_eq!(report["actionEvValidationCompleted"], true);
     assert_eq!(report["fullHandGtoClaim"], false);
     assert!(report.get("accepted").is_none());
     assert!(!run().status.success());

@@ -509,7 +509,7 @@ impl Game {
         hero: usize,
         guard: &Guard,
     ) -> Result<f64, String> {
-        let values = self.profile_walk(self.root, self.prior.clone(), frozen, hero, guard)?;
+        let values = self.profile_walk(self.root, self.prior.clone(), frozen, hero, guard, None)?;
         Ok(values
             .iter()
             .zip(&self.prior[hero])
@@ -518,13 +518,14 @@ impl Game {
             / self.joint_mass())
     }
 
-    fn profile_walk(
+    pub(super) fn profile_walk(
         &self,
         id: usize,
         reaches: [Vec<f64>; 2],
         frozen: &[Vec<f32>],
         hero: usize,
         guard: &Guard,
+        mut records: Option<&mut [values::NodeValues]>,
     ) -> Result<Vec<f64>, String> {
         guard.tick()?;
         let node = &self.nodes[id];
@@ -543,10 +544,14 @@ impl Game {
                             }
                         }
                     }
-                    for (v, c) in values
-                        .iter_mut()
-                        .zip(self.profile_walk(*child, masked, frozen, hero, guard)?)
-                    {
+                    for (v, c) in values.iter_mut().zip(self.profile_walk(
+                        *child,
+                        masked,
+                        frozen,
+                        hero,
+                        guard,
+                        records.as_deref_mut(),
+                    )?) {
                         *v += c / divisor;
                     }
                 }
@@ -558,8 +563,39 @@ impl Game {
                     for c in &self.boards[node.board].legal[*actor] {
                         masked[*actor][*c] *= self.probability(frozen, id, *c, action);
                     }
-                    let child = self.profile_walk(*child, masked, frozen, hero, guard)?;
+                    let child = self.profile_walk(
+                        *child,
+                        masked,
+                        frozen,
+                        hero,
+                        guard,
+                        records.as_deref_mut(),
+                    )?;
                     for c in &self.boards[node.board].legal[hero] {
+                        if *actor == hero {
+                            if let Some(records) = records.as_deref_mut() {
+                                let mass: f64 = self.boards[node.board].legal[1 - hero]
+                                    .iter()
+                                    .filter_map(|other| {
+                                        let pair = if hero == 0 {
+                                            self.pair(*c, *other)
+                                        } else {
+                                            self.pair(*other, *c)
+                                        };
+                                        self.compatible[pair].then_some(reaches[1 - hero][*other])
+                                    })
+                                    .sum();
+                                if mass > 0.0 {
+                                    let row = self.boards[node.board].rows[hero][*c].unwrap();
+                                    let ev = (child[*c] / mass) as f32;
+                                    if !ev.is_finite() {
+                                        return Err("nonfinite frozen action value".into());
+                                    }
+                                    records[id].cells[row * children.len() + action] = ev;
+                                    records[id].available[row] = true;
+                                }
+                            }
+                        }
                         values[*c] += child[*c]
                             * if *actor == hero {
                                 self.probability(frozen, id, *c, action)

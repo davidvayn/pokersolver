@@ -32,7 +32,7 @@ fn complete_flop_is_deterministic_and_agrees_with_independent_pair_values() {
     assert!(a.maximum_independent_profile_difference_bb < 1e-10);
     assert!(a.total_best_response_gain_bb >= -1e-10);
     assert!(
-        !a.serving_artifact_produced && !a.action_ev_validation_completed && !a.full_hand_gto_claim
+        !a.serving_artifact_produced && a.action_ev_validation_completed && !a.full_hand_gto_claim
     );
 }
 
@@ -109,6 +109,44 @@ fn exact_pilot_rejects_structural_time_and_invalid_probability_inputs() {
     frozen[game.root][0] = f32::NAN;
     assert!(check::verify(&game, &frozen, &guard()).is_err());
     assert!(game.check_probabilities(&[]).is_err());
+}
+
+#[test]
+fn action_values_match_direct_check_and_reject_corruption_and_wrong_reach_flags() {
+    let config = config_for_audit(&input(), true).unwrap();
+    let game = Game::new(&config, &guard()).unwrap();
+    let mut frozen = game.freeze().unwrap();
+    let Kind::Decision { children, .. } = &game.nodes[game.root].kind else {
+        unreachable!()
+    };
+    for row in frozen[game.root].chunks_exact_mut(children.len()) {
+        row.fill(0.0);
+        row[0] = 1.0;
+    }
+    let mut values = values::collect(&game, &frozen, &guard()).unwrap();
+    let report = check::verify_values(&game, &frozen, &values, &guard()).unwrap();
+    assert!(report.rows > 0 && report.actions > report.rows);
+    assert!(report.unavailable_rows > 0);
+    assert!(report.maximum_error < EV_TOLERANCE);
+    let original = values[game.root].cells[0];
+    values[game.root].cells[0] += 1.0;
+    assert!(check::verify_values(&game, &frozen, &values, &guard()).is_err());
+    values[game.root].cells[0] = original;
+    values[game.root].available[0] = false;
+    assert!(check::verify_values(&game, &frozen, &values, &guard()).is_err());
+    values[game.root].available[0] = true;
+    let (id, row) = values
+        .iter()
+        .enumerate()
+        .find_map(|(id, n)| {
+            n.available
+                .iter()
+                .position(|present| !present)
+                .map(|row| (id, row))
+        })
+        .unwrap();
+    values[id].available[row] = true;
+    assert!(check::verify_values(&game, &frozen, &values, &guard()).is_err());
 }
 
 #[test]

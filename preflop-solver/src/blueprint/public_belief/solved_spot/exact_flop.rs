@@ -7,6 +7,7 @@ mod check;
 #[cfg(test)]
 mod tests;
 mod tree;
+mod values;
 use tree::{Game, Kind};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -54,6 +55,11 @@ pub struct PilotReport {
     pub regret_average_array_bytes: usize,
     pub equity_cache_element_bytes: usize,
     pub frozen_policy_sha256: String,
+    pub frozen_action_values_sha256: String,
+    pub action_value_rows_checked: usize,
+    pub action_values_checked: usize,
+    pub rows_without_opponent_reach: usize,
+    pub maximum_action_ev_error_bb: f64,
     pub profile_value_bb: [f64; 2],
     pub best_response_value_bb: [f64; 2],
     pub total_best_response_gain_bb: f64,
@@ -108,6 +114,8 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
     let frozen = game.freeze()?;
     let maximum_probability_sum_error = game.check_probabilities(&frozen)?;
     let (profile_value_bb, best_response_value_bb) = check::verify(&game, &frozen, &guard)?;
+    let action_values = values::collect(&game, &frozen, &guard)?;
+    let ev_check = check::verify_values(&game, &frozen, &action_values, &guard)?;
     let vector = [
         game.profile_value(&frozen, 0, &guard)?,
         game.profile_value(&frozen, 1, &guard)?,
@@ -119,7 +127,8 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
     let gain = (0..2)
         .map(|p| best_response_value_bb[p] - profile_value_bb[p])
         .sum::<f64>();
-    if difference > 1e-8
+    if vector.iter().any(|v| !v.is_finite())
+        || difference > 1e-8
         || zero_sum > 1e-8
         || !gain.is_finite()
         || (0..2).any(|p| best_response_value_bb[p] + 1e-8 < profile_value_bb[p])
@@ -141,8 +150,9 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
         }
     }
     guard.check()?;
+    let frozen_policy_sha256 = format!("{:x}", digest.finalize());
     Ok(PilotReport {
-        schema: "exact-flop-pilot-v1".into(),
+        schema: "exact-flop-pilot-v2".into(),
         input_sha256,
         iterations_completed: input.iterations,
         input,
@@ -152,7 +162,12 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
         board_contexts: game.boards.len(),
         regret_average_array_bytes: game.array_bytes(),
         equity_cache_element_bytes: game.boards.iter().map(|b| b.equity.len() * 8).sum(),
-        frozen_policy_sha256: format!("{:x}", digest.finalize()),
+        frozen_action_values_sha256: values::fingerprint(&action_values, &frozen_policy_sha256),
+        frozen_policy_sha256,
+        action_value_rows_checked: ev_check.rows,
+        action_values_checked: ev_check.actions,
+        rows_without_opponent_reach: ev_check.unavailable_rows,
+        maximum_action_ev_error_bb: ev_check.maximum_error,
         profile_value_bb,
         best_response_value_bb,
         total_best_response_gain_bb: gain,
@@ -163,7 +178,7 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
         initialization_seconds,
         training_seconds,
         checking_seconds: checking_start.elapsed().as_secs_f64(),
-        action_ev_validation_completed: false,
+        action_ev_validation_completed: true,
         serving_artifact_produced: false,
         full_hand_gto_claim: false,
     })
