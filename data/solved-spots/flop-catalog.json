@@ -1,0 +1,38 @@
+[
+  {
+    "id": "flop-50bb-draws",
+    "title": "50bb · Flop to river · Sets and draws",
+    "board": [
+      43,
+      30,
+      16
+    ],
+    "depthBb": 50,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-50bb-draws/dda53afb0ca6af19e6be7dc17b6aad8dc4d41ac60203856914c361f688617c50.json",
+    "sha256": "dda53afb0ca6af19e6be7dc17b6aad8dc4d41ac60203856914c361f688617c50",
+    "bytes": 234147,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 45,
+      "profileValueBb": [
+        6.123725716386967,
+        -6.123725716386964
+      ],
+      "bestResponseValueBb": [
+        6.1250891182049365,
+        -6.1188140192602365
+      ],
+      "unilateralGainBb": [
+        0.0013634018179695673,
+        0.004911697126727788
+      ],
+      "totalBestResponseGainBb": 0.006275098944697355,
+      "maximumActionEvErrorBb": 0.0000019073486399179274,
+      "maximumProbabilitySumError": 4.470348358154297e-8,
+      "zeroSumResidualBb": 2.6645352591003757e-15,
+      "accepted": true,
+      "riverOutcomes": 89100
+    }
+  }
+]

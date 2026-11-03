@@ -18,9 +18,10 @@ export interface SpotVerification {
 export interface SpotCatalogEntry {
   id: string; title: string; board: number[]; depthBb: number;
   url: string; sha256: string; bytes: number; verification: SpotVerification;
+  format?: 'sharded-flop-v1';
 }
 export interface SolvedSpot {
-  schema: 'solved-river-spot-v1' | 'solved-turn-river-spot-v1';
+  schema: 'solved-river-spot-v1' | 'solved-turn-river-spot-v1' | 'solved-flop-sharded-v1';
   inputSha256: string;
   input: {
     id: string; title: string; description: string; rangeAssumptions: string;
@@ -33,6 +34,12 @@ export interface SolvedSpot {
   ranges: [Array<[number, number]>, Array<[number, number]>];
   nodes: SolvedSpotNode[];
   verification: SpotVerification;
+  nodeCount?: number;
+  runtime?: {
+    node(id: string): SolvedSpotNode | undefined;
+    step(session: SpotSession, actionId: string): SpotSession;
+    prepare(session: SpotSession): Promise<SpotSession>;
+  };
 }
 export interface SolvedSpotNode {
   id: string; actor: 0 | 1; investedBb: [number, number]; streetBetsBb: [number, number];
@@ -59,7 +66,7 @@ export function spotRangeSummary(input: SolvedSpot['input'], player: 0 | 1): str
 }
 
 /** Declared per-combo inclusion weights, normalized after public card removal. */
-function declaredRanges(input: SolvedSpot['input']): Map<number,number>[] {
+export function declaredRanges(input: SolvedSpot['input']): Map<number,number>[] {
   const weights = input.rangeClassWeights;
   if (!Array.isArray(input.rangeClasses) || input.rangeClasses.length !== 2
     || (weights !== undefined && (!Array.isArray(weights) || weights.length !== 2))) throw new Error();
@@ -161,6 +168,7 @@ export function validateSolvedSpot(value: unknown): SolvedSpot {
 }
 
 export async function loadSolvedSpot(entry: SpotCatalogEntry, signal?: AbortSignal): Promise<SolvedSpot> {
+  if (entry.format === 'sharded-flop-v1') return (await import('./solved-flop')).loadFlopSpot(entry, signal);
   if (!/^\/models\/solved-spots\/[a-z0-9-]+\/[a-f0-9]{64}\.json$/.test(entry.url)
     || !/^[a-f0-9]{64}$/.test(entry.sha256) || entry.bytes <= 0 || entry.bytes > 5_000_000) throw new Error('Invalid spot catalog');
   const response = await fetch(entry.url, { signal, cache: 'force-cache' });
@@ -193,7 +201,7 @@ export function startSpot(spot: SolvedSpot, version: string, hero: Seat, random 
   const known = [...spot.input.board, ...cards.flat()];
   const deck = Array.from({length:52}, (_,i) => i).filter((c) => !known.includes(c));
   // A turn strategy must never depend on this shuffled, unrevealed runout.
-  if (spot.input.board.length === 4) for (let i=deck.length-1; i>0; i--) {
+  if (spot.input.board.length < 5) for (let i=deck.length-1; i>0; i--) {
     const j = Math.floor(randomUnit(random) * (i+1));
     [deck[i],deck[j]] = [deck[j],deck[i]];
   }
@@ -201,7 +209,7 @@ export function startSpot(spot: SolvedSpot, version: string, hero: Seat, random 
   const state: HandState = {
     id: `spot-${spot.input.id}-${Date.now()}-${randomUnit(random).toString(36).slice(2)}`,
     modelVersion: version, depthBb: spot.input.depthBb, button: 'button-small-blind', hero,
-    street: spot.input.board.length === 4 ? 'turn' : 'river', holeCards: { 'button-small-blind': cards[0], 'big-blind': cards[1] },
+    street: spot.input.board.length === 3 ? 'flop' : spot.input.board.length === 4 ? 'turn' : 'river', holeCards: { 'button-small-blind': cards[0], 'big-blind': cards[1] },
     board: [...spot.input.board], deck,
     potBb: spot.input.potBb, stacksBb: { 'button-small-blind': spot.input.depthBb - committed, 'big-blind': spot.input.depthBb - committed },
     streetBetsBb: { 'button-small-blind': 0, 'big-blind': 0 }, totalCommittedBb: { 'button-small-blind': committed, 'big-blind': committed },
@@ -213,9 +221,9 @@ export function startSpot(spot: SolvedSpot, version: string, hero: Seat, random 
 
 export function sessionNode(spot: SolvedSpot, session: SpotSession): SolvedSpotNode {
   const { state } = session;
-  const node = spot.nodes.find((n) => n.id === session.nodeId);
+  const node = spot.runtime ? spot.runtime.node(session.nodeId ?? '') : spot.nodes.find((n) => n.id === session.nodeId);
   const expectedBoard = node?.board ?? spot.input.board;
-  if (!node || state.terminal || state.street !== (expectedBoard.length === 4 ? 'turn' : 'river') || state.depthBb !== spot.input.depthBb
+  if (!node || state.terminal || state.street !== (expectedBoard.length === 3 ? 'flop' : expectedBoard.length === 4 ? 'turn' : 'river') || state.depthBb !== spot.input.depthBb
     || JSON.stringify(state.board) !== JSON.stringify(expectedBoard) || state.toAct !== SPOT_SEATS[node.actor]
     || SPOT_SEATS.some((seat, p) => !near(state.totalCommittedBb[seat],node.investedBb[p])
       || !near(state.streetBetsBb[seat],node.streetBetsBb[p]) || !near(state.stacksBb[seat],state.depthBb - node.investedBb[p]))) {
@@ -235,6 +243,7 @@ export function spotActions(spot: SolvedSpot, session: SpotSession): PolicyActio
 }
 
 export function advanceSpot(spot: SolvedSpot, session: SpotSession, actionId: string): SpotSession {
+  if (spot.runtime) throw new Error('Sharded studies require beginSpotAction and prepareSpotSession');
   const node = sessionNode(spot, session);
   const action = node.actions.find((a) => a.id === actionId);
   if (!action) throw new Error('Action is not part of this saved solution');
@@ -250,6 +259,15 @@ export function advanceSpot(spot: SolvedSpot, session: SpotSession, actionId: st
   if (next.state.terminal !== (next.nodeId === null)) throw new Error('Saved solution/hand engine disagree on settlement');
   if (!next.state.terminal) sessionNode(spot, next);
   return next;
+}
+
+/** A pending session is displayable, but must be prepared before lookup/grading. */
+export function beginSpotAction(spot: SolvedSpot, session: SpotSession, actionId: string): SpotSession {
+  return spot.runtime ? spot.runtime.step(session, actionId) : advanceSpot(spot, session, actionId);
+}
+export async function prepareSpotSession(spot: SolvedSpot, session: SpotSession): Promise<SpotSession> {
+  if (session.state.terminal && session.nodeId === null) return session;
+  return spot.runtime ? spot.runtime.prepare(session) : session;
 }
 
 export function playSpotOpponent(spot: SolvedSpot, session: SpotSession, random = Math.random): SpotSession {

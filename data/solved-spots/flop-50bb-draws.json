@@ -1,0 +1,9 @@
+{
+  "id": "flop-50bb-draws",
+  "title": "50bb · Flop to river · Sets and draws",
+  "description": "A complete saved flop-to-river game on Qs 9h 6c, with a 32bb pot and 34bb behind. Both seats have deliberately narrow seven-combo starting ranges. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative seven-combo starting ranges per seat: BTN QQ/T8s and BB 99/JTs, equal weight per unblocked exact combination. These ranges were chosen for study, not inferred from a certified earlier betting line. This solves this conditional game, not full-hand Hold'em. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43,30,16], "depthBb":50, "potBb":32,
+  "rangeClasses":[["QQ","T8s"],["99","JTs"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

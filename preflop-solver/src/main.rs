@@ -61,6 +61,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         "solved-spot" => run_solved_spot(&args[1..]),
         "solved-spot-audit" => run_solved_spot_audit(&args[1..]),
         "solved-flop-pilot" => run_solved_flop_pilot(&args[1..]),
+        "solved-flop-export" => run_solved_flop_export(&args[1..]),
+        "solved-flop-verify" => {
+            let path = value(&args[1..], "--manifest").ok_or("--manifest is required")?;
+            let manifest = blueprint::public_belief::solved_spot::exact_flop::bundle::verify(std::path::Path::new(&path))?;
+            println!("{}", serde_json::to_string(&manifest.verification)?); Ok(())
+        },
         "turn-river-pbs-solve" => run_turn_river_pbs_solve(&args[1..]),
         "turn-pbs-targets" => run_turn_pbs_targets(&args[1..]),
         "turn-pbs-upgrade-targets" => run_turn_pbs_upgrade_targets(&args[1..]),
@@ -1385,6 +1391,19 @@ fn run_solved_spot_audit(args: &[String]) -> Result<(), Box<dyn Error>> {
     }
     println!("{serialized}");
     Ok(())
+}
+
+fn run_solved_flop_export(args: &[String]) -> Result<(), Box<dyn Error>> {
+    use blueprint::public_belief::solved_spot::{exact_flop, SpotInput};
+    let input = value(args,"--input").ok_or("--input is required")?;
+    let output = value(args,"--output-dir").ok_or("--output-dir is required")?;
+    let limits = exact_flop::PilotLimits {
+        max_decision_nodes:value(args,"--max-decision-nodes").ok_or("explicit node budget required")?.parse()?,
+        max_seconds:value(args,"--max-seconds").ok_or("explicit time budget required")?.parse()?,
+    };
+    let input:SpotInput = serde_json::from_slice(&fs::read(input)?)?;
+    let name = exact_flop::bundle::export(input,limits,std::path::Path::new(&output))?;
+    println!("{}",serde_json::json!({"manifest":name})); Ok(())
 }
 
 fn run_solved_flop_pilot(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -3881,6 +3900,8 @@ Usage:
   preflop-solver solved-spot --verify --input <artifact.json>
   preflop-solver solved-spot-audit --input <spot.json> [--output <new-report.json>]
   preflop-solver solved-flop-pilot --input <flop.json> --output <new-report.json> --max-decision-nodes <4..500000> --max-seconds <1..600>
+  preflop-solver solved-flop-export --input <flop.json> --output-dir <new-directory> --max-decision-nodes <4..500000> --max-seconds <1..600>
+  preflop-solver solved-flop-verify --manifest <sha256.json>
   preflop-solver turn-river-pbs-solve [options]
   preflop-solver turn-pbs-targets [options]
   preflop-solver turn-pbs-upgrade-targets [options]

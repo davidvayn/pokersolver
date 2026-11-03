@@ -3,6 +3,7 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+pub mod bundle;
 mod check;
 #[cfg(test)]
 mod tests;
@@ -76,6 +77,13 @@ pub struct PilotReport {
 }
 
 pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String> {
+    Ok(solve_checked(input, limits)?.0)
+}
+
+fn solve_checked(
+    input: SpotInput,
+    limits: PilotLimits,
+) -> Result<(PilotReport, Game, Vec<Vec<f32>>, Vec<values::NodeValues>), String> {
     if input.board.len() != 3
         || !(20..=1024).contains(&input.iterations)
         || !(4..=500_000).contains(&limits.max_decision_nodes)
@@ -151,7 +159,7 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
     }
     guard.check()?;
     let frozen_policy_sha256 = format!("{:x}", digest.finalize());
-    Ok(PilotReport {
+    let report = PilotReport {
         schema: "exact-flop-pilot-v2".into(),
         input_sha256,
         iterations_completed: input.iterations,
@@ -181,5 +189,6 @@ pub fn run(input: SpotInput, limits: PilotLimits) -> Result<PilotReport, String>
         action_ev_validation_completed: true,
         serving_artifact_produced: false,
         full_hand_gto_claim: false,
-    })
+    };
+    Ok((report, game, frozen, action_values))
 }
