@@ -48,6 +48,7 @@ interface PracticeTableProps {
   mode: PracticeMode;
   unavailableMessage?: string;
   errorMessage?: string;
+  loadingMessage?: string;
   revealOpponent: boolean;
   selectedActionId: string | null;
   onAction: (action: LegalAction) => void;
@@ -200,6 +201,7 @@ export function PracticeTable({
   mode,
   unavailableMessage,
   errorMessage,
+  loadingMessage,
   revealOpponent,
   selectedActionId,
   onAction,
@@ -258,7 +260,7 @@ export function PracticeTable({
       : '';
   const liveMessage =
     status === 'loading'
-      ? 'Loading practice spot'
+      ? loadingMessage ?? 'Loading practice spot'
       : status === 'transitioning'
         ? state?.street === 'preflop'
           ? 'Completing the preflop action.'
@@ -486,7 +488,7 @@ export function PracticeTable({
                 </p>
                 <p className="mt-1 text-xs leading-5 text-white/65">
                   {status === 'loading'
-                    ? 'Dealing unique cards and pinning the model version.'
+                    ? loadingMessage ?? 'Dealing unique cards and pinning the model version.'
                     : status === 'solving'
                       ? 'Almost done — the postflop strategy started during preflop.'
                       : status === 'unavailable'

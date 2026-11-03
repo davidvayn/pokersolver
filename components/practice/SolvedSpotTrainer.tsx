@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PracticeTable, type TableStatus } from '@/components/practice/PracticeTable';
-import { advanceSpot, loadSolvedSpot, playSpotOpponent, spotActions, spotEvLoss, spotRangeSummary, startSpot,
+import { beginSpotAction, loadSolvedSpot, spotActions, spotEvLoss, spotRangeSummary, startSpot,
   type SolvedSpot, type SpotCatalogEntry, type SpotSession } from '@/lib/solved-spots';
+import { prepareSpotLine } from '@/lib/solved-spot-line';
 import type { LegalAction, PolicyAction, PracticeStreet, Seat } from '@/lib/practice-types';
 
 interface DecisionReview { actions: PolicyAction[]; chosen: string; loss: number | null; street: PracticeStreet }
+interface PendingLine { spot: SolvedSpot; session: SpotSession; stop: 'feedback' | 'decision'; review?: DecisionReview; generation: number }
 const buttonClass = 'min-h-11 rounded-md border border-border bg-surface px-3 py-2 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent';
 
 export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) {
@@ -22,53 +24,83 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const feedbackRef = useRef<HTMLElement>(null);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const pending = useRef<PendingLine | null>(null);
+
+  async function resume(line: PendingLine) {
+    if (busy.current || line.generation !== generation.current) return;
+    busy.current = true; pending.current = line; setStatus('loading'); setError('');
+    try {
+      const next = await prepareSpotLine(line.spot, line.session, line.stop, (progress) => {
+        if (line.generation !== generation.current) throw new Error('Saved spot changed');
+        line.session = progress; setSession(progress);
+      });
+      if (line.generation !== generation.current) return;
+      // A failed shard must not grade the interrupted action. Commit feedback
+      // only once preparation succeeds; Retry resumes the same cursor.
+      if (line.review) setReviews((previous) => [...previous, line.review!]);
+      pending.current = null;
+      setStatus(line.stop === 'feedback' ? 'feedback' : next.state.terminal ? 'review' : 'decision');
+    } catch (cause) {
+      if (line.generation === generation.current) fail(cause);
+    } finally {
+      if (line.generation === generation.current) busy.current = false;
+    }
+  }
 
   useEffect(() => {
     const abort = new AbortController();
-    setStatus('loading'); setError(''); setSpot(null); setSession(null); setReviews([]);
+    const current = ++generation.current;
+    busy.current = false; pending.current = null;
+    setStatus('loading'); setError(''); setReviews([]);
     if (!entry) { setError('No verified spots are installed.'); setStatus('error'); return; }
     loadSolvedSpot(entry, abort.signal).then((loaded) => {
       if (abort.signal.aborted) return;
       setSpot(loaded);
       // Seat changes apply to the next deal, not to a hand in progress.
-      setSession(playSpotOpponent(loaded, startSpot(loaded, entry.sha256, nextHero.current)));
-      setStatus('decision');
+      void resume({ spot: loaded, session: startSpot(loaded, entry.sha256, nextHero.current), stop: 'decision', generation: current });
     }).catch((cause: unknown) => {
       if (abort.signal.aborted) return;
       setError(cause instanceof Error ? cause.message : 'Unable to load saved spot.'); setStatus('error');
     });
-    return () => abort.abort();
+    return () => { abort.abort(); generation.current++; };
   }, [entry, retry]);
 
   function fail(cause: unknown) {
     setError(cause instanceof Error ? cause.message : 'The saved solution could not be read.'); setStatus('error');
   }
   function nextDeal() {
+    if (busy.current || status === 'loading') return;
     if (nextEntryId !== entryId) {
-      setStatus('loading'); setSpot(null); setSession(null); setReviews([]); setEntryId(nextEntryId); return;
+      setStatus('loading'); setEntryId(nextEntryId); return;
     }
-    if (!spot || !entry) return;
+    if (!spot || !entry || spot.input.id !== entry.id) return;
     try {
-      const next = playSpotOpponent(spot, startSpot(spot, entry.sha256, hero));
-      setSession(next); setReviews([]); setStatus(next.state.terminal ? 'review' : 'decision');
+      setReviews([]);
+      void resume({ spot, session: startSpot(spot, entry.sha256, hero), stop: 'decision', generation: generation.current });
     } catch (cause) { fail(cause); }
   }
   function choose(action: LegalAction) {
-    if (!spot || !session || status !== 'decision' || session.state.toAct !== session.state.hero) return;
+    if (busy.current || !spot || !session || status !== 'decision' || session.state.toAct !== session.state.hero) return;
     try {
       const actions = spotActions(spot, session);
-      const next = advanceSpot(spot, session, action.id);
-      setReviews((previous) => [...previous, { actions, chosen: action.id, loss: spotEvLoss(actions, action.id), street: session.state.street }]);
-      setSession(next); setStatus('feedback');
+      const next = beginSpotAction(spot, session, action.id);
+      void resume({ spot, session: next, stop: 'feedback', generation: generation.current,
+        review: { actions, chosen: action.id, loss: spotEvLoss(actions, action.id), street: session.state.street } });
     } catch (cause) { fail(cause); }
   }
   function continueHand() {
     if (status === 'review') { nextDeal(); return; }
-    if (!spot || !session || status !== 'feedback') return;
+    if (busy.current || !spot || !session || status !== 'feedback') return;
     try {
-      const next = playSpotOpponent(spot, session);
-      setSession(next); setStatus(next.state.terminal ? 'review' : 'decision');
+      void resume({ spot, session, stop: 'decision', generation: generation.current });
     } catch (cause) { fail(cause); }
+  }
+  function retryLine() {
+    if (busy.current) return;
+    if (pending.current) void resume(pending.current);
+    else setRetry((value) => value + 1);
   }
 
   let actions: PolicyAction[] = [];
@@ -93,16 +125,17 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
             <option value="button-small-blind">Button · in position</option>
           </select>
         </label>
-        <button className={buttonClass} disabled={(!spot && nextEntryId === entryId) || status === 'loading'} onClick={nextDeal}>New deal</button>
+        <button className={buttonClass} disabled={((!spot || spot.input.id !== entryId) && nextEntryId === entryId) || status === 'loading'} onClick={nextDeal}>New deal</button>
         {session && session.state.hero !== hero && <p className="text-sm text-muted" role="status">Seat change applies on the next deal.</p>}
         {nextEntryId !== entryId && <p className="text-sm text-muted" role="status">Spot change applies on the next deal.</p>}
       </div>
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <PracticeTable state={session?.state ?? null} node={actions.length ? { actions } : null}
-          status={lookupError ? 'error' : status} mode="postflop" allModeledActions initialEventLabel={spot?.input.board.length === 4 ? 'Turn spot loaded' : 'River spot loaded'} showTableHistory={false}
+          status={lookupError ? 'error' : status} mode="postflop" allModeledActions initialEventLabel={spot?.input.board.length === 3 ? 'Flop spot loaded' : spot?.input.board.length === 4 ? 'Turn spot loaded' : 'River spot loaded'} showTableHistory={false}
+          loadingMessage="Loading the saved strategy. Your hand and actions stay in place."
           errorMessage={lookupError || error} revealOpponent={Boolean(session?.state.terminal && status === 'review')}
           selectedActionId={status === 'feedback' ? lastReview?.chosen ?? null : null}
-          onAction={choose} onContinue={continueHand} onRetry={() => setRetry((v) => v+1)}
+          onAction={choose} onContinue={continueHand} onRetry={retryLine}
           onOpenAnalyst={() => feedbackRef.current?.focus()} />
         <aside className="min-w-0 space-y-6" aria-label="Saved solution and feedback">
           <section ref={feedbackRef} tabIndex={-1} aria-labelledby="spot-feedback-title" className="scroll-mt-4 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
@@ -140,9 +173,9 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
             <p className="mt-2 text-sm leading-6">{spot.input.description}</p>
             <dl className="mt-3 space-y-2 text-sm">
               <div><dt className="text-muted">Total best-response gain · this spot only</dt><dd className="font-mono">{spot.verification.totalBestResponseGainBb.toFixed(5)}bb / ≤0.05000bb</dd></div>
-              <div><dt className="text-muted">Complete saved decision nodes</dt><dd>{spot.nodes.length}</dd></div>
+              <div><dt className="text-muted">Complete saved decision nodes</dt><dd>{(spot.nodeCount ?? spot.nodes.length).toLocaleString()}</dd></div>
               <div><dt className="text-muted">Compatible private-card deals checked</dt><dd>{spot.verification.compatibleDeals.toLocaleString()}</dd></div>
-              {spot.verification.riverOutcomes && <div><dt className="text-muted">Compatible deal–river outcomes</dt><dd>{spot.verification.riverOutcomes.toLocaleString()}</dd></div>}
+              {spot.verification.riverOutcomes && <div><dt className="text-muted">Compatible deal–{spot.input.board.length === 3 ? 'runout' : 'river'} outcomes</dt><dd>{spot.verification.riverOutcomes.toLocaleString()}</dd></div>}
             </dl>
             <details className="mt-4 text-sm">
               <summary className="cursor-pointer py-2 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Ranges, accuracy and version</summary>
@@ -151,7 +184,7 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
               <p className="mt-2 break-words"><strong>BB:</strong> {spotRangeSummary(spot.input,1)}</p>
               {spot.input.rangeClassWeights && <p className="mt-3 leading-6 text-muted">× values are starting-range inclusion multipliers per exact combination, not action probabilities. Public blockers are removed before normalizing; private cards are dealt jointly with card removal.</p>}
               <p className="mt-3 leading-6 text-muted">Bets: {spot.input.betPotFractions.map((f) => `${f*100}% pot`).join(', ')}, plus all-in. Raises: {spot.input.raisePotFractions.map((f) => `${f*100}% of the pot after calling`).join(', ')}, plus all-in. Raise cap: {spot.input.raiseCap} after the initial bet.</p>
-              <p className="mt-3 leading-6 text-muted">Exact pair{spot.input.board.length === 4 ? ' and river' : ''} enumeration checks every saved action EV to 0.0001bb and sums both players’ best-response gains. This is a conditional {spot.input.board.length === 4 ? 'turn-to-river' : 'river'} solution, not a full-hand exploitability certificate. No online resolver or neural values are used.</p>
+              <p className="mt-3 leading-6 text-muted">Exact pair{spot.input.board.length < 5 ? ' and runout' : ''} enumeration checks every saved action EV to 0.0001bb and sums both players’ best-response gains. This is a conditional {spot.input.board.length === 3 ? 'flop-to-river' : spot.input.board.length === 4 ? 'turn-to-river' : 'river'} solution, not a full-hand exploitability certificate. No online resolver or neural values are used.</p>
               <p className="mt-3 break-all font-mono text-xs">Version SHA-256: {entry?.sha256}</p>
             </details>
           </section>}

@@ -2,7 +2,8 @@
 
 ## Scope
 
-`/practice/spots` serves complete, offline-solved river and turn-to-river games, separately from
+`/practice/spots` serves complete, offline-solved river, turn-to-river and narrow
+flop-to-river games, separately from
 experimental full-hand practice. Each game pins the board, initial equal stacks,
 pot, declared exact-combo ranges, betting sizes, and complete continuation policy.
 It does **not** certify a preflop strategy or full-game Hold'em exploitability.
@@ -66,12 +67,17 @@ scope and the remaining complete-flop expansion limits.
 
 ## Serving and practice
 
-The catalog is bundled with the route. The browser downloads one immutable
+The catalog is bundled with the route. For river and turn studies the browser downloads one immutable
 JSON artifact, verifies SHA-256 and schema, and uses direct table lookups—no
 online solver requests. Static hosting/CDN caching is sufficient. Parsing rounds
 the JSON's shortest float32 decimals back to float32, then normalizes each row
 in float64, matching the actual categorical distribution and native verification.
 Missing, malformed or mismatched data pauses the table with Retry, never guesses.
+
+The complete flop study instead uses a hash-pinned manifest and lazy binary
+shards, with a bounded 16-shard cache. See [the format and validation](flop-shards.md).
+Missing shards preserve the pending hand/action and retry preparation, without
+re-dealing, re-sampling an opponent action, or grading an interrupted decision.
 
 The joint starting deal respects both ranges and exact card removal. Both seats
 are playable. Seat changes apply on the next deal. Practice uses the existing

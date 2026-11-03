@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { PageHeading } from '@/components/design/DesignShell';
 import { SolvedSpotTrainer } from '@/components/practice/SolvedSpotTrainer';
 import catalog from '@/data/solved-spots/catalog.json';
+import flopCatalog from '@/data/solved-spots/flop-catalog.json';
 import type { SpotCatalogEntry } from '@/lib/solved-spots';
 
 export default function SolvedSpotsPage() {
@@ -13,7 +14,7 @@ export default function SolvedSpotsPage() {
       <p className="mb-6 max-w-3xl text-sm leading-6 text-muted">
         Verified postflop strategies for the stated ranges and betting sizes—not full-hand GTO.
       </p>
-      <SolvedSpotTrainer entries={catalog as SpotCatalogEntry[]} />
+      <SolvedSpotTrainer entries={[...catalog, ...flopCatalog] as SpotCatalogEntry[]} />
     </div>
   );
 }

@@ -7,6 +7,20 @@ import type { PolicyNode } from '@/lib/practice-types';
 import { NL25_STUDY_RULES } from '@/lib/cash-game-rules';
 
 describe('PracticeTable decision controls', () => {
+  it('keeps the dealt cards visible while immutable saved strategy is loading', () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const state = createHand({ modelVersion: 'saved-test', depthBb: 50, button: 'button-small-blind', hero: 'big-blind', random: seededRandom(3) });
+    const html = renderToStaticMarkup(React.createElement(PracticeTable, {
+      state, node: null, status: 'loading', mode: 'postflop', revealOpponent: false,
+      selectedActionId: null, loadingMessage: 'Loading saved strategy; this hand is retained.',
+      onAction: vi.fn(), onContinue: vi.fn(), onRetry: vi.fn(),
+    }));
+    expect(html).toContain('Loading saved strategy; this hand is retained.');
+    expect(html).not.toContain('Dealing unique cards');
+    expect(html).not.toContain('Currently solving');
+    expect(html).toContain('Hero, Big blind');
+    expect(html).toContain('practice-card');
+  });
   it('exposes every saved library action without revealing the answer or inventing blinds', () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const state = createHand({ modelVersion: 'saved-test', depthBb: 50, button: 'button-small-blind', hero: 'big-blind', random: seededRandom(3) });

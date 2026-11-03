@@ -172,3 +172,49 @@ policy/EV data as bounded immutable shards, implement pinned lazy lookup and
 fail-closed loading in the library, reproduce values with the TypeScript
 rules/evaluator, and exercise the complete browser practice flow. Broader range
 and depth coverage remain separate from this narrow conditional pilot.
+
+## Serving and practice completion (2026-11-02)
+
+Those serving prerequisites are now implemented. The accepted exact 512-update
+game is exported and re-imported as [bounded immutable shards](flop-shards.md),
+with independent TypeScript checks of all public nodes, every available EV and
+both information-set-consistent best responses. Repeating the complete export
+produced the same manifest identity:
+`dda53afb0ca6af19e6be7dc17b6aad8dc4d41ac60203856914c361f688617c50`.
+
+`/practice/spots` includes **50bb · Flop to river · Sets and draws** alongside
+the eight unchanged studies. It uses one frozen average policy through all
+three streets, not independently solved street policies. All modeled actions
+remain available. Private deals, betting, board arrivals and settlement use
+the shared hand engine. The UI immediately publishes the action/dealt board,
+then prepares the required saved node. It holds a pending cursor during loading
+or failure. Retry does not apply an action twice or redraw the hand; a failed
+request cannot create an EV grade. Seat/spot changes remain next-deal changes.
+
+Browser Use completed flop → turn → river → showdown from both seats, including
+turn betting/calling in the mobile flow. Opponent cards remained hidden until
+terminal review; mixes and EVs appeared only after a user decision. Blocking
+the next binary request retained the exact cards and single Check in history,
+showed no grade, and Retry produced exactly one feedback record for that action.
+Initial loading requested the manifest and one root shard, not all 1,957 shards.
+No online resolver or neural-policy API was requested by these saved-hand flows.
+
+Checks at 375/768/1024/1440px in light/dark found no horizontal overflow. Mobile
+controls remain 48px tall above navigation; Review hand is keyboard-operable,
+focuses feedback and shows a visible focus ring. Reduced-motion playback was
+exercised. Native macOS select input again required the documented DOM
+change-event fallback; native select-keyboard behavior is not certified.
+No captured unhandled JavaScript exception occurred. A pre-existing missing
+`favicon.ico` produced a 404, unrelated to strategy playback. Immutable caching
+and COOP/COEP headers were checked on a binary response.
+
+This publishes one narrow conditional study, not the rejected 50bb universal
+neural model, arbitrary-board solving, or a full-hand exploitability improvement.
+Broader starting ranges and additional flop/depth situations still require their
+own measured pilots, complete solves and independent acceptance.
+
+Final checks: 359 TypeScript tests passed (20 optional integrations skipped),
+514 native release tests passed (60 resource/fixture cases ignored), and
+`npm run build` passed with fresh verification of all nine studies and the
+unchanged active full-hand artifacts. The complete native suite ran after the
+exporter change; no Rust source changed during UI integration.
