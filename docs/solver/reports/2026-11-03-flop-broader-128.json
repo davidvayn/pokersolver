@@ -1,0 +1,77 @@
+{
+  "schema": "exact-flop-pilot-v2",
+  "input": {
+    "id": "flop-50bb-broader",
+    "title": "50bb · Flop · Broader ranges",
+    "description": "A complete saved flop-to-river game on Qs 9h 6c, with a 32bb pot and 34bb behind. Broader starting ranges add top pairs, an underpair and additional sets to the earlier sets-and-draws study. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+    "rangeAssumptions": "Illustrative starting ranges: BTN QQ/QJs/T8s/AQs/TT and BB 99/JTs/QTs/66/A9s, equal weight per unblocked exact combination. These are declared study ranges, not outputs of a certified earlier betting line. Every later action and card arrival uses one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+    "board": [
+      43,
+      30,
+      16
+    ],
+    "depthBb": 50.0,
+    "potBb": 32.0,
+    "rangeClasses": [
+      [
+        "QQ",
+        "QJs",
+        "T8s",
+        "AQs",
+        "TT"
+      ],
+      [
+        "99",
+        "JTs",
+        "QTs",
+        "66",
+        "A9s"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 128
+  },
+  "inputSha256": "72e6f92aa05ca6a7080c02f08f93436d61fbbdd73e2e96ae761faa139aff4410",
+  "limits": {
+    "maxDecisionNodes": 500000,
+    "maxSeconds": 600
+  },
+  "iterationsCompleted": 128,
+  "publicDecisionNodes": 104872,
+  "treeNodesIncludingChanceAndTerminals": 250374,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 58965760,
+  "equityCacheElementBytes": 5841664,
+  "frozenPolicySha256": "c3ec713a8a6c33391e6549b523cbc587f928ba6728fe789116b423b77b2a0a0f",
+  "frozenActionValuesSha256": "15770a78e5af949c9fb695936d3a39f8755ccd08498849b478a5fe5fd7ee41c1",
+  "actionValueRowsChecked": 1389929,
+  "actionValuesChecked": 3088149,
+  "rowsWithoutOpponentReach": 298051,
+  "maximumActionEvErrorBb": 1.9073486328125e-6,
+  "profileValueBb": [
+    -3.2187956134438354,
+    3.2187956134438327
+  ],
+  "bestResponseValueBb": [
+    -3.2006847418662,
+    3.2480770503580985
+  ],
+  "totalBestResponseGainBb": 0.047392308491901236,
+  "maximumProbabilitySumError": 5.029141902923584e-8,
+  "maximumIndependentProfileDifferenceBb": 4.440892098500626e-15,
+  "zeroSumResidualBb": 2.6645352591003757e-15,
+  "conditionalResponseGainGatePassed": true,
+  "initializationSeconds": 0.121245375,
+  "trainingSeconds": 26.46767025,
+  "checkingSeconds": 4.80227125,
+  "actionEvValidationCompleted": true,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}

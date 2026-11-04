@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import catalog from '@/data/solved-spots/flop-catalog.json';
 import { decodeFlopShard, validateFlopManifest, type FlopNode } from '@/lib/solved-flop';
 import { beginSpotAction, loadSolvedSpot, prepareSpotSession, sessionNode, spotActions, spotCombo, startSpot, SPOT_SEATS, type SpotCatalogEntry } from '@/lib/solved-spots';
@@ -9,18 +9,22 @@ import { applyAction, seededRandom } from '@/lib/practice-engine';
 import { evaluate } from '@/lib/evaluator';
 import type { HandState } from '@/lib/practice-types';
 
-const entry=catalog[0] as SpotCatalogEntry;
-const bytes=readFileSync(path.join(process.cwd(),'public',entry.url));
-const manifest=validateFlopManifest(JSON.parse(bytes.toString()));
-const directory=path.join(process.cwd(),'public',path.dirname(entry.url));
-const nodes=new Map<number,FlopNode>();
-for(const shard of manifest.shards){
-  const b=readFileSync(path.join(directory,`${shard.sha256}.bin`));
-  if(createHash('sha256').update(b).digest('hex')!==shard.sha256) throw Error('corrupt fixture shard');
-  for(const [id,node] of decodeFlopShard(b,shard,manifest)) nodes.set(id,node);
-}
+describe.each(catalog as SpotCatalogEntry[])('pinned complete flop library: $id',(entry)=>{
+  const bytes=readFileSync(path.join(process.cwd(),'public',entry.url));
+  const manifest=validateFlopManifest(JSON.parse(bytes.toString()));
+  const directory=path.join(process.cwd(),'public',path.dirname(entry.url));
+  const nodes=new Map<number,FlopNode>();
+  // Decode one study at a time: broader corpora must not all stay resident in the
+  // test worker. Every installed study still receives the complete exact checks.
+  beforeAll(()=>{
+    for(const shard of manifest.shards){
+      const b=readFileSync(path.join(directory,`${shard.sha256}.bin`));
+      if(createHash('sha256').update(b).digest('hex')!==shard.sha256) throw Error('corrupt fixture shard');
+      for(const [id,node] of decodeFlopShard(b,shard,manifest)) nodes.set(id,node);
+    }
+  },120_000);
+  afterAll(()=>nodes.clear());
 
-describe('pinned complete flop library',()=>{
   it('bounds every binary shard and rejects malformed headers, rows and metadata',()=>{
     expect(nodes.size).toBe(manifest.treeNodes);
     expect(manifest.shards.every(s=>s.bytes<=65536)).toBe(true);
@@ -62,7 +66,7 @@ describe('pinned complete flop library',()=>{
       expect([...streets]).toEqual(['flop','turn','river']);
       expect(current.nodeId).toBeNull();expect(current.state.result?.reason).toBe('showdown');
       expect(new Set([...current.state.board,...Object.values(current.state.holeCards).flat()]).size).toBe(9);
-      expect(current.state.stacksBb['big-blind']+current.state.stacksBb['button-small-blind']).toBe(100);
+      expect(current.state.stacksBb['big-blind']+current.state.stacksBb['button-small-blind']).toBe(manifest.input.depthBb*2);
       expect(calls.length).toBeLessThan(30);
     } finally {fetcher.mockRestore();}
   });
@@ -136,7 +140,7 @@ describe('pinned complete flop library',()=>{
       for(let p=0;p<2;p++)if(Math.abs(state.totalCommittedBb[SPOT_SEATS[p]]-node.investedBb[p])>1e-7)throw Error('commitment mismatch');
       if(node.tag<2){
         if(!state.terminal||state.result?.reason!==(node.tag===0?'fold':'showdown'))throw Error('wrong terminal');
-        if(Math.abs(state.stacksBb['big-blind']+state.stacksBb['button-small-blind']-100)>1e-7)throw Error('lost chips');return;
+        if(Math.abs(state.stacksBb['big-blind']+state.stacksBb['button-small-blind']-manifest.input.depthBb*2)>1e-7)throw Error('lost chips');return;
       }
       for(let p=0;p<2;p++)if(Math.abs(state.streetBetsBb[SPOT_SEATS[p]]-node.streetBetsBb[p])>1e-7)throw Error('street accounting');
       if(node.tag===2){

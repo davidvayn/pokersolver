@@ -7,6 +7,10 @@ full-hand equilibrium certificate. It starts on Qs 9h 6c with a 32bb pot and
 The four existing river and four turn studies keep their original bytes and
 catalog. Flop studies use a separate registry and catalog.
 
+For additional published range/board situations and their individual gates,
+see [the 2026-11-03 expansion report](flop-library-expansion-2026-11-03.md).
+The original study's figures below remain its own, not corpus-wide totals.
+
 ## Reproduction and acceptance
 
 ```sh

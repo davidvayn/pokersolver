@@ -34,5 +34,41 @@
       "accepted": true,
       "riverOutcomes": 89100
     }
+  },
+  {
+    "id": "flop-50bb-broader",
+    "title": "50bb · Flop · Broader ranges",
+    "board": [
+      43,
+      30,
+      16
+    ],
+    "depthBb": 50,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-50bb-broader/97bd42530d7c1073e4ece106feaa2eb0a918f547be5130823387dc44a292c2c9.json",
+    "sha256": "97bd42530d7c1073e4ece106feaa2eb0a918f547be5130823387dc44a292c2c9",
+    "bytes": 234635,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 259,
+      "profileValueBb": [
+        -3.2150924127551854,
+        3.215092412755183
+      ],
+      "bestResponseValueBb": [
+        -3.2139721475870124,
+        3.2179774030455053
+      ],
+      "unilateralGainBb": [
+        0.0011202651681729847,
+        0.002884990290322076
+      ],
+      "totalBestResponseGainBb": 0.004005255458495061,
+      "maximumActionEvErrorBb": 0.0000019073486399179274,
+      "maximumProbabilitySumError": 4.8019501264207065e-8,
+      "zeroSumResidualBb": 2.220446049250313e-15,
+      "accepted": true,
+      "riverOutcomes": 512820
+    }
   }
 ]

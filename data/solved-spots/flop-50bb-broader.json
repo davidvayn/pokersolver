@@ -1,0 +1,9 @@
+{
+  "id": "flop-50bb-broader",
+  "title": "50bb · Flop · Broader ranges",
+  "description": "A complete saved flop-to-river game on Qs 9h 6c, with a 32bb pot and 34bb behind. Broader starting ranges add top pairs, an underpair and additional sets to the earlier sets-and-draws study. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN QQ/QJs/T8s/AQs/TT and BB 99/JTs/QTs/66/A9s, equal weight per unblocked exact combination. These are declared study ranges, not outputs of a certified earlier betting line. Every later action and card arrival uses one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43,30,16], "depthBb":50, "potBb":32,
+  "rangeClasses":[["QQ","QJs","T8s","AQs","TT"],["99","JTs","QTs","66","A9s"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}
