@@ -1,0 +1,9 @@
+{
+  "id": "flop-50bb-paired",
+  "title": "50bb · Flop · Paired king-high",
+  "description": "A complete saved flop-to-river game on Kh 7d 7c, with a 32bb pot and 34bb behind at 50bb initial depth. The declared ranges include a full house, trips, top pairs, an underpair and unpaired suited hands. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN KK/KQs/A7s/QJs and BB 87s/KJs/88/98s, equal weight per unblocked exact combination. These are declared study ranges, not outputs of a certified earlier betting line. All later betting histories and ordered card arrivals belong to one jointly solved conditional game, not independent street solves. This does not certify full-hand Hold'em. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [46,21,20], "depthBb":50, "potBb":32,
+  "rangeClasses":[["KK","KQs","A7s","QJs"],["87s","KJs","88","98s"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

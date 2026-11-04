@@ -1,0 +1,75 @@
+{
+  "schema": "exact-flop-pilot-v2",
+  "input": {
+    "id": "flop-50bb-paired",
+    "title": "50bb · Flop · Paired king-high",
+    "description": "A complete saved flop-to-river game on Kh 7d 7c, with a 32bb pot and 34bb behind at 50bb initial depth. The declared ranges include a full house, trips, top pairs, an underpair and unpaired suited hands. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+    "rangeAssumptions": "Illustrative starting ranges: BTN KK/KQs/A7s/QJs and BB 87s/KJs/88/98s, equal weight per unblocked exact combination. These are declared study ranges, not outputs of a certified earlier betting line. All later betting histories and ordered card arrivals belong to one jointly solved conditional game, not independent street solves. This does not certify full-hand Hold'em. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+    "board": [
+      46,
+      21,
+      20
+    ],
+    "depthBb": 50.0,
+    "potBb": 32.0,
+    "rangeClasses": [
+      [
+        "KK",
+        "KQs",
+        "A7s",
+        "QJs"
+      ],
+      [
+        "87s",
+        "KJs",
+        "88",
+        "98s"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 128
+  },
+  "inputSha256": "ec92e9ec23e7c5e5c7fa71215b372164e9239829027db2733129de877f3564a0",
+  "limits": {
+    "maxDecisionNodes": 500000,
+    "maxSeconds": 600
+  },
+  "iterationsCompleted": 128,
+  "publicDecisionNodes": 104872,
+  "treeNodesIncludingChanceAndTerminals": 250374,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 45487872,
+  "equityCacheElementBytes": 3458880,
+  "frozenPolicySha256": "4751e3f87cb502e4a4fed96e5245f9ba198d43fe027f13dcb3599440032487c2",
+  "frozenActionValuesSha256": "b4795a52f163b750a3553b34871cf279ad0c18f98619d0ee4ecbdf8535eac5a0",
+  "actionValueRowsChecked": 1104890,
+  "actionValuesChecked": 2447986,
+  "rowsWithoutOpponentReach": 197266,
+  "maximumActionEvErrorBb": 1.907342891627195e-6,
+  "profileValueBb": [
+    12.046220893297006,
+    -12.046220893297008
+  ],
+  "bestResponseValueBb": [
+    12.08568661600214,
+    -12.01541649170374
+  ],
+  "totalBestResponseGainBb": 0.0702701242984034,
+  "maximumProbabilitySumError": 4.761386662721634e-8,
+  "maximumIndependentProfileDifferenceBb": 1.7763568394002505e-15,
+  "zeroSumResidualBb": 1.7763568394002505e-15,
+  "conditionalResponseGainGatePassed": false,
+  "initializationSeconds": 0.6233605,
+  "trainingSeconds": 87.634696625,
+  "checkingSeconds": 13.909321583,
+  "actionEvValidationCompleted": true,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}
