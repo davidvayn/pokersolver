@@ -1,0 +1,93 @@
+{
+  "schema": "exact-flop-pilot-v2",
+  "input": {
+    "id": "flop-100bb-connected",
+    "title": "100bb · Flop · Connected hearts",
+    "description": "A complete saved flop-to-river game on 9h 8h 7c at 100bb initial depth, with a 60bb pot and 70bb behind. Declared weighted ranges include straights, sets, two pair, an overpair and heart/straight draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+    "rangeAssumptions": "Illustrative starting ranges and per-combination inclusion multipliers: BTN JTs x1, 99 x1, 98s x0.75, AJs x0.5, 65s x0.5; BB 77 x1, T6s x0.75, 97s x0.75, QTs x0.5, TT x0.5. Public blockers are removed before normalization, and private deals are sampled jointly with card removal. These weights are declared study assumptions, not certified preflop frequencies. This jointly solved conditional game does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+    "board": [
+      30,
+      26,
+      20
+    ],
+    "depthBb": 100.0,
+    "potBb": 60.0,
+    "rangeClasses": [
+      [
+        "JTs",
+        "99",
+        "98s",
+        "AJs",
+        "65s"
+      ],
+      [
+        "77",
+        "T6s",
+        "97s",
+        "QTs",
+        "TT"
+      ]
+    ],
+    "rangeClassWeights": [
+      [
+        1.0,
+        1.0,
+        0.75,
+        0.5,
+        0.5
+      ],
+      [
+        1.0,
+        0.75,
+        0.75,
+        0.5,
+        0.5
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 128
+  },
+  "inputSha256": "d012b32b87148d08dafcb97239ec7fcdedd66ff597cef09d7144db303439c59e",
+  "limits": {
+    "maxDecisionNodes": 500000,
+    "maxSeconds": 600
+  },
+  "iterationsCompleted": 128,
+  "publicDecisionNodes": 104872,
+  "treeNodesIncludingChanceAndTerminals": 250374,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 62335232,
+  "equityCacheElementBytes": 6571872,
+  "frozenPolicySha256": "7ab8ef2ca8188404c5404bd3a6f1c8155d4caabcf33d15b4878143d93a095cf4",
+  "frozenActionValuesSha256": "b34968a5305a802eb79df5f7683faafe522d5c5b7c4c0be3856207442c5246f3",
+  "actionValueRowsChecked": 1533131,
+  "actionValuesChecked": 3392360,
+  "rowsWithoutOpponentReach": 251305,
+  "maximumActionEvErrorBb": 3.814697279835855e-6,
+  "profileValueBb": [
+    12.759441774016935,
+    -12.759441774016935
+  ],
+  "bestResponseValueBb": [
+    12.830655567995692,
+    -12.694152346457344
+  ],
+  "totalBestResponseGainBb": 0.13650322153834793,
+  "maximumProbabilitySumError": 4.7730281949043274e-8,
+  "maximumIndependentProfileDifferenceBb": 3.552713678800501e-15,
+  "zeroSumResidualBb": 0.0,
+  "conditionalResponseGainGatePassed": false,
+  "initializationSeconds": 0.123320834,
+  "trainingSeconds": 28.323459167,
+  "checkingSeconds": 5.350331792,
+  "actionEvValidationCompleted": true,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "flop-100bb-connected",
+  "title": "100bb · Flop · Connected hearts",
+  "description": "A complete saved flop-to-river game on 9h 8h 7c at 100bb initial depth, with a 60bb pot and 70bb behind. Declared weighted ranges include straights, sets, two pair, an overpair and heart/straight draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges and per-combination inclusion multipliers: BTN JTs x1, 99 x1, 98s x0.75, AJs x0.5, 65s x0.5; BB 77 x1, T6s x0.75, 97s x0.75, QTs x0.5, TT x0.5. Public blockers are removed before normalization, and private deals are sampled jointly with card removal. These weights are declared study assumptions, not certified preflop frequencies. This jointly solved conditional game does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [30,26,20], "depthBb":100, "potBb":60,
+  "rangeClasses":[["JTs","99","98s","AJs","65s"],["77","T6s","97s","QTs","TT"]],
+  "rangeClassWeights":[[1.0,1.0,0.75,0.5,0.5],[1.0,0.75,0.75,0.5,0.5]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

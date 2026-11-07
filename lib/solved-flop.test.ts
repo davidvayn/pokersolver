@@ -37,6 +37,27 @@ describe.each(catalog as SpotCatalogEntry[])('pinned complete flop library: $id'
     expect(()=>validateFlopManifest({...manifest,verification:{...manifest.verification,accepted:false}})).toThrow();
   });
 
+  it('deals every compatible private pair at the exact midpoint of its declared joint-prior interval',()=>{
+    const deals:Array<{a:number;b:number;weight:number}>=[];
+    for(const [a,wa]of manifest.ranges[0])for(const [b,wb]of manifest.ranges[1]){
+      if(!spotCombo(a).some(c=>spotCombo(b).includes(c)))deals.push({a,b,weight:wa*wb});
+    }
+    expect(deals.length).toBe(manifest.verification.compatibleDeals);
+    const total=deals.reduce((sum,deal)=>sum+deal.weight,0);
+    const inputSpot={input:manifest.input,ranges:manifest.ranges,rootNodeId:String(manifest.root)} as Parameters<typeof startSpot>[0];
+    let cumulative=0;
+    for(const {a,b,weight}of deals){
+      // This exhausts the categorical intervals, not a noisy frequency test.
+      const midpoint=(cumulative+weight/2)/total;
+      const {state}=startSpot(inputSpot,entry.sha256,'big-blind',()=>midpoint);
+      expect(state.holeCards['button-small-blind']).toEqual(spotCombo(a));
+      expect(state.holeCards['big-blind']).toEqual(spotCombo(b));
+      expect(new Set([...state.board,...Object.values(state.holeCards).flat(),...state.deck]).size).toBe(52);
+      expect(state.modelVersion).toBe(entry.sha256);
+      cumulative+=weight;
+    }
+  });
+
   it('loads lazily, preserves a failed pending action, retries without applying it twice, and plays all streets',async()=>{
     const calls:string[]=[];let fail=false;
     const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async(url)=>{

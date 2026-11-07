@@ -1,0 +1,9 @@
+{
+  "id": "flop-50bb-monotone",
+  "title": "50bb · Flop · Monotone ace-high",
+  "description": "A complete saved flop-to-river game on As 9s 4s, with a 32bb pot and 34bb behind at 50bb initial depth. The declared ranges include made flushes, sets, top pairs, an underpair and single-spade blockers. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/A9s/KQs/JTs/TT and BB 99/AQs/QTs/T8s/44, equal weight per unblocked exact combination. These are declared study ranges, not outputs of a certified earlier betting line. Every later betting history and ordered card arrival uses one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or a universal 50bb policy. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [51,31,11], "depthBb":50, "potBb":32,
+  "rangeClasses":[["AA","A9s","KQs","JTs","TT"],["99","AQs","QTs","T8s","44"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

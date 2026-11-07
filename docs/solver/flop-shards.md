@@ -8,7 +8,8 @@ The four existing river and four turn studies keep their original bytes and
 catalog. Flop studies use a separate registry and catalog.
 
 For additional published range/board situations and their individual gates,
-see [the 2026-11-03 expansion report](flop-library-expansion-2026-11-03.md).
+see [the 2026-11-03 expansion report](flop-library-expansion-2026-11-03.md)
+and [the monotone/connected expansion](flop-texture-expansion-2026-11-06.md).
 The original study's figures below remain its own, not corpus-wide totals.
 
 ## Reproduction and acceptance
