@@ -1,0 +1,73 @@
+{
+  "schema": "exact-flop-pilot-v2",
+  "input": {
+    "id": "flop-20bb-low-hearts",
+    "title": "20bb · Flop · Low hearts",
+    "description": "A complete saved flop-to-river game on 6h 5h 3c at 20bb initial depth, with a 6bb pot and 17bb behind. The declared ranges include an overpair, a set, top pairs, pair-plus-straight draws and heart draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+    "rangeAssumptions": "Illustrative starting ranges: BTN AA/A6s/87s and BB 55/64s/A4s, equal weight per unblocked exact combination. These ranges are stated study assumptions, not certified preflop frequencies or outputs of a solved earlier line. All later betting and ordered card arrivals use one joint conditional game. This is a saved 20bb flop study, not validation or replacement of the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+    "board": [
+      18,
+      14,
+      4
+    ],
+    "depthBb": 20.0,
+    "potBb": 6.0,
+    "rangeClasses": [
+      [
+        "AA",
+        "A6s",
+        "87s"
+      ],
+      [
+        "55",
+        "64s",
+        "A4s"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 128
+  },
+  "inputSha256": "4c6d248c2283f6f479a21b11a30ae8c895c46bd4a45ce7bb855f760774774cbf",
+  "limits": {
+    "maxDecisionNodes": 500000,
+    "maxSeconds": 600
+  },
+  "iterationsCompleted": 128,
+  "publicDecisionNodes": 374668,
+  "treeNodesIncludingChanceAndTerminals": 946572,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 150153568,
+  "equityCacheElementBytes": 2498080,
+  "frozenPolicySha256": "24fd14a93071a3dea0c6346fe2a13ce67dc0b7945b2f320e0e7de1e89e54a9a6",
+  "frozenActionValuesSha256": "2a77d66d3e586e6d5140a7f0502d2214835854007aee5eb2a58737db5c408ba1",
+  "actionValueRowsChecked": 3112649,
+  "actionValuesChecked": 7419958,
+  "rowsWithoutOpponentReach": 849377,
+  "maximumActionEvErrorBb": 9.536743199589637e-7,
+  "profileValueBb": [
+    -2.6323832756826935,
+    2.6323832756826935
+  ],
+  "bestResponseValueBb": [
+    -2.629995447945795,
+    2.634674833207517
+  ],
+  "totalBestResponseGainBb": 0.004679385261721958,
+  "maximumProbabilitySumError": 4.6566128730773926e-8,
+  "maximumIndependentProfileDifferenceBb": 4.440892098500626e-16,
+  "zeroSumResidualBb": 0.0,
+  "conditionalResponseGainGatePassed": true,
+  "initializationSeconds": 0.471288458,
+  "trainingSeconds": 64.137372917,
+  "checkingSeconds": 6.2794507920000004,
+  "actionEvValidationCompleted": true,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}

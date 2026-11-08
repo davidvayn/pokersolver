@@ -92,6 +92,43 @@ describe.each(catalog as SpotCatalogEntry[])('pinned complete flop library: $id'
     } finally {fetcher.mockRestore();}
   });
 
+  it('preserves non-all-in pot raises and later streets whenever the starting stacks permit them',async()=>{
+    const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(async url=>
+      new Response(readFileSync(path.join(process.cwd(),'public',String(url)))));
+    try{
+      const spot=await loadSolvedSpot(entry);
+      const start=startSpot(spot,entry.sha256,'big-blind',seededRandom(7));
+      expect(spot.input.betPotFractions).toEqual([.5,1]);
+      expect(spot.input.raisePotFractions).toEqual([1]);
+      const half=spotActions(spot,start).find(a=>a.kind==='bet'&&a.amountToBb===spot.input.potBb/2)!;
+      expect(half).toBeDefined();
+      const facing=await prepareSpotSession(spot,beginSpotAction(spot,start,half.id));
+      const raises=spotActions(spot,facing).filter(a=>a.kind==='raise');
+      // After a half-pot bet, a pot raise targets 2.5P. Starting chips behind
+      // are D - 0.5P, so it is non-all-in precisely when D > 3P.
+      const canRaise=spot.input.depthBb>3*spot.input.potBb+1e-8;
+      expect(raises.length).toBe(canRaise?1:0);
+      if(!canRaise)return;
+      expect(raises[0].amountToBb).toBeCloseTo(spot.input.potBb*2.5,8);
+      const raised=await prepareSpotSession(spot,beginSpotAction(spot,facing,raises[0].id));
+      const call=spotActions(spot,raised).find(a=>a.kind==='call')!;
+      expect(call).toBeDefined();
+      let current=await prepareSpotSession(spot,beginSpotAction(spot,raised,call.id));
+      expect(current.state.street).toBe('turn');
+      expect(current.state.actionHistory).toHaveLength(3);
+      expect(current.state.potBb).toBeCloseTo(spot.input.potBb*6,8);
+      for(const seat of SPOT_SEATS)expect(current.state.stacksBb[seat]).toBeCloseTo(spot.input.depthBb-3*spot.input.potBb,8);
+      while(!current.state.terminal){
+        const check=spotActions(spot,current).find(a=>a.kind==='check')!;
+        expect(check).toBeDefined();
+        current=await prepareSpotSession(spot,beginSpotAction(spot,current,check.id));
+      }
+      expect(current.state.result?.reason).toBe('showdown');
+      expect(current.state.board).toHaveLength(5);
+      expect(current.state.stacksBb['big-blind']+current.state.stacksBb['button-small-blind']).toBeCloseTo(spot.input.depthBb*2,8);
+    }finally{fetcher.mockRestore();}
+  });
+
   it('reproduces every available EV and both whole-flop information-set responses in TypeScript',()=>{
     const cards=new Map(manifest.ranges.flat().map(([key])=>[key,spotCombo(key)]));
     const equities=new Map<string,number>();

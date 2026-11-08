@@ -1,0 +1,9 @@
+{
+  "id": "flop-20bb-low-hearts",
+  "title": "20bb · Flop · Low hearts",
+  "description": "A complete saved flop-to-river game on 6h 5h 3c at 20bb initial depth, with a 6bb pot and 17bb behind. The declared ranges include an overpair, a set, top pairs, pair-plus-straight draws and heart draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/A6s/87s and BB 55/64s/A4s, equal weight per unblocked exact combination. These ranges are stated study assumptions, not certified preflop frequencies or outputs of a solved earlier line. All later betting and ordered card arrivals use one joint conditional game. This is a saved 20bb flop study, not validation or replacement of the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [18,14,4], "depthBb":20, "potBb":6,
+  "rangeClasses":[["AA","A6s","87s"],["55","64s","A4s"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":128
+}

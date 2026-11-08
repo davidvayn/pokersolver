@@ -1,0 +1,9 @@
+{
+  "id": "flop-50bb-deeper",
+  "title": "50bb · Flop · Deeper low rainbow",
+  "description": "A complete saved flop-to-river game on 8s 5d 2c at 50bb initial depth, with a 12bb pot and 44bb behind. More chips relative to the pot allow non-all-in raises and multi-street pot building. The declared ranges include an overpair, a set, top pairs and straight draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/A8s/76s and BB 55/87s/A4s, equal weight per unblocked exact combination. These are declared study ranges, not outputs of a certified earlier betting line. All later betting histories and ordered card arrivals belong to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or activate a universal 50bb policy. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [27,13,0], "depthBb":50, "potBb":12,
+  "rangeClasses":[["AA","A8s","76s"],["55","87s","A4s"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}
