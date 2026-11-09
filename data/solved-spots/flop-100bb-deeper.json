@@ -1,0 +1,9 @@
+{
+  "id": "flop-100bb-deeper",
+  "title": "100bb · Flop · Deeper broadway",
+  "description": "A complete saved flop-to-river game on Kc Td 4h at 100bb initial depth, with a 24bb pot and 88bb behind. The smaller pot leaves room for non-all-in pot raises and multi-street pot building. The declared ranges include an overpair, a set, top pairs and broadway straight draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/KQs/QJs and BB TT/KJs/AQs, equal weight per unblocked exact combination. These are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival uses one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [44,33,10], "depthBb":100, "potBb":24,
+  "rangeClasses":[["AA","KQs","QJs"],["TT","KJs","AQs"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

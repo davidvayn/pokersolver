@@ -1,0 +1,73 @@
+{
+  "schema": "exact-flop-pilot-v2",
+  "input": {
+    "id": "flop-100bb-deeper",
+    "title": "100bb · Flop · Deeper broadway",
+    "description": "A complete saved flop-to-river game on Kc Td 4h at 100bb initial depth, with a 24bb pot and 88bb behind. The smaller pot leaves room for non-all-in pot raises and multi-street pot building. The declared ranges include an overpair, a set, top pairs and broadway straight draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+    "rangeAssumptions": "Illustrative starting ranges: BTN AA/KQs/QJs and BB TT/KJs/AQs, equal weight per unblocked exact combination. These are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival uses one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+    "board": [
+      44,
+      33,
+      10
+    ],
+    "depthBb": 100.0,
+    "potBb": 24.0,
+    "rangeClasses": [
+      [
+        "AA",
+        "KQs",
+        "QJs"
+      ],
+      [
+        "TT",
+        "KJs",
+        "AQs"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 128
+  },
+  "inputSha256": "a5c559ea5856fd0b928bb3ea0207aab88d72489a9c9cd0ab2153f43c1a1a2211",
+  "limits": {
+    "maxDecisionNodes": 500000,
+    "maxSeconds": 600
+  },
+  "iterationsCompleted": 128,
+  "publicDecisionNodes": 412300,
+  "treeNodesIncludingChanceAndTerminals": 1059468,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 169248352,
+  "equityCacheElementBytes": 2498080,
+  "frozenPolicySha256": "0c75099dd678bdea7af349ac296af78ba0061a9afcb516ba9347361ff5829ecc",
+  "frozenActionValuesSha256": "feb38823dd3741ec80453be7d956d6030857732567481dc12064aba2014e494c",
+  "actionValueRowsChecked": 4068524,
+  "actionValuesChecked": 9902077,
+  "rowsWithoutOpponentReach": 291310,
+  "maximumActionEvErrorBb": 3.814697279835855e-6,
+  "profileValueBb": [
+    -8.858043387688822,
+    8.858043387688822
+  ],
+  "bestResponseValueBb": [
+    -8.733665076817163,
+    8.972658494722006
+  ],
+  "totalBestResponseGainBb": 0.23899341790484385,
+  "maximumProbabilitySumError": 4.842877388000488e-8,
+  "maximumIndependentProfileDifferenceBb": 3.552713678800501e-15,
+  "zeroSumResidualBb": 0.0,
+  "conditionalResponseGainGatePassed": false,
+  "initializationSeconds": 0.444764625,
+  "trainingSeconds": 91.171808167,
+  "checkingSeconds": 10.613927292,
+  "actionEvValidationCompleted": true,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}

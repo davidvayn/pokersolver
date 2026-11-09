@@ -286,5 +286,41 @@
       "accepted": true,
       "riverOutcomes": 215820
     }
+  },
+  {
+    "id": "flop-100bb-deeper",
+    "title": "100bb · Flop · Deeper broadway",
+    "board": [
+      44,
+      33,
+      10
+    ],
+    "depthBb": 100,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-100bb-deeper/3c5ffd6fc98d380d030fc8e0ee7fa24dd2f74c612def6952602e80818d22ea3f.json",
+    "sha256": "3c5ffd6fc98d380d030fc8e0ee7fa24dd2f74c612def6952602e80818d22ea3f",
+    "bytes": 987156,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 105,
+      "profileValueBb": [
+        -8.877904064266849,
+        8.877904064266849
+      ],
+      "bestResponseValueBb": [
+        -8.871030228581752,
+        8.885088083948595
+      ],
+      "unilateralGainBb": [
+        0.006873835685096807,
+        0.007184019681746534
+      ],
+      "totalBestResponseGainBb": 0.014057855366843341,
+      "maximumActionEvErrorBb": 0.000003814697279835855,
+      "maximumProbabilitySumError": 4.842877388000488e-8,
+      "zeroSumResidualBb": 0,
+      "accepted": true,
+      "riverOutcomes": 207900
+    }
   }
 ]

@@ -12,6 +12,8 @@ see [the 2026-11-03 expansion report](flop-library-expansion-2026-11-03.md)
 and [the monotone/connected expansion](flop-texture-expansion-2026-11-06.md).
 The [lower-pot expansion](lower-pot-flops-2026-11-07.md) adds larger betting
 trees and documents their storage and deployment implications.
+The [deeper 100bb expansion](deeper-100bb-2026-11-08.md) completes the lower-pot
+stack set with a validated broadway study and a non-all-in 60bb pot raise.
 The original study's figures below remain its own, not corpus-wide totals.
 
 ## Reproduction and acceptance
