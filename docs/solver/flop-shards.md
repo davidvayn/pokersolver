@@ -14,6 +14,8 @@ The [lower-pot expansion](lower-pot-flops-2026-11-07.md) adds larger betting
 trees and documents their storage and deployment implications.
 The [deeper 100bb expansion](deeper-100bb-2026-11-08.md) completes the lower-pot
 stack set with a validated broadway study and a non-all-in 60bb pot raise.
+The [broader ace-high/low-paired expansion](broader-flops-2026-11-09.md) adds
+24/23-combo 20bb and weighted 27/21-combo 100bb games, including offsuit hands.
 The original study's figures below remain its own, not corpus-wide totals.
 
 ## Reproduction and acceptance

@@ -65,10 +65,14 @@ npm run test:watch
 Development output lives in `.next-dev`; production builds use `.next`. Do not
 make them share a directory or move either directory while its process runs.
 
-For every browser-facing change, start the development server and use the
-installed `browser-use` CLI to exercise the affected routes. Inspect visual
-layout at desktop and mobile viewport sizes, keyboard-accessible names, browser
-console errors, and the changed interaction flows. Build output alone is not UI
+For every browser-facing change, start the development server and use
+`browser-harness` with an isolated local **headless Chrome** instance. Launch
+Chrome with `--headless=new --mute-audio`, a temporary user-data directory and
+loopback-only remote debugging; connect through its explicit CDP endpoint. Keep
+the user's personal browser profile and tabs untouched. Use a visible browser
+only when the user explicitly requests it, and close the task-owned instance
+after QA. Inspect desktop/mobile screenshots, keyboard-accessible names, browser
+console errors and changed interaction flows. Build output alone is not UI
 validation.
 
 Rust validation and regeneration are run from `wasm/`:

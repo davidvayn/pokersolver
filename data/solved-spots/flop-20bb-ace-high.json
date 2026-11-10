@@ -1,0 +1,9 @@
+{
+  "id": "flop-20bb-ace-high",
+  "title": "20bb · Flop · Broader ace-high",
+  "description": "A complete saved flop-to-river game on Ah 8d 3c at 20bb initial depth, with a 12bb pot and 14bb behind. Broader declared ranges include top sets, top pairs, middle pairs, underpairs and unpaired suited broadways and connectors. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/AQs/KQs/QQ/JTs/76s and BB 88/AJs/QTs/99/54s/33, equal inclusion weight per unblocked exact combination. These are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival uses one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or replace the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [50,25,4], "depthBb":20, "potBb":12,
+  "rangeClasses":[["AA","AQs","KQs","QQ","JTs","76s"],["88","AJs","QTs","99","54s","33"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":128
+}
