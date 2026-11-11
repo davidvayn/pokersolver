@@ -1,0 +1,9 @@
+{
+  "id": "flop-20bb-monotone",
+  "title": "20bb · Flop · Broader king-high monotone",
+  "description": "A complete saved flop-to-river game on Kh Th 4h at 20bb initial depth, with a 12bb pot and 14bb behind. Broader declared ranges include made flushes, sets, top pairs, overpairs, underpairs, straight draws and single-heart blockers. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/KQs/AJs/QJs/99/65s and BB TT/44/KJs/AQs/Q9s/88/76s, equal inclusion weight per unblocked exact combination. These are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Private pairs are sampled jointly with exact card removal. All subsequent betting histories and ordered card arrivals belong to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or replace the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [46,34,10], "depthBb":20, "potBb":12,
+  "rangeClasses":[["AA","KQs","AJs","QJs","99","65s"],["TT","44","KJs","AQs","Q9s","88","76s"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":128
+}
