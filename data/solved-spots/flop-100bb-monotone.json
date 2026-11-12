@@ -1,0 +1,9 @@
+{
+  "id": "flop-100bb-monotone",
+  "title": "100bb · Flop · Broader queen-high monotone",
+  "description": "A complete saved flop-to-river game on Qs 8s 3s at 100bb initial depth, with a 60bb pot and 70bb behind. Broader declared ranges include made flushes, sets, top pairs, overpairs, underpairs and single-spade blockers. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges: BTN AA/QQ/KJs/AQs/JTs/99/65s and BB 88/33/QJs/ATs/KTs/77/T9s, equal inclusion weight per unblocked exact combination. These are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Public blockers are removed before normalization and private pairs are sampled jointly with exact card removal. All later actions and ordered card arrivals belong to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [43,27,7], "depthBb":100, "potBb":60,
+  "rangeClasses":[["AA","QQ","KJs","AQs","JTs","99","65s"],["88","33","QJs","ATs","KTs","77","T9s"]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

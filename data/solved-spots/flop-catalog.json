@@ -466,5 +466,77 @@
       "accepted": true,
       "riverOutcomes": 1714680
     }
+  },
+  {
+    "id": "flop-20bb-queen-paired",
+    "title": "20bb · Flop · Broader queen-high paired",
+    "board": [
+      40,
+      17,
+      19
+    ],
+    "depthBb": 20,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-20bb-queen-paired/ec9a61ab4436012e4544a6659d06bbd42e70c7608b6897881fb212e3884bf000.json",
+    "sha256": "ec9a61ab4436012e4544a6659d06bbd42e70c7608b6897881fb212e3884bf000",
+    "bytes": 236089,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 760,
+      "profileValueBb": [
+        3.0912649268550556,
+        -3.091264926855057
+      ],
+      "bestResponseValueBb": [
+        3.1206705896798725,
+        -3.087385299650856
+      ],
+      "unilateralGainBb": [
+        0.029405662824816936,
+        0.003879627204200986
+      ],
+      "totalBestResponseGainBb": 0.03328529002901792,
+      "maximumActionEvErrorBb": 9.536743199589637e-7,
+      "maximumProbabilitySumError": 5.21540641784668e-8,
+      "zeroSumResidualBb": 1.3322676295501878e-15,
+      "accepted": true,
+      "riverOutcomes": 1504800
+    }
+  },
+  {
+    "id": "flop-100bb-monotone",
+    "title": "100bb · Flop · Broader queen-high monotone",
+    "board": [
+      43,
+      27,
+      7
+    ],
+    "depthBb": 100,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-100bb-monotone/6240516fb508d193396e48268505008a0979566e65e8486060ba0edc7d519e0c.json",
+    "sha256": "6240516fb508d193396e48268505008a0979566e65e8486060ba0edc7d519e0c",
+    "bytes": 235731,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 752,
+      "profileValueBb": [
+        2.880287230529069,
+        -2.8802872305290665
+      ],
+      "bestResponseValueBb": [
+        2.8867522228246862,
+        -2.874366522407777
+      ],
+      "unilateralGainBb": [
+        0.006464992295617034,
+        0.005920708121289753
+      ],
+      "totalBestResponseGainBb": 0.012385700416906786,
+      "maximumActionEvErrorBb": 0.000003814697265625,
+      "maximumProbabilitySumError": 4.586763679981232e-8,
+      "zeroSumResidualBb": 2.6645352591003757e-15,
+      "accepted": true,
+      "riverOutcomes": 1488960
+    }
   }
 ]

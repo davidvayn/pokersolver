@@ -1,0 +1,81 @@
+{
+  "schema": "exact-flop-pilot-v2",
+  "input": {
+    "id": "flop-100bb-monotone",
+    "title": "100bb · Flop · Broader queen-high monotone",
+    "description": "A complete saved flop-to-river game on Qs 8s 3s at 100bb initial depth, with a 60bb pot and 70bb behind. Broader declared ranges include made flushes, sets, top pairs, overpairs, underpairs and single-spade blockers. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+    "rangeAssumptions": "Illustrative starting ranges: BTN AA/QQ/KJs/AQs/JTs/99/65s and BB 88/33/QJs/ATs/KTs/77/T9s, equal inclusion weight per unblocked exact combination. These are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Public blockers are removed before normalization and private pairs are sampled jointly with exact card removal. All later actions and ordered card arrivals belong to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+    "board": [
+      43,
+      27,
+      7
+    ],
+    "depthBb": 100.0,
+    "potBb": 60.0,
+    "rangeClasses": [
+      [
+        "AA",
+        "QQ",
+        "KJs",
+        "AQs",
+        "JTs",
+        "99",
+        "65s"
+      ],
+      [
+        "88",
+        "33",
+        "QJs",
+        "ATs",
+        "KTs",
+        "77",
+        "T9s"
+      ]
+    ],
+    "betPotFractions": [
+      0.5,
+      1.0
+    ],
+    "raisePotFractions": [
+      1.0
+    ],
+    "raiseCap": 1,
+    "iterations": 128
+  },
+  "inputSha256": "c31f9fbdf019a7c24e948ac46082b4ff6990d60a7b120ae4fb3f49ecb0b08b66",
+  "limits": {
+    "maxDecisionNodes": 500000,
+    "maxSeconds": 600
+  },
+  "iterationsCompleted": 128,
+  "publicDecisionNodes": 104872,
+  "treeNodesIncludingChanceAndTerminals": 250374,
+  "boardContexts": 2402,
+  "regretAverageArrayBytes": 96029952,
+  "equityCacheElementBytes": 15564960,
+  "frozenPolicySha256": "61d93168c8e9b88a9dc22e90e58da4b28ebbe376e443437b1c58857096edffbe",
+  "frozenActionValuesSha256": "d54d552dd0c318c0d840846c9c421a43435c85d59973b1f8d6e40ab738298cf2",
+  "actionValueRowsChecked": 2610665,
+  "actionValuesChecked": 5725209,
+  "rowsWithoutOpponentReach": 138331,
+  "maximumActionEvErrorBb": 3.814697279835855e-6,
+  "profileValueBb": [
+    2.885795813683072,
+    -2.885795813683069
+  ],
+  "bestResponseValueBb": [
+    2.9653101439180705,
+    -2.80496411579141
+  ],
+  "totalBestResponseGainBb": 0.16034602812665755,
+  "maximumProbabilitySumError": 4.889443516731262e-8,
+  "maximumIndependentProfileDifferenceBb": 2.220446049250313e-15,
+  "zeroSumResidualBb": 3.1086244689504383e-15,
+  "conditionalResponseGainGatePassed": false,
+  "initializationSeconds": 0.135910458,
+  "trainingSeconds": 62.740136583,
+  "checkingSeconds": 14.14952475,
+  "actionEvValidationCompleted": true,
+  "servingArtifactProduced": false,
+  "fullHandGtoClaim": false
+}
