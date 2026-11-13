@@ -1,0 +1,10 @@
+{
+  "id": "flop-20bb-connected",
+  "title": "20bb · Flop · Broader connected hearts",
+  "description": "A complete saved flop-to-river game on Th 9h 8c at 20bb initial depth, with a 12bb pot and 14bb behind. Broader weighted ranges include made straights, sets, two pair, overpairs, top pairs, heart draws, straight draws and offsuit broadways. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges and per-combination inclusion multipliers: BTN QJs x1, JJ x1, ATs x1, T9s x0.75, 76s x0.75, KQo x0.5; BB 88 x1, JTs x1, QTs x0.75, J7s x0.75, 97s x0.5, AJs x0.75, 99 x1, KJs x0.5, T8s x0.75. These multipliers describe starting-range inclusion, not action frequencies. Public blockers are removed before normalization and private pairs are sampled jointly with exact card removal. These priors are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival belongs to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or replace the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [34,30,24], "depthBb":20, "potBb":12,
+  "rangeClasses":[["QJs","JJ","ATs","T9s","76s","KQo"],["88","JTs","QTs","J7s","97s","AJs","99","KJs","T8s"]],
+  "rangeClassWeights":[[1.0,1.0,1.0,0.75,0.75,0.5],[1.0,1.0,0.75,0.75,0.5,0.75,1.0,0.5,0.75]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":128
+}

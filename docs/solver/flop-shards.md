@@ -20,6 +20,8 @@ The [broader monotone/two-tone expansion](broader-textures-2026-11-10.md) adds
 27/27-combo 20bb and weighted 32/30-combo 50bb games without raising range limits.
 The [queen-high paired/monotone expansion](broader-queen-flops-2026-11-11.md)
 adds weighted 31/29-combo 20bb and 30/27-combo 100bb games at the same limits.
+The [connected/paired-aces expansion](connected-and-paired-aces-2026-11-12.md)
+adds weighted 32/29-combo 20bb and 29/29-combo 100bb games at unchanged limits.
 The original study's figures below remain its own, not corpus-wide totals.
 
 ## Reproduction and acceptance
