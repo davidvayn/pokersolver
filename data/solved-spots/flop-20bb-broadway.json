@@ -1,0 +1,10 @@
+{
+  "id": "flop-20bb-broadway",
+  "title": "20bb · Flop · Broader broadway rainbow",
+  "description": "A complete saved flop-to-river game on Ac Kd Qh at 20bb initial depth, with a 12bb pot and 14bb behind. Broader weighted ranges include a made broadway straight, sets, two pair, top and second pairs, straight draws, offsuit broadways and unpaired suited connectors. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges and per-combination inclusion multipliers: BTN AA x1, AKo x1, AQo x0.75, JTs x1, QQ x1, 76s x0.5, KQs x0.75; BB KK x1, AJs x0.75, ATs x0.75, AQo x1, QJs x0.75, KQo x0.75, T9s x0.5. These multipliers describe starting-range inclusion, not action frequencies. Public blockers are removed before normalization and private pairs are sampled jointly with exact card removal. The priors are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival belongs to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or replace the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [48,45,42], "depthBb":20, "potBb":12,
+  "rangeClasses":[["AA","AKo","AQo","JTs","QQ","76s","KQs"],["KK","AJs","ATs","AQo","QJs","KQo","T9s"]],
+  "rangeClassWeights":[[1.0,1.0,0.75,1.0,1.0,0.5,0.75],[1.0,0.75,0.75,1.0,0.75,0.75,0.5]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":128
+}

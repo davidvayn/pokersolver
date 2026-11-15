@@ -610,5 +610,77 @@
       "accepted": true,
       "riverOutcomes": 1510740
     }
+  },
+  {
+    "id": "flop-20bb-broadway",
+    "title": "20bb · Flop · Broader broadway rainbow",
+    "board": [
+      48,
+      45,
+      42
+    ],
+    "depthBb": 20,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-20bb-broadway/20df2f73987de041cb0fbe54eef88577affcc6ae1e531b31985f196ab3ec7337.json",
+    "sha256": "20df2f73987de041cb0fbe54eef88577affcc6ae1e531b31985f196ab3ec7337",
+    "bytes": 235922,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 684,
+      "profileValueBb": [
+        4.431687764086469,
+        -4.431687764086469
+      ],
+      "bestResponseValueBb": [
+        4.4366944119087055,
+        -4.429268200145378
+      ],
+      "unilateralGainBb": [
+        0.005006647822236587,
+        0.0024195639410908854
+      ],
+      "totalBestResponseGainBb": 0.007426211763327473,
+      "maximumActionEvErrorBb": 9.536743199589637e-7,
+      "maximumProbabilitySumError": 4.4819898903369904e-8,
+      "zeroSumResidualBb": 0,
+      "accepted": true,
+      "riverOutcomes": 1354320
+    }
+  },
+  {
+    "id": "flop-50bb-low-rainbow",
+    "title": "50bb · Flop · Broader low rainbow",
+    "board": [
+      20,
+      9,
+      2
+    ],
+    "depthBb": 50,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-50bb-low-rainbow/b20c02ce5586891027842d942f8b3fcff1f2ba1bf3befea1bad285eeef0a9b0e.json",
+    "sha256": "b20c02ce5586891027842d942f8b3fcff1f2ba1bf3befea1bad285eeef0a9b0e",
+    "bytes": 236139,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 902,
+      "profileValueBb": [
+        0.07252185205904682,
+        -0.07252185205904846
+      ],
+      "bestResponseValueBb": [
+        0.08169214337215709,
+        -0.05588465549391997
+      ],
+      "unilateralGainBb": [
+        0.009170291313110271,
+        0.016637196565128486
+      ],
+      "totalBestResponseGainBb": 0.025807487878238757,
+      "maximumActionEvErrorBb": 0.0000019073486399179274,
+      "maximumProbabilitySumError": 4.889443516731262e-8,
+      "zeroSumResidualBb": 1.6375789613221059e-15,
+      "accepted": true,
+      "riverOutcomes": 1785960
+    }
   }
 ]
