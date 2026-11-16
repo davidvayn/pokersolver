@@ -24,6 +24,8 @@ The [connected/paired-aces expansion](connected-and-paired-aces-2026-11-12.md)
 adds weighted 32/29-combo 20bb and 29/29-combo 100bb games at unchanged limits.
 The [broader rainbow expansion](broader-rainbow-flops-2026-11-14.md) adds weighted
 30/30-combo 20bb broadway and 31/31-combo 50bb low-board games at the same limits.
+The [trips-board/wheel expansion](trips-and-wheel-flops-2026-11-15.md) adds
+weighted 30/30-combo 50bb and 32/31-combo 100bb games without raising those limits.
 The original study's figures below remain its own, not corpus-wide totals.
 
 ## Reproduction and acceptance
