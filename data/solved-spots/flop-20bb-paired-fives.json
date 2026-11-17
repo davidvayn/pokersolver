@@ -1,0 +1,10 @@
+{
+  "id": "flop-20bb-paired-fives",
+  "title": "20bb · Flop · Broader paired fives",
+  "description": "A complete saved flop-to-river game on 5c 5d 2h at 20bb initial depth, with a 12bb pot and 14bb behind. Broader weighted ranges include quads, a full house, trips, overpairs, suited broadways and offsuit ace-high holdings. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges and per-combination inclusion multipliers: BTN AA x1, KK x0.75, A5s x1, AKo x0.5, QJs x0.5, 65s x0.75; BB QQ x1, JJ x0.75, K5s x1, AQo x0.5, 55 x1, 22 x1. These multipliers describe starting-range inclusion, not action frequencies. Public blockers are removed before normalization and private pairs are sampled jointly with exact card removal. The priors are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival belongs to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or replace the existing full-hand 20bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [12,13,2], "depthBb":20, "potBb":12,
+  "rangeClasses":[["AA","KK","A5s","AKo","QJs","65s"],["QQ","JJ","K5s","AQo","55","22"]],
+  "rangeClassWeights":[[1.0,0.75,1.0,0.5,0.5,0.75],[1.0,0.75,1.0,0.5,1.0,1.0]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":256
+}

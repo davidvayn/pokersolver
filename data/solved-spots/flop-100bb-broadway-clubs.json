@@ -1,0 +1,10 @@
+{
+  "id": "flop-100bb-broadway-clubs",
+  "title": "100bb · Flop · Broader broadway clubs",
+  "description": "A complete saved flop-to-river game on Kc Qc Td at 100bb initial depth, with a 60bb pot and 70bb behind. Broader weighted ranges include made straights, sets, two pair, an overpair, top pairs, club and straight draws, and offsuit broadways. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative starting ranges and per-combination inclusion multipliers: BTN AA x1, KK x1, AKo x0.75, AJs x1, J9s x0.75, QTs x0.75, 98s x0.5; BB QQ x1, TT x1, KQs x1, QJs x0.75, ATs x0.75, JJ x0.5, AQo x0.5. These multipliers describe starting-range inclusion, not action frequencies. Public blockers are removed before normalization and private pairs are sampled jointly with exact card removal. The priors are declared study assumptions, not certified preflop frequencies or outputs of a solved earlier betting line. Every later action and ordered card arrival belongs to one jointly solved conditional flop-to-river game. This does not certify full-hand Hold'em or activate a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [44,40,33], "depthBb":100, "potBb":60,
+  "rangeClasses":[["AA","KK","AKo","AJs","J9s","QTs","98s"],["QQ","TT","KQs","QJs","ATs","JJ","AQo"]],
+  "rangeClassWeights":[[1.0,1.0,0.75,1.0,0.75,0.75,0.5],[1.0,1.0,1.0,0.75,0.75,0.5,0.5]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":256
+}
