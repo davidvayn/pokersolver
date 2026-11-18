@@ -9,6 +9,8 @@
 use super::*;
 #[cfg(test)]
 mod cash_training_tests;
+#[cfg(test)]
+mod live_nash_benchmark;
 mod cash_evaluation;
 pub use cash_evaluation::{evaluate_cash_full_hands, CashFullHandEvaluationConfig};
 mod cash_response;

@@ -26,6 +26,8 @@ pub mod sampled_flop;
 pub mod solved_spot;
 mod frozen_flop_walk;
 #[cfg(test)]
+pub(in crate::blueprint) mod live_policy_response;
+#[cfg(test)]
 pub(super) mod frozen_turn_response;
 #[cfg(test)]
 pub(in crate::blueprint) mod counterfactual_turn;
