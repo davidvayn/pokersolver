@@ -898,5 +898,77 @@
       "accepted": true,
       "riverOutcomes": 1726560
     }
+  },
+  {
+    "id": "flop-20bb-jack-high-clubs",
+    "title": "20bb · Flop · Jack-high clubs",
+    "board": [
+      36,
+      20,
+      1
+    ],
+    "depthBb": 20,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-20bb-jack-high-clubs/3a09846839c158f67da635d5b30ccc3fd7e38ad7c61ce73a5b9c4c2b29a3bef0.json",
+    "sha256": "3a09846839c158f67da635d5b30ccc3fd7e38ad7c61ce73a5b9c4c2b29a3bef0",
+    "bytes": 235969,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 877,
+      "profileValueBb": [
+        -3.6265404249603006,
+        3.6265404249602997
+      ],
+      "bestResponseValueBb": [
+        -3.6234569908103293,
+        3.629843006587126
+      ],
+      "unilateralGainBb": [
+        0.0030834341499712536,
+        0.0033025816268263952
+      ],
+      "totalBestResponseGainBb": 0.006386015776797649,
+      "maximumActionEvErrorBb": 9.5367431640625e-7,
+      "maximumProbabilitySumError": 4.936009645462036e-8,
+      "zeroSumResidualBb": 8.881784197001252e-16,
+      "accepted": true,
+      "riverOutcomes": 1736460
+    }
+  },
+  {
+    "id": "flop-50bb-queen-diamonds",
+    "title": "50bb · Flop · Queen-high diamonds",
+    "board": [
+      41,
+      33,
+      21
+    ],
+    "depthBb": 50,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-50bb-queen-diamonds/4154b7f87f25d28f0003adaa87c79001a130f7872788eb947f9298b58d308d02.json",
+    "sha256": "4154b7f87f25d28f0003adaa87c79001a130f7872788eb947f9298b58d308d02",
+    "bytes": 236013,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 868,
+      "profileValueBb": [
+        -7.235567931359859,
+        7.235567931359858
+      ],
+      "bestResponseValueBb": [
+        -7.229787829034677,
+        7.244789932885158
+      ],
+      "unilateralGainBb": [
+        0.00578010232518178,
+        0.009222001525300172
+      ],
+      "totalBestResponseGainBb": 0.015002103850481951,
+      "maximumActionEvErrorBb": 0.000001907340347884201,
+      "maximumProbabilitySumError": 4.842877388000488e-8,
+      "zeroSumResidualBb": 8.881784197001252e-16,
+      "accepted": true,
+      "riverOutcomes": 1718640
+    }
   }
 ]

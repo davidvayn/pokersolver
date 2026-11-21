@@ -1,0 +1,10 @@
+{
+  "id": "flop-20bb-jack-high-clubs",
+  "title": "20bb · Flop · Jack-high clubs",
+  "description": "A saved flop-to-river game on Jc 7c 2d at 20bb starting depth, with a 12bb pot and 14bb behind. Broad weighted ranges include sets, overpairs, top pair, two pair, and club draws. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative per-combination inclusion multipliers: BTN AA x1, QQ x0.75, AJo x0.75, KJs x0.75, QJs x0.5, T9s x0.5; BB JJ x1, 77 x1, 22 x1, J7s x0.75, KJo x0.5, A7s x0.75, 98s x0.75, 65s x0.5. Weights describe range inclusion, not action frequencies. Board blockers are removed before normalization; private cards are drawn jointly with exact card removal. Priors are declared assumptions, not certified preflop frequencies. All later betting and ordered card arrivals belong to one conditional flop-to-river game, not a full-hand solution or a replacement for the live 20bb solver. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [36,20,1], "depthBb":20, "potBb":12,
+  "rangeClasses":[["AA","QQ","AJo","KJs","QJs","T9s"],["JJ","77","22","J7s","KJo","A7s","98s","65s"]],
+  "rangeClassWeights":[[1.0,0.75,0.75,0.75,0.5,0.5],[1.0,1.0,1.0,0.75,0.5,0.75,0.75,0.5]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":256
+}
