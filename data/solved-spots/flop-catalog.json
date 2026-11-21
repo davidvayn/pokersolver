@@ -826,5 +826,77 @@
       "accepted": true,
       "riverOutcomes": 1621620
     }
+  },
+  {
+    "id": "flop-50bb-king-rainbow",
+    "title": "50bb · Flop · Broader king-high rainbow",
+    "board": [
+      46,
+      29,
+      12
+    ],
+    "depthBb": 50,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-50bb-king-rainbow/e43184db6ecd7aa259111e0da880b8de16fdfa86d7afbe166d809fab6ad4b844.json",
+    "sha256": "e43184db6ecd7aa259111e0da880b8de16fdfa86d7afbe166d809fab6ad4b844",
+    "bytes": 235980,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 859,
+      "profileValueBb": [
+        -0.719746542673211,
+        0.7197465426732105
+      ],
+      "bestResponseValueBb": [
+        -0.6949640408193692,
+        0.7287504858175381
+      ],
+      "unilateralGainBb": [
+        0.024782501853841787,
+        0.00900394314432762
+      ],
+      "totalBestResponseGainBb": 0.03378644499816941,
+      "maximumActionEvErrorBb": 0.0000019073486257070726,
+      "maximumProbabilitySumError": 4.842877388000488e-8,
+      "zeroSumResidualBb": 5.551115123125783e-16,
+      "accepted": true,
+      "riverOutcomes": 1700820
+    }
+  },
+  {
+    "id": "flop-100bb-paired-eights-clubs",
+    "title": "100bb · Flop · Broader paired eights with clubs",
+    "board": [
+      24,
+      25,
+      16
+    ],
+    "depthBb": 100,
+    "format": "sharded-flop-v1",
+    "url": "/models/solved-spots/flop-100bb-paired-eights-clubs/0d0104ace6c0a311892d81f4f5c2f9ef1bea5e8938a7f1c5c6c2573a65ff8b9e.json",
+    "sha256": "0d0104ace6c0a311892d81f4f5c2f9ef1bea5e8938a7f1c5c6c2573a65ff8b9e",
+    "bytes": 236041,
+    "verification": {
+      "method": "direct-compatible-pair-and-runout-enumeration-of-exported-f32-policy-v1",
+      "compatibleDeals": 872,
+      "profileValueBb": [
+        -12.338650344366165,
+        12.338650344366167
+      ],
+      "bestResponseValueBb": [
+        -12.323189931120412,
+        12.353982900016772
+      ],
+      "unilateralGainBb": [
+        0.015460413245753202,
+        0.015332555650605428
+      ],
+      "totalBestResponseGainBb": 0.03079296889635863,
+      "maximumActionEvErrorBb": 0.000003814697279835855,
+      "maximumProbabilitySumError": 4.842877388000488e-8,
+      "zeroSumResidualBb": 1.7763568394002505e-15,
+      "accepted": true,
+      "riverOutcomes": 1726560
+    }
   }
 ]

@@ -114,8 +114,8 @@ export function SolvedSpotTrainer({ entries }: { entries: SpotCatalogEntry[] }) 
     <>
       {entries.length === 1 && <p className="mb-3 text-sm font-semibold">{entry?.title}</p>}
       <div className="mb-5 flex flex-wrap items-end gap-4">
-        {entries.length > 1 && <label className="grid gap-1 text-sm font-medium">Saved spot · next deal
-          <select className={buttonClass} value={nextEntryId} onChange={(event) => setNextEntryId(event.target.value)}>
+        {entries.length > 1 && <label className="grid min-w-0 max-w-full grid-cols-1 gap-1 text-sm font-medium">Saved spot · next deal
+          <select className={`${buttonClass} w-full min-w-0`} value={nextEntryId} onChange={(event) => setNextEntryId(event.target.value)}>
             {entries.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
           </select>
         </label>}

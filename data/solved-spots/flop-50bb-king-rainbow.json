@@ -1,0 +1,10 @@
+{
+  "id": "flop-50bb-king-rainbow",
+  "title": "50bb · Flop · Broader king-high rainbow",
+  "description": "A complete saved flop-to-river game on Kh 9d 5c at 50bb initial depth, with a 32bb pot and 34bb behind. Broader weighted ranges include sets, an overpair, top pair, two pair, gutshots and unpaired ace-high holdings on a rainbow board. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative per-combination inclusion: BTN AA x1, KK x1, AKo x0.75, KQs x0.75, KJs x0.5, QJs x0.75, 87s x0.5; BB 99 x1, 55 x1, K9s x1, KTs x0.75, AQo x0.5, QTs x0.75, JTs x0.75. These weights are not action frequencies. Board blockers are removed before normalization, and private hands are drawn jointly with exact card removal. The declared priors are not certified preflop frequencies. All actions and ordered arrivals belong to one conditional flop-to-river game. This is not a full-hand solution or a universal 50bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [46,29,12], "depthBb":50, "potBb":32,
+  "rangeClasses":[["AA","KK","AKo","KQs","KJs","QJs","87s"],["99","55","K9s","KTs","AQo","QTs","JTs"]],
+  "rangeClassWeights":[[1.0,1.0,0.75,0.75,0.5,0.75,0.5],[1.0,1.0,1.0,0.75,0.5,0.75,0.75]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":256
+}

@@ -1,0 +1,10 @@
+{
+  "id": "flop-100bb-paired-eights-clubs",
+  "title": "100bb · Flop · Broader paired eights with clubs",
+  "description": "A complete saved flop-to-river game on 8c 8d 6c at 100bb initial depth, with a 60bb pot and 70bb behind. Broader weighted ranges include quads, full houses, trips, overpairs, club draws, straight draws and unpaired ace-high holdings. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative per-combination inclusion: BTN AA x1, QQ x0.75, A8s x1, AKo x0.5, 87s x0.75, T9s x0.75; BB 88 x1, 66 x1, K8s x0.75, 86s x1, 99 x0.75, AQo x0.5, 75s x0.75, 98s x0.75. These weights are not action frequencies. Board blockers are removed before normalization, and private hands are drawn jointly with exact card removal. The declared priors are not certified preflop frequencies. All actions and ordered arrivals belong to one conditional flop-to-river game. This is not a full-hand solution or a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [24,25,16], "depthBb":100, "potBb":60,
+  "rangeClasses":[["AA","QQ","A8s","AKo","87s","T9s"],["88","66","K8s","86s","99","AQo","75s","98s"]],
+  "rangeClassWeights":[[1.0,0.75,1.0,0.5,0.75,0.75],[1.0,1.0,0.75,1.0,0.75,0.5,0.75,0.75]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":256
+}
