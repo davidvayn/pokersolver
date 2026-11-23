@@ -1,0 +1,10 @@
+{
+  "id": "flop-100bb-trips-queens",
+  "title": "100bb · Flop · Trip queens",
+  "description": "A saved flop-to-river game on Qc Qd Qs at 100bb starting depth, with a 60bb pot and 70bb behind. Weighted ranges include quads, full houses, suited connectors and offsuit hands playing the board trips with kickers. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative per-combination inclusion: BTN AA x1, KK x0.75, AQo x0.75, AQs x1, AKo x0.5, JTs x0.75; BB JJ x1, TT x0.75, KQo x0.75, KQs x1, AJo x0.5, 98s x0.75. Multipliers describe range inclusion, not action frequencies. Board blockers are removed before normalization; the exact joint deal never allows both private hands to hold the last queen. These priors are not certified preflop frequencies. All later actions and ordered runouts are solved together in one conditional flop-to-river game, not a full-hand solution or a universal 100bb model. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [40,41,43], "depthBb":100, "potBb":60,
+  "rangeClasses":[["AA","KK","AQo","AQs","AKo","JTs"],["JJ","TT","KQo","KQs","AJo","98s"]],
+  "rangeClassWeights":[[1.0,0.75,0.75,1.0,0.5,0.75],[1.0,0.75,0.75,1.0,0.5,0.75]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":512
+}

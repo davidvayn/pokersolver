@@ -1,0 +1,10 @@
+{
+  "id": "flop-20bb-eight-rainbow",
+  "title": "20bb · Flop · Eight-high rainbow",
+  "description": "A saved flop-to-river game on 8d 4s 2c at 20bb starting depth, with a 12bb pot and 14bb behind. Weighted ranges include sets, overpairs, two pair, top pair, gutshots and offsuit ace-high hands. Half-pot, pot, all-in and one subsequent raise are modeled across all three streets.",
+  "rangeAssumptions": "Illustrative per-combination inclusion: BTN AA x1, JJ x0.75, AKo x0.5, 88 x1, A8s x0.75, 84s x0.5; BB 99 x0.75, 44 x1, 22 x1, AQo x0.5, 76s x0.75, 65s x0.75. Multipliers describe range inclusion, not action frequencies. Board blockers are removed before normalization; private cards are drawn jointly with exact card removal. These priors are not certified preflop frequencies. All later actions and ordered runouts are solved together in one conditional flop-to-river game, not a full-hand solution or a replacement for the live 20bb solver. Rake-free Home game. Player 0 is BTN; player 1 is BB.",
+  "board": [25,11,0], "depthBb":20, "potBb":12,
+  "rangeClasses":[["AA","JJ","AKo","88","A8s","84s"],["99","44","22","AQo","76s","65s"]],
+  "rangeClassWeights":[[1.0,0.75,0.5,1.0,0.75,0.5],[0.75,1.0,1.0,0.5,0.75,0.75]],
+  "betPotFractions":[0.5,1.0], "raisePotFractions":[1.0], "raiseCap":1, "iterations":256
+}

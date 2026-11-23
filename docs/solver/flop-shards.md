@@ -32,6 +32,8 @@ The [king-rainbow/paired-eights expansion](king-rainbow-and-paired-eights-2026-1
 adds weighted 32/31-combo 50bb and 32/32-combo 100bb games at the same limits.
 The [jack-club/queen-diamond expansion](jack-clubs-and-queen-diamonds-2026-11-21.md)
 adds weighted 31/32-combo 20bb and 32/32-combo 50bb games at the same limits.
+The [eight-rainbow/trip-queens expansion](eight-rainbow-and-trip-queens-2026-11-22.md)
+adds weighted 32/32-combo games at 20bb and 100bb at the same limits.
 The original study's figures below remain its own, not corpus-wide totals.
 
 ## Reproduction and acceptance
