@@ -28,6 +28,9 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=moderate
+
       - name: Cache Rust release solver
         uses: actions/cache@v5
         with:

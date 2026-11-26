@@ -17,7 +17,7 @@ export async function GET(_request: Request, context: RouteContext) {
       { status: 404, headers: { 'Cache-Control': 'no-store' } }
     );
   }
-  return new Response(shard.payload, {
+  return new Response(new Uint8Array(shard.payload), {
     status: 200,
     headers: {
       'Content-Type': 'application/vnd.poker-lab.policy-v1',

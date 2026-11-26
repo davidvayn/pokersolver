@@ -71,7 +71,7 @@ class Writer {
     this.bytes(bytes);
   }
 
-  finish(): Uint8Array {
+  finish(): Uint8Array<ArrayBuffer> {
     return Uint8Array.from(this.values);
   }
 }
@@ -135,7 +135,7 @@ export function quantizeProbabilities(values: number[]): number[] {
   return quantized;
 }
 
-export function encodePolicyShard(nodes: PolicyNode[]): Uint8Array {
+export function encodePolicyShard(nodes: PolicyNode[]): Uint8Array<ArrayBuffer> {
   const writer = new Writer();
   writer.bytes(MAGIC);
   writer.u8(SCHEMA_VERSION);

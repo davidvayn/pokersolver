@@ -998,7 +998,7 @@ export async function inferNeuralPolicy(input: {
 
 export function encodeNeuralArtifact(
   artifact: NeuralPolicyArtifact
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   try {
     assertNeuralArtifact(artifact);
   } catch (error) {
@@ -1061,7 +1061,7 @@ export function decodeNeuralArtifact(bytes: Uint8Array): NeuralPolicyArtifact {
   return artifact;
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)]
     .map((value) => value.toString(16).padStart(2, '0'))

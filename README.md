@@ -34,9 +34,18 @@ npm run build
 
 The development server normally runs at `http://localhost:3000`.
 
-`npm run lint` is not suitable for unattended validation yet because the
-repository does not have a committed ESLint configuration and `next lint`
-opens an interactive setup flow.
+Use Node.js 22.12+ (22 LTS), 24 LTS, or 26+. CI uses Node 22.
+`npm run typecheck` runs the standalone TypeScript check; `npm run build`
+also checks types. Next.js 16 removed `next lint`, so that script has been
+replaced rather than adding an unconfigured lint command.
+
+Development and production explicitly use Webpack to preserve the solver's
+worker and generated WASM asset pipeline during the Next.js 16 upgrade.
+Tailwind stays on the patched v3 LTS line to preserve the existing design.
+TypeScript stays on v6, which provides the compiler API used by Next's stable
+type-checking integration; v7 currently needs its experimental CLI integration.
+Run `npm audit` to check both runtime and development dependencies. CI rejects
+known vulnerabilities of moderate severity or higher.
 
 ## Landing page
 

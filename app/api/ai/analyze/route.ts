@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import {
   SYSTEM_PROMPT,
   buildUserPrompt,
@@ -19,16 +19,79 @@ interface Body {
   messages?: unknown;
 }
 
+function isSpotContext(value: unknown): value is SpotContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const spot = value as Record<string, unknown>;
+  if (
+    typeof spot.kind !== "string" ||
+    !["equity", "preflop", "postflop"].includes(spot.kind) ||
+    typeof spot.description !== "string"
+  ) {
+    return false;
+  }
+  for (const field of [
+    "description", "hero", "villain", "board", "heroRange", "villainRange",
+  ]) {
+    const entry = spot[field];
+    if (entry !== undefined && (typeof entry !== "string" || entry.length > 8000)) {
+      return false;
+    }
+  }
+  for (const field of ["potBB", "stackBB"]) {
+    const entry = spot[field];
+    if (entry !== undefined && (typeof entry !== "number" || !Number.isFinite(entry))) {
+      return false;
+    }
+  }
+  if (spot.equity !== undefined) {
+    if (!spot.equity || typeof spot.equity !== "object") return false;
+    const equity = spot.equity as Record<string, unknown>;
+    for (const field of ["hero", "villain", "tie"]) {
+      const entry = equity[field];
+      if (field === "tie" && entry === undefined) continue;
+      if (typeof entry !== "number" || !Number.isFinite(entry) || entry < 0 || entry > 1) {
+        return false;
+      }
+    }
+  }
+  if (spot.extra !== undefined) {
+    if (!spot.extra || typeof spot.extra !== "object" || Array.isArray(spot.extra)) {
+      return false;
+    }
+    const entries = Object.entries(spot.extra);
+    if (
+      entries.length > 50 ||
+      entries.some(([key, entry]) =>
+        key.length > 200 || typeof entry !== "string" || entry.length > 8000)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function POST(req: NextRequest) {
   let body: Body;
   try {
-    body = (await req.json()) as Body;
+    const value: unknown = await req.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return json({ error: "Invalid request" }, 400);
+    }
+    body = value as Body;
   } catch {
     return json({ error: "Invalid JSON" }, 400);
   }
   const { provider, apiKey, model, spot } = body;
-  if (!apiKey) return json({ error: "Missing API key" }, 400);
-  if (!spot) return json({ error: "Missing spot" }, 400);
+  if (
+    typeof apiKey !== "string" || !apiKey.trim() ||
+    apiKey.length > 4096 || /[\r\n]/.test(apiKey)
+  ) {
+    return json({ error: "Invalid API key" }, 400);
+  }
+  if (typeof model !== "string" || !model.trim() || model.length > 200) {
+    return json({ error: "Invalid model" }, 400);
+  }
+  if (!isSpotContext(spot)) return json({ error: "Invalid spot" }, 400);
   if (!["anthropic", "openai", "gemini"].includes(provider)) {
     return json({ error: "Unsupported provider" }, 400);
   }
@@ -58,10 +121,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (!upstream.ok || !upstream.body) {
-      const text = await upstream.text().catch(() => "");
+      await upstream.body?.cancel().catch(() => undefined);
+      // Provider bodies can echo request credentials. Keep their status, but
+      // never reflect the body or transport exception into our response.
       return json(
-        { error: `Provider error (${upstream.status}): ${text.slice(0, 500)}` },
-        upstream.status || 502,
+        {
+          error: `Provider request failed (${upstream.status}). Check your API key and model.`,
+        },
+        upstream.ok ? 502 : upstream.status,
       );
     }
 
@@ -70,18 +137,21 @@ export async function POST(req: NextRequest) {
     return new Response(stream, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "private, no-store",
       },
     });
-  } catch (e) {
-    return json({ error: `Request failed: ${(e as Error).message}` }, 502);
+  } catch {
+    return json({ error: "AI provider request failed. Please try again." }, 502);
   }
 }
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-store",
+    },
   });
 }
 

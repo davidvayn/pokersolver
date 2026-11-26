@@ -26,7 +26,7 @@ export async function GET(_request: Request, context: RouteContext) {
       { status: 404, headers: { 'Cache-Control': 'no-store' } }
     );
   }
-  return new Response(shard.payload, {
+  return new Response(new Uint8Array(shard.payload), {
     headers: {
       'Content-Type': 'application/vnd.poker-lab.sample-v1',
       ETag: `"${shard.etag}"`,

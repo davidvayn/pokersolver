@@ -60,7 +60,10 @@ export function normalizeStream(
               : null;
         if (errMsg) {
           controller.enqueue(
-            encoder.encode(`\n\n⚠️ AI provider error: ${errMsg}`),
+            // API-key provider error payloads may echo request credentials.
+            encoder.encode(provider === "responses"
+              ? `\n\n⚠️ AI provider error: ${errMsg}`
+              : "\n\nAI provider stream failed. Please try again."),
           );
           controller.close();
           reader.cancel();
