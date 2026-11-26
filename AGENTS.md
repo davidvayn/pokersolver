@@ -3,7 +3,7 @@
 ## Scope and architecture
 
 This repository is a local Texas Hold'em study application built with Next.js
-15, React 19, TypeScript, Tailwind CSS, Zustand, and Vitest. It has four
+16, React 19, TypeScript, Tailwind CSS, Zustand, and Vitest. It has four
 user-facing areas:
 
 - `app/preflop/`: bundled heads-up, 6-max, and 9-max preflop charts.
@@ -76,10 +76,11 @@ cp pkg/poker_solver_wasm_bg.wasm ../lib/solver/pkg/
 cp pkg/poker_solver_wasm_bg.wasm ../public/wasm/
 ```
 
-`npm run lint` currently invokes `next lint`, which opens interactive ESLint
-setup because no ESLint configuration is committed. Do not use it as an
-unattended check until the project adds that configuration; use `npm test` and
-`npm run build` instead.
+Use `npm run typecheck` for a standalone TypeScript check. Next.js 16 removed
+`next lint`; no ESLint configuration is committed. Development and production
+use Webpack explicitly to preserve worker/WASM bundling. Keep TypeScript on v6
+while Next's TypeScript v7 CLI integration is experimental, and Tailwind on the
+patched v3 LTS line until a separately verified styling migration.
 
 ## Testing expectations
 
@@ -130,3 +131,13 @@ Keep changes narrowly scoped and preserve unrelated work in a dirty tree. For
 behavioral changes, report the commands run and any limitations, especially
 Monte Carlo variance, worker/browser-only behavior, or intentional solver-model
 constraints.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

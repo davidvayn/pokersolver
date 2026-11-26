@@ -169,7 +169,7 @@ function routedArtifact(): NeuralPolicyArtifact {
   };
 }
 
-async function digest(bytes: Uint8Array): Promise<string> {
+async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const value = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(value)]
     .map((part) => part.toString(16).padStart(2, '0'))

@@ -16,6 +16,64 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("AI analysis request safety", () => {
+  const request = (body: unknown) => new NextRequest("http://localhost/api/ai/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const validBody = {
+    provider: "openai",
+    apiKey: "private-test-key",
+    model: "test-model",
+    spot: SPOT,
+  };
+
+  it.each([null, [], 1, "text", {},
+    { ...validBody, apiKey: { secret: "key" } },
+    { ...validBody, apiKey: "key\r\ninjected-header: value" },
+    { ...validBody, model: null },
+    { ...validBody, spot: [] },
+    { ...validBody, spot: { ...SPOT, kind: { toString: null } } },
+    { ...validBody, spot: { ...SPOT, equity: { hero: "bad", villain: 0.5 } } },
+  ])("rejects malformed input before contacting a provider: %j", async (body) => {
+    const upstreamFetch = vi.fn();
+    vi.stubGlobal("fetch", upstreamFetch);
+    const response = await POST(request(body));
+    expect(response.status).toBe(400);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(upstreamFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not reflect provider error bodies containing credentials", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      `Rejected Authorization: Bearer ${validBody.apiKey}`, { status: 401 },
+    )));
+    const response = await POST(request(validBody));
+    expect(response.status).toBe(401);
+    expect(await response.text()).not.toContain(validBody.apiKey);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("does not reflect transport exceptions containing credentials", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error(validBody.apiKey)));
+    const response = await POST(request(validBody));
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain(validBody.apiKey);
+  });
+
+  it("does not reflect credentials in provider stream errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      `data: ${JSON.stringify({ error: { message: validBody.apiKey } })}\n\n`,
+    )));
+    const response = await POST(request(validBody));
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    const text = await response.text();
+    expect(text).toContain("AI provider stream failed");
+    expect(text).not.toContain(validBody.apiKey);
+  });
+});
+
 describe("AI analysis route conversation", () => {
   it("sends the spot followed by the existing thread to OpenAI", async () => {
     const upstreamFetch = vi
